@@ -1,3 +1,16 @@
+/*
+ * Datacenter Layout Viewer
+ * Copyright (C) 2026 Martin J. Gallagher
+ *
+ * This program is free software: you can redistribute it and/or modify it under
+ * the terms of the GNU General Public License as published by the Free Software
+ * Foundation, either version 3 of the License, or (at your option) any later
+ * version. This program is distributed WITHOUT ANY WARRANTY; see the GNU General
+ * Public License (LICENSE, or <https://www.gnu.org/licenses/>) for details.
+ *
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
 :root {
   --bg: #0d1117;
   --panel: #12171f;
@@ -98,7 +111,7 @@ input[type="checkbox"] { accent-color: var(--accent); }
 
 #statusbar {
   position: absolute; left: 0; right: 0; bottom: 0;
-  display: flex; gap: 16px;
+  display: flex; gap: 16px; align-items: baseline;
   padding: 4px 10px;
   font-family: var(--mono); font-size: 11px; color: var(--ink-dim);
   background: rgba(13, 17, 23, 0.85);
@@ -227,3 +240,12 @@ input[type="checkbox"] { accent-color: var(--accent); }
 }
 
 .dropzone[hidden] { display: none; }
+
+/* ------------------------------------------------------------------- about */
+
+.about { color: var(--ink-dim); font-size: 11px; line-height: 1.5; }
+.about p { margin: 0 0 6px; }
+.about p:last-child { margin-bottom: 0; }
+.about a { color: var(--accent); }
+
+#statuslicense { margin-left: auto; white-space: nowrap; color: #6b7484; }
