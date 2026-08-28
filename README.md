@@ -149,6 +149,85 @@ dcadd results.tsv --csv fio.csv --test iops --target host --value write_iops
 dcadd results.tsv --meta temp_c unit=C higher=bad min=15 max=95
 ```
 
+### JSON results
+
+Anything that starts with `{` or `[` is read as JSON instead — no flag, no
+separate extension, and a `#` comment above it does not count. The overlays
+that come out are identical to the text form's, so the two are
+interchangeable and can be loaded together.
+
+**NDJSON — one object per line — is the form to generate.** It keeps the
+append-only property that makes `cat run47.ndjson >> results.ndjson` work,
+which a top-level `[ ... ]` array would lose:
+
+```json
+{"!test":"rtt_p50","unit":"us","higher":"bad","palette":"turbo"}
+{"test":"rtt_p50","target":"wr12r06u15","value":184.2,"meta":{"peer":"wr12r06u16"}}
+{"test":"burnin","target":"wr12r06u15","value":"PASS"}
+```
+
+An object with `!test` is the JSON spelling of a `!test` line. Everything
+else needs `test`, `target` and `value`; `meta` is optional and shows up in
+the inspector. A number stays a number and a string that reads as one is
+treated as numeric, so a value quoted by whatever generated the file behaves
+the same as an unquoted one.
+
+A whole document also works, for tools that would rather emit one value:
+
+```json
+{"tests":   {"rtt_p50": {"unit": "us", "higher": "bad"}},
+ "samples": [{"test": "rtt_p50", "target": "wr12r06u15", "value": 184.2}]}
+```
+
+A bare `[ ... ]` array of samples is accepted too. Malformed lines are
+reported with their line number rather than dropped, so a broken generator
+shows up as a warning instead of an empty overlay.
+
+### `tools/dcimport` — output from the test tools, directly
+
+`dcadd --csv` already imports any CSV with a target column and a value
+column. `dcimport` is for the three tools whose output does not have that
+shape, because what they measure is a **pair** — `(src, dst)` — while the
+viewer paints **elements**.
+
+```sh
+dcimport results.tsv --tidy reports/          # netmesh or mx, auto-detected
+dcimport results.tsv --iperf results/latest/  # iperf_orchestrator
+mx status | dcimport results.tsv --mx-status  # mx, live
+```
+
+| Source | What arrives |
+|---|---|
+| [`netmesh`](https://github.com/MartinGallagher-code/binnacle) `reports/` | `rtt_p50` `rtt_p99` `jitter` `loss` `path_mtu` per peer, `agent_cpu` per host |
+| [`mx`](https://github.com/MartinGallagher-code/matrix_orchestrator) `reports/` | `pps` `mbps` `rep_mbps` `loss` `rtt_p50` `rtt_p99` `cpu` `delivery`; `--peers` adds per-peer rows |
+| [`iperf_orchestrator`](https://github.com/MartinGallagher-code/iperf_orchestrator) | `mbps_out` `mbps_in`, plus `cpu_peak` `cpu_softirq` `cpu_idle_floor` from `cpu_summary.csv` |
+| `mx status` | `mx_state` (RUNNING / NOT-RUNNING / NOT-DEPLOYED / STARTING) and live `mx_pps` `mx_loss` `mx_rtt_p50` `mx_rtt_p99` `mx_cpu` `mx_peers` |
+
+**Nothing is averaged on the way in.** One measured row becomes one sample,
+so the viewer's own aggregation menu does the reducing: `mean` reads as
+"across peers and intervals", `max` as "the worst peer", `last` as "right
+now". `--reduce` collapses to one sample per host per metric (median) for
+meshes big enough that the raw row count matters.
+
+A blank cell means "not measured" in all three tools and is skipped rather
+than read as zero — averaging a blank as 0 is the one mistake that quietly
+makes every one of these numbers look better than it is. iperf rows that are
+not `status=OK` are skipped and counted on stderr for the same reason.
+
+Targets are whatever the tools called the hosts, so **generate the server
+list from the layout and the names already match**. binnacle's `manifest`
+reads this project's `.dc` format for exactly that:
+
+```sh
+manifest floor.dc 'room[1]' | netmesh gen --servers -
+netmesh run --for 60 && dcimport results.tsv --tidy reports/
+```
+
+`mx status` is scraped, not parsed from an API — it is one line of
+`agent.log` per host, formatted for people. `dcimport` matches each field by
+name and reports any line it does not recognise instead of half-reading it,
+but for anything you intend to keep or analyse, import `reports/` instead.
+
 ## The viewer
 
 - **Zoom / pan** — wheel and drag (level-of-detail keeps hundreds of
@@ -180,6 +259,8 @@ examples/mega.dc          scale test (~256k elements on one page)
 examples/hostnames.dc     flat hostname naming (wr12r06u15 style)
 examples/hostnames-results.tsv  results addressed by flat name
 tools/dcadd               results appender (python3, stdlib only)
+tools/dcimport            netmesh / mx / iperf output -> overlay samples
+tests/fixtures/           real output from those tools, as the import contract
 tests/run.mjs             headless test suite (node tests/run.mjs)
 LICENSE                   GNU General Public License v3
 ```
