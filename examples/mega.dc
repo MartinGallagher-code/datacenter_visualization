@@ -1,0 +1,45 @@
+# A hyperscale campus described in one page.
+#
+# 8 halls x (24 rows x 40 racks x ~41 devices + a spine row) plus a core room:
+# ~256,000 elements and ~510,000 cables from the thirty-odd lines below.
+
+dc MEGA name="Hyperscale MEGA-1" +prod region=us-west cols=3
+
+  hall H[1..8] name="Hall {id}" cols=1 +hall power=grid-{i}
+
+    # Two thirds of each hall is general compute...
+    row C[01..16] +compute +x86
+      rack R[01..40] u=42
+        node tor at=42 role=tor +switch model=sn5600
+        node u[01..40] role=server model=gen11 cpu=turin cores=192
+
+    # ...then accelerator and storage capacity...
+    row G[01..05] +accel +gpu
+      rack R[01..40] u=42
+        node tor at=42 role=tor +switch model=sn5600
+        node u[01..10] u=4 role=server model=hgx-b200 gpus=8
+
+    row S[01..03] +storage
+      rack R[01..40] u=42
+        node tor at=42 role=tor +switch
+        node d[01..20] u=2 role=server model=jbod-102 disks=102
+
+    # ...and the hall's own spine cage.
+    row SP name="Spines" +network
+      rack SP[1..4]
+        node spine[1..2] u=2 role=spine +switch
+
+  hall MMR name="Meet-Me Room" +network
+    row CORE
+      rack C[1..4]
+        node core[1..2] u=2 role=core +switch
+
+net data    label="Data / east-west" color=#4fa3ff
+net mgmt    label="Out-of-band"      color=#8b93a7 style=dashed
+net storage label="Storage fabric"   color=#ff9f43
+
+link data    role=server role=tor   scope=rack
+link mgmt    role=server role=tor   scope=rack
+link data    role=tor    role=spine scope=hall
+link data    role=spine  role=core
+link storage +storage,role=server   scope=row mode=chain
