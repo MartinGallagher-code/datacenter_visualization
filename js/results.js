@@ -91,8 +91,27 @@ function parseMetaTokens(tokens) {
 /**
  * Parse one or more results files into overlay definitions.
  * Returns a Map of test name -> overlay { name, samples: [{target, value, meta}], meta }.
+ *
+ * Accepts the plain-text format above, or the JSON forms below when the file
+ * starts with `{` or `[`. Nothing has to declare which it is: a results file
+ * that begins with a brace cannot be a `test target value` line.
  */
 export function parseResults(text, into = new Map(), warnings = []) {
+  if (looksLikeJson(text)) return parseJsonResults(text, into, warnings);
+  return parseTextResults(text, into, warnings);
+}
+
+/** First meaningful character, ignoring blank lines and `#` comments. */
+function looksLikeJson(text) {
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith('#')) continue;
+    return line.startsWith('{') || line.startsWith('[');
+  }
+  return false;
+}
+
+function parseTextResults(text, into, warnings) {
   text.split(/\r?\n/).forEach((raw, i) => {
     const line = raw.trim();
     if (!line || line.startsWith('#')) return;
@@ -125,6 +144,127 @@ export function parseResults(text, into = new Map(), warnings = []) {
   });
   return into;
 }
+
+// JSON results come in two shapes, and both are read here.
+//
+// NDJSON -- one object per line, which is the one to generate. It keeps the
+// append-only property that makes `cat run47.ndjson >> results.ndjson` work,
+// where a top-level `[ ... ]` array would not:
+//
+//     {"!test":"rtt_p50","unit":"us","higher":"bad"}
+//     {"test":"rtt_p50","target":"wr12r06u15","value":184.2,"meta":{"peer":"…"}}
+//
+// A whole document -- a bare array of samples, or an object pairing them with
+// their metadata, for tools that would rather emit one value:
+//
+//     {"tests": {"rtt_p50": {"unit":"us"}}, "samples": [ … ]}
+function parseJsonResults(text, into, warnings) {
+  let doc;
+  try {
+    doc = JSON.parse(text);
+  } catch {
+    return parseNdjsonResults(text, into, warnings);
+  }
+  ingestJsonDoc(doc, into, warnings, 'results');
+  return into;
+}
+
+function parseNdjsonResults(text, into, warnings) {
+  text.split(/\r?\n/).forEach((raw, i) => {
+    const line = raw.trim();
+    if (!line || line.startsWith('#')) return;
+    let entry;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      warnings.push(`results line ${i + 1}: not valid JSON: "${truncate(line)}"`);
+      return;
+    }
+    ingestJsonEntry(entry, into, warnings, `line ${i + 1}`);
+  });
+  return into;
+}
+
+function ingestJsonDoc(doc, into, warnings, where) {
+  if (Array.isArray(doc)) {
+    doc.forEach((entry, i) => ingestJsonEntry(entry, into, warnings, `${where}[${i}]`));
+    return;
+  }
+  if (!doc || typeof doc !== 'object') {
+    warnings.push(`${where}: expected a JSON object or array`);
+    return;
+  }
+  // { tests: { name: {unit: …} } } declares metadata for several tests at once.
+  if (doc.tests && typeof doc.tests === 'object' && !Array.isArray(doc.tests)) {
+    for (const [name, meta] of Object.entries(doc.tests)) {
+      if (meta && typeof meta === 'object') applyJsonMeta(into, name, meta);
+    }
+  }
+  if (Array.isArray(doc.samples)) {
+    doc.samples.forEach((entry, i) =>
+      ingestJsonEntry(entry, into, warnings, `${where}.samples[${i}]`));
+  } else if (doc.test !== undefined || doc['!test'] !== undefined) {
+    ingestJsonEntry(doc, into, warnings, where);
+  } else if (!doc.tests) {
+    warnings.push(`${where}: no "samples" array and no "test" field`);
+  }
+}
+
+function ingestJsonEntry(entry, into, warnings, where) {
+  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+    warnings.push(`${where}: expected a JSON object`);
+    return;
+  }
+  // {"!test": "temp_c", unit: "C", …} is the JSON spelling of a `!test` line.
+  const declared = entry['!test'];
+  if (declared !== undefined) {
+    applyJsonMeta(into, String(declared), entry, new Set(['!test']));
+    return;
+  }
+  const name = entry.test;
+  if (name === undefined || entry.target === undefined) {
+    warnings.push(`${where}: needs "test" and "target"`);
+    return;
+  }
+  const value = entry.value;
+  if (value === undefined || value === null || typeof value === 'boolean') {
+    warnings.push(`${where}: "value" must be a number or a string`);
+    return;
+  }
+  // A JSON number is numeric; so is a string that reads as one, which keeps a
+  // value quoted by a generating tool behaving the same as an unquoted one.
+  const num = typeof value === 'number' ? value : Number(String(value).trim());
+  const numeric = Number.isFinite(num) && String(value).trim() !== '';
+  const overlay = ensureOverlay(into, String(name));
+  overlay.samples.push({
+    target: String(entry.target),
+    value: numeric ? num : String(value),
+    numeric,
+    meta: jsonMeta(entry.meta),
+  });
+}
+
+function applyJsonMeta(into, name, source, skip = new Set()) {
+  const overlay = ensureOverlay(into, name);
+  for (const [key, value] of Object.entries(source)) {
+    if (skip.has(key) || value === null || typeof value === 'object') continue;
+    overlay.meta[key.toLowerCase()] = String(value);
+  }
+}
+
+function jsonMeta(meta) {
+  if (!meta || typeof meta !== 'object' || Array.isArray(meta)) return null;
+  const out = {};
+  let any = false;
+  for (const [key, value] of Object.entries(meta)) {
+    if (value === null || typeof value === 'object') continue;
+    out[key.toLowerCase()] = String(value);
+    any = true;
+  }
+  return any ? out : null;
+}
+
+const truncate = (line) => (line.length > 60 ? `${line.slice(0, 57)}…` : line);
 
 function ensureOverlay(map, name) {
   let overlay = map.get(name);

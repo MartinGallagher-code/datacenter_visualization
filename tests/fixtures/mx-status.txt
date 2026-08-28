@@ -1,0 +1,4 @@
+  wr01r01u01  ts=1787941213 tx=4.0 kpps/4.0 kpps rx=4.0 kpps serving=4.0 kpps loss=0.36% rtt_p50=96us rtt_p99=384us cpu=14%(max 15%) workers=1 peers=2 busiest_worker=20% of a core
+  wr01r01u02  NOT-RUNNING
+  wr01r02u01  NOT-DEPLOYED
+  wr01r02u02  running (no report yet)

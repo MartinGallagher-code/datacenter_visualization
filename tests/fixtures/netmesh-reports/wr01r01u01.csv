@@ -1,0 +1,8 @@
+ts,host,dir,peer,probe,size,target_pps,sent,recv,loss_pct,rtt_min_us,rtt_avg_us,rtt_p50_us,rtt_p99_us,rtt_max_us,jitter_us,path_mtu,mtu_state,agent_cpu_pct,note,rx_usecs,flow
+1787941142,wr01r01u01,tx,wr01r01u02,udp,64,50,101,100,0.990,72,261,256,384,381,59,9000,confirmed,,,,
+1787941142,wr01r01u01,tx,wr01r02u01,udp,64,50,101,100,0.990,61,225,224,448,448,71,9000,confirmed,,,,
+1787941142,wr01r01u01,tx,wr01r02u02,udp,64,50,101,100,0.990,47,211,224,384,411,59,9000,confirmed,,,,
+1787941142,wr01r01u01,rx,wr01r01u02,udp,,,100,100,,,,,,,,,,,,,
+1787941142,wr01r01u01,rx,wr01r02u01,udp,,,100,100,,,,,,,,,,,,,
+1787941142,wr01r01u01,host,*,udp,,,,,,,,,,,,,,3.5,,,
+1787941144,wr01r01u01,host,*,udp,,,,,,,,,,,,,,3.0,,,

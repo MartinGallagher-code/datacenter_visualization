@@ -10,6 +10,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 // Headless test suite: node tests/run.mjs
+import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -127,6 +128,54 @@ ok(!burnin.numeric, 'text overlay');
 const failRack = small.resolve('DH1/B/R04');
 eq(overlayValue(burnin, failRack).value, 'FAIL', 'worst verdict wins upward');
 
+// -------------------------------------------------------------- results json
+// The JSON forms must land on exactly the same overlay shape as the text one,
+// so every JSON case below is asserted against its `test target value` twin.
+const asText = parseResults('temp_c\tDH1/A/R01/u05\t61.2\nburnin\tDH1/A/R01/u05\tPASS\n');
+const asNdjson = parseResults(
+  '{"test":"temp_c","target":"DH1/A/R01/u05","value":61.2}\n' +
+  '{"test":"burnin","target":"DH1/A/R01/u05","value":"PASS"}\n');
+eq([...asNdjson.keys()], [...asText.keys()], 'ndjson yields the same tests');
+eq(asNdjson.get('temp_c').samples, asText.get('temp_c').samples, 'ndjson sample matches text');
+eq(asNdjson.get('burnin').samples, asText.get('burnin').samples, 'ndjson text value matches');
+
+const jsonWarnings = [];
+const doc = parseResults(JSON.stringify({
+  tests: { temp_c: { unit: 'C', higher: 'bad' } },
+  samples: [
+    { test: 'temp_c', target: 'DH1/A/R01/u05', value: 61.2, meta: { run: 'nightly' } },
+    { test: 'temp_c', target: 'DH1/A/R01/u06', value: '58' },
+  ],
+}), new Map(), jsonWarnings);
+eq(jsonWarnings, [], 'document form parses clean');
+eq(doc.get('temp_c').meta, { unit: 'C', higher: 'bad' }, 'tests block sets metadata');
+eq(doc.get('temp_c').samples.length, 2, 'document samples');
+eq(doc.get('temp_c').samples[0].meta, { run: 'nightly' }, 'per-sample meta kept');
+ok(doc.get('temp_c').samples[1].numeric && doc.get('temp_c').samples[1].value === 58,
+   'quoted number is numeric, matching the text format');
+
+const bang = parseResults('{"!test":"temp_c","unit":"C","min":15,"max":95}\n' +
+                          '{"test":"temp_c","target":"DH1/A/R01/u05","value":61.2}\n');
+eq(bang.get('temp_c').meta, { unit: 'C', min: '15', max: '95' }, '!test object sets metadata');
+eq(bang.get('temp_c').samples.length, 1, '!test object is not a sample');
+
+const arrayDoc = parseResults('[{"test":"t","target":"a","value":1}]');
+eq(arrayDoc.get('t').samples.length, 1, 'bare array of samples');
+
+// A JSON file that is broken should say so rather than silently importing zero.
+const badWarnings = [];
+parseResults('{"test":"t","target":"a","value":1}\n{oops\n', new Map(), badWarnings);
+eq(badWarnings.length, 1, 'one warning for one bad ndjson line');
+ok(badWarnings[0].includes('line 2'), 'bad ndjson line is numbered');
+
+const missing = [];
+parseResults('{"test":"t","value":1}\n', new Map(), missing);
+ok(missing[0].includes('target'), 'missing target is reported');
+
+// Sniffing must not steal files that merely mention a brace.
+const braced = parseResults('# {not json}\ntemp_c\tDH1/A/R01/u05\t61.2\n');
+eq(braced.get('temp_c').samples.length, 1, 'comment starting with { stays text');
+
 // ------------------------------------------------------------------- filter
 const overlays = new Map([['temp_c', temp], ['burnin', burnin]]);
 const ctx = {
@@ -182,6 +231,92 @@ ok(contrastInk('#ffffff') !== contrastInk('#000000'), 'contrast ink flips');
   ok(parseMs < 20000, `mega parse time ${parseMs}ms`);
   ok(layoutMs < 5000, `mega layout time ${layoutMs}ms`);
   console.log(`  mega: ${mega.all.length} elements, ${mega.links.length} links, parse ${parseMs}ms, layout ${layoutMs}ms`);
+}
+
+// ----------------------------------------------------------------- dcimport
+// The fixtures under tests/fixtures/ are real output: the netmesh and mx
+// reports came from agents actually probing over loopback, and the header of
+// each is the one those tools write today. They are the contract this importer
+// is written against, so a schema change upstream fails here rather than in a
+// silently empty overlay.
+const python = spawnSync('python3', ['--version'], { encoding: 'utf8' });
+if (python.error) {
+  console.log('  dcimport: skipped (no python3)');
+} else {
+  const fixtures = join(root, 'tests/fixtures');
+  const dcimport = (args) => {
+    const run = spawnSync('python3', [join(root, 'tools/dcimport'), '-', ...args],
+                          { encoding: 'utf8' });
+    return { out: run.stdout || '', err: run.stderr || '', code: run.status };
+  };
+  const samplesOf = (text) => text.split('\n')
+    .filter((l) => l && !l.startsWith('!test'));
+
+  // netmesh: per-peer rows become one sample each, carrying their peer.
+  const nm = dcimport(['--tidy', join(fixtures, 'netmesh-reports')]);
+  eq(nm.code, 0, 'dcimport netmesh exits 0');
+  ok(/^!test rtt_p50 .*higher=bad/m.test(nm.out), 'netmesh declares rtt_p50 metadata');
+  ok(samplesOf(nm.out).every((l) => l.split('\t').length >= 3), 'netmesh samples are tab-separated');
+  ok(nm.out.includes('peer=wr01r01u02'), 'netmesh keeps the peer it measured');
+  ok(/^agent_cpu\t/m.test(nm.out), 'netmesh agent cpu comes from its dir=host row');
+
+  // mx: the dir=host row is already per-host, and delivery is derived from it.
+  const mxr = dcimport(['--tidy', join(fixtures, 'mx-reports')]);
+  eq(mxr.code, 0, 'dcimport mx exits 0');
+  ok(/^delivery\t/m.test(mxr.out), 'mx delivery ratio derived from target_pps');
+  ok(!mxr.out.includes('peer='), 'mx host rows carry no peer without --peers');
+  ok(dcimport(['--tidy', join(fixtures, 'mx-reports'), '--peers']).out.includes('peer='),
+     '--peers adds mx per-peer samples');
+
+  // --reduce collapses each host's peers to one median sample per metric.
+  const full = dcimport(['--tidy', join(fixtures, 'netmesh-reports'), '--no-meta']);
+  const cut = dcimport(['--tidy', join(fixtures, 'netmesh-reports'), '--no-meta', '--reduce']);
+  ok(samplesOf(cut.out).length < samplesOf(full.out).length, '--reduce emits fewer samples');
+  eq(samplesOf(cut.out).filter((l) => l.startsWith('rtt_p50\twr01r01u01\t')).length, 1,
+     '--reduce leaves one sample per host per metric');
+  ok(!cut.out.includes('peer='), '--reduce drops the per-peer provenance it collapsed');
+
+  // iperf: both directions, and rows without a throughput number are skipped
+  // rather than imported as zero.
+  const ip = dcimport(['--iperf', join(fixtures, 'iperf-results')]);
+  eq(ip.code, 0, 'dcimport iperf exits 0');
+  ok(/^mbps_out\twr01r01u01\t1000\t/m.test(ip.out), 'iperf outbound sample');
+  ok(/^mbps_in\twr01r01u02\t1000\t/m.test(ip.out), 'iperf inbound sample mirrors it');
+  ok(ip.err.includes('1 iperf row(s) skipped'), 'non-OK iperf row skipped and reported');
+  ok(/^cpu_peak\twr01r02u01\t38/m.test(ip.out), 'proc_stat host keeps the field it has');
+  ok(!/^cpu_softirq\twr01r02u01/m.test(ip.out), 'blank softirq is not imported as zero');
+
+  // mx status: the human ticker, with its units unwound and its sentinels kept.
+  const st = dcimport(['--mx-status', join(fixtures, 'mx-status.txt')]);
+  eq(st.code, 0, 'dcimport mx-status exits 0');
+  ok(/^mx_pps\twr01r01u01\t4000$/m.test(st.out), '"4.0 kpps" becomes 4000');
+  ok(/^mx_rtt_p50\twr01r01u01\t96$/m.test(st.out), '"96us" becomes 96');
+  ok(/^mx_cpu\twr01r01u01\t14$/m.test(st.out), '"14%(max 15%)" takes the current value');
+  ok(/^mx_state\twr01r01u02\tNOT-RUNNING$/m.test(st.out), 'NOT-RUNNING kept as a state');
+  ok(/^mx_state\twr01r02u02\tSTARTING$/m.test(st.out), '"running (no report yet)" is STARTING');
+
+  // A ticker we do not recognise must be reported, never half-parsed.
+  const odd = spawnSync('python3', [join(root, 'tools/dcimport'), '-', '--mx-status'],
+                        { encoding: 'utf8', input: '  host8  WAT\n' });
+  ok((odd.stderr || '').includes('unrecognised status line'), 'unknown status line warns');
+
+  // A file that is not one of these reports fails loudly.
+  const wrong = dcimport(['--tidy', join(root, 'examples/small-results.tsv')]);
+  ok(wrong.code !== 0 && wrong.err.includes('not a netmesh or mx report'),
+     'unknown report header is rejected');
+
+  // End to end: importer output -> parseResults -> bound against a real
+  // layout, with every target resolving to an element.
+  const flat = parseLayout(readFileSync(join(root, 'examples/hostnames.dc'), 'utf8'));
+  const imported = parseResults(nm.out + ip.out);
+  const rtt = bindOverlay(imported.get('rtt_p50'), flat);
+  eq(rtt.unresolved, [], 'every imported netmesh target resolves in the layout');
+  eq(rtt.unit, 'us', 'metadata survives the round trip');
+  ok(rtt.numeric && rtt.sampleCount > 0, 'imported overlay binds numerically');
+  const host = flat.resolve('wr01r01u01');
+  ok(overlayValue(rtt, host).value > 0, 'imported value lands on its element');
+  ok(overlayValue(rtt, host.parent).samples >= overlayValue(rtt, host).samples,
+     'rack aggregates the raw samples beneath it');
 }
 
 console.log(failures ? `${failures}/${count} tests FAILED` : `all ${count} tests passed`);
