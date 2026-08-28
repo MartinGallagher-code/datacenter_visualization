@@ -1,4 +1,14 @@
 #!/usr/bin/env python3
+# Datacenter Layout Viewer
+# Copyright (C) 2026 Martin J. Gallagher
+#
+# This program is free software: you can redistribute it and/or modify it under
+# the terms of the GNU General Public License as published by the Free Software
+# Foundation, either version 3 of the License, or (at your option) any later
+# version. This program is distributed WITHOUT ANY WARRANTY; see the GNU General
+# Public License (LICENSE, or <https://www.gnu.org/licenses/>) for details.
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Append test results to an overlay file.
 
 The overlay file is append-only, so the whole tool is a careful `>>`. Everything
@@ -24,6 +34,12 @@ import os
 import sys
 
 BAD_CHARS = set(" \t\n\r")
+
+VERSION_NOTICE = """dcadd (Datacenter Layout Viewer) 1.0
+Copyright (C) 2026 Martin J. Gallagher
+License GPLv3+: GNU GPL version 3 or later <https://gnu.org/licenses/gpl.html>.
+This is free software: you are free to change and redistribute it.
+There is NO WARRANTY, to the extent permitted by law."""
 
 
 def clean(field, what):
@@ -83,6 +99,8 @@ def main():
     ap.add_argument("--meta", nargs="+", metavar="TEST KEY=VALUE",
                     help="write a !test metadata line (unit, min, max, palette, higher, agg, short, decimals)")
     ap.add_argument("-n", "--dry-run", action="store_true", help="print lines instead of writing")
+    ap.add_argument("--version", action="version", version=VERSION_NOTICE,
+                    help="show version, copyright and licence, then exit")
     args = ap.parse_args()
 
     lines = []

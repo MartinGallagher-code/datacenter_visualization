@@ -1,3 +1,14 @@
+// Datacenter Layout Viewer
+// Copyright (C) 2026 Martin J. Gallagher
+//
+// This program is free software: you can redistribute it and/or modify it under
+// the terms of the GNU General Public License as published by the Free Software
+// Foundation, either version 3 of the License, or (at your option) any later
+// version. This program is distributed WITHOUT ANY WARRANTY; see the GNU General
+// Public License (LICENSE, or <https://www.gnu.org/licenses/>) for details.
+//
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // Application wiring: state, file loading, input handling and the redraw loop.
 
 import { compileQuery, applyFilter } from './filter.js';
@@ -435,7 +446,7 @@ function frame() {
   if (needsDraw) {
     needsDraw = false;
     renderer.draw();
-    $('statusbar').textContent =
+    $('statusinfo').textContent =
       `${state.model.all.length.toLocaleString()} elements · ${renderer.stats.drawn.toLocaleString()} drawn · ` +
       `${renderer.stats.links.toLocaleString()} links · zoom ${renderer.camera.scale.toFixed(2)}× · ` +
       'drag pan · wheel zoom · dbl-click collapse · / filter · f fit';

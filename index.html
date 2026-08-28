@@ -1,4 +1,16 @@
 <!doctype html>
+<!--
+Datacenter Layout Viewer
+Copyright (C) 2026 Martin J. Gallagher
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU General Public License as published by the Free Software
+Foundation, either version 3 of the License, or (at your option) any later
+version. This program is distributed WITHOUT ANY WARRANTY; see the GNU General
+Public License (LICENSE, or <https://www.gnu.org/licenses/>) for details.
+
+SPDX-License-Identifier: GPL-3.0-or-later
+-->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -41,12 +53,24 @@
       </div>
       <div id="tree" class="tree"></div>
     </section>
+
+    <section class="block about">
+      <h2>About</h2>
+      <p>Datacenter Layout Viewer<br>
+         Copyright &copy; 2026 Martin J. Gallagher</p>
+      <p>Free software under the
+         <a href="LICENSE" target="_blank" rel="noopener">GNU GPL v3</a>
+         or later, with ABSOLUTELY NO WARRANTY.</p>
+    </section>
   </aside>
 
   <div id="canvaswrap">
     <canvas id="view"></canvas>
     <div id="tooltip" class="tooltip" hidden></div>
-    <div id="statusbar"></div>
+    <div id="statusbar">
+      <span id="statusinfo"></span>
+      <span id="statuslicense">© 2026 Martin J. Gallagher · GPLv3+ · no warranty</span>
+    </div>
   </div>
 
   <aside id="right" class="panel">
