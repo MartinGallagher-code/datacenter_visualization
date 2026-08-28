@@ -1,0 +1,47 @@
+# A small, readable datacenter. Start here to learn the format.
+#
+#   <kind> <id-spec> [key=value ...] [+tag ...]
+#
+# Indentation nests. Ranges expand. Children of an expanded line are created
+# once per expansion.
+
+dc IAD1 name="Acme IAD1" +prod region=us-east tier=3
+
+  room DH1 name="Data Hall 1" cols=2 +hall-a
+
+    # 4 rows x 6 racks x (1 switch + 20 servers) = 504 elements from 5 lines.
+    row A..D +compute
+      rack R[01..06] u=42 +standard
+        node tor at=42 role=tor +switch model=sn3700
+        node u[01..20] role=server +x86 +gpu model=hgx-h100 cpu=epyc-9654
+
+    row E..F +storage
+      rack R[01..04] u=42
+        node tor at=42 role=tor +switch
+        node d[01..10] u=4 role=server +storage model=jbod-90 disks=90
+
+  room DH2 name="Data Hall 2" +hall-b
+    row A..B +compute
+      rack R[01..08]
+        node tor at=42 role=tor +switch
+        node u[01..30] role=server +x86 model=r7625
+
+  room MDF name="Meet-Me Room" +network
+    row S1
+      rack SP[1..4]
+        node spine at=40 u=2 role=spine +switch +core
+
+# ---- networks -------------------------------------------------------------
+# Logical fabrics, not real NIC names. Each element can sit on several.
+
+net data    label="Data / east-west"  color=#4fa3ff
+net mgmt    label="Out-of-band mgmt"  color=#8b93a7 style=dashed
+net storage label="Storage fabric"    color=#ff9f43
+
+# Every server reaches the switch in its own rack.
+link data    role=server role=tor   scope=rack
+link mgmt    role=server role=tor   scope=rack
+# Storage servers also cross-connect within their row.
+link storage +storage,role=server scope=row mode=mesh
+# Every rack switch uplinks to every spine.
+link data    role=tor    role=spine

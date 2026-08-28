@@ -1,0 +1,149 @@
+#!/usr/bin/env python3
+"""Append test results to an overlay file.
+
+The overlay file is append-only, so the whole tool is a careful `>>`. Everything
+here is optional convenience: writing the lines by hand, or `cat run*.tsv >>
+results.tsv`, works exactly as well.
+
+    dcadd results.tsv temp_c DH1/A/R01/u05 61.2
+    dcadd results.tsv temp_c DH1/A/R01/u05 61.2 run=nightly host=probe-3
+
+    dcadd results.tsv --stdin temp_c            # "target value" pairs on stdin
+    dcadd results.tsv --merge run1.tsv run2.tsv # concatenate whole result files
+    dcadd results.tsv --csv fio.csv --test iops --target host --value write_iops
+    dcadd results.tsv --meta temp_c unit=C higher=bad min=15 max=95
+
+Every sample is kept. Repeated samples for the same test and target are reduced
+in the viewer by whichever aggregation you pick there (mean, max, p95, ...), so
+there is never a reason to overwrite or de-duplicate on the way in.
+"""
+
+import argparse
+import csv
+import os
+import sys
+
+BAD_CHARS = set(" \t\n\r")
+
+
+def clean(field, what):
+    text = str(field).strip()
+    if not text:
+        sys.exit(f"dcadd: empty {what}")
+    if any(c in BAD_CHARS for c in text):
+        sys.exit(f"dcadd: {what} may not contain whitespace: {text!r}")
+    return text
+
+
+def append(path, lines):
+    if not lines:
+        return 0
+    new_file = not os.path.exists(path) or os.path.getsize(path) == 0
+    needs_newline = False
+    if not new_file:
+        with open(path, "rb") as fh:
+            fh.seek(-1, os.SEEK_END)
+            needs_newline = fh.read(1) != b"\n"
+    with open(path, "a", encoding="utf-8") as fh:
+        if new_file:
+            fh.write("# test\ttarget\tvalue\t[key=value ...]\n")
+        elif needs_newline:
+            fh.write("\n")
+        for line in lines:
+            fh.write(line + "\n")
+    return len(lines)
+
+
+def sample_line(test, target, value, extras):
+    fields = [clean(test, "test name"), clean(target, "target"), clean(value, "value")]
+    fields.extend(clean(e, "extra field") for e in extras)
+    return "\t".join(fields)
+
+
+def main():
+    ap = argparse.ArgumentParser(
+        prog="dcadd",
+        description="Append test results to a layout-viewer overlay file.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__.split("\n", 2)[2],
+    )
+    ap.add_argument("file", help="overlay file to append to (created if missing)")
+    ap.add_argument("rest", nargs="*", metavar="ARG",
+                    help="TEST TARGET VALUE [key=value ...] for a single sample")
+    ap.add_argument("--stdin", metavar="TEST",
+                    help="read 'target value [key=value ...]' lines from stdin for TEST")
+    ap.add_argument("--merge", nargs="+", metavar="FILE",
+                    help="append the sample lines of other overlay files")
+    ap.add_argument("--csv", metavar="FILE", help="import samples from a csv/tsv file")
+    ap.add_argument("--test", help="--csv: test name, or a column name with --test-col")
+    ap.add_argument("--test-col", help="--csv: column holding the test name")
+    ap.add_argument("--target", help="--csv: column holding the target element")
+    ap.add_argument("--value", help="--csv: column holding the value")
+    ap.add_argument("--prefix", default="", help="--csv: string prepended to every target")
+    ap.add_argument("--meta", nargs="+", metavar="TEST KEY=VALUE",
+                    help="write a !test metadata line (unit, min, max, palette, higher, agg, short, decimals)")
+    ap.add_argument("-n", "--dry-run", action="store_true", help="print lines instead of writing")
+    args = ap.parse_args()
+
+    lines = []
+
+    if args.meta:
+        test = clean(args.meta[0], "test name")
+        pairs = [clean(p, "metadata field") for p in args.meta[1:]]
+        for p in pairs:
+            if "=" not in p:
+                sys.exit(f"dcadd: metadata must be key=value, got {p!r}")
+        lines.append("\t".join(["!test", test, *pairs]))
+
+    if args.rest:
+        if len(args.rest) < 3:
+            sys.exit("dcadd: a sample needs TEST TARGET VALUE")
+        test, target, value, *extras = args.rest
+        lines.append(sample_line(test, target, value, extras))
+
+    if args.stdin:
+        for raw in sys.stdin:
+            parts = raw.split("#", 1)[0].split()
+            if len(parts) < 2:
+                continue
+            target, value, *extras = parts
+            lines.append(sample_line(args.stdin, target, value, extras))
+
+    if args.merge:
+        for path in args.merge:
+            with open(path, encoding="utf-8") as fh:
+                for raw in fh:
+                    text = raw.strip()
+                    if text and not text.startswith("#"):
+                        lines.append(text)
+
+    if args.csv:
+        if not (args.target and args.value):
+            sys.exit("dcadd: --csv needs --target and --value column names")
+        if not (args.test or args.test_col):
+            sys.exit("dcadd: --csv needs --test or --test-col")
+        delimiter = "\t" if args.csv.endswith((".tsv", ".tab")) else ","
+        with open(args.csv, newline="", encoding="utf-8") as fh:
+            for row in csv.DictReader(fh, delimiter=delimiter):
+                missing = [c for c in (args.test_col, args.target, args.value) if c and c not in row]
+                if missing:
+                    sys.exit(f"dcadd: column(s) not in {args.csv}: {', '.join(missing)}")
+                value = row[args.value]
+                if value is None or not str(value).strip():
+                    continue
+                test = row[args.test_col] if args.test_col else args.test
+                lines.append(sample_line(test, args.prefix + row[args.target], value, []))
+
+    if not lines:
+        ap.error("nothing to do -- give a sample, --stdin, --merge, --csv or --meta")
+
+    if args.dry_run:
+        print("\n".join(lines))
+        return
+
+    count = append(args.file, lines)
+    print(f"dcadd: appended {count} line{'' if count == 1 else 's'} to {args.file}", file=sys.stderr)
+
+
+if __name__ == "__main__":
+    main()
