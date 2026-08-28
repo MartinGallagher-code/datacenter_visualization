@@ -86,6 +86,12 @@ export function renderOverlays(state, host, actions) {
   for (const overlay of overlays) {
     host.append(overlayCard(state, overlay, actions));
   }
+
+  if (overlays.length > 1) {
+    const clear = el('button', 'overlay-clear', 'Remove all overlays');
+    clear.addEventListener('click', () => actions.removeAllOverlays());
+    host.append(clear);
+  }
 }
 
 function overlayCard(state, overlay, actions) {
@@ -108,6 +114,15 @@ function overlayCard(state, overlay, actions) {
 
   const slot = state.activeOverlays.indexOf(overlay);
   if (slot >= 0) head.append(el('span', 'overlay-order', `slice ${slot + 1}/${state.activeOverlays.length}`));
+
+  const remove = el('button', 'overlay-x', '×');
+  remove.title = `Remove "${overlay.label}" and its ${overlay.sampleCount} samples from the viewer`;
+  remove.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    actions.removeOverlay(overlay);
+  });
+  head.append(remove);
+
   head.addEventListener('click', (ev) => {
     if (ev.target !== check) { check.checked = !check.checked; actions.setOverlayEnabled(overlay, check.checked); }
   });

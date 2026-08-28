@@ -169,6 +169,22 @@ const actions = {
     state.version++;          // force the link cache to rebuild
     invalidate();
   },
+
+  // Removal drops the overlay and its loaded samples entirely; re-loading the
+  // results file is the way back, which is cheap since files are append-only.
+  removeOverlay(overlay) {
+    state.rawOverlays.delete(overlay.name);
+    state.overlays.delete(overlay.name);
+    refreshPanels();
+    invalidate();
+  },
+
+  removeAllOverlays() {
+    state.rawOverlays.clear();
+    state.overlays.clear();
+    refreshPanels();
+    invalidate();
+  },
 };
 
 // -------------------------------------------------------------------- loading
