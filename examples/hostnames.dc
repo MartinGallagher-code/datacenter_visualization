@@ -1,0 +1,42 @@
+# Flat hostname-style naming: every server gets a name like wr12r06u15
+# (room 12, rack 06, U slot 15) that results files can target directly,
+# while the row it belongs to lives in the hierarchy.
+#
+# The name= attribute accepts {placeholders} that resolve to the id of the
+# enclosing element of that kind: {room}, {row}, {rack}, plus {id} for this
+# element's own expanded id. So one node line names an entire floor.
+#
+# Rack numbers run continuously across each room (row A gets r01-r06, row B
+# r07-r12, ...) so the flat name is unique without the row appearing in it.
+# If your racks restart numbering in every row, put the row into the name
+# instead:  name={room}{row}{rack}{id}  ->  wr12ar06u15
+
+dc FLAT name="Flat-named DC" cols=2
+
+  room wr[01..04] +prod
+    row A
+      rack r[01..06] u=42
+        node tor at=42 role=tor +switch name={room}{rack}tor
+        node u[01..40] role=server name={room}{rack}{id} +x86
+    row B
+      rack r[07..12] u=42
+        node tor at=42 role=tor +switch name={room}{rack}tor
+        node u[01..40] role=server name={room}{rack}{id} +x86
+    row C
+      rack r[13..18] u=42
+        node tor at=42 role=tor +switch name={room}{rack}tor
+        node u[01..40] role=server name={room}{rack}{id} +x86
+
+net data label="Data" color=#4fa3ff
+net mgmt label="Mgmt" color=#8b93a7 style=dashed
+
+link data role=server role=tor scope=rack
+link mgmt role=server role=tor scope=rack
+
+# A results file can now address servers by the flat name alone:
+#
+#     temp_c  wr01r03u15  48.2
+#     temp_c  wr04r18u40  61.9
+#
+# and the filter box finds them the same way: typing  wr01r03  matches
+# every server in that rack; +prod, kind:rack, row paths etc. still work.

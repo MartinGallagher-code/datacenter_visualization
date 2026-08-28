@@ -66,6 +66,11 @@ generic container. There is no schema to declare.
 `{placeholders}` in attributes refer to enclosing elements:
 `name="Hall {id}"`, `power=grid-{i}`, `{room}`, `{row}`, `{parent}`.
 
+This is how flat hostname-style names work: `node u[01..40]
+name={room}{rack}{id}` names every server like `wr12r06u15`, results files
+can then target that name directly, and the row stays expressed by nesting
+without appearing in the name — see `examples/hostnames.dc`.
+
 ### Attributes and tags
 
 - `key=value` attributes are free-form and **inherit** downward (children see
@@ -172,6 +177,8 @@ index.html, css/, js/     the viewer (ES modules, no dependencies)
 examples/small.dc         starter layout   (~1,200 elements)
 examples/small-results.tsv  two nightly runs of four tests
 examples/mega.dc          scale test (~256k elements on one page)
+examples/hostnames.dc     flat hostname naming (wr12r06u15 style)
+examples/hostnames-results.tsv  results addressed by flat name
 tools/dcadd               results appender (python3, stdlib only)
 tests/run.mjs             headless test suite (node tests/run.mjs)
 ```
