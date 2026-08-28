@@ -156,6 +156,16 @@ input[type="checkbox"] { accent-color: var(--accent); }
   margin-left: auto; font-family: var(--mono); font-size: 10px; color: var(--ink-dim);
   background: #0f141c; border-radius: 3px; padding: 1px 5px;
 }
+.overlay-x {
+  flex: none; padding: 0 5px; line-height: 1.2;
+  font-size: 13px; color: var(--ink-dim);
+  background: none; border: none; border-radius: 4px;
+}
+.overlay-head .overlay-x:nth-child(4) { margin-left: auto; }  /* no slice chip present */
+.overlay-x:hover { color: #f85149; background: #2a1517; }
+.overlay-clear {
+  width: 100%; margin-top: 2px; font-size: 11.5px; color: var(--ink-dim);
+}
 .overlay-body { padding: 0 7px 7px; display: grid; gap: 6px; }
 .overlay.off .overlay-body { display: none; }
 .grid2 { display: grid; grid-template-columns: auto 1fr; gap: 5px 7px; align-items: center; }
