@@ -294,24 +294,42 @@ if (python.error) {
   ok(/^cpu_peak\twr01r02u01\t38/m.test(ip.out), 'proc_stat host keeps the field it has');
   ok(!/^cpu_softirq\twr01r02u01/m.test(ip.out), 'blank softirq is not imported as zero');
 
-  // iperf_orchestrator can also write this format itself
-  // (`iperf-orchestrator export-overlay`). Its output and dcimport's must
-  // stay interchangeable, so the same fixture run through both paths has to
-  // produce the same throughput samples.
+  // iperf_orchestrator writes this format itself (`export-overlay`), and its
+  // export is richer than what an importer can reconstruct from the CSVs: it
+  // knows the whole run, so it can score a direction against the run's median,
+  // compare a pair's two directions, and say how much of a host's mesh
+  // measured at all. Kept here as the contract that export is written against.
   const native = readFileSync(join(fixtures, 'iperf-overlay.tsv'), 'utf8');
-  const triples = (text) => samplesOf(text)
-    .map((l) => l.split('\t').slice(0, 3).join('\t'))
-    .filter((l) => l.startsWith('mbps_'))
-    .sort();
-  eq(triples(native), triples(ip.out),
-     'export-overlay and dcimport --iperf agree on every throughput sample');
-  ok(/^iperf_status\twr01r01u02\tFAIL\t.*status=NO_SUMMARY/m.test(native),
-     'the direction dcimport skips is exported as a FAIL, not as zero');
   const nativeOverlays = parseResults(native);
-  eq(nativeOverlays.get('mbps_out').meta.label, 'Outbound Mb/s',
-     'export-overlay metadata survives the parser');
-  ok(!nativeOverlays.get('mbps_out').samples.some((smp) => smp.value === 0),
-     'no zero throughput invented for an unmeasured direction');
+  eq([...nativeOverlays.keys()], [
+    'iperf_mbps_out', 'iperf_mbps_in', 'iperf_mbps_duplex', 'iperf_rel_median',
+    'iperf_asymmetry', 'iperf_status', 'iperf_ok_pct',
+    'iperf_cpu_peak', 'iperf_cpu_mean', 'iperf_cpu_softirq', 'iperf_cpu_sys',
+    'iperf_cpu_user', 'iperf_cpu_idle_floor',
+  ], 'export-overlay declares its overlays in reading order');
+
+  // Metadata is the difference between a readable first render and a puzzle,
+  // so it has to survive the parser intact.
+  const relMeta = nativeOverlays.get('iperf_rel_median').meta;
+  eq(relMeta.label, 'Throughput vs run median', 'multi-word label survives');
+  eq([relMeta.palette, relMeta.min, relMeta.max, relMeta.agg],
+     ['rdbu', '0', '200', 'min'], 'relative throughput diverges around 100%');
+  eq(nativeOverlays.get('iperf_cpu_peak').meta.max, '100',
+     'percentages state their real scale rather than auto-fitting');
+
+  // The direction that produced no number is a FAIL verdict, not a zero.
+  ok(/^iperf_status\twr01r01u02\tFAIL\t.*status=NO_SUMMARY/m.test(native),
+     'an unmeasured direction is exported as a verdict');
+  for (const name of ['iperf_mbps_out', 'iperf_mbps_in', 'iperf_mbps_duplex']) {
+    ok(!nativeOverlays.get(name).samples.some((smp) => smp.value === 0),
+       `${name} invents no zero for an unmeasured direction`);
+  }
+
+  // dcimport reads the same CSVs and can still be loaded alongside: both name
+  // their overlays distinctly, so the two never overwrite each other.
+  const mixed = parseResults(native + ip.out);
+  ok(mixed.has('iperf_mbps_out') && mixed.has('mbps_out'),
+     'export-overlay and dcimport overlays coexist in one results file');
 
   // mx status: the human ticker, with its units unwound and its sentinels kept.
   const st = dcimport(['--mx-status', join(fixtures, 'mx-status.txt')]);
@@ -350,6 +368,21 @@ if (python.error) {
   ok(!status.numeric, 'iperf_status is a verdict overlay');
   eq(overlayValue(status, flat.resolve('wr01r01u02')).value, 'FAIL',
      'a host with one failed direction reads FAIL');
+
+  // The derived overlays land on elements and aggregate the way their
+  // metadata says they should: half of wr01r01u02's mesh failed, and its
+  // rack must carry that number upward rather than the healthier host's.
+  const okPct = bindOverlay(nativeOverlays.get('iperf_ok_pct'), flat);
+  eq(okPct.agg, 'min', 'coverage aggregates to the worst host');
+  eq(overlayValue(okPct, flat.resolve('wr01r01u02')).value, 50,
+     'a host whose mesh half failed reads 50%');
+  const rack = flat.resolve('wr01r01u02').parent;
+  eq(overlayValue(okPct, rack).value, 50, 'and its rack shows that, not the average');
+
+  const asym = bindOverlay(nativeOverlays.get('iperf_asymmetry'), flat);
+  eq(asym.agg, 'max', 'asymmetry aggregates to the worst pair');
+  eq(overlayValue(asym, flat.resolve('wr01r01u01')).value, 12,
+     '1000 vs 880 Mb/s on one pair is 12% apart');
 }
 
 console.log(failures ? `${failures}/${count} tests FAILED` : `all ${count} tests passed`);

@@ -200,7 +200,7 @@ mx status | dcimport results.tsv --mx-status  # mx, live
 |---|---|
 | [`netmesh`](https://github.com/MartinGallagher-code/binnacle) `reports/` | `rtt_p50` `rtt_p99` `jitter` `loss` `path_mtu` per peer, `agent_cpu` per host |
 | [`mx`](https://github.com/MartinGallagher-code/matrix_orchestrator) `reports/` | `pps` `mbps` `rep_mbps` `loss` `rtt_p50` `rtt_p99` `cpu` `delivery`; `--peers` adds per-peer rows |
-| [`iperf_orchestrator`](https://github.com/MartinGallagher-code/iperf_orchestrator) | `mbps_out` `mbps_in`, plus `cpu_peak` `cpu_softirq` `cpu_idle_floor` from `cpu_summary.csv` |
+| [`iperf_orchestrator`](https://github.com/MartinGallagher-code/iperf_orchestrator) | `mbps_out` `mbps_in`, plus `cpu_peak` `cpu_softirq` `cpu_idle_floor` from `cpu_summary.csv` (superseded by that tool's own `export-overlay` — see below) |
 | `mx status` | `mx_state` (RUNNING / NOT-RUNNING / NOT-DEPLOYED / STARTING) and live `mx_pps` `mx_loss` `mx_rtt_p50` `mx_rtt_p99` `mx_cpu` `mx_peers` |
 
 **Nothing is averaged on the way in.** One measured row becomes one sample,
@@ -214,13 +214,15 @@ than read as zero — averaging a blank as 0 is the one mistake that quietly
 makes every one of these numbers look better than it is. iperf rows that are
 not `status=OK` are skipped and counted on stderr for the same reason.
 
-`iperf_orchestrator` 2.2+ can also write this format itself —
-`iperf-orchestrator export-overlay` (or `run --overlay`) drops an
-`iperf_overlay.tsv` beside its CSVs, with the same tests and metadata as
-`dcimport --iperf` plus an `iperf_status` verdict for the directions that
-produced no number. Use whichever end you have to hand; the two are
-interchangeable, and `tests/fixtures/iperf-overlay.tsv` holds that export as
-the contract.
+`iperf_orchestrator` 2.2+ writes this format itself, and better than an
+importer can: `iperf-orchestrator export-overlay` (or `run --overlay`) drops an
+`iperf_overlay.tsv` beside its CSVs. Because it has the whole run in hand it
+also derives what `--iperf` here cannot — each direction against the run's own
+median, the gap between a pair's two directions, and how much of each host's
+mesh measured at all — and it keeps the failed directions `--iperf` can only
+count. **Prefer it; `dcimport --iperf` is the fallback for CSVs from an older
+version.** `tests/fixtures/iperf-overlay.tsv` is that export, kept as the
+contract the suite checks.
 
 Targets are whatever the tools called the hosts, so **generate the server
 list from the layout and the names already match**. binnacle's `manifest`
