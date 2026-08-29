@@ -1,0 +1,62 @@
+# mx 1.5.0 export -- 2 host(s), whole history, 43 sample(s), latest ts=1787941215
+{"!test": "mx_pps", "higher": "good", "label": "Requests sent", "short": "PPS", "unit": "pps"}
+{"!test": "mx_rep_pps", "higher": "good", "label": "Replies received", "short": "REP", "unit": "pps"}
+{"!test": "mx_served_pps", "higher": "good", "label": "Requests arriving here", "short": "SRV", "unit": "pps"}
+{"!test": "mx_egress_gbps", "higher": "good", "label": "Egress on the wire", "short": "EGR", "unit": "Gb/s"}
+{"!test": "mx_loss", "higher": "bad", "label": "Round-trip loss", "short": "LOSS", "unit": "%"}
+{"!test": "mx_achieved", "higher": "good", "label": "Rate achieved vs target", "short": "ACHV", "unit": "%"}
+{"!test": "mx_rtt_p50", "higher": "bad", "label": "RTT p50, worst peer", "short": "P50", "unit": "us"}
+{"!test": "mx_rtt_p99", "higher": "bad", "label": "RTT p99, worst peer", "short": "P99", "unit": "us"}
+{"!test": "mx_rtt_max", "higher": "bad", "label": "RTT max, worst peer", "short": "MAX", "unit": "us"}
+{"!test": "mx_cpu", "higher": "bad", "label": "Host CPU", "short": "CPU", "unit": "%"}
+{"!test": "mx_cpu_core", "higher": "bad", "label": "Busiest core", "short": "CORE", "unit": "%"}
+{"!test": "mx_agent_cpu", "higher": "bad", "label": "Busiest mx worker, share of a core", "short": "ACPU", "unit": "%"}
+{"!test": "mx_peers", "higher": "good", "label": "Flows this host sends", "short": "PEER"}
+{"!test": "mx_intervals", "higher": "good", "label": "Report intervals in the window", "short": "IVL"}
+{"!test": "mx_state", "agg": "last", "label": "Did this host report?", "short": "STATE"}
+{"!test": "mx_peer_pps", "agg": "mean", "higher": "good", "label": "Requests sent to one peer", "short": "PPS", "unit": "pps"}
+{"!test": "mx_peer_loss", "agg": "max", "higher": "bad", "label": "Round-trip loss, worst peer", "short": "LOSS", "unit": "%"}
+{"!test": "mx_peer_rtt_p99", "agg": "max", "higher": "bad", "label": "RTT p99, worst peer", "short": "P99", "unit": "us"}
+{"target": "wr01r01u01", "test": "mx_pps", "value": 3998.0}
+{"target": "wr01r01u01", "test": "mx_rep_pps", "value": 3984.0}
+{"target": "wr01r01u01", "test": "mx_served_pps", "value": 1987.0}
+{"target": "wr01r01u01", "test": "mx_egress_gbps", "value": 0.01334}
+{"target": "wr01r01u01", "test": "mx_loss", "value": 0.3626}
+{"target": "wr01r01u01", "test": "mx_achieved", "value": 99.96}
+{"target": "wr01r01u01", "test": "mx_rtt_p50", "value": 96.0}
+{"target": "wr01r01u01", "test": "mx_rtt_p99", "value": 384.0}
+{"target": "wr01r01u01", "test": "mx_rtt_max", "value": 748.0}
+{"target": "wr01r01u01", "test": "mx_cpu", "value": 13.95}
+{"target": "wr01r01u01", "test": "mx_cpu_core", "value": 16.05}
+{"target": "wr01r01u01", "test": "mx_agent_cpu", "value": 19.75}
+{"target": "wr01r01u01", "test": "mx_peers", "value": 2.0}
+{"target": "wr01r01u01", "test": "mx_intervals", "value": 2.0}
+{"target": "wr01r01u02", "test": "mx_pps", "value": 3999.0}
+{"target": "wr01r01u02", "test": "mx_rep_pps", "value": 3999.0}
+{"target": "wr01r01u02", "test": "mx_served_pps", "value": 2000.0}
+{"target": "wr01r01u02", "test": "mx_egress_gbps", "value": 0.01341}
+{"target": "wr01r01u02", "test": "mx_loss", "value": 0.0}
+{"target": "wr01r01u02", "test": "mx_achieved", "value": 99.96}
+{"target": "wr01r01u02", "test": "mx_rtt_p50", "value": 96.0}
+{"target": "wr01r01u02", "test": "mx_rtt_p99", "value": 384.0}
+{"target": "wr01r01u02", "test": "mx_rtt_max", "value": 3097.0}
+{"target": "wr01r01u02", "test": "mx_cpu", "value": 13.95}
+{"target": "wr01r01u02", "test": "mx_cpu_core", "value": 16.0}
+{"target": "wr01r01u02", "test": "mx_agent_cpu", "value": 19.75}
+{"target": "wr01r01u02", "test": "mx_peers", "value": 2.0}
+{"target": "wr01r01u02", "test": "mx_intervals", "value": 2.0}
+{"target": "wr01r01u01", "test": "mx_state", "value": "REPORTING"}
+{"target": "wr01r01u02", "test": "mx_state", "value": "REPORTING"}
+{"meta": {"peer": "wr01r01u02"}, "target": "wr01r01u01", "test": "mx_peer_pps", "value": 1999.0}
+{"meta": {"peer": "wr01r01u02"}, "target": "wr01r01u01", "test": "mx_peer_loss", "value": 0.6253}
+{"meta": {"peer": "wr01r01u02"}, "target": "wr01r01u01", "test": "mx_peer_rtt_p99", "value": 384.0}
+{"meta": {"peer": "wr01r02u01"}, "target": "wr01r01u01", "test": "mx_peer_pps", "value": 1999.0}
+{"meta": {"peer": "wr01r02u01"}, "target": "wr01r01u01", "test": "mx_peer_loss", "value": 0.1}
+{"meta": {"peer": "wr01r02u01"}, "target": "wr01r01u01", "test": "mx_peer_rtt_p99", "value": 384.0}
+{"meta": {"peer": "wr01r01u01"}, "target": "wr01r01u02", "test": "mx_peer_pps", "value": 1999.0}
+{"meta": {"peer": "wr01r01u01"}, "target": "wr01r01u02", "test": "mx_peer_loss", "value": 0.0}
+{"meta": {"peer": "wr01r01u01"}, "target": "wr01r01u02", "test": "mx_peer_rtt_p99", "value": 384.0}
+{"meta": {"peer": "wr01r02u01"}, "target": "wr01r01u02", "test": "mx_peer_pps", "value": 1999.0}
+{"meta": {"peer": "wr01r02u01"}, "target": "wr01r01u02", "test": "mx_peer_loss", "value": 0.0}
+{"meta": {"peer": "wr01r02u01"}, "target": "wr01r01u02", "test": "mx_peer_rtt_p99", "value": 384.0}
+{"target": "wr01r02u01", "test": "mx_state", "value": "NO-DATA"}

@@ -22,6 +22,9 @@
 //
 //     !test temp_c unit=C min=15 max=95 palette=turbo higher=bad short=TMP
 //
+// A value that needs a space is double quoted -- `label="Inlet temp"` -- and
+// the quotes are not part of it.
+//
 // The same (test, target) may appear any number of times. Duplicates are kept
 // as individual samples and reduced at draw time by the aggregation the user
 // picks in the UI.
@@ -77,7 +80,26 @@ function stdev(values) {
   return Math.sqrt(values.reduce((a, b) => a + (b - m) ** 2, 0) / (values.length - 1));
 }
 
-const splitFields = (line) => line.split(/\t|\s*,\s*|\s{1,}/).filter((s) => s !== '');
+// Fields are separated by tabs, commas or runs of whitespace -- except inside
+// double quotes, so `label="RTT p50"` arrives as one field with one space in
+// it rather than as two mangled halves.
+function splitFields(line) {
+  const out = [];
+  let field = '';
+  let quoted = false;
+  let started = false;
+  for (const ch of line) {
+    if (ch === '"') { quoted = !quoted; started = true; continue; }
+    if (!quoted && (ch === ',' || /\s/.test(ch))) {
+      if (started) { out.push(field); field = ''; started = false; }
+      continue;
+    }
+    field += ch;
+    started = true;
+  }
+  if (started) out.push(field);
+  return out;
+}
 
 function parseMetaTokens(tokens) {
   const meta = {};

@@ -137,6 +137,10 @@ burnin      DH1/A/R01/u05   PASS
 ramp: viridis, magma, plasma, turbo, health, cool, ember, gray, rdbu;
 `agg=` presets the aggregation; `decimals=` fixes formatting.)
 
+Fields split on tabs, commas or runs of spaces — except inside double quotes,
+so a value that needs a space is written `label="Inlet temp"` and the quotes
+are not part of it.
+
 ### `tools/dcadd` — appending made even easier
 
 Optional helper; plain `>>` works too.
@@ -183,25 +187,52 @@ A bare `[ ... ]` array of samples is accepted too. Malformed lines are
 reported with their line number rather than dropped, so a broken generator
 shows up as a warning instead of an empty overlay.
 
+### `mx export` — matrix_orchestrator writes this format itself
+
+[`matrix_orchestrator`](https://github.com/MartinGallagher-code/matrix_orchestrator)
+needs no importer: it exports overlay samples directly, so there is nothing
+in between to guess at its reports.
+
+```sh
+mx run --for 120                       # measure
+mx export --window 120 >> results.tsv  # colour the floor plan with it
+```
+
+What arrives: `mx_pps` `mx_rep_pps` `mx_served_pps` `mx_egress_gbps`
+`mx_loss` `mx_achieved` `mx_rtt_p50` `mx_rtt_p99` `mx_rtt_max` `mx_cpu`
+`mx_cpu_core` `mx_agent_cpu` `mx_peers` `mx_intervals`, and `mx_state` —
+`REPORTING`, or `NO-DATA` for a host in the matrix that said nothing at all,
+which is the one reading a missing report cannot give you. `mx export
+--peers` adds a per-flow overlay (`mx_peer_pps`, `mx_peer_loss`,
+`mx_peer_rtt_p99`), each sample tagged `peer=`, so `max` on one of those is
+the worst peer of that host. `--raw` gives one sample per report interval
+instead of one per host, `--json` writes NDJSON, and `--names` /
+`--target-prefix` map mx host names onto whatever the layout calls those
+nodes.
+
+The numbers are the ones `mx summarize` prints, reduced by the run's own
+rules — a blank cell is *not measured* and never zero, a layered run's rates
+come from the host rows, latency is the worst peer's rather than a
+percentile of percentiles. Those rules are not visible from outside a
+`reports/` directory, which is why this direction is an export and not an
+import.
+
 ### `tools/dcimport` — output from the test tools, directly
 
 `dcadd --csv` already imports any CSV with a target column and a value
-column. `dcimport` is for the three tools whose output does not have that
-shape, because what they measure is a **pair** — `(src, dst)` — while the
-viewer paints **elements**.
+column. `dcimport` is for the tools whose output does not have that shape,
+because what they measure is a **pair** — `(src, dst)` — while the viewer
+paints **elements**.
 
 ```sh
-dcimport results.tsv --tidy reports/          # netmesh or mx, auto-detected
+dcimport results.tsv --tidy reports/          # netmesh
 dcimport results.tsv --iperf results/latest/  # iperf_orchestrator
-mx status | dcimport results.tsv --mx-status  # mx, live
 ```
 
 | Source | What arrives |
 |---|---|
 | [`netmesh`](https://github.com/MartinGallagher-code/binnacle) `reports/` | `rtt_p50` `rtt_p99` `jitter` `loss` `path_mtu` per peer, `agent_cpu` per host |
-| [`mx`](https://github.com/MartinGallagher-code/matrix_orchestrator) `reports/` | `pps` `mbps` `rep_mbps` `loss` `rtt_p50` `rtt_p99` `cpu` `delivery`; `--peers` adds per-peer rows |
 | [`iperf_orchestrator`](https://github.com/MartinGallagher-code/iperf_orchestrator) | `mbps_out` `mbps_in`, plus `cpu_peak` `cpu_softirq` `cpu_idle_floor` from `cpu_summary.csv` |
-| `mx status` | `mx_state` (RUNNING / NOT-RUNNING / NOT-DEPLOYED / STARTING) and live `mx_pps` `mx_loss` `mx_rtt_p50` `mx_rtt_p99` `mx_cpu` `mx_peers` |
 
 **Nothing is averaged on the way in.** One measured row becomes one sample,
 so the viewer's own aggregation menu does the reducing: `mean` reads as
@@ -209,10 +240,10 @@ so the viewer's own aggregation menu does the reducing: `mean` reads as
 now". `--reduce` collapses to one sample per host per metric (median) for
 meshes big enough that the raw row count matters.
 
-A blank cell means "not measured" in all three tools and is skipped rather
-than read as zero — averaging a blank as 0 is the one mistake that quietly
-makes every one of these numbers look better than it is. iperf rows that are
-not `status=OK` are skipped and counted on stderr for the same reason.
+A blank cell means "not measured" in both tools and is skipped rather than
+read as zero — averaging a blank as 0 is the one mistake that quietly makes
+every one of these numbers look better than it is. iperf rows that are not
+`status=OK` are skipped and counted on stderr for the same reason.
 
 Targets are whatever the tools called the hosts, so **generate the server
 list from the layout and the names already match**. binnacle's `manifest`
@@ -222,11 +253,6 @@ reads this project's `.dc` format for exactly that:
 manifest floor.dc 'room[1]' | netmesh gen --servers -
 netmesh run --for 60 && dcimport results.tsv --tidy reports/
 ```
-
-`mx status` is scraped, not parsed from an API — it is one line of
-`agent.log` per host, formatted for people. `dcimport` matches each field by
-name and reports any line it does not recognise instead of half-reading it,
-but for anything you intend to keep or analyse, import `reports/` instead.
 
 ## The viewer
 
@@ -259,8 +285,8 @@ examples/mega.dc          scale test (~256k elements on one page)
 examples/hostnames.dc     flat hostname naming (wr12r06u15 style)
 examples/hostnames-results.tsv  results addressed by flat name
 tools/dcadd               results appender (python3, stdlib only)
-tools/dcimport            netmesh / mx / iperf output -> overlay samples
-tests/fixtures/           real output from those tools, as the import contract
+tools/dcimport            netmesh / iperf output -> overlay samples
+tests/fixtures/           real tool output, as the import contract
 tests/run.mjs             headless test suite (node tests/run.mjs)
 LICENSE                   GNU General Public License v3
 ```
