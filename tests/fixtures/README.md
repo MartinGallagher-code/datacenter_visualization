@@ -17,6 +17,7 @@ which is what makes the end-to-end assertion in the suite possible.
 | `mx-reports/` | `matrix_orchestrator` agents run over loopback, likewise trimmed |
 | `mx-status.txt` | one real ticker line from an `mx` agent log, plus the three sentinels `mx status` prints (`NOT-RUNNING`, `NOT-DEPLOYED`, `running (no report yet)`) |
 | `iperf-results/` | `iperf_orchestrator`'s documented `iperf_results.csv` and `cpu_summary.csv` schemas, matching the fixtures in its own test suite |
+| `iperf-overlay.tsv` | the same run through `iperf_orchestrator`'s own `export-overlay`, which writes this format directly and derives more from it than an importer can (relative-to-median, pair asymmetry, per-host success rate); the suite checks its overlays, metadata and aggregation behaviour against the layout |
 
 The trimming keeps at least one row of every shape that matters: each `dir`
 value (`tx`, `rx`, `host`), a blank-celled row, and for iperf a non-`OK` row

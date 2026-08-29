@@ -77,7 +77,32 @@ function stdev(values) {
   return Math.sqrt(values.reduce((a, b) => a + (b - m) ** 2, 0) / (values.length - 1));
 }
 
-const splitFields = (line) => line.split(/\t|\s*,\s*|\s{1,}/).filter((s) => s !== '');
+// Fields are separated by a tab, a comma, or a run of spaces -- and a quoted
+// value keeps the spaces inside it, which is what makes `label="Inlet temp"`
+// on a !test line survive as one field instead of splitting into two.
+function splitFields(line) {
+  const out = [];
+  let cur = '';
+  let quote = null;
+  let started = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (quote) {
+      if (c === quote) quote = null;
+      else cur += c;
+      continue;
+    }
+    if (c === '"' || c === "'") { quote = c; started = true; continue; }
+    if (c === '\t' || c === ',' || c === ' ' || c === '\r' || c === '\n') {
+      if (started) { out.push(cur); cur = ''; started = false; }
+      continue;
+    }
+    cur += c;
+    started = true;
+  }
+  if (started) out.push(cur);
+  return out;
+}
 
 function parseMetaTokens(tokens) {
   const meta = {};
