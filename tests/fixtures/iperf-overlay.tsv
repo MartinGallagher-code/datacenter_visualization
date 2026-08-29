@@ -1,0 +1,59 @@
+# iperf-orchestrator 2.2.0 -- overlay samples for the datacenter layout viewer
+# run 20260101120000: 4 direction(s) measured, 1 with no measurement, 3 host(s) with CPU data
+# run shape: duration=10s  streams=1  proto=TCP (samples say so when they differ)
+!test	iperf_mbps_out	unit=Mb/s	higher=good	decimals=0	short=OUT	label="Outbound Mb/s per direction"
+!test	iperf_mbps_in	unit=Mb/s	higher=good	decimals=0	short=IN	label="Inbound Mb/s per direction"
+!test	iperf_mbps_duplex	unit=Mb/s	higher=good	decimals=0	short=DUP	label="Total duplex Mb/s carried"
+!test	iperf_rel_median	unit=%	higher=good	palette=rdbu	min=0	max=200	agg=min	decimals=0	short=REL	label="Throughput vs run median"
+!test	iperf_asymmetry	unit=%	higher=bad	min=0	max=100	agg=max	decimals=0	short=ASYM	label="Direction asymmetry within a pair"
+!test	iperf_status	short=STAT	label="Directed test outcome"
+!test	iperf_ok_pct	unit=%	higher=good	min=0	max=100	agg=min	decimals=0	short=OK%	label="Directions that measured"
+!test	iperf_cpu_peak	unit=%	higher=bad	min=0	max=100	decimals=0	short=CPU	label="Peak host CPU"
+!test	iperf_cpu_mean	unit=%	higher=bad	min=0	max=100	decimals=0	short=AVG	label="Mean host CPU"
+!test	iperf_cpu_softirq	unit=%	higher=bad	min=0	max=100	decimals=0	short=SIRQ	label="Peak softirq on one core"
+!test	iperf_cpu_sys	unit=%	higher=bad	min=0	max=100	decimals=0	short=SYS	label="Peak system CPU"
+!test	iperf_cpu_user	unit=%	higher=bad	min=0	max=100	decimals=0	short=USR	label="Peak user CPU"
+!test	iperf_cpu_idle_floor	unit=%	higher=good	min=0	max=100	agg=min	decimals=1	short=IDLE	label="Lowest idle on one core"
+iperf_mbps_out	wr01r01u01	1000	peer=wr01r01u02	at=20260101120000	run=20260101120000
+iperf_mbps_in	wr01r01u02	1000	peer=wr01r01u01	at=20260101120000	run=20260101120000
+iperf_rel_median	wr01r01u01	119.048	peer=wr01r01u02	run=20260101120000
+iperf_mbps_out	wr01r01u02	880	peer=wr01r01u01	at=20260101120000	run=20260101120000
+iperf_mbps_in	wr01r01u01	880	peer=wr01r01u02	at=20260101120000	run=20260101120000
+iperf_rel_median	wr01r01u02	104.762	peer=wr01r01u01	run=20260101120000
+iperf_mbps_out	wr01r01u01	800	peer=wr01r02u01	at=20260101120000	run=20260101120000
+iperf_mbps_in	wr01r02u01	800	peer=wr01r01u01	at=20260101120000	run=20260101120000
+iperf_rel_median	wr01r01u01	95.2381	peer=wr01r02u01	run=20260101120000
+iperf_mbps_out	wr01r02u01	720	peer=wr01r01u01	at=20260101120000	run=20260101120000
+iperf_mbps_in	wr01r01u01	720	peer=wr01r02u01	at=20260101120000	run=20260101120000
+iperf_rel_median	wr01r02u01	85.7143	peer=wr01r01u01	run=20260101120000
+iperf_asymmetry	wr01r01u01	12	peer=wr01r01u02	run=20260101120000
+iperf_asymmetry	wr01r01u02	12	peer=wr01r01u01	run=20260101120000
+iperf_asymmetry	wr01r01u01	10	peer=wr01r02u01	run=20260101120000
+iperf_asymmetry	wr01r02u01	10	peer=wr01r01u01	run=20260101120000
+iperf_status	wr01r01u01	OK	peer=wr01r01u02	run=20260101120000
+iperf_status	wr01r01u02	OK	peer=wr01r01u01	run=20260101120000
+iperf_status	wr01r01u01	OK	peer=wr01r02u01	run=20260101120000
+iperf_status	wr01r02u01	OK	peer=wr01r01u01	run=20260101120000
+iperf_status	wr01r01u02	FAIL	peer=wr01r02u01	status=NO_SUMMARY	run=20260101120000
+iperf_ok_pct	wr01r01u01	100	ok=2	of=2	run=20260101120000
+iperf_mbps_duplex	wr01r01u01	3400	out=1800	in=1600	run=20260101120000
+iperf_ok_pct	wr01r01u02	50	ok=1	of=2	run=20260101120000
+iperf_mbps_duplex	wr01r01u02	1880	out=880	in=1000	run=20260101120000
+iperf_ok_pct	wr01r02u01	100	ok=1	of=1	run=20260101120000
+iperf_mbps_duplex	wr01r02u01	1520	out=720	in=800	run=20260101120000
+iperf_cpu_peak	wr01r01u01	45	src=mpstat	cores=16	run=20260101120000
+iperf_cpu_mean	wr01r01u01	31.2	src=mpstat	cores=16	run=20260101120000
+iperf_cpu_softirq	wr01r01u01	12.5	src=mpstat	cores=16	core=3	run=20260101120000
+iperf_cpu_sys	wr01r01u01	20.1	src=mpstat	cores=16	run=20260101120000
+iperf_cpu_user	wr01r01u01	18.4	src=mpstat	cores=16	run=20260101120000
+iperf_cpu_idle_floor	wr01r01u01	22	src=mpstat	cores=16	run=20260101120000
+iperf_cpu_peak	wr01r01u02	98.6	src=mpstat	cores=16	run=20260101120000
+iperf_cpu_mean	wr01r01u02	88.1	src=mpstat	cores=16	run=20260101120000
+iperf_cpu_softirq	wr01r01u02	41.2	src=mpstat	cores=16	core=7	run=20260101120000
+iperf_cpu_sys	wr01r01u02	55	src=mpstat	cores=16	run=20260101120000
+iperf_cpu_user	wr01r01u02	30.2	src=mpstat	cores=16	run=20260101120000
+iperf_cpu_idle_floor	wr01r01u02	0.4	src=mpstat	cores=16	run=20260101120000
+iperf_cpu_peak	wr01r02u01	38	src=proc_stat	run=20260101120000
+iperf_cpu_mean	wr01r02u01	25.5	src=proc_stat	run=20260101120000
+iperf_cpu_sys	wr01r02u01	15	src=proc_stat	run=20260101120000
+iperf_cpu_user	wr01r02u01	20	src=proc_stat	run=20260101120000

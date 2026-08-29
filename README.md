@@ -137,9 +137,9 @@ burnin      DH1/A/R01/u05   PASS
 ramp: viridis, magma, plasma, turbo, health, cool, ember, gray, rdbu;
 `agg=` presets the aggregation; `decimals=` fixes formatting.)
 
-Fields split on tabs, commas or runs of spaces — except inside double quotes,
-so a value that needs a space is written `label="Inlet temp"` and the quotes
-are not part of it.
+Fields split on tabs, commas or runs of spaces — except inside quotes, so a
+value that needs a space is written `label="Inlet temp"` (single quotes work
+too) and the quotes are not part of it.
 
 ### `tools/dcadd` — appending made even easier
 
@@ -232,7 +232,7 @@ dcimport results.tsv --iperf results/latest/  # iperf_orchestrator
 | Source | What arrives |
 |---|---|
 | [`netmesh`](https://github.com/MartinGallagher-code/binnacle) `reports/` | `rtt_p50` `rtt_p99` `jitter` `loss` `path_mtu` per peer, `agent_cpu` per host |
-| [`iperf_orchestrator`](https://github.com/MartinGallagher-code/iperf_orchestrator) | `mbps_out` `mbps_in`, plus `cpu_peak` `cpu_softirq` `cpu_idle_floor` from `cpu_summary.csv` |
+| [`iperf_orchestrator`](https://github.com/MartinGallagher-code/iperf_orchestrator) | `mbps_out` `mbps_in`, plus `cpu_peak` `cpu_softirq` `cpu_idle_floor` from `cpu_summary.csv` (superseded by that tool's own `export-overlay` — see below) |
 
 **Nothing is averaged on the way in.** One measured row becomes one sample,
 so the viewer's own aggregation menu does the reducing: `mean` reads as
@@ -244,6 +244,16 @@ A blank cell means "not measured" in both tools and is skipped rather than
 read as zero — averaging a blank as 0 is the one mistake that quietly makes
 every one of these numbers look better than it is. iperf rows that are not
 `status=OK` are skipped and counted on stderr for the same reason.
+
+`iperf_orchestrator` 2.2+ writes this format itself, and better than an
+importer can: `iperf-orchestrator export-overlay` (or `run --overlay`) drops an
+`iperf_overlay.tsv` beside its CSVs. Because it has the whole run in hand it
+also derives what `--iperf` here cannot — each direction against the run's own
+median, the gap between a pair's two directions, and how much of each host's
+mesh measured at all — and it keeps the failed directions `--iperf` can only
+count. **Prefer it; `dcimport --iperf` is the fallback for CSVs from an older
+version.** `tests/fixtures/iperf-overlay.tsv` is that export, kept as the
+contract the suite checks.
 
 Targets are whatever the tools called the hosts, so **generate the server
 list from the layout and the names already match**. binnacle's `manifest`
