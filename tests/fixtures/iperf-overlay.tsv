@@ -1,0 +1,27 @@
+# iperf-orchestrator run 20260101120000 -- overlay samples for the datacenter layout viewer
+!test	mbps_out	unit=Mb/s	higher=good	short=OUT	label="Outbound Mb/s"
+!test	mbps_in	unit=Mb/s	higher=good	short=IN	label="Inbound Mb/s"
+!test	iperf_status	short=IPF	label="Directed test outcome"
+!test	cpu_peak	unit=%	higher=bad	short=CPU	label="Peak CPU"
+!test	cpu_softirq	unit=%	higher=bad	short=SIRQ	label="Peak softirq (one core)"
+!test	cpu_idle_floor	unit=%	higher=good	short=IDLE	label="Lowest idle (one core)"
+mbps_out	wr01r01u01	1000	peer=wr01r01u02	run=20260101120000
+mbps_in	wr01r01u02	1000	peer=wr01r01u01	run=20260101120000
+iperf_status	wr01r01u01	OK	peer=wr01r01u02	run=20260101120000
+mbps_out	wr01r01u02	880	peer=wr01r01u01	run=20260101120000
+mbps_in	wr01r01u01	880	peer=wr01r01u02	run=20260101120000
+iperf_status	wr01r01u02	OK	peer=wr01r01u01	run=20260101120000
+mbps_out	wr01r01u01	800	peer=wr01r02u01	run=20260101120000
+mbps_in	wr01r02u01	800	peer=wr01r01u01	run=20260101120000
+iperf_status	wr01r01u01	OK	peer=wr01r02u01	run=20260101120000
+mbps_out	wr01r02u01	720	peer=wr01r01u01	run=20260101120000
+mbps_in	wr01r01u01	720	peer=wr01r02u01	run=20260101120000
+iperf_status	wr01r02u01	OK	peer=wr01r01u01	run=20260101120000
+iperf_status	wr01r01u02	FAIL	peer=wr01r02u01	status=NO_SUMMARY	run=20260101120000
+cpu_peak	wr01r01u01	45	run=20260101120000
+cpu_softirq	wr01r01u01	12.5	run=20260101120000
+cpu_idle_floor	wr01r01u01	22	run=20260101120000
+cpu_peak	wr01r01u02	98.6	run=20260101120000
+cpu_softirq	wr01r01u02	41.2	run=20260101120000
+cpu_idle_floor	wr01r01u02	0.4	run=20260101120000
+cpu_peak	wr01r02u01	38	run=20260101120000

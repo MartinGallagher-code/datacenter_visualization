@@ -123,6 +123,14 @@ eq(AGGREGATIONS.median.fn([1, 9, 5]), 5, 'median');
 eq(AGGREGATIONS.count.fn(v), 3, 'count');
 eq(AGGREGATIONS.range.fn(v), 6, 'range');
 
+// Quoted values keep their spaces: a `label="Inlet temp"` that split on the
+// space would leave the overlay labelled `"Inlet`, and both the format's own
+// documentation and every importer write labels that way.
+const quoted = parseResults('!test temp_c unit=C label="Inlet temp"\ntemp_c\tDH1/A/R01/u05\t61.2 run="nightly 01"\n');
+eq(quoted.get('temp_c').meta.label, 'Inlet temp', 'quoted !test label keeps its spaces');
+eq(quoted.get('temp_c').samples[0].meta.run, 'nightly 01', 'quoted sample metadata too');
+eq(quoted.get('temp_c').samples[0].value, 61.2, 'the value ahead of it still parses');
+
 const burnin = bindOverlay(rawOverlays.get('burnin'), small);
 ok(!burnin.numeric, 'text overlay');
 const failRack = small.resolve('DH1/B/R04');
@@ -286,6 +294,25 @@ if (python.error) {
   ok(/^cpu_peak\twr01r02u01\t38/m.test(ip.out), 'proc_stat host keeps the field it has');
   ok(!/^cpu_softirq\twr01r02u01/m.test(ip.out), 'blank softirq is not imported as zero');
 
+  // iperf_orchestrator can also write this format itself
+  // (`iperf-orchestrator export-overlay`). Its output and dcimport's must
+  // stay interchangeable, so the same fixture run through both paths has to
+  // produce the same throughput samples.
+  const native = readFileSync(join(fixtures, 'iperf-overlay.tsv'), 'utf8');
+  const triples = (text) => samplesOf(text)
+    .map((l) => l.split('\t').slice(0, 3).join('\t'))
+    .filter((l) => l.startsWith('mbps_'))
+    .sort();
+  eq(triples(native), triples(ip.out),
+     'export-overlay and dcimport --iperf agree on every throughput sample');
+  ok(/^iperf_status\twr01r01u02\tFAIL\t.*status=NO_SUMMARY/m.test(native),
+     'the direction dcimport skips is exported as a FAIL, not as zero');
+  const nativeOverlays = parseResults(native);
+  eq(nativeOverlays.get('mbps_out').meta.label, 'Outbound Mb/s',
+     'export-overlay metadata survives the parser');
+  ok(!nativeOverlays.get('mbps_out').samples.some((smp) => smp.value === 0),
+     'no zero throughput invented for an unmeasured direction');
+
   // mx status: the human ticker, with its units unwound and its sentinels kept.
   const st = dcimport(['--mx-status', join(fixtures, 'mx-status.txt')]);
   eq(st.code, 0, 'dcimport mx-status exits 0');
@@ -317,6 +344,12 @@ if (python.error) {
   ok(overlayValue(rtt, host).value > 0, 'imported value lands on its element');
   ok(overlayValue(rtt, host.parent).samples >= overlayValue(rtt, host).samples,
      'rack aggregates the raw samples beneath it');
+
+  const status = bindOverlay(nativeOverlays.get('iperf_status'), flat);
+  eq(status.unresolved, [], 'every export-overlay target resolves in the layout');
+  ok(!status.numeric, 'iperf_status is a verdict overlay');
+  eq(overlayValue(status, flat.resolve('wr01r01u02')).value, 'FAIL',
+     'a host with one failed direction reads FAIL');
 }
 
 console.log(failures ? `${failures}/${count} tests FAILED` : `all ${count} tests passed`);

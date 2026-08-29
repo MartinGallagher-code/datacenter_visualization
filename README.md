@@ -214,6 +214,14 @@ than read as zero — averaging a blank as 0 is the one mistake that quietly
 makes every one of these numbers look better than it is. iperf rows that are
 not `status=OK` are skipped and counted on stderr for the same reason.
 
+`iperf_orchestrator` 2.2+ can also write this format itself —
+`iperf-orchestrator export-overlay` (or `run --overlay`) drops an
+`iperf_overlay.tsv` beside its CSVs, with the same tests and metadata as
+`dcimport --iperf` plus an `iperf_status` verdict for the directions that
+produced no number. Use whichever end you have to hand; the two are
+interchangeable, and `tests/fixtures/iperf-overlay.tsv` holds that export as
+the contract.
+
 Targets are whatever the tools called the hosts, so **generate the server
 list from the layout and the names already match**. binnacle's `manifest`
 reads this project's `.dc` format for exactly that:
