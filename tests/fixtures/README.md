@@ -28,3 +28,12 @@ binds against a layout, and carries the metadata each overlay needs.
 |---|---|
 | `iperf-overlay.tsv` | a run through `iperf_orchestrator`'s own `export-overlay`, which derives more than an importer could (relative-to-median, pair asymmetry, per-host success rate); the suite checks its overlays, metadata and aggregation behaviour against the layout |
 | `mx-export/` | `mx export` run against `matrix_orchestrator` agents on loopback, in both the tab-separated and NDJSON forms — including a host that never reported, which arrives as `mx_state NO-DATA` |
+
+`mx-export/` is also the contract for what that export leaves *out*. Because
+one host in the run behind it never reported, nobody can say how much of its
+peers' traffic arrived, so the loss split (`mx_forward_loss` /
+`mx_return_loss`) is absent rather than guessed, as is `mx_served_pps` for a
+host whose receive side went unmeasured. The suite asserts those absences
+alongside what is present: an overlay that appears only when its number was
+measured is the property worth protecting, since a zero here would be
+averaged into every rack and room above it.
