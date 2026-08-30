@@ -137,6 +137,10 @@ burnin      DH1/A/R01/u05   PASS
 ramp: viridis, magma, plasma, turbo, health, cool, ember, gray, rdbu;
 `agg=` presets the aggregation; `decimals=` fixes formatting.)
 
+Fields split on tabs, commas or runs of spaces — except inside quotes, so a
+value that needs a space is written `label="Inlet temp"` (single quotes work
+too) and the quotes are not part of it.
+
 ### `tools/dcadd` — appending made even easier
 
 Optional helper; plain `>>` works too.
@@ -183,7 +187,37 @@ A bare `[ ... ]` array of samples is accepted too. Malformed lines are
 reported with their line number rather than dropped, so a broken generator
 shows up as a warning instead of an empty overlay.
 
-### `tools/dcimport` — output from the test tools, directly
+### `mx export` — matrix_orchestrator writes this format itself
+
+[`matrix_orchestrator`](https://github.com/MartinGallagher-code/matrix_orchestrator)
+needs no importer: it exports overlay samples directly, so there is nothing
+in between to guess at its reports.
+
+```sh
+mx run --for 120                       # measure
+mx export --window 120 >> results.tsv  # colour the floor plan with it
+```
+
+What arrives: `mx_pps` `mx_rep_pps` `mx_served_pps` `mx_egress_gbps`
+`mx_loss` `mx_achieved` `mx_rtt_p50` `mx_rtt_p99` `mx_rtt_max` `mx_cpu`
+`mx_cpu_core` `mx_agent_cpu` `mx_peers` `mx_intervals`, and `mx_state` —
+`REPORTING`, or `NO-DATA` for a host in the matrix that said nothing at all,
+which is the one reading a missing report cannot give you. `mx export
+--peers` adds a per-flow overlay (`mx_peer_pps`, `mx_peer_loss`,
+`mx_peer_rtt_p99`), each sample tagged `peer=`, so `max` on one of those is
+the worst peer of that host. `--raw` gives one sample per report interval
+instead of one per host, `--json` writes NDJSON, and `--names` /
+`--target-prefix` map mx host names onto whatever the layout calls those
+nodes.
+
+The numbers are the ones `mx summarize` prints, reduced by the run's own
+rules — a blank cell is *not measured* and never zero, a layered run's rates
+come from the host rows, latency is the worst peer's rather than a
+percentile of percentiles. Those rules are not visible from outside a
+`reports/` directory, which is why this direction is an export and not an
+import.
+
+### `tools/dcimport` — netmesh output, directly
 
 `dcadd --csv` already imports any CSV with a target column and a value
 column. `dcimport` is for netmesh, whose output does not have that shape,
@@ -205,18 +239,20 @@ now". `--reduce` collapses to one sample per host per metric (median) for
 meshes big enough that the raw row count matters.
 
 A blank cell means "not measured" and is skipped rather than read as zero —
-averaging a blank as 0 is the one mistake that quietly makes every one of
-these numbers look better than it is.
+averaging a blank as 0 is the one mistake that quietly makes every one of these
+numbers look better than it is.
 
-Tools that write this format themselves need no importer at all.
-`iperf_orchestrator` 2.2+ is one: `iperf-orchestrator export-overlay` (or `run
---overlay`) drops an `iperf_overlay.tsv` beside its CSVs, and because it has
-the whole run in hand it derives what an importer cannot — each direction
-against the run's own median, the gap between a pair's two directions, how much
-of each host's mesh measured, how wide it reached, and what a host carried at
-once — keeping the failed directions too, coloured by why they failed and
-carrying the log to open. Load that file directly.
-`tests/fixtures/iperf-overlay.tsv` is such an export, kept as the contract the
+`iperf_orchestrator` is not imported here either, for the same reason as `mx`:
+2.2+ writes this format itself, and better than an importer could.
+`iperf-orchestrator export-overlay` (or `run --overlay`) drops an
+`iperf_overlay.tsv` beside its CSVs, and because it has the whole run in hand
+it derives what reading those CSVs cannot — each direction against the run's
+own median, the gap between a pair's two directions, how much of each host's
+mesh measured, how wide it reached, and what a host carried at once (clustering
+concurrent flows rather than summing repeated probes) — and it keeps the failed
+directions, coloured by why they failed and carrying the log to open. Append
+that file to your results and skip this tool.
+`tests/fixtures/iperf-overlay.tsv` is that export, kept as the contract the
 suite checks.
 
 Targets are whatever the tools called the hosts, so **generate the server
@@ -260,7 +296,7 @@ examples/hostnames.dc     flat hostname naming (wr12r06u15 style)
 examples/hostnames-results.tsv  results addressed by flat name
 tools/dcadd               results appender (python3, stdlib only)
 tools/dcimport            netmesh output -> overlay samples
-tests/fixtures/           real output from the test tools, as the contract
+tests/fixtures/           real tool output, as the import contract
 tests/run.mjs             headless test suite (node tests/run.mjs)
 LICENSE                   GNU General Public License v3
 ```

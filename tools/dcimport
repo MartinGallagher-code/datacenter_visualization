@@ -25,6 +25,14 @@ per metric instead, for meshes big enough that the raw row count matters.
 A blank cell means "not measured" and is skipped, never read as zero --
 averaging a blank as 0 is the one mistake that quietly makes every one of
 these numbers look better than it is.
+
+`matrix_orchestrator` and `iperf_orchestrator` are not here: `mx export` and
+`iperf-orchestrator export-overlay` write this format themselves, with each
+run's own rules applied to the numbers (blank is not zero, a layered run's
+rates come from the host rows, latency is the worst peer's; and for iperf, a
+direction against the run's median, a pair's asymmetry, and the failures a
+count alone would lose). Point the viewer at those files and skip this tool
+entirely.
 """
 
 import argparse
@@ -33,7 +41,7 @@ import io
 import os
 import sys
 
-VERSION_NOTICE = """dcimport (Datacenter Layout Viewer) 1.0
+VERSION_NOTICE = """dcimport (Datacenter Layout Viewer) 1.1
 Copyright (C) 2026 Martin J. Gallagher
 License GPLv3+: GNU GPL version 3 or later <https://gnu.org/licenses/gpl.html>.
 This is free software: you are free to change and redistribute it.
@@ -74,8 +82,8 @@ def clean(field, what):
 def number(cell):
     """A finite float, or None for a blank/absent/unparseable cell.
 
-    Blank is "not measured", and is deliberately not zero: a zero here would
-    be averaged in and flatter the result.
+    Blank is "not measured" in every one of these tools, and is deliberately
+    not zero: a zero here would be averaged in and flatter the result.
     """
     if cell is None:
         return None
@@ -174,26 +182,33 @@ def csv_files(path, what):
 # ------------------------------------------------------------ tidy long format
 #
 # netmesh writes reports/<host>.csv in tidy long format with a `dir` column of
-# tx / rx / host. Whether a file is one of its reports is read off its header
-# rather than its path.
+# tx / rx / host. The header, not the path, is what says a file is one of
+# those, so a directory of something else fails loudly instead of quietly
+# importing nothing.
 
-def is_netmesh(fieldnames):
+def detect_tidy(fieldnames):
     fields = set(fieldnames or ())
-    return "jitter_us" in fields and "path_mtu" in fields
+    if "jitter_us" in fields and "path_mtu" in fields:
+        return "netmesh"
+    return None
 
 
 def read_tidy(path, out):
     for filename in csv_files(path, "reports directory"):
         with io.open(filename, "r", encoding="utf-8-sig", newline="") as fh:
             reader = csv.DictReader(fh)
-            if not is_netmesh(reader.fieldnames):
+            if detect_tidy(reader.fieldnames) is None:
                 sys.exit(
                     "dcimport: %s is not a netmesh report\n"
                     "  header: %s\n"
-                    "  expected netmesh (jitter_us, path_mtu)"
+                    "  expected netmesh columns (jitter_us, path_mtu)\n"
+                    "  (matrix_orchestrator reports are exported by `mx export`,"
+                    " and iperf_orchestrator runs by its own `export-overlay`,"
+                    " not imported here)"
                     % (filename, ",".join(reader.fieldnames or [])))
             for row in reader:
                 _tidy_row(row, out)
+    return "netmesh"
 
 
 def _tidy_row(row, out):
@@ -202,7 +217,6 @@ def _tidy_row(row, out):
         return
     direction = (row.get("dir") or "").strip()
     peer = (row.get("peer") or "").strip()
-
     if direction == "tx":
         extras = ["peer=%s" % peer] if peer and peer != "*" else []
         probe = (row.get("probe") or "").strip()
@@ -266,8 +280,7 @@ def main(argv=None):
     args = ap.parse_args(argv)
 
     out = Out()
-    read_tidy(args.tidy, out)
-    source_label = "netmesh reports"
+    source_label = "%s reports" % read_tidy(args.tidy, out)
 
     if args.reduce:
         out.reduce()
