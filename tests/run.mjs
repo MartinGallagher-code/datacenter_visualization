@@ -285,18 +285,30 @@ if (python.error) {
   const nativeOverlays = parseResults(native);
   eq([...nativeOverlays.keys()], [
     'iperf_mbps_out', 'iperf_mbps_in', 'iperf_mbps_duplex', 'iperf_gbytes',
-    'iperf_rel_median', 'iperf_asymmetry', 'iperf_status', 'iperf_fail_kind',
-    'iperf_ok_pct', 'iperf_peers', 'iperf_cpu_peak', 'iperf_cpu_mean',
-    'iperf_cpu_softirq', 'iperf_cpu_sys', 'iperf_cpu_user',
-    'iperf_cpu_idle_floor', 'iperf_bind_iface',
+    'iperf_rel_median', 'iperf_asymmetry', 'iperf_state', 'iperf_status',
+    'iperf_fail_kind', 'iperf_ok_pct', 'iperf_peers', 'iperf_coverage',
+    'iperf_tests', 'iperf_cpu_peak', 'iperf_cpu_mean', 'iperf_cpu_softirq',
+    'iperf_cpu_sys', 'iperf_cpu_user', 'iperf_cpu_idle_floor',
+    'iperf_bind_iface',
   ], 'export-overlay declares its overlays in reading order');
 
   // A host in the run's server list that produced no row at all. Without a
   // sample it would render exactly like a host that was never part of the
-  // test, so the export says NO-DATA and gives it 0% coverage.
-  const silent = nativeOverlays.get('iperf_status').samples
-    .filter((smp) => smp.value === 'NO-DATA');
-  eq(silent.map((smp) => smp.target), ['wr01r02u02'], 'the host that never reported says so');
+  // test, so the roll call says NO-DATA and it gets 0% success. The roll
+  // call is its own per-host overlay, the way `mx export` keeps mx_state
+  // apart from its per-peer overlays, so the two never reduce together.
+  const roll = nativeOverlays.get('iperf_state');
+  eq(roll.samples.filter((smp) => smp.value === 'NO-DATA').map((smp) => smp.target),
+     ['wr01r02u02'], 'the host that never reported says so');
+  ok(roll.samples.some((smp) => smp.value === 'TESTED'), 'and the ones that ran say that');
+  ok(!nativeOverlays.get('iperf_status').samples.some((smp) => smp.value === 'NO-DATA'),
+     'the per-direction verdict overlay carries no per-host value');
+
+  // Coverage against the peers a host was planned to reach, the readable
+  // form of a raw peer count (mx_coverage does the same for a layered run).
+  const cov = nativeOverlays.get('iperf_coverage').samples
+    .find((smp) => smp.target === 'wr01r01u01');
+  eq([cov.value, cov.meta.of], [66.67, '3'], 'two of three planned peers reached');
   ok(!nativeOverlays.get('iperf_mbps_out').samples.some((smp) => smp.target === 'wr01r02u02'),
      'and no throughput is invented for it');
 
