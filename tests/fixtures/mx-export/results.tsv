@@ -1,50 +1,59 @@
-# mx 1.5.0 export -- 2 host(s), whole history, 43 sample(s), latest ts=1787941215
+# mx 1.6.0 export -- 2 host(s), whole history, 49 sample(s), latest ts=1787941215
 !test	mx_pps	unit=pps higher=good short=PPS label="Requests sent"
 !test	mx_rep_pps	unit=pps higher=good short=REP label="Replies received"
-!test	mx_served_pps	unit=pps higher=good short=SRV label="Requests arriving here"
-!test	mx_egress_gbps	unit=Gb/s higher=good short=EGR label="Egress on the wire"
 !test	mx_loss	unit=% higher=bad short=LOSS label="Round-trip loss"
 !test	mx_achieved	unit=% higher=good short=ACHV label="Rate achieved vs target"
+!test	mx_rtt_avg	unit=us higher=bad short=AVG label="RTT mean over this host's flows"
 !test	mx_rtt_p50	unit=us higher=bad short=P50 label="RTT p50, worst peer"
 !test	mx_rtt_p99	unit=us higher=bad short=P99 label="RTT p99, worst peer"
 !test	mx_rtt_max	unit=us higher=bad short=MAX label="RTT max, worst peer"
 !test	mx_cpu	unit=% higher=bad short=CPU label="Host CPU"
 !test	mx_cpu_core	unit=% higher=bad short=CORE label="Busiest core"
 !test	mx_agent_cpu	unit=% higher=bad short=ACPU label="Busiest mx worker, share of a core"
+!test	mx_request_gbps	unit=Gb/s higher=good short=REQ label="Requests on the wire"
+!test	mx_served_pps	unit=pps higher=good short=SRV label="Requests arriving here"
+!test	mx_egress_gbps	unit=Gb/s higher=good short=EGR label="Egress on the wire"
 !test	mx_peers	higher=good short=PEER label="Flows this host sends"
 !test	mx_intervals	higher=good short=IVL label="Report intervals in the window"
+!test	mx_workers	higher=good short=WRK label="Agent worker processes"
 !test	mx_state	agg=last short=STATE label="Did this host report?"
 !test	mx_peer_pps	unit=pps higher=good short=PPS agg=mean label="Requests sent to one peer"
 !test	mx_peer_loss	unit=% higher=bad short=LOSS agg=max label="Round-trip loss, worst peer"
 !test	mx_peer_rtt_p99	unit=us higher=bad short=P99 agg=max label="RTT p99, worst peer"
 mx_pps	wr01r01u01	3998
 mx_rep_pps	wr01r01u01	3984
-mx_served_pps	wr01r01u01	1987
-mx_egress_gbps	wr01r01u01	0.01334
 mx_loss	wr01r01u01	0.3626
 mx_achieved	wr01r01u01	99.96
+mx_rtt_avg	wr01r01u01	108
 mx_rtt_p50	wr01r01u01	96
 mx_rtt_p99	wr01r01u01	384
 mx_rtt_max	wr01r01u01	748
 mx_cpu	wr01r01u01	13.95
 mx_cpu_core	wr01r01u01	16.05
 mx_agent_cpu	wr01r01u01	19.75
+mx_request_gbps	wr01r01u01	0.004158
+mx_served_pps	wr01r01u01	1987
+mx_egress_gbps	wr01r01u01	0.01334
 mx_peers	wr01r01u01	2
 mx_intervals	wr01r01u01	2
+mx_workers	wr01r01u01	1
 mx_pps	wr01r01u02	3999
 mx_rep_pps	wr01r01u02	3999
-mx_served_pps	wr01r01u02	2000
-mx_egress_gbps	wr01r01u02	0.01341
 mx_loss	wr01r01u02	0
 mx_achieved	wr01r01u02	99.96
+mx_rtt_avg	wr01r01u02	114.5
 mx_rtt_p50	wr01r01u02	96
 mx_rtt_p99	wr01r01u02	384
 mx_rtt_max	wr01r01u02	3097
 mx_cpu	wr01r01u02	13.95
 mx_cpu_core	wr01r01u02	16
 mx_agent_cpu	wr01r01u02	19.75
+mx_request_gbps	wr01r01u02	0.004159
+mx_served_pps	wr01r01u02	2000
+mx_egress_gbps	wr01r01u02	0.01341
 mx_peers	wr01r01u02	2
 mx_intervals	wr01r01u02	2
+mx_workers	wr01r01u02	1
 mx_state	wr01r01u01	REPORTING
 mx_state	wr01r01u02	REPORTING
 mx_peer_pps	wr01r01u01	1999	peer=wr01r01u02

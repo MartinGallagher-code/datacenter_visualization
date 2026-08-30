@@ -444,6 +444,24 @@ if (python.error) {
     ok(!state.numeric, `mx_state is a label overlay (${name})`);
     eq(overlayValue(state, flat.resolve('wr01r02u01')).value, 'NO-DATA',
        `a silent host is visible on the floor plan (${name})`);
+
+    // An overlay appears only when the number behind it was measured, which
+    // is the whole reason this export exists rather than an importer. In
+    // this run wr01r02u01 never reported, so nobody can say how much of its
+    // peers' traffic arrived -- and the loss split is absent rather than
+    // guessed. The half that IS known from a host's own rows is present.
+    ok(overlays.has('mx_request_gbps'),
+       `requests on the wire are known from the host's own rows (${name})`);
+    ok(!overlays.has('mx_forward_loss') && !overlays.has('mx_return_loss'),
+       `the loss split stays out when a peer never reported (${name})`);
+    const req = bindOverlay(overlays.get('mx_request_gbps'), flat);
+    eq(req.unit, 'Gb/s', `mx_request_gbps carries its unit (${name})`);
+    ok(overlayValue(req, host).value > 0, `and lands on its node (${name})`);
+    // Nothing is exported as a zero it did not measure.
+    for (const test of ['mx_served_pps', 'mx_egress_gbps', 'mx_request_gbps']) {
+      ok(overlays.get(test).samples.every((sm) => sm.value !== 0),
+         `${test} invents no zero (${name})`);
+    }
   }
 }
 

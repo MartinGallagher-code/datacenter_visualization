@@ -198,24 +198,85 @@ mx run --for 120                       # measure
 mx export --window 120 >> results.tsv  # colour the floor plan with it
 ```
 
-What arrives: `mx_pps` `mx_rep_pps` `mx_served_pps` `mx_egress_gbps`
-`mx_loss` `mx_achieved` `mx_rtt_p50` `mx_rtt_p99` `mx_rtt_max` `mx_cpu`
-`mx_cpu_core` `mx_agent_cpu` `mx_peers` `mx_intervals`, and `mx_state` —
-`REPORTING`, or `NO-DATA` for a host in the matrix that said nothing at all,
-which is the one reading a missing report cannot give you. `mx export
---peers` adds a per-flow overlay (`mx_peer_pps`, `mx_peer_loss`,
-`mx_peer_rtt_p99`), each sample tagged `peer=`, so `max` on one of those is
-the worst peer of that host. `--raw` gives one sample per report interval
-instead of one per host, `--json` writes NDJSON, and `--names` /
-`--target-prefix` map mx host names onto whatever the layout calls those
-nodes.
-
 The numbers are the ones `mx summarize` prints, reduced by the run's own
 rules — a blank cell is *not measured* and never zero, a layered run's rates
 come from the host rows, latency is the worst peer's rather than a
 percentile of percentiles. Those rules are not visible from outside a
 `reports/` directory, which is why this direction is an export and not an
 import.
+
+#### What arrives on the floor plan
+
+One sample per host per run, targeted at the host's name. Every overlay
+carries its own units and palette direction, so the first render is already
+readable.
+
+| Overlay | Unit | What it is |
+|---|---|---|
+| `mx_pps` | pps | requests this host sent |
+| `mx_rep_pps` | pps | replies it got back |
+| `mx_served_pps` | pps | requests that *arrived* here from its peers — the receiver-side truth a sender cannot see |
+| `mx_request_gbps` | Gb/s | its own requests on the wire, Ethernet/IP/UDP framing included |
+| `mx_egress_gbps` | Gb/s | everything it puts on the wire: those requests plus the replies it owes the hosts that call it |
+| `mx_loss` | % | round-trip loss |
+| `mx_forward_loss` | % | of what it sent, the share that never arrived |
+| `mx_return_loss` | % | the share that arrived but whose reply never came back |
+| `mx_achieved` | % | delivered rate against the matrix's target |
+| `mx_coverage` | % | layered runs only: the share of its peers measured so far |
+| `mx_rtt_avg` | µs | mean latency over its flows |
+| `mx_rtt_p50` `mx_rtt_p99` `mx_rtt_max` | µs | latency of its **worst** peer |
+| `mx_cpu` | % | the whole box, averaged over its cores |
+| `mx_cpu_core` | % | its busiest single core |
+| `mx_agent_cpu` | % | the busiest mx worker, as a share of *one* core — near 100% means mx itself is the ceiling |
+| `mx_peers` | | flows this host sends |
+| `mx_workers` | | agent worker processes, which is what makes `mx_agent_cpu` readable |
+| `mx_intervals` | | report intervals it contributed to the window |
+| `mx_state` | | `REPORTING`, or `NO-DATA` for a host in the matrix that said nothing at all — the one reading a missing report cannot give you |
+
+`mx export --peers` adds a per-flow overlay — `mx_peer_pps`, `mx_peer_loss`,
+`mx_peer_rtt_p99` — one sample per flow, each tagged `peer=` (and `layer=`
+on a layered run). They live under their own names so a `mean` over the
+per-host overlays can never quietly include per-flow rows, and they ask for
+`max` by default, which reads as *the worst peer of this host*.
+
+**An overlay is present only when its number was measured.** A host whose
+receive side nobody reported gets no `mx_served_pps` and no
+`mx_egress_gbps` — rather than a zero, which the viewer would average into
+the rack and room above it — while `mx_request_gbps` is known from the
+host's own rows and is always there. The loss split needs every peer's
+receive rows, `mx_achieved` needs a paced matrix, and `mx_coverage` only
+means anything on a layered run. Sparse overlays are normal here and are
+the format working as intended.
+
+**Reading `mx_rtt_p99`.** mx's latency histogram holds four buckets per
+octave and a percentile reports its bucket's upper edge, so `mx_rtt_p99`
+rounds *up* — by up to ~25%, and it can read a little above `mx_rtt_max`,
+which is exact. That is a property of mx's report, not of the export;
+`mx summarize` prints the same pair.
+
+#### Making the names line up
+
+Targets are the mx host names. The viewer resolves a bare name, a full
+path, or any unique tail of one, so hosts named `wr12r06u15` in
+`servers.txt` land on the right node with nothing else to do. A server list
+of bare IPs will not resolve — the overlay panel shows them as *unmatched
+targets* — so either name the hosts in `servers.txt` (`name=addr`) or map
+them on the way out:
+
+```sh
+mx export --names hosts.map --target-prefix DH1/A/ -o results.tsv
+```
+
+#### The rest of the switches
+
+`--raw` adds one sample per host per report *interval* for the columns a
+host row carries, so the viewer can show min/max/p95 over a run rather than
+the window's mean; the overlays derived from more than one row are still
+written once per host. `--json` writes the same samples as NDJSON, one
+object per line. `--window 0` reduces the whole report history instead of
+the last 60 s. `--run LABEL` tags every sample `run=LABEL`, and
+`--test-prefix` renames the overlays if `mx_` would collide with something
+else in the same file.
 
 ### `export-overlay` — iperf_orchestrator writes this format itself
 
@@ -399,7 +460,7 @@ examples/hostnames.dc     flat hostname naming (wr12r06u15 style)
 examples/hostnames-results.tsv  results addressed by flat name
 tools/dcadd               results appender (python3, stdlib only)
 tools/dcimport            netmesh output -> overlay samples
-tests/fixtures/           real tool output, as the import contract
+tests/fixtures/           real tool output, as the contract the suite checks
 tests/run.mjs             headless test suite (node tests/run.mjs)
 LICENSE                   GNU General Public License v3
 ```
