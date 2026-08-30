@@ -41,7 +41,7 @@ import io
 import os
 import sys
 
-VERSION_NOTICE = """dcimport (Datacenter Layout Viewer) 1.1
+VERSION_NOTICE = """dcimport (Datacenter Layout Viewer) 1.2
 Copyright (C) 2026 Martin J. Gallagher
 License GPLv3+: GNU GPL version 3 or later <https://gnu.org/licenses/gpl.html>.
 This is free software: you are free to change and redistribute it.

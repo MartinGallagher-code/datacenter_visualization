@@ -296,7 +296,7 @@ examples/hostnames.dc     flat hostname naming (wr12r06u15 style)
 examples/hostnames-results.tsv  results addressed by flat name
 tools/dcadd               results appender (python3, stdlib only)
 tools/dcimport            netmesh output -> overlay samples
-tests/fixtures/           real tool output, as the import contract
+tests/fixtures/           real tool output, as the contract the suite checks
 tests/run.mjs             headless test suite (node tests/run.mjs)
 LICENSE                   GNU General Public License v3
 ```
