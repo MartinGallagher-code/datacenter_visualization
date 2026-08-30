@@ -12,11 +12,10 @@
 """Turn network-test output into overlay samples.
 
 `dcadd --csv` already imports any CSV with a target column and a value column.
-This is for the three tools whose output does not have that shape:
+This is for the tools whose output does not have that shape:
 
-    dcimport results.tsv --tidy reports/          netmesh or mx reports/
+    dcimport results.tsv --tidy reports/          netmesh reports/
     dcimport results.tsv --iperf results/latest/  iperf_orchestrator
-    mx status | dcimport results.tsv --mx-status  mx, live
 
 Every sample is kept and the viewer reduces them with the aggregation you pick
 there, so nothing is averaged on the way in: one measured row becomes one
@@ -24,19 +23,23 @@ sample. `mean` then reads as "across peers and intervals", `max` as "the worst
 peer", `last` as "right now". Pass --reduce to collapse to one sample per host
 per metric instead, for meshes big enough that the raw row count matters.
 
-A blank cell means "not measured" in all three tools and is skipped, never
-read as zero -- averaging a blank as 0 is the one mistake that quietly makes
-every one of these numbers look better than it is.
+A blank cell means "not measured" in both tools and is skipped, never read as
+zero -- averaging a blank as 0 is the one mistake that quietly makes every one
+of these numbers look better than it is.
+
+`matrix_orchestrator` is not here: `mx export` writes this format itself, with
+the run's own rules applied to the numbers (blank is not zero, a layered run's
+rates come from the host rows, latency is the worst peer's). Point it at a
+results file and skip this tool entirely.
 """
 
 import argparse
 import csv
 import io
 import os
-import re
 import sys
 
-VERSION_NOTICE = """dcimport (Datacenter Layout Viewer) 1.0
+VERSION_NOTICE = """dcimport (Datacenter Layout Viewer) 1.1
 Copyright (C) 2026 Martin J. Gallagher
 License GPLv3+: GNU GPL version 3 or later <https://gnu.org/licenses/gpl.html>.
 This is free software: you are free to change and redistribute it.
@@ -62,24 +65,6 @@ NETMESH_HOST = [
     ("agent_cpu", "agent_cpu_pct", "unit=% higher=bad short=ACPU label=\"netmesh agent CPU\""),
 ]
 
-# mx writes a dir=host row per interval that already carries this host's
-# totals, so these need no reduction at all -- unlike netmesh, whose dir=host
-# row carries only the agent's own CPU.
-MX_HOST = [
-    ("pps", "pps", "higher=good short=PPS label=\"Packets/sec\""),
-    ("mbps", "mbps", "unit=Mb/s higher=good short=TX label=\"Request Mb/s\""),
-    ("rep_mbps", "rep_mbps", "unit=Mb/s higher=good short=RX label=\"Reply Mb/s\""),
-    ("loss", "loss_pct", "unit=% higher=bad short=LOSS label=\"Packet loss\""),
-    ("rtt_p50", "rtt_p50_us", "unit=us higher=bad short=P50 label=\"RTT p50\""),
-    ("rtt_p99", "rtt_p99_us", "unit=us higher=bad short=P99 label=\"RTT p99\""),
-    ("cpu", "cpu_pct", "unit=% higher=bad short=CPU label=\"Host CPU\""),
-]
-MX_TX = [
-    ("pps", "pps", ""),
-    ("loss", "loss_pct", ""),
-    ("rtt_p99", "rtt_p99_us", ""),
-]
-
 IPERF_META = [
     ("mbps_out", "unit=Mb/s higher=good short=OUT label=\"Outbound Mb/s\""),
     ("mbps_in", "unit=Mb/s higher=good short=IN label=\"Inbound Mb/s\""),
@@ -88,16 +73,6 @@ IPERF_CPU = [
     ("cpu_peak", "peak_total_pct", "unit=% higher=bad short=CPU label=\"Peak CPU\""),
     ("cpu_softirq", "peak_softirq_pct", "unit=% higher=bad short=SIRQ label=\"Peak softirq (one core)\""),
     ("cpu_idle_floor", "peak_idle_floor_pct", "unit=% higher=good short=IDLE label=\"Lowest idle (one core)\""),
-]
-
-MX_STATUS_META = [
-    ("mx_state", "agg=last short=STATE label=\"mx agent state\""),
-    ("mx_pps", "higher=good short=PPS agg=last label=\"Packets/sec (live)\""),
-    ("mx_loss", "unit=% higher=bad short=LOSS agg=last label=\"Packet loss (live)\""),
-    ("mx_rtt_p50", "unit=us higher=bad short=P50 agg=last label=\"RTT p50 (live)\""),
-    ("mx_rtt_p99", "unit=us higher=bad short=P99 agg=last label=\"RTT p99 (live)\""),
-    ("mx_cpu", "unit=% higher=bad short=CPU agg=last label=\"Host CPU (live)\""),
-    ("mx_peers", "higher=good short=PEER agg=last label=\"Peers in the matrix\""),
 ]
 
 
@@ -220,73 +195,49 @@ def csv_files(path, what):
 
 # ------------------------------------------------------------ tidy long format
 #
-# netmesh and mx both write reports/<host>.csv in tidy long format with a `dir`
-# column of tx / rx / host. The columns differ, so which tool wrote a file is
-# read off its header rather than its path.
+# netmesh writes reports/<host>.csv in tidy long format with a `dir` column of
+# tx / rx / host. The header, not the path, is what says a file is one of
+# those, so a directory of something else fails loudly instead of quietly
+# importing nothing.
 
 def detect_tidy(fieldnames):
     fields = set(fieldnames or ())
     if "jitter_us" in fields and "path_mtu" in fields:
         return "netmesh"
-    if "rep_pps" in fields and "workers" in fields:
-        return "mx"
     return None
 
 
-def read_tidy(path, out, want_peers=False):
-    kinds = set()
+def read_tidy(path, out):
     for filename in csv_files(path, "reports directory"):
         with io.open(filename, "r", encoding="utf-8-sig", newline="") as fh:
             reader = csv.DictReader(fh)
-            kind = detect_tidy(reader.fieldnames)
-            if kind is None:
+            if detect_tidy(reader.fieldnames) is None:
                 sys.exit(
-                    "dcimport: %s is not a netmesh or mx report\n"
+                    "dcimport: %s is not a netmesh report\n"
                     "  header: %s\n"
-                    "  expected netmesh (jitter_us, path_mtu) or mx (rep_pps, workers)"
+                    "  expected netmesh columns (jitter_us, path_mtu)\n"
+                    "  (matrix_orchestrator reports are exported by `mx export`,"
+                    " not imported here)"
                     % (filename, ",".join(reader.fieldnames or [])))
-            kinds.add(kind)
-            if len(kinds) > 1:
-                sys.exit("dcimport: %s mixes netmesh and mx reports; import them "
-                         "separately" % path)
             for row in reader:
-                _tidy_row(kind, row, out, want_peers)
-    return kinds.pop() if kinds else None
+                _tidy_row(row, out)
+    return "netmesh"
 
 
-def _tidy_row(kind, row, out, want_peers):
+def _tidy_row(row, out):
     host = (row.get("host") or "").strip()
     if not host:
         return
     direction = (row.get("dir") or "").strip()
     peer = (row.get("peer") or "").strip()
-
-    if kind == "netmesh":
-        if direction == "tx":
-            extras = ["peer=%s" % peer] if peer and peer != "*" else []
-            probe = (row.get("probe") or "").strip()
-            if probe:
-                extras.append("probe=%s" % probe)
-            _emit(NETMESH_TX, row, host, out, extras)
-        elif direction == "host":
-            _emit(NETMESH_HOST, row, host, out, [])
-        return
-
-    # mx: the dir=host row is already this host's totals.
-    if direction == "host":
-        _emit(MX_HOST, row, host, out, [])
-        target = number(row.get("target_pps"))
-        actual = number(row.get("pps"))
-        if target and actual is not None:
-            out.declare("delivery", "unit=% higher=good short=DLV "
-                                    "label=\"Delivered vs target pps\"")
-            out.sample("delivery", host, trim(actual / target * 100.0))
-    elif direction == "tx" and want_peers:
+    if direction == "tx":
         extras = ["peer=%s" % peer] if peer and peer != "*" else []
-        layer = (row.get("layer") or "").strip()
-        if layer:
-            extras.append("layer=%s" % layer)
-        _emit(MX_TX, row, host, out, extras)
+        probe = (row.get("probe") or "").strip()
+        if probe:
+            extras.append("probe=%s" % probe)
+        _emit(NETMESH_TX, row, host, out, extras)
+    elif direction == "host":
+        _emit(NETMESH_HOST, row, host, out, [])
 
 
 def _emit(table, row, host, out, extras):
@@ -340,93 +291,6 @@ def read_iperf(path, out):
     return skipped
 
 
-# ------------------------------------------------------------------- mx status
-#
-# `mx status` ssh's to every host and tails one line of agent.log, printed
-# host-prefixed. That line is a log line, not an API: it is formatted for
-# people, and the format can change under us. So every field is matched by
-# name and anything unrecognised is reported rather than guessed at.
-
-STATE_SENTINELS = {
-    "NOT-DEPLOYED": "NOT-DEPLOYED",
-    "NOT-RUNNING": "NOT-RUNNING",
-    "running (no report yet)": "STARTING",
-}
-
-# fmt_pps: "%.3f Mpps" / "%.1f kpps" / "%.0f pps" / "max"  -- note the space.
-# fmt_us:  "%.2fs" / "%.1fms" / "%.0fus" / "-"             -- note there is none.
-PPS_SCALE = {"pps": 1.0, "kpps": 1e3, "Mpps": 1e6}
-US_SCALE = {"us": 1.0, "ms": 1e3, "s": 1e6}
-
-RE_TICKER = re.compile(r"\bts=\d+\b")
-RE_PPS = re.compile(r"\btx=([0-9.]+)\s*(Mpps|kpps|pps)\b")
-RE_LOSS = re.compile(r"\bloss=([0-9.]+)%")
-RE_P50 = re.compile(r"\brtt_p50=([0-9.]+)(us|ms|s)\b")
-RE_P99 = re.compile(r"\brtt_p99=([0-9.]+)(us|ms|s)\b")
-RE_CPU = re.compile(r"\bcpu=([0-9.]+)%")
-RE_PEERS = re.compile(r"\bpeers=(\d+)\b")
-
-
-def _scaled(match, scale):
-    if not match:
-        return None
-    value = number(match.group(1))
-    if value is None:
-        return None
-    return value * scale[match.group(2)]
-
-
-def read_mx_status(stream, out, warn):
-    for test, meta in MX_STATUS_META:
-        out.declare(test, meta)
-
-    seen = 0
-    for raw in stream:
-        line = raw.rstrip("\n").rstrip()
-        if not line.strip():
-            continue
-        # Fleet.each prints "  <host padded>  <line>"; mx's own chatter is
-        # prefixed "[mx]" and is not a host row.
-        stripped = line.strip()
-        if stripped.startswith("[mx]") or stripped.startswith("mx:"):
-            continue
-        parts = line.split(None, 1)
-        if len(parts) < 2:
-            warn("no host and payload on status line: %r" % stripped)
-            continue
-        host, payload = parts[0], parts[1].strip()
-
-        state = STATE_SENTINELS.get(payload)
-        if state is not None:
-            out.sample("mx_state", host, state)
-            seen += 1
-            continue
-
-        if not RE_TICKER.search(payload):
-            warn("unrecognised status line for %s: %r" % (host, payload))
-            continue
-
-        out.sample("mx_state", host, "RUNNING")
-        seen += 1
-        pps = _scaled(RE_PPS.search(payload), PPS_SCALE)
-        if pps is not None:
-            out.sample("mx_pps", host, trim(pps))
-        p50 = _scaled(RE_P50.search(payload), US_SCALE)
-        if p50 is not None:
-            out.sample("mx_rtt_p50", host, trim(p50))
-        p99 = _scaled(RE_P99.search(payload), US_SCALE)
-        if p99 is not None:
-            out.sample("mx_rtt_p99", host, trim(p99))
-        for regex, test in ((RE_LOSS, "mx_loss"), (RE_CPU, "mx_cpu"),
-                            (RE_PEERS, "mx_peers")):
-            match = regex.search(payload)
-            if match:
-                value = number(match.group(1))
-                if value is not None:
-                    out.sample(test, host, trim(value))
-    return seen
-
-
 # ------------------------------------------------------------------------ main
 
 def append(path, lines):
@@ -449,7 +313,7 @@ def append(path, lines):
 def main(argv=None):
     ap = argparse.ArgumentParser(
         prog="dcimport",
-        description="Turn netmesh, mx and iperf_orchestrator output into "
+        description="Turn netmesh and iperf_orchestrator output into "
                     "overlay samples.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="Every measured row becomes one sample; the viewer reduces "
@@ -458,13 +322,9 @@ def main(argv=None):
                     help="results file to append to ('-' for stdout)")
     src = ap.add_mutually_exclusive_group(required=True)
     src.add_argument("--tidy", metavar="PATH",
-                     help="netmesh or mx reports/ directory, or one report csv")
+                     help="netmesh reports/ directory, or one report csv")
     src.add_argument("--iperf", metavar="PATH",
                      help="iperf_orchestrator results dir (or iperf_results.csv)")
-    src.add_argument("--mx-status", nargs="?", const="-", metavar="PATH",
-                     help="output of `mx status` (default: stdin)")
-    ap.add_argument("--peers", action="store_true",
-                    help="--tidy with mx: also import per-peer rows")
     ap.add_argument("--reduce", action="store_true",
                     help="one sample per host per metric (median) instead of "
                          "one per measured row")
@@ -485,21 +345,12 @@ def main(argv=None):
 
     out = Out()
     if args.tidy:
-        kind = read_tidy(args.tidy, out, want_peers=args.peers)
-        source_label = "%s reports" % kind
-    elif args.iperf:
+        source_label = "%s reports" % read_tidy(args.tidy, out)
+    else:
         skipped = read_iperf(args.iperf, out)
         source_label = "iperf_orchestrator"
         if skipped:
             warn("%d iperf row(s) skipped: not status=OK, or no mbps" % skipped)
-    else:
-        if args.mx_status == "-":
-            stream = sys.stdin
-            read_mx_status(stream, out, warn)
-        else:
-            with io.open(args.mx_status, "r", encoding="utf-8") as fh:
-                read_mx_status(fh, out, warn)
-        source_label = "mx status"
 
     if args.reduce:
         out.reduce()

@@ -242,11 +242,11 @@ ok(contrastInk('#ffffff') !== contrastInk('#000000'), 'contrast ink flips');
 }
 
 // ----------------------------------------------------------------- dcimport
-// The fixtures under tests/fixtures/ are real output: the netmesh and mx
-// reports came from agents actually probing over loopback, and the header of
-// each is the one those tools write today. They are the contract this importer
-// is written against, so a schema change upstream fails here rather than in a
-// silently empty overlay.
+// The fixtures under tests/fixtures/ are real output: the netmesh reports came
+// from agents actually probing over loopback, and the header of each is the
+// one that tool writes today. They are the contract this importer is written
+// against, so a schema change upstream fails here rather than in a silently
+// empty overlay.
 const python = spawnSync('python3', ['--version'], { encoding: 'utf8' });
 if (python.error) {
   console.log('  dcimport: skipped (no python3)');
@@ -267,14 +267,6 @@ if (python.error) {
   ok(samplesOf(nm.out).every((l) => l.split('\t').length >= 3), 'netmesh samples are tab-separated');
   ok(nm.out.includes('peer=wr01r01u02'), 'netmesh keeps the peer it measured');
   ok(/^agent_cpu\t/m.test(nm.out), 'netmesh agent cpu comes from its dir=host row');
-
-  // mx: the dir=host row is already per-host, and delivery is derived from it.
-  const mxr = dcimport(['--tidy', join(fixtures, 'mx-reports')]);
-  eq(mxr.code, 0, 'dcimport mx exits 0');
-  ok(/^delivery\t/m.test(mxr.out), 'mx delivery ratio derived from target_pps');
-  ok(!mxr.out.includes('peer='), 'mx host rows carry no peer without --peers');
-  ok(dcimport(['--tidy', join(fixtures, 'mx-reports'), '--peers']).out.includes('peer='),
-     '--peers adds mx per-peer samples');
 
   // --reduce collapses each host's peers to one median sample per metric.
   const full = dcimport(['--tidy', join(fixtures, 'netmesh-reports'), '--no-meta']);
@@ -341,23 +333,10 @@ if (python.error) {
   ok(mixed.has('iperf_mbps_out') && mixed.has('mbps_out'),
      'export-overlay and dcimport overlays coexist in one results file');
 
-  // mx status: the human ticker, with its units unwound and its sentinels kept.
-  const st = dcimport(['--mx-status', join(fixtures, 'mx-status.txt')]);
-  eq(st.code, 0, 'dcimport mx-status exits 0');
-  ok(/^mx_pps\twr01r01u01\t4000$/m.test(st.out), '"4.0 kpps" becomes 4000');
-  ok(/^mx_rtt_p50\twr01r01u01\t96$/m.test(st.out), '"96us" becomes 96');
-  ok(/^mx_cpu\twr01r01u01\t14$/m.test(st.out), '"14%(max 15%)" takes the current value');
-  ok(/^mx_state\twr01r01u02\tNOT-RUNNING$/m.test(st.out), 'NOT-RUNNING kept as a state');
-  ok(/^mx_state\twr01r02u02\tSTARTING$/m.test(st.out), '"running (no report yet)" is STARTING');
-
-  // A ticker we do not recognise must be reported, never half-parsed.
-  const odd = spawnSync('python3', [join(root, 'tools/dcimport'), '-', '--mx-status'],
-                        { encoding: 'utf8', input: '  host8  WAT\n' });
-  ok((odd.stderr || '').includes('unrecognised status line'), 'unknown status line warns');
-
-  // A file that is not one of these reports fails loudly.
+  // A file that is not one of these reports fails loudly -- and an mx report,
+  // which this tool deliberately no longer reads, says where it belongs.
   const wrong = dcimport(['--tidy', join(root, 'examples/small-results.tsv')]);
-  ok(wrong.code !== 0 && wrong.err.includes('not a netmesh or mx report'),
+  ok(wrong.code !== 0 && wrong.err.includes('not a netmesh report'),
      'unknown report header is rejected');
 
   // End to end: importer output -> parseResults -> bound against a real
@@ -404,6 +383,48 @@ if (python.error) {
      'concurrent flows add into one duplex figure');
   const rackLoad = overlayValue(duplex, flat.resolve('wr01r01u01').parent);
   ok(rackLoad.value > 0, 'and a rack sums the hosts beneath it');
+}
+
+// ---------------------------------------------------------------- mx export
+// matrix_orchestrator writes this format itself (`mx export`), so there is no
+// importer to test -- what has to hold is that its output parses, binds and
+// reads correctly here. The fixtures are real `mx export` output from agents
+// run over loopback, in both the tab-separated and NDJSON forms.
+{
+  const flat = parseLayout(readFileSync(join(root, 'examples/hostnames.dc'), 'utf8'));
+  for (const [name, file] of [['tsv', 'results.tsv'], ['ndjson', 'results.ndjson']]) {
+    const warnings = [];
+    const overlays = parseResults(
+      readFileSync(join(root, 'tests/fixtures/mx-export', file), 'utf8'),
+      new Map(), warnings);
+    eq(warnings, [], `mx export ${name} parses clean`);
+    ok(overlays.has('mx_pps') && overlays.has('mx_loss'),
+       `mx export ${name} declares the headline overlays`);
+
+    const pps = bindOverlay(overlays.get('mx_pps'), flat);
+    eq(pps.unresolved, [], `every mx export ${name} target resolves in the layout`);
+    eq(pps.unit, 'pps', `mx export ${name} carries units`);
+    // A label with a space in it survives both forms intact.
+    eq(pps.label, 'Requests sent', `mx export ${name} carries a readable label`);
+    ok(pps.invert && pps.palette === 'health',
+       `higher=good picks the health ramp for ${name}`);
+    const host = flat.resolve('wr01r01u01');
+    ok(overlayValue(pps, host).value > 1000, `mx export ${name} value lands on its node`);
+
+    // Per-flow samples live under their own test, so a mean over the per-host
+    // overlay can never quietly include per-peer rows.
+    const peerLoss = bindOverlay(overlays.get('mx_peer_loss'), flat);
+    eq(peerLoss.agg, 'max', `mx_peer_loss asks for max, the worst peer (${name})`);
+    ok(overlays.get('mx_peer_loss').samples.every((sm) => sm.meta && sm.meta.peer),
+       `every per-flow sample names its peer (${name})`);
+
+    // A host in the matrix that never reported is exported as a state, which
+    // is the one thing its (absent) report could not say.
+    const state = bindOverlay(overlays.get('mx_state'), flat);
+    ok(!state.numeric, `mx_state is a label overlay (${name})`);
+    eq(overlayValue(state, flat.resolve('wr01r02u01')).value, 'NO-DATA',
+       `a silent host is visible on the floor plan (${name})`);
+  }
 }
 
 console.log(failures ? `${failures}/${count} tests FAILED` : `all ${count} tests passed`);
