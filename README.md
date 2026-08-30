@@ -217,6 +217,99 @@ percentile of percentiles. Those rules are not visible from outside a
 `reports/` directory, which is why this direction is an export and not an
 import.
 
+### `export-overlay` — iperf_orchestrator writes this format itself
+
+[`iperf_orchestrator`](https://github.com/MartinGallagher-code/iperf_orchestrator)
+2.2+ needs no importer either. A mesh test answers "which host is slow"; this
+floor plan answers "which rack", and the orchestrator exports the samples that
+join them:
+
+```sh
+iperf-orchestrator run                          # measure
+iperf-orchestrator export-overlay               # -> results/latest/iperf_overlay.tsv
+iperf-orchestrator run --overlay                # or as part of the pipeline
+```
+
+**Throughput**
+
+| Overlay | Per | What it is |
+|---|---|---|
+| `iperf_mbps_out` / `iperf_mbps_in` | direction | one test's rate, credited to the sender and to the receiver |
+| `iperf_mbps_duplex` | host | what that host carried *at once*, both directions |
+| `iperf_gbytes` | host | total data carried across the run |
+| `iperf_line_util` | direction | rate as a % of the NIC's line rate (only with `--overlay-line-rate`) |
+
+**Relative — the overlays that say something a rate cannot**
+
+| Overlay | Per | What it is |
+|---|---|---|
+| `iperf_rel_median` | direction | that direction against the run's own median, in % |
+| `iperf_asymmetry` | pair | the gap between a pair's two directions, as a % of the faster one |
+
+`iperf_rel_median` is the one to open first: 100% is "normal for this fabric",
+45% is half speed, and you need not know what good looks like on this hardware.
+It arrives with a diverging palette pinned at 0–200% and aggregates by
+**median**, which matters more than it sounds — on a full mesh every host talks
+to the sick host, so every host's *worst* direction is the one to it, and a
+`min` aggregation reddens the whole floor while hiding the host that is
+actually slow. The median separates "I am slow" (all my directions are) from "I
+have a slow peer" (one is). Switch it to `min` when you do want the worst link
+anywhere. `iperf_asymmetry` is the shape a duplex mismatch, a one-way policer
+or a congested return path makes, credited to both ends and aggregating by
+`max`.
+
+**Reliability**
+
+| Overlay | Per | What it is |
+|---|---|---|
+| `iperf_status` | direction | `OK`; `FAIL` with the status, error text and log file to open; or `NO-DATA` |
+| `iperf_fail_kind` | direction | the failures only, valued by why (`NO_SUMMARY`, `DIRECTION_MISSING`, …) |
+| `iperf_ok_pct` | host | success rate, the **worse** of the host's send and receive sides |
+| `iperf_peers` | host | how many distinct peers it exchanged data with |
+
+`NO-DATA` is a host that was in the run's server list and produced no row at
+all — SSH refused, iperf2 missing, box down. Without it that host has nothing
+to paint and reads here as "not part of this test", which is the one reading
+that is certainly wrong; it comes with 0% coverage so it lands on the same
+overlay as every other broken host. `iperf_ok_pct` reports the worse side
+rather than the pooled rate because a host that receives fine and cannot send
+anything is broken, not half-well — the `sent=`/`recv=` metadata names which
+side failed.
+
+**The host itself**
+
+| Overlay | Per | What it is |
+|---|---|---|
+| `iperf_cpu_peak`, `_mean`, `_softirq`, `_sys`, `_user`, `_idle_floor` | host | from `cpu_summary.csv`; softirq and idle floor are per-core, and say which core |
+| `iperf_bind_iface` | direction | which NIC the traffic rode, when the run used `--bind` |
+
+Every overlay arrives with its unit, ramp direction, short name and — for the
+percentages — its real `0–100` range, because an auto-fitted scale makes a 30%
+CPU peak look alarming purely for being the highest number present. Sample
+metadata carries the peer, the test's timestamp, and on a failure the error
+text and log file; the header records the run id, its **mode** (a `parallel`
+run is the whole fleet under load at once, `sequential-pair` is one link's
+uncontended maximum — the numbers are not comparable) and the shape every
+sample shared.
+
+Two things are deliberately never invented. A direction that produced no number
+is **never** exported as 0 Mb/s — zero is a measurement, and averaging it in
+makes a broken link read as merely slow — so it leaves as a `FAIL` verdict and
+pulls its host's coverage down instead. And `iperf_mbps_duplex` is not a plain
+sum: parallel and sequential runs fire a round's flows together so those rates
+genuinely add, while rolling mode probes one pair over and over and adding
+*those* reports more than the NIC can carry. Rows are clustered by overlapping
+test window, summed inside a cluster and averaged across clusters; when the CSV
+carries no test windows the overlay is left out rather than guessed at.
+
+One measured row becomes one sample, so the aggregation menu here does the
+reducing (`mean` across peers, `max` the best, `min` the worst, `stdev` how
+steady). Every sample carries `run=<run-id>`, so a nightly
+`export-overlay --overlay-append` accumulates history in one file that `first`
+and `last` read as then-and-now. `--overlay-map` and `--overlay-prefix` rename
+hosts onto whatever the layout calls those nodes, and `--overlay-format ndjson`
+writes NDJSON instead.
+
 ### `tools/dcimport` — netmesh output, directly
 
 `dcadd --csv` already imports any CSV with a target column and a value
@@ -243,15 +336,7 @@ averaging a blank as 0 is the one mistake that quietly makes every one of these
 numbers look better than it is.
 
 `iperf_orchestrator` is not imported here either, for the same reason as `mx`:
-2.2+ writes this format itself, and better than an importer could.
-`iperf-orchestrator export-overlay` (or `run --overlay`) drops an
-`iperf_overlay.tsv` beside its CSVs, and because it has the whole run in hand
-it derives what reading those CSVs cannot — each direction against the run's
-own median, the gap between a pair's two directions, how much of each host's
-mesh measured, how wide it reached, and what a host carried at once (clustering
-concurrent flows rather than summing repeated probes) — and it keeps the failed
-directions, coloured by why they failed and carrying the log to open. Append
-that file to your results and skip this tool.
+it writes this format itself — see `export-overlay` above.
 `tests/fixtures/iperf-overlay.tsv` is that export, kept as the contract the
 suite checks.
 
