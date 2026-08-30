@@ -314,8 +314,11 @@ if (python.error) {
   // so it has to survive the parser intact.
   const relMeta = nativeOverlays.get('iperf_rel_median').meta;
   eq(relMeta.label, 'Throughput vs run median', 'multi-word label survives');
+  // Median, not min: on a mesh every host's worst direction is the one to
+  // the sick host, so a min aggregation reddens the whole floor and hides
+  // the host that is actually slow.
   eq([relMeta.palette, relMeta.min, relMeta.max, relMeta.agg],
-     ['rdbu', '0', '200', 'min'], 'relative throughput diverges around 100%');
+     ['rdbu', '0', '200', 'median'], 'relative throughput diverges around 100%');
   eq(nativeOverlays.get('iperf_cpu_peak').meta.max, '100',
      'percentages state their real scale rather than auto-fitting');
 
@@ -361,12 +364,12 @@ if (python.error) {
   // The derived overlays land on elements and aggregate the way their
   // metadata says they should: half of wr01r01u02's mesh failed, and its
   // rack must carry that number upward rather than the healthier host's.
-  // Coverage counts every direction a host is an end of: wr01r01u02 is part
-  // of three and one failed, so two thirds of its mesh measured.
+  // Coverage is the worse of a host's two sides: wr01r01u02 received both
+  // directions aimed at it but only one of the two it sent got through.
   const okPct = bindOverlay(nativeOverlays.get('iperf_ok_pct'), flat);
   eq(okPct.agg, 'min', 'coverage aggregates to the worst host');
-  ok(Math.abs(overlayValue(okPct, flat.resolve('wr01r01u02')).value - 200 / 3) < 0.01,
-     'a host with one failed direction reads two thirds');
+  eq(overlayValue(okPct, flat.resolve('wr01r01u02')).value, 50,
+     'a host that failed half of what it sent reads 50%');
   const rack = flat.resolve('wr01r01u02').parent;
   ok(overlayValue(okPct, rack).value < 100,
      'and its rack carries that downward, not the healthy host average');

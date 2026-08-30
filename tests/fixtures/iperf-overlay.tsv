@@ -1,14 +1,14 @@
-# iperf-orchestrator 2.3.0 -- overlay samples for the datacenter layout viewer
+# iperf-orchestrator 2.3.1 -- overlay samples for the datacenter layout viewer
 # run 20260101120000, mode parallel: 3 host(s), 4 direction(s) measured, 1 with no measurement, 3 host(s) with CPU data
 # run shape: duration=10s  streams=1  proto=TCP (samples say so when they differ)
 !test	iperf_mbps_out	unit=Mb/s	higher=good	decimals=0	short=OUT	label="Outbound Mb/s per direction"
 !test	iperf_mbps_in	unit=Mb/s	higher=good	decimals=0	short=IN	label="Inbound Mb/s per direction"
 !test	iperf_mbps_duplex	unit=Mb/s	higher=good	decimals=0	short=DUP	label="Total duplex Mb/s carried"
-!test	iperf_rel_median	unit=%	higher=good	palette=rdbu	min=0	max=200	agg=min	decimals=0	short=REL	label="Throughput vs run median"
+!test	iperf_rel_median	unit=%	higher=good	palette=rdbu	min=0	max=200	agg=median	decimals=0	short=REL	label="Throughput vs run median"
 !test	iperf_asymmetry	unit=%	higher=bad	min=0	max=100	agg=max	decimals=0	short=ASYM	label="Direction asymmetry within a pair"
 !test	iperf_status	short=STAT	label="Directed test outcome"
 !test	iperf_fail_kind	short=WHY	label="How a direction failed"
-!test	iperf_ok_pct	unit=%	higher=good	min=0	max=100	agg=min	decimals=0	short=OK%	label="Directions that measured"
+!test	iperf_ok_pct	unit=%	higher=good	min=0	max=100	agg=min	decimals=0	short=OK%	label="Success rate, worst of send and receive"
 !test	iperf_peers	higher=good	agg=min	decimals=0	short=PEER	label="Distinct peers measured"
 !test	iperf_cpu_peak	unit=%	higher=bad	min=0	max=100	decimals=0	short=CPU	label="Peak host CPU"
 !test	iperf_cpu_mean	unit=%	higher=bad	min=0	max=100	decimals=0	short=AVG	label="Mean host CPU"
@@ -43,13 +43,13 @@ iperf_bind_iface	wr01r01u01	eth0	peer=wr01r01u02	ip=10.0.0.1	run=20260101120000
 iperf_bind_iface	wr01r01u02	eth0	peer=wr01r01u01	ip=10.0.0.2	run=20260101120000
 iperf_bind_iface	wr01r01u01	eth0	peer=wr01r02u01	ip=10.0.0.1	run=20260101120000
 iperf_bind_iface	wr01r02u01	eth0	peer=wr01r01u01	ip=10.0.0.3	run=20260101120000
-iperf_ok_pct	wr01r01u01	100	ok=4	of=4	run=20260101120000
+iperf_ok_pct	wr01r01u01	100	sent=2/2	recv=2/2	run=20260101120000
 iperf_peers	wr01r01u01	2	run=20260101120000
 iperf_mbps_duplex	wr01r01u01	3400	flows=4	run=20260101120000
-iperf_ok_pct	wr01r01u02	66.6667	ok=2	of=3	run=20260101120000
+iperf_ok_pct	wr01r01u02	50	sent=1/2	recv=1/1	run=20260101120000
 iperf_peers	wr01r01u02	1	run=20260101120000
 iperf_mbps_duplex	wr01r01u02	1880	flows=2	run=20260101120000
-iperf_ok_pct	wr01r02u01	66.6667	ok=2	of=3	run=20260101120000
+iperf_ok_pct	wr01r02u01	50	sent=1/1	recv=1/2	run=20260101120000
 iperf_peers	wr01r02u01	1	run=20260101120000
 iperf_mbps_duplex	wr01r02u01	1520	flows=2	run=20260101120000
 iperf_cpu_peak	wr01r01u01	45	src=mpstat	cores=16	run=20260101120000
