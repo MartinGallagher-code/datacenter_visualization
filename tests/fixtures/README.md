@@ -24,3 +24,12 @@ write this project's own results format themselves, so what the suite checks
 there is that their output parses, binds against a layout, and carries the
 metadata each overlay needs — including, for `mx export`, a host that never
 reported, which arrives as `mx_state NO-DATA`.
+
+`mx-export/` is also the contract for what that export leaves *out*. Because
+one host in the run behind it never reported, nobody can say how much of its
+peers' traffic arrived, so the loss split (`mx_forward_loss` /
+`mx_return_loss`) is absent rather than guessed, as is `mx_served_pps` for a
+host whose receive side went unmeasured. The suite asserts those absences
+alongside what is present: an overlay that appears only when its number was
+measured is the property worth protecting, since a zero here would be
+averaged into every rack and room above it.
