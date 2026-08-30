@@ -9,13 +9,12 @@
 # Public License (LICENSE, or <https://www.gnu.org/licenses/>) for details.
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Turn network-test output into overlay samples.
+"""Turn netmesh output into overlay samples.
 
 `dcadd --csv` already imports any CSV with a target column and a value column.
-This is for the tools whose output does not have that shape:
+This is for netmesh, whose output does not have that shape:
 
     dcimport results.tsv --tidy reports/          netmesh reports/
-    dcimport results.tsv --iperf results/latest/  iperf_orchestrator
 
 Every sample is kept and the viewer reduces them with the aggregation you pick
 there, so nothing is averaged on the way in: one measured row becomes one
@@ -23,14 +22,17 @@ sample. `mean` then reads as "across peers and intervals", `max` as "the worst
 peer", `last` as "right now". Pass --reduce to collapse to one sample per host
 per metric instead, for meshes big enough that the raw row count matters.
 
-A blank cell means "not measured" in both tools and is skipped, never read as
-zero -- averaging a blank as 0 is the one mistake that quietly makes every one
-of these numbers look better than it is.
+A blank cell means "not measured" and is skipped, never read as zero --
+averaging a blank as 0 is the one mistake that quietly makes every one of
+these numbers look better than it is.
 
-`matrix_orchestrator` is not here: `mx export` writes this format itself, with
-the run's own rules applied to the numbers (blank is not zero, a layered run's
-rates come from the host rows, latency is the worst peer's). Point it at a
-results file and skip this tool entirely.
+`matrix_orchestrator` and `iperf_orchestrator` are not here: `mx export` and
+`iperf-orchestrator export-overlay` write this format themselves, with each
+run's own rules applied to the numbers (blank is not zero, a layered run's
+rates come from the host rows, latency is the worst peer's; and for iperf, a
+direction against the run's median, a pair's asymmetry, and the failures a
+count alone would lose). Point the viewer at those files and skip this tool
+entirely.
 """
 
 import argparse
@@ -63,16 +65,6 @@ NETMESH_TX = [
 ]
 NETMESH_HOST = [
     ("agent_cpu", "agent_cpu_pct", "unit=% higher=bad short=ACPU label=\"netmesh agent CPU\""),
-]
-
-IPERF_META = [
-    ("mbps_out", "unit=Mb/s higher=good short=OUT label=\"Outbound Mb/s\""),
-    ("mbps_in", "unit=Mb/s higher=good short=IN label=\"Inbound Mb/s\""),
-]
-IPERF_CPU = [
-    ("cpu_peak", "peak_total_pct", "unit=% higher=bad short=CPU label=\"Peak CPU\""),
-    ("cpu_softirq", "peak_softirq_pct", "unit=% higher=bad short=SIRQ label=\"Peak softirq (one core)\""),
-    ("cpu_idle_floor", "peak_idle_floor_pct", "unit=% higher=good short=IDLE label=\"Lowest idle (one core)\""),
 ]
 
 
@@ -174,12 +166,6 @@ class Out(object):
         self.samples = reduced
 
 
-def read_csv_rows(path):
-    with io.open(path, "r", encoding="utf-8-sig", newline="") as fh:
-        for row in csv.DictReader(fh):
-            yield row
-
-
 def csv_files(path, what):
     """Every .csv under a directory, or the single file named."""
     if os.path.isfile(path):
@@ -217,6 +203,7 @@ def read_tidy(path, out):
                     "  header: %s\n"
                     "  expected netmesh columns (jitter_us, path_mtu)\n"
                     "  (matrix_orchestrator reports are exported by `mx export`,"
+                    " and iperf_orchestrator runs by its own `export-overlay`,"
                     " not imported here)"
                     % (filename, ",".join(reader.fieldnames or [])))
             for row in reader:
@@ -249,48 +236,6 @@ def _emit(table, row, host, out, extras):
         out.sample(test, host, trim(value), extras)
 
 
-# ------------------------------------------------------------ iperf_orchestrator
-
-def read_iperf(path, out):
-    if os.path.isfile(path):
-        results = path
-        cpu = os.path.join(os.path.dirname(path) or ".", "cpu_summary.csv")
-    else:
-        if not os.path.isdir(path):
-            sys.exit("dcimport: no such results directory: %s" % path)
-        results = os.path.join(path, "iperf_results.csv")
-        cpu = os.path.join(path, "cpu_summary.csv")
-        if not os.path.isfile(results):
-            sys.exit("dcimport: %s has no iperf_results.csv\n"
-                     "  (point --iperf at results/latest/, or at the csv itself)"
-                     % path)
-
-    for test, meta in IPERF_META:
-        out.declare(test, meta)
-
-    skipped = 0
-    for row in read_csv_rows(results):
-        status = (row.get("status") or "").strip()
-        source = (row.get("source") or "").strip()
-        target = (row.get("target") or "").strip()
-        mbps = number(row.get("mbps"))
-        # Only OK rows carry a throughput number; the others exist so a missing
-        # direction is visible rather than silently absent, and importing them
-        # as 0 Mb/s would paint a working link as dead.
-        if status != "OK" or mbps is None or not source or not target:
-            skipped += 1
-            continue
-        out.sample("mbps_out", source, trim(mbps), ["peer=%s" % target])
-        out.sample("mbps_in", target, trim(mbps), ["peer=%s" % source])
-
-    if os.path.isfile(cpu):
-        for row in read_csv_rows(cpu):
-            host = (row.get("host") or "").strip()
-            if host:
-                _emit(IPERF_CPU, row, host, out, [])
-    return skipped
-
-
 # ------------------------------------------------------------------------ main
 
 def append(path, lines):
@@ -313,18 +258,14 @@ def append(path, lines):
 def main(argv=None):
     ap = argparse.ArgumentParser(
         prog="dcimport",
-        description="Turn netmesh and iperf_orchestrator output into "
-                    "overlay samples.",
+        description="Turn netmesh output into overlay samples.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="Every measured row becomes one sample; the viewer reduces "
                "them with the aggregation you pick there.")
     ap.add_argument("output", metavar="RESULTS.TSV",
                     help="results file to append to ('-' for stdout)")
-    src = ap.add_mutually_exclusive_group(required=True)
-    src.add_argument("--tidy", metavar="PATH",
-                     help="netmesh reports/ directory, or one report csv")
-    src.add_argument("--iperf", metavar="PATH",
-                     help="iperf_orchestrator results dir (or iperf_results.csv)")
+    ap.add_argument("--tidy", metavar="PATH", required=True,
+                    help="netmesh reports/ directory, or one report csv")
     ap.add_argument("--reduce", action="store_true",
                     help="one sample per host per metric (median) instead of "
                          "one per measured row")
@@ -338,19 +279,8 @@ def main(argv=None):
     ap.add_argument("--version", action="version", version=VERSION_NOTICE)
     args = ap.parse_args(argv)
 
-    warnings = []
-
-    def warn(message):
-        warnings.append(message)
-
     out = Out()
-    if args.tidy:
-        source_label = "%s reports" % read_tidy(args.tidy, out)
-    else:
-        skipped = read_iperf(args.iperf, out)
-        source_label = "iperf_orchestrator"
-        if skipped:
-            warn("%d iperf row(s) skipped: not status=OK, or no mbps" % skipped)
+    source_label = "%s reports" % read_tidy(args.tidy, out)
 
     if args.reduce:
         out.reduce()
@@ -379,8 +309,6 @@ def main(argv=None):
             "dcimport: %s %d line(s) from %s -- %d sample(s), %d test(s): %s\n"
             % (where, written, source_label, len(out.samples), len(tests),
                " ".join(tests) or "none"))
-        for message in warnings:
-            sys.stderr.write("dcimport: %s\n" % message)
 
     if not out.samples:
         sys.stderr.write("dcimport: nothing imported\n")

@@ -217,22 +217,20 @@ percentile of percentiles. Those rules are not visible from outside a
 `reports/` directory, which is why this direction is an export and not an
 import.
 
-### `tools/dcimport` — output from the test tools, directly
+### `tools/dcimport` — netmesh output, directly
 
 `dcadd --csv` already imports any CSV with a target column and a value
-column. `dcimport` is for the tools whose output does not have that shape,
-because what they measure is a **pair** — `(src, dst)` — while the viewer
+column. `dcimport` is for netmesh, whose output does not have that shape,
+because what it measures is a **pair** — `(src, dst)` — while the viewer
 paints **elements**.
 
 ```sh
 dcimport results.tsv --tidy reports/          # netmesh
-dcimport results.tsv --iperf results/latest/  # iperf_orchestrator
 ```
 
 | Source | What arrives |
 |---|---|
 | [`netmesh`](https://github.com/MartinGallagher-code/binnacle) `reports/` | `rtt_p50` `rtt_p99` `jitter` `loss` `path_mtu` per peer, `agent_cpu` per host |
-| [`iperf_orchestrator`](https://github.com/MartinGallagher-code/iperf_orchestrator) | `mbps_out` `mbps_in`, plus `cpu_peak` `cpu_softirq` `cpu_idle_floor` from `cpu_summary.csv` (superseded by that tool's own `export-overlay` — see below) |
 
 **Nothing is averaged on the way in.** One measured row becomes one sample,
 so the viewer's own aggregation menu does the reducing: `mean` reads as
@@ -240,22 +238,22 @@ so the viewer's own aggregation menu does the reducing: `mean` reads as
 now". `--reduce` collapses to one sample per host per metric (median) for
 meshes big enough that the raw row count matters.
 
-A blank cell means "not measured" in both tools and is skipped rather than
-read as zero — averaging a blank as 0 is the one mistake that quietly makes
-every one of these numbers look better than it is. iperf rows that are not
-`status=OK` are skipped and counted on stderr for the same reason.
+A blank cell means "not measured" and is skipped rather than read as zero —
+averaging a blank as 0 is the one mistake that quietly makes every one of these
+numbers look better than it is.
 
-`iperf_orchestrator` 2.2+ writes this format itself, and better than an
-importer can: `iperf-orchestrator export-overlay` (or `run --overlay`) drops an
-`iperf_overlay.tsv` beside its CSVs. Because it has the whole run in hand it
-also derives what `--iperf` here cannot — each direction against the run's own
-median, the gap between a pair's two directions, how much of each host's mesh
-measured, how wide it reached, and what a host carried at once (clustering
+`iperf_orchestrator` is not imported here either, for the same reason as `mx`:
+2.2+ writes this format itself, and better than an importer could.
+`iperf-orchestrator export-overlay` (or `run --overlay`) drops an
+`iperf_overlay.tsv` beside its CSVs, and because it has the whole run in hand
+it derives what reading those CSVs cannot — each direction against the run's
+own median, the gap between a pair's two directions, how much of each host's
+mesh measured, how wide it reached, and what a host carried at once (clustering
 concurrent flows rather than summing repeated probes) — and it keeps the failed
-directions `--iperf` can only count, coloured by why they failed and carrying
-the log to open. **Prefer it; `dcimport --iperf` is the fallback for CSVs from an older
-version.** `tests/fixtures/iperf-overlay.tsv` is that export, kept as the
-contract the suite checks.
+directions, coloured by why they failed and carrying the log to open. Append
+that file to your results and skip this tool.
+`tests/fixtures/iperf-overlay.tsv` is that export, kept as the contract the
+suite checks.
 
 Targets are whatever the tools called the hosts, so **generate the server
 list from the layout and the names already match**. binnacle's `manifest`
@@ -297,7 +295,7 @@ examples/mega.dc          scale test (~256k elements on one page)
 examples/hostnames.dc     flat hostname naming (wr12r06u15 style)
 examples/hostnames-results.tsv  results addressed by flat name
 tools/dcadd               results appender (python3, stdlib only)
-tools/dcimport            netmesh / iperf output -> overlay samples
+tools/dcimport            netmesh output -> overlay samples
 tests/fixtures/           real tool output, as the import contract
 tests/run.mjs             headless test suite (node tests/run.mjs)
 LICENSE                   GNU General Public License v3
