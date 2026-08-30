@@ -276,21 +276,11 @@ if (python.error) {
      '--reduce leaves one sample per host per metric');
   ok(!cut.out.includes('peer='), '--reduce drops the per-peer provenance it collapsed');
 
-  // iperf: both directions, and rows without a throughput number are skipped
-  // rather than imported as zero.
-  const ip = dcimport(['--iperf', join(fixtures, 'iperf-results')]);
-  eq(ip.code, 0, 'dcimport iperf exits 0');
-  ok(/^mbps_out\twr01r01u01\t1000\t/m.test(ip.out), 'iperf outbound sample');
-  ok(/^mbps_in\twr01r01u02\t1000\t/m.test(ip.out), 'iperf inbound sample mirrors it');
-  ok(ip.err.includes('1 iperf row(s) skipped'), 'non-OK iperf row skipped and reported');
-  ok(/^cpu_peak\twr01r02u01\t38/m.test(ip.out), 'proc_stat host keeps the field it has');
-  ok(!/^cpu_softirq\twr01r02u01/m.test(ip.out), 'blank softirq is not imported as zero');
-
-  // iperf_orchestrator writes this format itself (`export-overlay`), and its
-  // export is richer than what an importer can reconstruct from the CSVs: it
-  // knows the whole run, so it can score a direction against the run's median,
-  // compare a pair's two directions, and say how much of a host's mesh
-  // measured at all. Kept here as the contract that export is written against.
+  // iperf_orchestrator writes this format itself (`export-overlay`), so there
+  // is no importer for it either: it knows the whole run, so it can score a
+  // direction against the run's median, compare a pair's two directions, and
+  // say how much of a host's mesh measured at all. Kept here as the contract
+  // that export is written against.
   const native = readFileSync(join(fixtures, 'iperf-overlay.tsv'), 'utf8');
   const nativeOverlays = parseResults(native);
   eq([...nativeOverlays.keys()], [
@@ -327,14 +317,14 @@ if (python.error) {
        `${name} invents no zero for an unmeasured direction`);
   }
 
-  // dcimport reads the same CSVs and can still be loaded alongside: both name
+  // That export and dcimport's output can be loaded side by side: they name
   // their overlays distinctly, so the two never overwrite each other.
-  const mixed = parseResults(native + ip.out);
-  ok(mixed.has('iperf_mbps_out') && mixed.has('mbps_out'),
+  const mixed = parseResults(native + nm.out);
+  ok(mixed.has('iperf_mbps_out') && mixed.has('rtt_p50'),
      'export-overlay and dcimport overlays coexist in one results file');
 
-  // A file that is not one of these reports fails loudly -- and an mx report,
-  // which this tool deliberately no longer reads, says where it belongs.
+  // A file that is not a netmesh report fails loudly -- and the mx and iperf
+  // reports this tool deliberately no longer reads say where they belong.
   const wrong = dcimport(['--tidy', join(root, 'examples/small-results.tsv')]);
   ok(wrong.code !== 0 && wrong.err.includes('not a netmesh report'),
      'unknown report header is rejected');
@@ -342,7 +332,7 @@ if (python.error) {
   // End to end: importer output -> parseResults -> bound against a real
   // layout, with every target resolving to an element.
   const flat = parseLayout(readFileSync(join(root, 'examples/hostnames.dc'), 'utf8'));
-  const imported = parseResults(nm.out + ip.out);
+  const imported = parseResults(nm.out);
   const rtt = bindOverlay(imported.get('rtt_p50'), flat);
   eq(rtt.unresolved, [], 'every imported netmesh target resolves in the layout');
   eq(rtt.unit, 'us', 'metadata survives the round trip');
