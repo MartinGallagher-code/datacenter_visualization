@@ -218,6 +218,8 @@ readable.
 | `mx_served_pps` | pps | requests that *arrived* here from its peers — the receiver-side truth a sender cannot see |
 | `mx_request_gbps` | Gb/s | its own requests on the wire, Ethernet/IP/UDP framing included |
 | `mx_egress_gbps` | Gb/s | everything it puts on the wire: those requests plus the replies it owes the hosts that call it |
+| `mx_rel_median` | % | its packet rate against the fleet's own median — 100% is "normal for this fabric" |
+| `mx_line_util` | % | egress against the NIC's line rate (only with `mx export --nic-gbps`) |
 | `mx_loss` | % | round-trip loss |
 | `mx_forward_loss` | % | of what it sent, the share that never arrived |
 | `mx_return_loss` | % | the share that arrived but whose reply never came back |
@@ -231,13 +233,38 @@ readable.
 | `mx_peers` | | flows this host sends |
 | `mx_workers` | | agent worker processes, which is what makes `mx_agent_cpu` readable |
 | `mx_intervals` | | report intervals it contributed to the window |
-| `mx_state` | | `REPORTING`, or `NO-DATA` for a host in the matrix that said nothing at all — the one reading a missing report cannot give you |
+| `mx_state` | | `REPORTING`; `SILENT` for a host that reported earlier in the run but nothing inside the window; `NO-DATA` for one in the matrix that never reported at all — the reading a missing report cannot give you |
 
 `mx export --peers` adds a per-flow overlay — `mx_peer_pps`, `mx_peer_loss`,
 `mx_peer_rtt_p99` — one sample per flow, each tagged `peer=` (and `layer=`
 on a layered run). They live under their own names so a `mean` over the
 per-host overlays can never quietly include per-flow rows, and they ask for
 `max` by default, which reads as *the worst peer of this host*.
+
+**Rates you can read without knowing the hardware.** `mx_rel_median` is the
+one to open first on an unfamiliar fleet: it puts every host against the
+run's own median on a diverging ramp, so 100% is "normal here" and a slow
+rack stands out whatever the absolute numbers are. It aggregates by
+**median** deliberately — every host in a mesh talks to the sick host, so
+`min` would redden the whole floor and hide it, while a host that is itself
+slow has all of its flows slow. That is "I am slow" against "I have a slow
+peer". (`iperf_rel_median` below is the same idea for throughput, and reads
+the same way.)
+
+What a relative overlay cannot see is a floor that is *uniformly* slow —
+every host reads 100% of a median that is itself wrong. `mx export
+--nic-gbps 25` fixes the scale to the hardware: it adds `mx_line_util` and
+pins the throughput overlays absolutely, so half speed looks like half
+speed.
+
+**Every overlay arrives ready to read.** Units, palette direction, decimal
+places, a 0-100 range pinned where the value really is a percentage of
+something (auto-fitting makes a 30% CPU peak look alarming for no reason
+but being the highest), and the aggregation that answers each overlay's own
+question when a rack or room is collapsed: `max` for the worst peer's
+latency and the busiest agent worker, `min` for coverage and intervals,
+`median` for the two that diverge around 100%. All of it is overridable in
+the overlay panel.
 
 **An overlay is present only when its number was measured.** A host whose
 receive side nobody reported gets no `mx_served_pps` and no
