@@ -1,4 +1,0 @@
-host,source,n_cpus,peak_total_pct,mean_total_pct,peak_softirq_pct,peak_softirq_cpu,peak_sys_pct,peak_user_pct,peak_idle_floor_pct
-wr01r01u01,mpstat,16,45.0,31.2,12.5,3,20.1,18.4,22.0
-wr01r01u02,mpstat,16,98.6,88.1,41.2,7,55.0,30.2,0.4
-wr01r02u01,proc_stat,,38.0,25.5,,,15.0,20.0,

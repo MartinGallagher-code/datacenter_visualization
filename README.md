@@ -186,22 +186,17 @@ shows up as a warning instead of an empty overlay.
 ### `tools/dcimport` — output from the test tools, directly
 
 `dcadd --csv` already imports any CSV with a target column and a value
-column. `dcimport` is for the three tools whose output does not have that
-shape, because what they measure is a **pair** — `(src, dst)` — while the
-viewer paints **elements**.
+column. `dcimport` is for netmesh, whose output does not have that shape,
+because what it measures is a **pair** — `(src, dst)` — while the viewer
+paints **elements**.
 
 ```sh
-dcimport results.tsv --tidy reports/          # netmesh or mx, auto-detected
-dcimport results.tsv --iperf results/latest/  # iperf_orchestrator
-mx status | dcimport results.tsv --mx-status  # mx, live
+dcimport results.tsv --tidy reports/          # netmesh
 ```
 
 | Source | What arrives |
 |---|---|
 | [`netmesh`](https://github.com/MartinGallagher-code/binnacle) `reports/` | `rtt_p50` `rtt_p99` `jitter` `loss` `path_mtu` per peer, `agent_cpu` per host |
-| [`mx`](https://github.com/MartinGallagher-code/matrix_orchestrator) `reports/` | `pps` `mbps` `rep_mbps` `loss` `rtt_p50` `rtt_p99` `cpu` `delivery`; `--peers` adds per-peer rows |
-| [`iperf_orchestrator`](https://github.com/MartinGallagher-code/iperf_orchestrator) | `mbps_out` `mbps_in`, plus `cpu_peak` `cpu_softirq` `cpu_idle_floor` from `cpu_summary.csv` (superseded by that tool's own `export-overlay` — see below) |
-| `mx status` | `mx_state` (RUNNING / NOT-RUNNING / NOT-DEPLOYED / STARTING) and live `mx_pps` `mx_loss` `mx_rtt_p50` `mx_rtt_p99` `mx_cpu` `mx_peers` |
 
 **Nothing is averaged on the way in.** One measured row becomes one sample,
 so the viewer's own aggregation menu does the reducing: `mean` reads as
@@ -209,22 +204,20 @@ so the viewer's own aggregation menu does the reducing: `mean` reads as
 now". `--reduce` collapses to one sample per host per metric (median) for
 meshes big enough that the raw row count matters.
 
-A blank cell means "not measured" in all three tools and is skipped rather
-than read as zero — averaging a blank as 0 is the one mistake that quietly
-makes every one of these numbers look better than it is. iperf rows that are
-not `status=OK` are skipped and counted on stderr for the same reason.
+A blank cell means "not measured" and is skipped rather than read as zero —
+averaging a blank as 0 is the one mistake that quietly makes every one of
+these numbers look better than it is.
 
-`iperf_orchestrator` 2.2+ writes this format itself, and better than an
-importer can: `iperf-orchestrator export-overlay` (or `run --overlay`) drops an
-`iperf_overlay.tsv` beside its CSVs. Because it has the whole run in hand it
-also derives what `--iperf` here cannot — each direction against the run's own
-median, the gap between a pair's two directions, how much of each host's mesh
-measured, how wide it reached, and what a host carried at once (clustering
-concurrent flows rather than summing repeated probes) — and it keeps the failed
-directions `--iperf` can only count, coloured by why they failed and carrying
-the log to open. **Prefer it; `dcimport --iperf` is the fallback for CSVs from an older
-version.** `tests/fixtures/iperf-overlay.tsv` is that export, kept as the
-contract the suite checks.
+Tools that write this format themselves need no importer at all.
+`iperf_orchestrator` 2.2+ is one: `iperf-orchestrator export-overlay` (or `run
+--overlay`) drops an `iperf_overlay.tsv` beside its CSVs, and because it has
+the whole run in hand it derives what an importer cannot — each direction
+against the run's own median, the gap between a pair's two directions, how much
+of each host's mesh measured, how wide it reached, and what a host carried at
+once — keeping the failed directions too, coloured by why they failed and
+carrying the log to open. Load that file directly.
+`tests/fixtures/iperf-overlay.tsv` is such an export, kept as the contract the
+suite checks.
 
 Targets are whatever the tools called the hosts, so **generate the server
 list from the layout and the names already match**. binnacle's `manifest`
@@ -234,11 +227,6 @@ reads this project's `.dc` format for exactly that:
 manifest floor.dc 'room[1]' | netmesh gen --servers -
 netmesh run --for 60 && dcimport results.tsv --tidy reports/
 ```
-
-`mx status` is scraped, not parsed from an API — it is one line of
-`agent.log` per host, formatted for people. `dcimport` matches each field by
-name and reports any line it does not recognise instead of half-reading it,
-but for anything you intend to keep or analyse, import `reports/` instead.
 
 ## The viewer
 
@@ -271,8 +259,8 @@ examples/mega.dc          scale test (~256k elements on one page)
 examples/hostnames.dc     flat hostname naming (wr12r06u15 style)
 examples/hostnames-results.tsv  results addressed by flat name
 tools/dcadd               results appender (python3, stdlib only)
-tools/dcimport            netmesh / mx / iperf output -> overlay samples
-tests/fixtures/           real output from those tools, as the import contract
+tools/dcimport            netmesh output -> overlay samples
+tests/fixtures/           real output from the test tools, as the contract
 tests/run.mjs             headless test suite (node tests/run.mjs)
 LICENSE                   GNU General Public License v3
 ```

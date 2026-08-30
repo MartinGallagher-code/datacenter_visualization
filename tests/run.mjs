@@ -242,11 +242,10 @@ ok(contrastInk('#ffffff') !== contrastInk('#000000'), 'contrast ink flips');
 }
 
 // ----------------------------------------------------------------- dcimport
-// The fixtures under tests/fixtures/ are real output: the netmesh and mx
-// reports came from agents actually probing over loopback, and the header of
-// each is the one those tools write today. They are the contract this importer
-// is written against, so a schema change upstream fails here rather than in a
-// silently empty overlay.
+// The fixtures under tests/fixtures/ are real output: the netmesh reports came
+// from agents actually probing over loopback, and their header is the one that
+// tool writes today. They are the contract this importer is written against, so
+// a schema change upstream fails here rather than in a silently empty overlay.
 const python = spawnSync('python3', ['--version'], { encoding: 'utf8' });
 if (python.error) {
   console.log('  dcimport: skipped (no python3)');
@@ -268,14 +267,6 @@ if (python.error) {
   ok(nm.out.includes('peer=wr01r01u02'), 'netmesh keeps the peer it measured');
   ok(/^agent_cpu\t/m.test(nm.out), 'netmesh agent cpu comes from its dir=host row');
 
-  // mx: the dir=host row is already per-host, and delivery is derived from it.
-  const mxr = dcimport(['--tidy', join(fixtures, 'mx-reports')]);
-  eq(mxr.code, 0, 'dcimport mx exits 0');
-  ok(/^delivery\t/m.test(mxr.out), 'mx delivery ratio derived from target_pps');
-  ok(!mxr.out.includes('peer='), 'mx host rows carry no peer without --peers');
-  ok(dcimport(['--tidy', join(fixtures, 'mx-reports'), '--peers']).out.includes('peer='),
-     '--peers adds mx per-peer samples');
-
   // --reduce collapses each host's peers to one median sample per metric.
   const full = dcimport(['--tidy', join(fixtures, 'netmesh-reports'), '--no-meta']);
   const cut = dcimport(['--tidy', join(fixtures, 'netmesh-reports'), '--no-meta', '--reduce']);
@@ -284,21 +275,11 @@ if (python.error) {
      '--reduce leaves one sample per host per metric');
   ok(!cut.out.includes('peer='), '--reduce drops the per-peer provenance it collapsed');
 
-  // iperf: both directions, and rows without a throughput number are skipped
-  // rather than imported as zero.
-  const ip = dcimport(['--iperf', join(fixtures, 'iperf-results')]);
-  eq(ip.code, 0, 'dcimport iperf exits 0');
-  ok(/^mbps_out\twr01r01u01\t1000\t/m.test(ip.out), 'iperf outbound sample');
-  ok(/^mbps_in\twr01r01u02\t1000\t/m.test(ip.out), 'iperf inbound sample mirrors it');
-  ok(ip.err.includes('1 iperf row(s) skipped'), 'non-OK iperf row skipped and reported');
-  ok(/^cpu_peak\twr01r02u01\t38/m.test(ip.out), 'proc_stat host keeps the field it has');
-  ok(!/^cpu_softirq\twr01r02u01/m.test(ip.out), 'blank softirq is not imported as zero');
-
-  // iperf_orchestrator writes this format itself (`export-overlay`), and its
-  // export is richer than what an importer can reconstruct from the CSVs: it
-  // knows the whole run, so it can score a direction against the run's median,
-  // compare a pair's two directions, and say how much of a host's mesh
-  // measured at all. Kept here as the contract that export is written against.
+  // iperf_orchestrator writes this format itself (`export-overlay`), so it
+  // needs no importer: it knows the whole run, and scores a direction against
+  // the run's median, compares a pair's two directions, and says how much of a
+  // host's mesh measured at all. Kept here as the contract that export is
+  // written against.
   const native = readFileSync(join(fixtures, 'iperf-overlay.tsv'), 'utf8');
   const nativeOverlays = parseResults(native);
   eq([...nativeOverlays.keys()], [
@@ -335,35 +316,21 @@ if (python.error) {
        `${name} invents no zero for an unmeasured direction`);
   }
 
-  // dcimport reads the same CSVs and can still be loaded alongside: both name
+  // That export and dcimport's output can be loaded side by side: they name
   // their overlays distinctly, so the two never overwrite each other.
-  const mixed = parseResults(native + ip.out);
-  ok(mixed.has('iperf_mbps_out') && mixed.has('mbps_out'),
+  const mixed = parseResults(native + nm.out);
+  ok(mixed.has('iperf_mbps_out') && mixed.has('rtt_p50'),
      'export-overlay and dcimport overlays coexist in one results file');
-
-  // mx status: the human ticker, with its units unwound and its sentinels kept.
-  const st = dcimport(['--mx-status', join(fixtures, 'mx-status.txt')]);
-  eq(st.code, 0, 'dcimport mx-status exits 0');
-  ok(/^mx_pps\twr01r01u01\t4000$/m.test(st.out), '"4.0 kpps" becomes 4000');
-  ok(/^mx_rtt_p50\twr01r01u01\t96$/m.test(st.out), '"96us" becomes 96');
-  ok(/^mx_cpu\twr01r01u01\t14$/m.test(st.out), '"14%(max 15%)" takes the current value');
-  ok(/^mx_state\twr01r01u02\tNOT-RUNNING$/m.test(st.out), 'NOT-RUNNING kept as a state');
-  ok(/^mx_state\twr01r02u02\tSTARTING$/m.test(st.out), '"running (no report yet)" is STARTING');
-
-  // A ticker we do not recognise must be reported, never half-parsed.
-  const odd = spawnSync('python3', [join(root, 'tools/dcimport'), '-', '--mx-status'],
-                        { encoding: 'utf8', input: '  host8  WAT\n' });
-  ok((odd.stderr || '').includes('unrecognised status line'), 'unknown status line warns');
 
   // A file that is not one of these reports fails loudly.
   const wrong = dcimport(['--tidy', join(root, 'examples/small-results.tsv')]);
-  ok(wrong.code !== 0 && wrong.err.includes('not a netmesh or mx report'),
+  ok(wrong.code !== 0 && wrong.err.includes('not a netmesh report'),
      'unknown report header is rejected');
 
   // End to end: importer output -> parseResults -> bound against a real
   // layout, with every target resolving to an element.
   const flat = parseLayout(readFileSync(join(root, 'examples/hostnames.dc'), 'utf8'));
-  const imported = parseResults(nm.out + ip.out);
+  const imported = parseResults(nm.out);
   const rtt = bindOverlay(imported.get('rtt_p50'), flat);
   eq(rtt.unresolved, [], 'every imported netmesh target resolves in the layout');
   eq(rtt.unit, 'us', 'metadata survives the round trip');
