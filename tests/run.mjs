@@ -295,10 +295,20 @@ if (python.error) {
   const nativeOverlays = parseResults(native);
   eq([...nativeOverlays.keys()], [
     'iperf_mbps_out', 'iperf_mbps_in', 'iperf_mbps_duplex', 'iperf_rel_median',
-    'iperf_asymmetry', 'iperf_status', 'iperf_ok_pct',
-    'iperf_cpu_peak', 'iperf_cpu_mean', 'iperf_cpu_softirq', 'iperf_cpu_sys',
-    'iperf_cpu_user', 'iperf_cpu_idle_floor',
+    'iperf_asymmetry', 'iperf_status', 'iperf_fail_kind', 'iperf_ok_pct',
+    'iperf_peers', 'iperf_cpu_peak', 'iperf_cpu_mean', 'iperf_cpu_softirq',
+    'iperf_cpu_sys', 'iperf_cpu_user', 'iperf_cpu_idle_floor',
+    'iperf_bind_iface',
   ], 'export-overlay declares its overlays in reading order');
+
+  // Verdict overlays are categorical, and the failure kind is its own
+  // overlay so a floor can be coloured by *why* rather than by pass/fail.
+  const kinds = nativeOverlays.get('iperf_fail_kind');
+  eq(kinds.samples.map((smp) => smp.value), ['NO_SUMMARY'],
+     'only the failures, valued by their status');
+  ok(nativeOverlays.get('iperf_status').samples.some(
+       (smp) => smp.meta && smp.meta.log && smp.meta.err),
+     'a failed direction carries its error text and the log to open');
 
   // Metadata is the difference between a readable first render and a puzzle,
   // so it has to survive the parser intact.
@@ -351,17 +361,28 @@ if (python.error) {
   // The derived overlays land on elements and aggregate the way their
   // metadata says they should: half of wr01r01u02's mesh failed, and its
   // rack must carry that number upward rather than the healthier host's.
+  // Coverage counts every direction a host is an end of: wr01r01u02 is part
+  // of three and one failed, so two thirds of its mesh measured.
   const okPct = bindOverlay(nativeOverlays.get('iperf_ok_pct'), flat);
   eq(okPct.agg, 'min', 'coverage aggregates to the worst host');
-  eq(overlayValue(okPct, flat.resolve('wr01r01u02')).value, 50,
-     'a host whose mesh half failed reads 50%');
+  ok(Math.abs(overlayValue(okPct, flat.resolve('wr01r01u02')).value - 200 / 3) < 0.01,
+     'a host with one failed direction reads two thirds');
   const rack = flat.resolve('wr01r01u02').parent;
-  eq(overlayValue(okPct, rack).value, 50, 'and its rack shows that, not the average');
+  ok(overlayValue(okPct, rack).value < 100,
+     'and its rack carries that downward, not the healthy host average');
 
   const asym = bindOverlay(nativeOverlays.get('iperf_asymmetry'), flat);
   eq(asym.agg, 'max', 'asymmetry aggregates to the worst pair');
   eq(overlayValue(asym, flat.resolve('wr01r01u01')).value, 12,
      '1000 vs 880 Mb/s on one pair is 12% apart');
+
+  // Duplex load is what a host carried at once: the fixture's flows share a
+  // test window, so wr01r01u01's 1000 + 800 out and 880 + 720 in add up.
+  const duplex = bindOverlay(nativeOverlays.get('iperf_mbps_duplex'), flat);
+  eq(overlayValue(duplex, flat.resolve('wr01r01u01')).value, 3400,
+     'concurrent flows add into one duplex figure');
+  const rackLoad = overlayValue(duplex, flat.resolve('wr01r01u01').parent);
+  ok(rackLoad.value > 0, 'and a rack sums the hosts beneath it');
 }
 
 // ---------------------------------------------------------------- mx export

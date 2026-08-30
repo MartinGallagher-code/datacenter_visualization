@@ -249,9 +249,11 @@ every one of these numbers look better than it is. iperf rows that are not
 importer can: `iperf-orchestrator export-overlay` (or `run --overlay`) drops an
 `iperf_overlay.tsv` beside its CSVs. Because it has the whole run in hand it
 also derives what `--iperf` here cannot — each direction against the run's own
-median, the gap between a pair's two directions, and how much of each host's
-mesh measured at all — and it keeps the failed directions `--iperf` can only
-count. **Prefer it; `dcimport --iperf` is the fallback for CSVs from an older
+median, the gap between a pair's two directions, how much of each host's mesh
+measured, how wide it reached, and what a host carried at once (clustering
+concurrent flows rather than summing repeated probes) — and it keeps the failed
+directions `--iperf` can only count, coloured by why they failed and carrying
+the log to open. **Prefer it; `dcimport --iperf` is the fallback for CSVs from an older
 version.** `tests/fixtures/iperf-overlay.tsv` is that export, kept as the
 contract the suite checks.
 
