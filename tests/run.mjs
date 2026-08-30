@@ -284,12 +284,27 @@ if (python.error) {
   const native = readFileSync(join(fixtures, 'iperf-overlay.tsv'), 'utf8');
   const nativeOverlays = parseResults(native);
   eq([...nativeOverlays.keys()], [
-    'iperf_mbps_out', 'iperf_mbps_in', 'iperf_mbps_duplex', 'iperf_rel_median',
-    'iperf_asymmetry', 'iperf_status', 'iperf_fail_kind', 'iperf_ok_pct',
-    'iperf_peers', 'iperf_cpu_peak', 'iperf_cpu_mean', 'iperf_cpu_softirq',
-    'iperf_cpu_sys', 'iperf_cpu_user', 'iperf_cpu_idle_floor',
-    'iperf_bind_iface',
+    'iperf_mbps_out', 'iperf_mbps_in', 'iperf_mbps_duplex', 'iperf_gbytes',
+    'iperf_rel_median', 'iperf_asymmetry', 'iperf_status', 'iperf_fail_kind',
+    'iperf_ok_pct', 'iperf_peers', 'iperf_cpu_peak', 'iperf_cpu_mean',
+    'iperf_cpu_softirq', 'iperf_cpu_sys', 'iperf_cpu_user',
+    'iperf_cpu_idle_floor', 'iperf_bind_iface',
   ], 'export-overlay declares its overlays in reading order');
+
+  // A host in the run's server list that produced no row at all. Without a
+  // sample it would render exactly like a host that was never part of the
+  // test, so the export says NO-DATA and gives it 0% coverage.
+  const silent = nativeOverlays.get('iperf_status').samples
+    .filter((smp) => smp.value === 'NO-DATA');
+  eq(silent.map((smp) => smp.target), ['wr01r02u02'], 'the host that never reported says so');
+  ok(!nativeOverlays.get('iperf_mbps_out').samples.some((smp) => smp.target === 'wr01r02u02'),
+     'and no throughput is invented for it');
+
+  // Bytes add over time where rates do not, so this total is exact in every
+  // mode: 1.25 + 1.1 + 1.0 + 0.9 GB across wr01r01u01's four flows.
+  const bytes = nativeOverlays.get('iperf_gbytes').samples
+    .find((smp) => smp.target === 'wr01r01u01');
+  eq(bytes.value, 4.25, 'total data carried per host');
 
   // Verdict overlays are categorical, and the failure kind is its own
   // overlay so a floor can be coloured by *why* rather than by pass/fail.
@@ -304,8 +319,11 @@ if (python.error) {
   // so it has to survive the parser intact.
   const relMeta = nativeOverlays.get('iperf_rel_median').meta;
   eq(relMeta.label, 'Throughput vs run median', 'multi-word label survives');
+  // Median, not min: on a mesh every host's worst direction is the one to
+  // the sick host, so a min aggregation reddens the whole floor and hides
+  // the host that is actually slow.
   eq([relMeta.palette, relMeta.min, relMeta.max, relMeta.agg],
-     ['rdbu', '0', '200', 'min'], 'relative throughput diverges around 100%');
+     ['rdbu', '0', '200', 'median'], 'relative throughput diverges around 100%');
   eq(nativeOverlays.get('iperf_cpu_peak').meta.max, '100',
      'percentages state their real scale rather than auto-fitting');
 
@@ -351,12 +369,12 @@ if (python.error) {
   // The derived overlays land on elements and aggregate the way their
   // metadata says they should: half of wr01r01u02's mesh failed, and its
   // rack must carry that number upward rather than the healthier host's.
-  // Coverage counts every direction a host is an end of: wr01r01u02 is part
-  // of three and one failed, so two thirds of its mesh measured.
+  // Coverage is the worse of a host's two sides: wr01r01u02 received both
+  // directions aimed at it but only one of the two it sent got through.
   const okPct = bindOverlay(nativeOverlays.get('iperf_ok_pct'), flat);
   eq(okPct.agg, 'min', 'coverage aggregates to the worst host');
-  ok(Math.abs(overlayValue(okPct, flat.resolve('wr01r01u02')).value - 200 / 3) < 0.01,
-     'a host with one failed direction reads two thirds');
+  eq(overlayValue(okPct, flat.resolve('wr01r01u02')).value, 50,
+     'a host that failed half of what it sent reads 50%');
   const rack = flat.resolve('wr01r01u02').parent;
   ok(overlayValue(okPct, rack).value < 100,
      'and its rack carries that downward, not the healthy host average');
