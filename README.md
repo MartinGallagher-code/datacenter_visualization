@@ -484,6 +484,8 @@ examples/small.dc         starter layout   (~1,200 elements)
 examples/small-results.tsv  two nightly runs of four tests
 examples/mega.dc          scale test (~256k elements on one page)
 examples/hostnames.dc     flat hostname naming (wr12r06u15 style)
+examples/iperf/          a floor plan using every layout feature, with a real
+                         export-overlay run painted over it (see its README)
 examples/hostnames-results.tsv  results addressed by flat name
 tools/dcadd               results appender (python3, stdlib only)
 tools/dcimport            netmesh output -> overlay samples

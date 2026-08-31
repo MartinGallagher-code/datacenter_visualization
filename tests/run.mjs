@@ -391,6 +391,15 @@ if (python.error) {
   ok(overlayValue(okPct, rack).value < 100,
      'and its rack carries that downward, not the healthy host average');
 
+  // A verdict overlay reduces to the worst thing beneath it, and a host that
+  // never answered has to count as one of the worst: otherwise collapsing the
+  // rack it sits in hides it again, which is what exporting NO-DATA was for.
+  const rollUp = parseResults(
+    'st\twr01r01u01\tTESTED\nst\twr01r01u02\tTESTED\nst\twr01r01u03\tNO-DATA\n');
+  const rollBound = bindOverlay(rollUp.get('st'), flat);
+  eq(overlayValue(rollBound, flat.resolve('wr01r01u03').parent).value, 'NO-DATA',
+     'one silent host is still visible with its rack collapsed');
+
   const asym = bindOverlay(nativeOverlays.get('iperf_asymmetry'), flat);
   eq(asym.agg, 'max', 'asymmetry aggregates to the worst pair');
   eq(overlayValue(asym, flat.resolve('wr01r01u01')).value, 12,
