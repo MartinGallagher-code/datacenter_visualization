@@ -1,0 +1,74 @@
+# A floor built to exercise everything this format can express, and to be the
+# target of a real `mx export` run: examples/mx/mx-results.tsv paints every
+# overlay matrix_orchestrator writes over the servers below.
+#
+#   http://localhost:8000/?layout=examples/mx/floor.dc&results=examples/mx/mx-results.tsv
+#
+# The measured fleet is room wr01, row A -- 24 servers, wr01r01u01 .. wr01r04u06.
+# Everything else here is floor the test never touched, which is the normal
+# case: a datacenter is always bigger than any one run of anything.
+
+dc MX1 name="Acme MX1" region=us-east tier=3 +prod
+
+  # cols= shapes the grid a container lays its children out on. Attributes set
+  # here reach every element below unless one overrides them -- the storage row
+  # overrides `model`, the rest of the hall inherits r760.
+  room wr01 name="Hall 1" cols=2 model=r760 +hall-a
+
+    # The mx fleet. name={room}{rack}{id} gives every server a flat hostname
+    # like wr01r03u05: that is what `mx gen --servers` was fed and what the
+    # results file targets, so the two agree with no mapping step in between.
+    row A +compute
+      rack r[01..04] u=42 +standard
+        node tor at=42 role=tor model=sn3700 name={room}{rack}tor +switch,uplink
+        node u[01..06] role=server name={room}{rack}{id} +x86
+
+    # The same servers one row over, outside the test fleet: the overlays leave
+    # them uncoloured, which is what "nobody measured this" looks like.
+    row B +compute
+      rack r[05..08] u=42 +standard
+        node tor at=42 role=tor model=sn3700 name={room}{rack}tor +switch,uplink
+        node u[01..06] role=server name={room}{rack}{id} +x86
+
+    # u=4 gives each node four U of height, and children with no `at=` auto-fill
+    # the lowest free run of slots -- eight 4U boxes stack without a single pin.
+    row S name="Storage" +storage
+      rack r[09..10] u=42
+        node tor at=42 role=tor name={room}{rack}tor +switch,uplink
+        node d[01..08] u=4 role=server model=jbod-90 disks=90 name={room}{rack}{id} +storage
+
+  room wr02 name="Hall 2" cols=2 +hall-b
+    row A..B +compute
+      rack r[01..04] u=42
+        node tor at=42 role=tor model=sn3700 name={room}{rack}tor +switch,uplink
+        # A stepped range: every other slot, for a half-populated hall.
+        node u[01..12x2] role=server name={room}{rack}{id} +x86
+
+  # Any word is a container kind. `pod` and `cage` have no special layout rules
+  # and are drawn as generic boxes -- there is no schema to declare first.
+  pod spine name="Spine layer" cols=4 +fabric
+    node sp[1..4] role=spine model=sn5600 +switch
+
+  cage svc name="Service cage" dir=x +mgmt
+    # Alternatives crossed with a range: six boxes from one line.
+    node [web|db|cache]-[1..2] role=service +x86
+
+# ------------------------------------------------------------------ networks
+net data     label="Data / east-west"    color=#4fa3ff
+net uplink   label="ToR uplinks"         color=#f2b544
+net mgmt     label="Out-of-band mgmt"    color=#8b93a7 style=dashed
+net storage  label="Storage replication" color=#7ee081 width=2
+
+# star (two selectors): every server in a rack to that rack's own ToR.
+link data    role=server role=tor    scope=rack
+# star across the whole dc: every ToR to every spine.
+link uplink  +uplink     role=spine  scope=dc
+# mesh (one selector): the storage nodes replicate among themselves, per row.
+link storage +storage,role=server scope=row mode=mesh
+# chain: the service boxes wired in order, one after the next.
+link mgmt    kind=node,+mgmt scope=dc mode=chain
+# ring: the spines close a loop among themselves.
+link uplink  role=spine scope=dc mode=ring
+# pair, with a non-inherited tag, a glob and a negation: ToRs pair off across
+# the halls, skipping anything decommissioned.
+link mgmt    ^switch,model=sn3700*,!+decom scope=dc mode=pair

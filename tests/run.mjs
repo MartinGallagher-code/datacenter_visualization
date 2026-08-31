@@ -483,5 +483,38 @@ if (python.error) {
   }
 }
 
+// ------------------------------------------------------------- examples/mx
+// The demo pair is documentation that runs: floor.dc uses every construct the
+// format has, and mx-results.tsv is real `mx export` output over it. If either
+// drifts out of agreement with the other, the demo silently stops demoing.
+{
+  const floor = parseLayout(readFileSync(join(root, 'examples/mx/floor.dc'), 'utf8'));
+  eq(floor.warnings, [], 'examples/mx/floor.dc parses clean');
+  ok(floor.links.length > 300, `and wires its four nets (${floor.links.length} cables)`);
+  eq([...floor.nets.keys()], ['data', 'uplink', 'mgmt', 'storage'], 'all four nets declared');
+  // Every naming form the layout uses has to be reachable from a results file.
+  for (const target of ['wr01r01u01', 'wr01r09d01', 'wr02r01u11', 'sp1', 'web-1'])
+    ok(floor.resolve(target), `${target} resolves in the demo floor`);
+
+  const warnings = [];
+  const demo = parseResults(
+    readFileSync(join(root, 'examples/mx/mx-results.tsv'), 'utf8'), new Map(), warnings);
+  eq(warnings, [], 'examples/mx/mx-results.tsv parses clean');
+  for (const test of ['mx_pps', 'mx_rel_median', 'mx_line_util', 'mx_coverage',
+                      'mx_forward_loss', 'mx_return_loss', 'mx_state', 'mx_peer_loss'])
+    ok(demo.has(test), `the demo run carries ${test}`);
+
+  const rel = bindOverlay(demo.get('mx_rel_median'), floor);
+  eq(rel.unresolved, [], 'every demo sample lands on an element');
+  // The slow rack is the point of the overlay: collapsed, it aggregates by
+  // median, so it stays slow instead of averaging back to healthy.
+  eq(overlayValue(rel, floor.resolve('wr01/A/r03')).value, 60, 'the slow rack reads 60%');
+  eq(overlayValue(rel, floor.resolve('wr01/A/r01')).value, 100, 'a healthy rack reads 100%');
+
+  const state = bindOverlay(demo.get('mx_state'), floor);
+  eq(overlayValue(state, floor.resolve('wr01r04u06')).value, 'NO-DATA', 'the host that never started');
+  eq(overlayValue(state, floor.resolve('wr01r04u05')).value, 'SILENT', 'the host that went quiet');
+}
+
 console.log(failures ? `${failures}/${count} tests FAILED` : `all ${count} tests passed`);
 process.exit(failures ? 1 : 0);

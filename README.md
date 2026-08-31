@@ -485,6 +485,7 @@ examples/small-results.tsv  two nightly runs of four tests
 examples/mega.dc          scale test (~256k elements on one page)
 examples/hostnames.dc     flat hostname naming (wr12r06u15 style)
 examples/hostnames-results.tsv  results addressed by flat name
+examples/mx/              every layout construct, painted by a real mx run
 tools/dcadd               results appender (python3, stdlib only)
 tools/dcimport            netmesh output -> overlay samples
 tests/fixtures/           real tool output, as the contract the suite checks
