@@ -326,6 +326,7 @@ iperf-orchestrator run --overlay                # or as part of the pipeline
 | `iperf_mbps_duplex` | host | what that host carried *at once*, both directions |
 | `iperf_gbytes` | host | total data carried across the run |
 | `iperf_line_util` | direction | rate as a % of the NIC's line rate (only with `--overlay-line-rate`) |
+| `iperf_achieved` | direction | rate as a % of the `-b` target the run asked for |
 
 **Relative — the overlays that say something a rate cannot**
 
@@ -352,14 +353,20 @@ or a congested return path makes, credited to both ends and aggregating by
 |---|---|---|
 | `iperf_status` | direction | `OK`; `FAIL` with the status, error text and log file to open; or `NO-DATA` |
 | `iperf_fail_kind` | direction | the failures only, valued by why (`NO_SUMMARY`, `DIRECTION_MISSING`, …) |
+| `iperf_state` | host | the roll call: `TESTED`, or `NO-DATA` for a host that never answered |
 | `iperf_ok_pct` | host | success rate, the **worse** of the host's send and receive sides |
 | `iperf_peers` | host | how many distinct peers it exchanged data with |
+| `iperf_coverage` | host | those peers as a % of the ones it was *planned* to reach |
+| `iperf_tests` | host | how many directed tests it took part in — sample count is confidence |
 
-`NO-DATA` is a host that was in the run's server list and produced no row at
-all — SSH refused, iperf2 missing, box down. Without it that host has nothing
-to paint and reads here as "not part of this test", which is the one reading
-that is certainly wrong; it comes with 0% coverage so it lands on the same
-overlay as every other broken host. `iperf_ok_pct` reports the worse side
+`iperf_state` is the roll call, and `NO-DATA` is a host that was in the run's
+server list and produced no row at all — SSH refused, iperf2 missing, box down.
+Without it that host has nothing to paint and reads here as "not part of this
+test", which is the one reading that is certainly wrong; it comes with 0% on
+`iperf_ok_pct` so it lands on a numeric overlay too. The roll call is a
+per-host overlay kept apart from the per-direction `iperf_status` for the same
+reason `mx export` keeps `mx_state` apart from its per-peer overlays: two
+granularities in one overlay would reduce into each other. `iperf_ok_pct` reports the worse side
 rather than the pooled rate because a host that receives fine and cannot send
 anything is broken, not half-well — the `sent=`/`recv=` metadata names which
 side failed.
@@ -389,6 +396,17 @@ genuinely add, while rolling mode probes one pair over and over and adding
 *those* reports more than the NIC can carry. Rows are clustered by overlapping
 test window, summed inside a cluster and averaged across clusters; when the CSV
 carries no test windows the overlay is left out rather than guessed at.
+
+**This export and `mx export` are built to the same rules**, so an `mx` run
+and an iperf run can share one results file and read as one system:
+`iperf_achieved` is `mx_achieved` against a target rate, `iperf_coverage` is
+`mx_coverage`, `iperf_tests` is `mx_intervals`, `iperf_state` is `mx_state`,
+both keep per-host and per-peer values in separate overlays, and both write
+numbers to four significant digits in fixed notation — `%g` renders a host's
+aggregate as `1.163e+06`, which is correct and unreadable in a file people
+grep. `--overlay-test-prefix` (like mx's `--test-prefix`) namespaces every
+overlay, so two runs exported with different prefixes load side by side for
+comparison instead of averaging into each other.
 
 One measured row becomes one sample, so the aggregation menu here does the
 reducing (`mean` across peers, `max` the best, `min` the worst, `stdev` how
