@@ -1,25 +1,29 @@
-# mx 1.6.0 export -- 2 host(s), whole history, 49 sample(s), latest ts=1787941215
-{"!test": "mx_pps", "higher": "good", "label": "Requests sent", "short": "PPS", "unit": "pps"}
-{"!test": "mx_rep_pps", "higher": "good", "label": "Replies received", "short": "REP", "unit": "pps"}
-{"!test": "mx_loss", "higher": "bad", "label": "Round-trip loss", "short": "LOSS", "unit": "%"}
-{"!test": "mx_achieved", "higher": "good", "label": "Rate achieved vs target", "short": "ACHV", "unit": "%"}
-{"!test": "mx_rtt_avg", "higher": "bad", "label": "RTT mean over this host's flows", "short": "AVG", "unit": "us"}
-{"!test": "mx_rtt_p50", "higher": "bad", "label": "RTT p50, worst peer", "short": "P50", "unit": "us"}
-{"!test": "mx_rtt_p99", "higher": "bad", "label": "RTT p99, worst peer", "short": "P99", "unit": "us"}
-{"!test": "mx_rtt_max", "higher": "bad", "label": "RTT max, worst peer", "short": "MAX", "unit": "us"}
-{"!test": "mx_cpu", "higher": "bad", "label": "Host CPU", "short": "CPU", "unit": "%"}
-{"!test": "mx_cpu_core", "higher": "bad", "label": "Busiest core", "short": "CORE", "unit": "%"}
-{"!test": "mx_agent_cpu", "higher": "bad", "label": "Busiest mx worker, share of a core", "short": "ACPU", "unit": "%"}
-{"!test": "mx_request_gbps", "higher": "good", "label": "Requests on the wire", "short": "REQ", "unit": "Gb/s"}
-{"!test": "mx_served_pps", "higher": "good", "label": "Requests arriving here", "short": "SRV", "unit": "pps"}
-{"!test": "mx_egress_gbps", "higher": "good", "label": "Egress on the wire", "short": "EGR", "unit": "Gb/s"}
-{"!test": "mx_peers", "higher": "good", "label": "Flows this host sends", "short": "PEER"}
-{"!test": "mx_intervals", "higher": "good", "label": "Report intervals in the window", "short": "IVL"}
-{"!test": "mx_workers", "higher": "good", "label": "Agent worker processes", "short": "WRK"}
+# mx 1.7.0 export -- 2 host(s), whole history, 51 sample(s)
+# run shape: 64 bytes out -> 512 bytes back
+# window covers 2026-08-28 18:20:13 .. 2026-08-28 18:20:15
+# 1 host(s) in the matrix never reported at all: wr01r02u01
+{"!test": "mx_pps", "decimals": "0", "higher": "good", "label": "Requests sent", "short": "PPS", "unit": "pps"}
+{"!test": "mx_rep_pps", "decimals": "0", "higher": "good", "label": "Replies received", "short": "REP", "unit": "pps"}
+{"!test": "mx_loss", "decimals": "2", "higher": "bad", "label": "Round-trip loss", "short": "LOSS", "unit": "%"}
+{"!test": "mx_achieved", "agg": "median", "decimals": "0", "higher": "good", "label": "Rate achieved vs target", "max": "200", "min": "0", "palette": "rdbu", "short": "ACHV", "unit": "%"}
+{"!test": "mx_rtt_avg", "decimals": "0", "higher": "bad", "label": "RTT mean over this host's flows", "short": "AVG", "unit": "us"}
+{"!test": "mx_rtt_p50", "decimals": "0", "higher": "bad", "label": "RTT p50, worst peer", "short": "P50", "unit": "us"}
+{"!test": "mx_rtt_p99", "agg": "max", "decimals": "0", "higher": "bad", "label": "RTT p99, worst peer", "short": "P99", "unit": "us"}
+{"!test": "mx_rtt_max", "agg": "max", "decimals": "0", "higher": "bad", "label": "RTT max, worst peer", "short": "MAX", "unit": "us"}
+{"!test": "mx_cpu", "decimals": "0", "higher": "bad", "label": "Host CPU", "max": "100", "min": "0", "short": "CPU", "unit": "%"}
+{"!test": "mx_cpu_core", "agg": "max", "decimals": "0", "higher": "bad", "label": "Busiest core", "max": "100", "min": "0", "short": "CORE", "unit": "%"}
+{"!test": "mx_agent_cpu", "agg": "max", "decimals": "0", "higher": "bad", "label": "Busiest mx worker, share of a core", "short": "ACPU", "unit": "%"}
+{"!test": "mx_request_gbps", "decimals": "2", "higher": "good", "label": "Requests on the wire", "short": "REQ", "unit": "Gb/s"}
+{"!test": "mx_rel_median", "agg": "median", "decimals": "0", "higher": "good", "label": "Packet rate vs fleet median", "max": "200", "min": "0", "palette": "rdbu", "short": "REL", "unit": "%"}
+{"!test": "mx_served_pps", "decimals": "0", "higher": "good", "label": "Requests arriving here", "short": "SRV", "unit": "pps"}
+{"!test": "mx_egress_gbps", "decimals": "2", "higher": "good", "label": "Egress on the wire", "short": "EGR", "unit": "Gb/s"}
+{"!test": "mx_peers", "agg": "min", "decimals": "0", "higher": "good", "label": "Flows this host sends", "short": "PEER"}
+{"!test": "mx_intervals", "agg": "min", "decimals": "0", "higher": "good", "label": "Report intervals in the window", "short": "IVL"}
+{"!test": "mx_workers", "agg": "min", "decimals": "0", "higher": "good", "label": "Agent worker processes", "short": "WRK"}
 {"!test": "mx_state", "agg": "last", "label": "Did this host report?", "short": "STATE"}
-{"!test": "mx_peer_pps", "agg": "mean", "higher": "good", "label": "Requests sent to one peer", "short": "PPS", "unit": "pps"}
-{"!test": "mx_peer_loss", "agg": "max", "higher": "bad", "label": "Round-trip loss, worst peer", "short": "LOSS", "unit": "%"}
-{"!test": "mx_peer_rtt_p99", "agg": "max", "higher": "bad", "label": "RTT p99, worst peer", "short": "P99", "unit": "us"}
+{"!test": "mx_peer_pps", "agg": "mean", "decimals": "0", "higher": "good", "label": "Requests sent to one peer", "short": "PPS", "unit": "pps"}
+{"!test": "mx_peer_loss", "agg": "max", "decimals": "2", "higher": "bad", "label": "Round-trip loss, worst peer", "short": "LOSS", "unit": "%"}
+{"!test": "mx_peer_rtt_p99", "agg": "max", "decimals": "0", "higher": "bad", "label": "RTT p99, worst peer", "short": "P99", "unit": "us"}
 {"target": "wr01r01u01", "test": "mx_pps", "value": 3998.0}
 {"target": "wr01r01u01", "test": "mx_rep_pps", "value": 3984.0}
 {"target": "wr01r01u01", "test": "mx_loss", "value": 0.3626}
@@ -32,6 +36,7 @@
 {"target": "wr01r01u01", "test": "mx_cpu_core", "value": 16.05}
 {"target": "wr01r01u01", "test": "mx_agent_cpu", "value": 19.75}
 {"target": "wr01r01u01", "test": "mx_request_gbps", "value": 0.004158}
+{"target": "wr01r01u01", "test": "mx_rel_median", "value": 100.0}
 {"target": "wr01r01u01", "test": "mx_served_pps", "value": 1987.0}
 {"target": "wr01r01u01", "test": "mx_egress_gbps", "value": 0.01334}
 {"target": "wr01r01u01", "test": "mx_peers", "value": 2.0}
@@ -49,6 +54,7 @@
 {"target": "wr01r01u02", "test": "mx_cpu_core", "value": 16.0}
 {"target": "wr01r01u02", "test": "mx_agent_cpu", "value": 19.75}
 {"target": "wr01r01u02", "test": "mx_request_gbps", "value": 0.004159}
+{"target": "wr01r01u02", "test": "mx_rel_median", "value": 100.0}
 {"target": "wr01r01u02", "test": "mx_served_pps", "value": 2000.0}
 {"target": "wr01r01u02", "test": "mx_egress_gbps", "value": 0.01341}
 {"target": "wr01r01u02", "test": "mx_peers", "value": 2.0}

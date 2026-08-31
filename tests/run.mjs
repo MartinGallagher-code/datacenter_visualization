@@ -450,6 +450,24 @@ if (python.error) {
       ok(overlays.get(test).samples.every((sm) => sm.value !== 0),
          `${test} invents no zero (${name})`);
     }
+
+    // Every overlay arrives dressed for display: the viewer should never
+    // have to guess a precision, and a percentage should not auto-fit to
+    // whatever this run happened to produce.
+    const rel = bindOverlay(overlays.get('mx_rel_median'), flat);
+    eq([rel.palette, rel.min, rel.max, rel.agg], ['rdbu', 0, 200, 'median'],
+       `mx_rel_median diverges around 100% and a rack answers with its median (${name})`);
+    const cpu = bindOverlay(overlays.get('mx_cpu'), flat);
+    eq([cpu.min, cpu.max], [0, 100], `mx_cpu is pinned to its real scale (${name})`);
+    ok(!cpu.autoDomain, `and does not auto-fit to the run (${name})`);
+    eq(bindOverlay(overlays.get('mx_agent_cpu'), flat).agg, 'max',
+       `the busiest worker stays the busiest when a rack collapses (${name})`);
+    eq(bindOverlay(overlays.get('mx_rtt_p99'), flat).agg, 'max',
+       `so does the worst peer's tail (${name})`);
+    for (const test of ['mx_pps', 'mx_loss', 'mx_rtt_p99', 'mx_cpu']) {
+      ok(overlays.get(test).meta.decimals !== undefined,
+         `${test} states its precision (${name})`);
+    }
   }
 }
 
