@@ -1,0 +1,2127 @@
+# iperf-orchestrator 2.5.0 -- overlay samples for the datacenter layout viewer
+# run 2026-08-31_02-00-00, mode sequential-pair: 40 host(s), 198 direction(s) measured, 6 with no measurement, 39 host(s) with CPU data
+# run shape: duration=30s  streams=1  proto=TCP (samples say so when they differ)
+# tests ran 2026-08-31 02:00:00 .. 2026-08-31 03:58:25
+# -b target 20G (20000 Mb/s per flow): iperf_achieved is measured against it
+# line rate 25000 Mb/s: throughput overlays are scaled absolutely and iperf_line_util is included
+# 1 host(s) in the server list produced no rows at all: h2r02u04
+!test	iperf_mbps_out	unit=Mb/s	higher=good	decimals=0	short=OUT	label="Outbound Mb/s per direction"	min=0	max=25000
+!test	iperf_mbps_in	unit=Mb/s	higher=good	decimals=0	short=IN	label="Inbound Mb/s per direction"	min=0	max=25000
+!test	iperf_mbps_duplex	unit=Mb/s	higher=good	decimals=0	short=DUP	label="Total duplex Mb/s carried"	min=0	max=50000
+!test	iperf_gbytes	unit=GB	higher=good	decimals=1	short=DATA	label="Total data carried"
+!test	iperf_line_util	unit=%	higher=good	min=0	max=100	agg=median	decimals=0	short=UTIL	label="Throughput vs line rate"
+!test	iperf_rel_median	unit=%	higher=good	palette=rdbu	min=0	max=200	agg=median	decimals=0	short=REL	label="Throughput vs run median"
+!test	iperf_asymmetry	unit=%	higher=bad	min=0	max=100	agg=max	decimals=0	short=ASYM	label="Direction asymmetry within a pair"
+!test	iperf_achieved	unit=%	higher=good	min=0	max=100	agg=median	decimals=0	short=ACHV	label="Rate achieved vs the -b target"
+!test	iperf_state	agg=last	short=STATE	label="Did this host test?"
+!test	iperf_status	short=STAT	label="Directed test outcome"
+!test	iperf_fail_kind	short=WHY	label="How a direction failed"
+!test	iperf_ok_pct	unit=%	higher=good	min=0	max=100	agg=min	decimals=0	short=OK%	label="Success rate, worst of send and receive"
+!test	iperf_peers	higher=good	agg=min	decimals=0	short=PEER	label="Distinct peers measured"
+!test	iperf_coverage	unit=%	higher=good	min=0	max=100	agg=min	decimals=0	short=COV	label="Peers measured, of those planned"
+!test	iperf_tests	higher=good	agg=min	decimals=0	short=N	label="Directed tests this host was in"
+!test	iperf_cpu_peak	unit=%	higher=bad	min=0	max=100	decimals=0	short=CPU	label="Peak host CPU"
+!test	iperf_cpu_mean	unit=%	higher=bad	min=0	max=100	decimals=0	short=AVG	label="Mean host CPU"
+!test	iperf_cpu_softirq	unit=%	higher=bad	min=0	max=100	decimals=0	short=SIRQ	label="Peak softirq on one core"
+!test	iperf_cpu_sys	unit=%	higher=bad	min=0	max=100	decimals=0	short=SYS	label="Peak system CPU"
+!test	iperf_cpu_user	unit=%	higher=bad	min=0	max=100	decimals=0	short=USR	label="Peak user CPU"
+!test	iperf_cpu_idle_floor	unit=%	higher=good	min=0	max=100	agg=min	decimals=1	short=IDLE	label="Lowest idle on one core"
+!test	iperf_bind_iface	short=NIC	label="Interface the test bound to"
+iperf_mbps_out	edge-core-p1-a	19703	peer=edge-core-p1-b	at=20260831020000	run=2026-08-31_02-00-00
+iperf_mbps_in	edge-core-p1-b	19703	peer=edge-core-p1-a	at=20260831020000	run=2026-08-31_02-00-00
+iperf_rel_median	edge-core-p1-a	99.48	peer=edge-core-p1-b	run=2026-08-31_02-00-00
+iperf_line_util	edge-core-p1-a	78.81	peer=edge-core-p1-b	run=2026-08-31_02-00-00
+iperf_achieved	edge-core-p1-a	98.51	peer=edge-core-p1-b	run=2026-08-31_02-00-00
+iperf_mbps_out	edge-core-p1-a	19527	peer=edge-core-p2-a	at=20260831020035	run=2026-08-31_02-00-00
+iperf_mbps_in	edge-core-p2-a	19527	peer=edge-core-p1-a	at=20260831020035	run=2026-08-31_02-00-00
+iperf_rel_median	edge-core-p1-a	98.6	peer=edge-core-p2-a	run=2026-08-31_02-00-00
+iperf_line_util	edge-core-p1-a	78.11	peer=edge-core-p2-a	run=2026-08-31_02-00-00
+iperf_achieved	edge-core-p1-a	97.64	peer=edge-core-p2-a	run=2026-08-31_02-00-00
+iperf_mbps_out	edge-core-p1-a	20040	peer=edge-core-p2-b	at=20260831020110	run=2026-08-31_02-00-00
+iperf_mbps_in	edge-core-p2-b	20040	peer=edge-core-p1-a	at=20260831020110	run=2026-08-31_02-00-00
+iperf_rel_median	edge-core-p1-a	101.2	peer=edge-core-p2-b	run=2026-08-31_02-00-00
+iperf_line_util	edge-core-p1-a	80.16	peer=edge-core-p2-b	run=2026-08-31_02-00-00
+iperf_achieved	edge-core-p1-a	100.2	peer=edge-core-p2-b	run=2026-08-31_02-00-00
+iperf_mbps_out	edge-core-p1-a	19964	peer=edge-dmz-p1-a	at=20260831020145	run=2026-08-31_02-00-00
+iperf_mbps_in	edge-dmz-p1-a	19964	peer=edge-core-p1-a	at=20260831020145	run=2026-08-31_02-00-00
+iperf_rel_median	edge-core-p1-a	100.8	peer=edge-dmz-p1-a	run=2026-08-31_02-00-00
+iperf_line_util	edge-core-p1-a	79.86	peer=edge-dmz-p1-a	run=2026-08-31_02-00-00
+iperf_achieved	edge-core-p1-a	99.82	peer=edge-dmz-p1-a	run=2026-08-31_02-00-00
+iperf_mbps_out	edge-core-p1-a	20063	peer=h1r01u01	at=20260831020220	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r01u01	20063	peer=edge-core-p1-a	at=20260831020220	run=2026-08-31_02-00-00
+iperf_rel_median	edge-core-p1-a	101.3	peer=h1r01u01	run=2026-08-31_02-00-00
+iperf_line_util	edge-core-p1-a	80.25	peer=h1r01u01	run=2026-08-31_02-00-00
+iperf_achieved	edge-core-p1-a	100.3	peer=h1r01u01	run=2026-08-31_02-00-00
+iperf_mbps_out	edge-core-p1-a	20061	peer=h1r02u01	at=20260831020255	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r02u01	20061	peer=edge-core-p1-a	at=20260831020255	run=2026-08-31_02-00-00
+iperf_rel_median	edge-core-p1-a	101.3	peer=h1r02u01	run=2026-08-31_02-00-00
+iperf_line_util	edge-core-p1-a	80.25	peer=h1r02u01	run=2026-08-31_02-00-00
+iperf_achieved	edge-core-p1-a	100.3	peer=h1r02u01	run=2026-08-31_02-00-00
+iperf_mbps_out	edge-core-p1-a	19652	peer=h1r03u01	at=20260831020330	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r03u01	19652	peer=edge-core-p1-a	at=20260831020330	run=2026-08-31_02-00-00
+iperf_rel_median	edge-core-p1-a	99.23	peer=h1r03u01	run=2026-08-31_02-00-00
+iperf_line_util	edge-core-p1-a	78.61	peer=h1r03u01	run=2026-08-31_02-00-00
+iperf_achieved	edge-core-p1-a	98.26	peer=h1r03u01	run=2026-08-31_02-00-00
+iperf_mbps_out	edge-core-p1-a	19536	peer=h1r04u01	at=20260831020405	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r04u01	19536	peer=edge-core-p1-a	at=20260831020405	run=2026-08-31_02-00-00
+iperf_rel_median	edge-core-p1-a	98.64	peer=h1r04u01	run=2026-08-31_02-00-00
+iperf_line_util	edge-core-p1-a	78.15	peer=h1r04u01	run=2026-08-31_02-00-00
+iperf_achieved	edge-core-p1-a	97.68	peer=h1r04u01	run=2026-08-31_02-00-00
+iperf_mbps_out	edge-core-p1-a	19591	peer=h1r05u01	at=20260831020440	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r05u01	19591	peer=edge-core-p1-a	at=20260831020440	run=2026-08-31_02-00-00
+iperf_rel_median	edge-core-p1-a	98.92	peer=h1r05u01	run=2026-08-31_02-00-00
+iperf_line_util	edge-core-p1-a	78.36	peer=h1r05u01	run=2026-08-31_02-00-00
+iperf_achieved	edge-core-p1-a	97.96	peer=h1r05u01	run=2026-08-31_02-00-00
+iperf_mbps_out	edge-core-p1-a	19825	peer=h1r06d04	at=20260831020515	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r06d04	19825	peer=edge-core-p1-a	at=20260831020515	run=2026-08-31_02-00-00
+iperf_rel_median	edge-core-p1-a	100.1	peer=h1r06d04	run=2026-08-31_02-00-00
+iperf_line_util	edge-core-p1-a	79.3	peer=h1r06d04	run=2026-08-31_02-00-00
+iperf_achieved	edge-core-p1-a	99.12	peer=h1r06d04	run=2026-08-31_02-00-00
+iperf_mbps_out	edge-core-p1-a	19758	peer=h2r01u01	at=20260831020550	run=2026-08-31_02-00-00
+iperf_mbps_in	h2r01u01	19758	peer=edge-core-p1-a	at=20260831020550	run=2026-08-31_02-00-00
+iperf_rel_median	edge-core-p1-a	99.76	peer=h2r01u01	run=2026-08-31_02-00-00
+iperf_line_util	edge-core-p1-a	79.03	peer=h2r01u01	run=2026-08-31_02-00-00
+iperf_achieved	edge-core-p1-a	98.79	peer=h2r01u01	run=2026-08-31_02-00-00
+iperf_mbps_out	edge-core-p1-a	20097	peer=h2r02u01	at=20260831020625	run=2026-08-31_02-00-00
+iperf_mbps_in	h2r02u01	20097	peer=edge-core-p1-a	at=20260831020625	run=2026-08-31_02-00-00
+iperf_rel_median	edge-core-p1-a	101.5	peer=h2r02u01	run=2026-08-31_02-00-00
+iperf_line_util	edge-core-p1-a	80.39	peer=h2r02u01	run=2026-08-31_02-00-00
+iperf_achieved	edge-core-p1-a	100.5	peer=h2r02u01	run=2026-08-31_02-00-00
+iperf_mbps_out	edge-core-p1-b	19995	peer=edge-core-p1-a	at=20260831020700	run=2026-08-31_02-00-00
+iperf_mbps_in	edge-core-p1-a	19995	peer=edge-core-p1-b	at=20260831020700	run=2026-08-31_02-00-00
+iperf_rel_median	edge-core-p1-b	101	peer=edge-core-p1-a	run=2026-08-31_02-00-00
+iperf_line_util	edge-core-p1-b	79.98	peer=edge-core-p1-a	run=2026-08-31_02-00-00
+iperf_achieved	edge-core-p1-b	99.97	peer=edge-core-p1-a	run=2026-08-31_02-00-00
+iperf_mbps_out	edge-core-p1-b	19775	peer=edge-core-p2-a	at=20260831020735	run=2026-08-31_02-00-00
+iperf_mbps_in	edge-core-p2-a	19775	peer=edge-core-p1-b	at=20260831020735	run=2026-08-31_02-00-00
+iperf_rel_median	edge-core-p1-b	99.85	peer=edge-core-p2-a	run=2026-08-31_02-00-00
+iperf_line_util	edge-core-p1-b	79.1	peer=edge-core-p2-a	run=2026-08-31_02-00-00
+iperf_achieved	edge-core-p1-b	98.87	peer=edge-core-p2-a	run=2026-08-31_02-00-00
+iperf_mbps_out	edge-core-p1-b	19593	peer=edge-core-p2-b	at=20260831020810	run=2026-08-31_02-00-00
+iperf_mbps_in	edge-core-p2-b	19593	peer=edge-core-p1-b	at=20260831020810	run=2026-08-31_02-00-00
+iperf_rel_median	edge-core-p1-b	98.93	peer=edge-core-p2-b	run=2026-08-31_02-00-00
+iperf_line_util	edge-core-p1-b	78.37	peer=edge-core-p2-b	run=2026-08-31_02-00-00
+iperf_achieved	edge-core-p1-b	97.97	peer=edge-core-p2-b	run=2026-08-31_02-00-00
+iperf_mbps_out	edge-core-p2-a	19784	peer=edge-core-p1-a	at=20260831020845	run=2026-08-31_02-00-00
+iperf_mbps_in	edge-core-p1-a	19784	peer=edge-core-p2-a	at=20260831020845	run=2026-08-31_02-00-00
+iperf_rel_median	edge-core-p2-a	99.9	peer=edge-core-p1-a	run=2026-08-31_02-00-00
+iperf_line_util	edge-core-p2-a	79.14	peer=edge-core-p1-a	run=2026-08-31_02-00-00
+iperf_achieved	edge-core-p2-a	98.92	peer=edge-core-p1-a	run=2026-08-31_02-00-00
+iperf_mbps_out	edge-core-p2-a	19797	peer=edge-core-p1-b	at=20260831020920	run=2026-08-31_02-00-00
+iperf_mbps_in	edge-core-p1-b	19797	peer=edge-core-p2-a	at=20260831020920	run=2026-08-31_02-00-00
+iperf_rel_median	edge-core-p2-a	99.96	peer=edge-core-p1-b	run=2026-08-31_02-00-00
+iperf_line_util	edge-core-p2-a	79.19	peer=edge-core-p1-b	run=2026-08-31_02-00-00
+iperf_achieved	edge-core-p2-a	98.98	peer=edge-core-p1-b	run=2026-08-31_02-00-00
+iperf_mbps_out	edge-core-p2-a	20036	peer=edge-core-p2-b	at=20260831020955	run=2026-08-31_02-00-00
+iperf_mbps_in	edge-core-p2-b	20036	peer=edge-core-p2-a	at=20260831020955	run=2026-08-31_02-00-00
+iperf_rel_median	edge-core-p2-a	101.2	peer=edge-core-p2-b	run=2026-08-31_02-00-00
+iperf_line_util	edge-core-p2-a	80.14	peer=edge-core-p2-b	run=2026-08-31_02-00-00
+iperf_achieved	edge-core-p2-a	100.2	peer=edge-core-p2-b	run=2026-08-31_02-00-00
+iperf_mbps_out	edge-core-p2-b	19673	peer=edge-core-p1-a	at=20260831021030	run=2026-08-31_02-00-00
+iperf_mbps_in	edge-core-p1-a	19673	peer=edge-core-p2-b	at=20260831021030	run=2026-08-31_02-00-00
+iperf_rel_median	edge-core-p2-b	99.34	peer=edge-core-p1-a	run=2026-08-31_02-00-00
+iperf_line_util	edge-core-p2-b	78.69	peer=edge-core-p1-a	run=2026-08-31_02-00-00
+iperf_achieved	edge-core-p2-b	98.37	peer=edge-core-p1-a	run=2026-08-31_02-00-00
+iperf_mbps_out	edge-core-p2-b	19614	peer=edge-core-p1-b	at=20260831021105	run=2026-08-31_02-00-00
+iperf_mbps_in	edge-core-p1-b	19614	peer=edge-core-p2-b	at=20260831021105	run=2026-08-31_02-00-00
+iperf_rel_median	edge-core-p2-b	99.03	peer=edge-core-p1-b	run=2026-08-31_02-00-00
+iperf_line_util	edge-core-p2-b	78.45	peer=edge-core-p1-b	run=2026-08-31_02-00-00
+iperf_achieved	edge-core-p2-b	98.07	peer=edge-core-p1-b	run=2026-08-31_02-00-00
+iperf_mbps_out	edge-core-p2-b	20094	peer=edge-core-p2-a	at=20260831021140	run=2026-08-31_02-00-00
+iperf_mbps_in	edge-core-p2-a	20094	peer=edge-core-p2-b	at=20260831021140	run=2026-08-31_02-00-00
+iperf_rel_median	edge-core-p2-b	101.5	peer=edge-core-p2-a	run=2026-08-31_02-00-00
+iperf_line_util	edge-core-p2-b	80.38	peer=edge-core-p2-a	run=2026-08-31_02-00-00
+iperf_achieved	edge-core-p2-b	100.5	peer=edge-core-p2-a	run=2026-08-31_02-00-00
+iperf_mbps_out	edge-dmz-p1-a	19885	peer=edge-core-p1-a	at=20260831021215	run=2026-08-31_02-00-00
+iperf_mbps_in	edge-core-p1-a	19885	peer=edge-dmz-p1-a	at=20260831021215	run=2026-08-31_02-00-00
+iperf_rel_median	edge-dmz-p1-a	100.4	peer=edge-core-p1-a	run=2026-08-31_02-00-00
+iperf_line_util	edge-dmz-p1-a	79.54	peer=edge-core-p1-a	run=2026-08-31_02-00-00
+iperf_achieved	edge-dmz-p1-a	99.43	peer=edge-core-p1-a	run=2026-08-31_02-00-00
+iperf_mbps_out	edge-dmz-p1-a	20038	peer=edge-dmz-p1-b	at=20260831021250	run=2026-08-31_02-00-00
+iperf_mbps_in	edge-dmz-p1-b	20038	peer=edge-dmz-p1-a	at=20260831021250	run=2026-08-31_02-00-00
+iperf_rel_median	edge-dmz-p1-a	101.2	peer=edge-dmz-p1-b	run=2026-08-31_02-00-00
+iperf_line_util	edge-dmz-p1-a	80.15	peer=edge-dmz-p1-b	run=2026-08-31_02-00-00
+iperf_achieved	edge-dmz-p1-a	100.2	peer=edge-dmz-p1-b	run=2026-08-31_02-00-00
+iperf_mbps_out	edge-dmz-p1-a	19753	peer=edge-dmz-p2-a	at=20260831021325	run=2026-08-31_02-00-00
+iperf_mbps_in	edge-dmz-p2-a	19753	peer=edge-dmz-p1-a	at=20260831021325	run=2026-08-31_02-00-00
+iperf_rel_median	edge-dmz-p1-a	99.74	peer=edge-dmz-p2-a	run=2026-08-31_02-00-00
+iperf_line_util	edge-dmz-p1-a	79.01	peer=edge-dmz-p2-a	run=2026-08-31_02-00-00
+iperf_achieved	edge-dmz-p1-a	98.77	peer=edge-dmz-p2-a	run=2026-08-31_02-00-00
+iperf_mbps_out	edge-dmz-p1-a	19937	peer=edge-dmz-p2-b	at=20260831021400	run=2026-08-31_02-00-00
+iperf_mbps_in	edge-dmz-p2-b	19937	peer=edge-dmz-p1-a	at=20260831021400	run=2026-08-31_02-00-00
+iperf_rel_median	edge-dmz-p1-a	100.7	peer=edge-dmz-p2-b	run=2026-08-31_02-00-00
+iperf_line_util	edge-dmz-p1-a	79.75	peer=edge-dmz-p2-b	run=2026-08-31_02-00-00
+iperf_achieved	edge-dmz-p1-a	99.69	peer=edge-dmz-p2-b	run=2026-08-31_02-00-00
+iperf_mbps_out	edge-dmz-p1-a	19739	peer=h1r01u01	at=20260831021435	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r01u01	19739	peer=edge-dmz-p1-a	at=20260831021435	run=2026-08-31_02-00-00
+iperf_rel_median	edge-dmz-p1-a	99.67	peer=h1r01u01	run=2026-08-31_02-00-00
+iperf_line_util	edge-dmz-p1-a	78.96	peer=h1r01u01	run=2026-08-31_02-00-00
+iperf_achieved	edge-dmz-p1-a	98.7	peer=h1r01u01	run=2026-08-31_02-00-00
+iperf_mbps_out	edge-dmz-p1-a	19569	peer=h1r02u01	at=20260831021510	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r02u01	19569	peer=edge-dmz-p1-a	at=20260831021510	run=2026-08-31_02-00-00
+iperf_rel_median	edge-dmz-p1-a	98.81	peer=h1r02u01	run=2026-08-31_02-00-00
+iperf_line_util	edge-dmz-p1-a	78.28	peer=h1r02u01	run=2026-08-31_02-00-00
+iperf_achieved	edge-dmz-p1-a	97.85	peer=h1r02u01	run=2026-08-31_02-00-00
+iperf_mbps_out	edge-dmz-p1-a	19839	peer=h1r03u01	at=20260831021545	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r03u01	19839	peer=edge-dmz-p1-a	at=20260831021545	run=2026-08-31_02-00-00
+iperf_rel_median	edge-dmz-p1-a	100.2	peer=h1r03u01	run=2026-08-31_02-00-00
+iperf_line_util	edge-dmz-p1-a	79.36	peer=h1r03u01	run=2026-08-31_02-00-00
+iperf_achieved	edge-dmz-p1-a	99.19	peer=h1r03u01	run=2026-08-31_02-00-00
+iperf_mbps_out	edge-dmz-p1-a	19708	peer=h1r04u01	at=20260831021620	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r04u01	19708	peer=edge-dmz-p1-a	at=20260831021620	run=2026-08-31_02-00-00
+iperf_rel_median	edge-dmz-p1-a	99.51	peer=h1r04u01	run=2026-08-31_02-00-00
+iperf_line_util	edge-dmz-p1-a	78.83	peer=h1r04u01	run=2026-08-31_02-00-00
+iperf_achieved	edge-dmz-p1-a	98.54	peer=h1r04u01	run=2026-08-31_02-00-00
+iperf_mbps_out	edge-dmz-p1-a	19894	peer=h1r05u01	at=20260831021655	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r05u01	19894	peer=edge-dmz-p1-a	at=20260831021655	run=2026-08-31_02-00-00
+iperf_rel_median	edge-dmz-p1-a	100.5	peer=h1r05u01	run=2026-08-31_02-00-00
+iperf_line_util	edge-dmz-p1-a	79.58	peer=h1r05u01	run=2026-08-31_02-00-00
+iperf_achieved	edge-dmz-p1-a	99.47	peer=h1r05u01	run=2026-08-31_02-00-00
+iperf_mbps_out	edge-dmz-p1-a	19955	peer=h1r06d04	at=20260831021730	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r06d04	19955	peer=edge-dmz-p1-a	at=20260831021730	run=2026-08-31_02-00-00
+iperf_rel_median	edge-dmz-p1-a	100.8	peer=h1r06d04	run=2026-08-31_02-00-00
+iperf_line_util	edge-dmz-p1-a	79.82	peer=h1r06d04	run=2026-08-31_02-00-00
+iperf_achieved	edge-dmz-p1-a	99.78	peer=h1r06d04	run=2026-08-31_02-00-00
+iperf_mbps_out	edge-dmz-p1-a	20024	peer=h2r01u01	at=20260831021805	run=2026-08-31_02-00-00
+iperf_mbps_in	h2r01u01	20024	peer=edge-dmz-p1-a	at=20260831021805	run=2026-08-31_02-00-00
+iperf_rel_median	edge-dmz-p1-a	101.1	peer=h2r01u01	run=2026-08-31_02-00-00
+iperf_line_util	edge-dmz-p1-a	80.09	peer=h2r01u01	run=2026-08-31_02-00-00
+iperf_achieved	edge-dmz-p1-a	100.1	peer=h2r01u01	run=2026-08-31_02-00-00
+iperf_mbps_out	edge-dmz-p1-a	20006	peer=h2r02u01	at=20260831021840	run=2026-08-31_02-00-00
+iperf_mbps_in	h2r02u01	20006	peer=edge-dmz-p1-a	at=20260831021840	run=2026-08-31_02-00-00
+iperf_rel_median	edge-dmz-p1-a	101	peer=h2r02u01	run=2026-08-31_02-00-00
+iperf_line_util	edge-dmz-p1-a	80.02	peer=h2r02u01	run=2026-08-31_02-00-00
+iperf_achieved	edge-dmz-p1-a	100	peer=h2r02u01	run=2026-08-31_02-00-00
+iperf_mbps_out	edge-dmz-p1-b	19570	peer=edge-dmz-p1-a	at=20260831021915	run=2026-08-31_02-00-00
+iperf_mbps_in	edge-dmz-p1-a	19570	peer=edge-dmz-p1-b	at=20260831021915	run=2026-08-31_02-00-00
+iperf_rel_median	edge-dmz-p1-b	98.81	peer=edge-dmz-p1-a	run=2026-08-31_02-00-00
+iperf_line_util	edge-dmz-p1-b	78.28	peer=edge-dmz-p1-a	run=2026-08-31_02-00-00
+iperf_achieved	edge-dmz-p1-b	97.85	peer=edge-dmz-p1-a	run=2026-08-31_02-00-00
+iperf_mbps_out	edge-dmz-p1-b	19918	peer=edge-dmz-p2-a	at=20260831021950	run=2026-08-31_02-00-00
+iperf_mbps_in	edge-dmz-p2-a	19918	peer=edge-dmz-p1-b	at=20260831021950	run=2026-08-31_02-00-00
+iperf_rel_median	edge-dmz-p1-b	100.6	peer=edge-dmz-p2-a	run=2026-08-31_02-00-00
+iperf_line_util	edge-dmz-p1-b	79.67	peer=edge-dmz-p2-a	run=2026-08-31_02-00-00
+iperf_achieved	edge-dmz-p1-b	99.59	peer=edge-dmz-p2-a	run=2026-08-31_02-00-00
+iperf_mbps_out	edge-dmz-p1-b	19943	peer=edge-dmz-p2-b	at=20260831022025	run=2026-08-31_02-00-00
+iperf_mbps_in	edge-dmz-p2-b	19943	peer=edge-dmz-p1-b	at=20260831022025	run=2026-08-31_02-00-00
+iperf_rel_median	edge-dmz-p1-b	100.7	peer=edge-dmz-p2-b	run=2026-08-31_02-00-00
+iperf_line_util	edge-dmz-p1-b	79.77	peer=edge-dmz-p2-b	run=2026-08-31_02-00-00
+iperf_achieved	edge-dmz-p1-b	99.71	peer=edge-dmz-p2-b	run=2026-08-31_02-00-00
+iperf_mbps_out	edge-dmz-p2-a	19808	peer=edge-dmz-p1-a	at=20260831022100	run=2026-08-31_02-00-00
+iperf_mbps_in	edge-dmz-p1-a	19808	peer=edge-dmz-p2-a	at=20260831022100	run=2026-08-31_02-00-00
+iperf_rel_median	edge-dmz-p2-a	100	peer=edge-dmz-p1-a	run=2026-08-31_02-00-00
+iperf_line_util	edge-dmz-p2-a	79.23	peer=edge-dmz-p1-a	run=2026-08-31_02-00-00
+iperf_achieved	edge-dmz-p2-a	99.04	peer=edge-dmz-p1-a	run=2026-08-31_02-00-00
+iperf_mbps_out	edge-dmz-p2-a	20016	peer=edge-dmz-p1-b	at=20260831022135	run=2026-08-31_02-00-00
+iperf_mbps_in	edge-dmz-p1-b	20016	peer=edge-dmz-p2-a	at=20260831022135	run=2026-08-31_02-00-00
+iperf_rel_median	edge-dmz-p2-a	101.1	peer=edge-dmz-p1-b	run=2026-08-31_02-00-00
+iperf_line_util	edge-dmz-p2-a	80.07	peer=edge-dmz-p1-b	run=2026-08-31_02-00-00
+iperf_achieved	edge-dmz-p2-a	100.1	peer=edge-dmz-p1-b	run=2026-08-31_02-00-00
+iperf_mbps_out	edge-dmz-p2-a	19957	peer=edge-dmz-p2-b	at=20260831022210	run=2026-08-31_02-00-00
+iperf_mbps_in	edge-dmz-p2-b	19957	peer=edge-dmz-p2-a	at=20260831022210	run=2026-08-31_02-00-00
+iperf_rel_median	edge-dmz-p2-a	100.8	peer=edge-dmz-p2-b	run=2026-08-31_02-00-00
+iperf_line_util	edge-dmz-p2-a	79.83	peer=edge-dmz-p2-b	run=2026-08-31_02-00-00
+iperf_achieved	edge-dmz-p2-a	99.78	peer=edge-dmz-p2-b	run=2026-08-31_02-00-00
+iperf_mbps_out	edge-dmz-p2-b	19597	peer=edge-dmz-p1-a	at=20260831022245	run=2026-08-31_02-00-00
+iperf_mbps_in	edge-dmz-p1-a	19597	peer=edge-dmz-p2-b	at=20260831022245	run=2026-08-31_02-00-00
+iperf_rel_median	edge-dmz-p2-b	98.95	peer=edge-dmz-p1-a	run=2026-08-31_02-00-00
+iperf_line_util	edge-dmz-p2-b	78.39	peer=edge-dmz-p1-a	run=2026-08-31_02-00-00
+iperf_achieved	edge-dmz-p2-b	97.99	peer=edge-dmz-p1-a	run=2026-08-31_02-00-00
+iperf_mbps_out	edge-dmz-p2-b	19650	peer=edge-dmz-p1-b	at=20260831022320	run=2026-08-31_02-00-00
+iperf_mbps_in	edge-dmz-p1-b	19650	peer=edge-dmz-p2-b	at=20260831022320	run=2026-08-31_02-00-00
+iperf_rel_median	edge-dmz-p2-b	99.22	peer=edge-dmz-p1-b	run=2026-08-31_02-00-00
+iperf_line_util	edge-dmz-p2-b	78.6	peer=edge-dmz-p1-b	run=2026-08-31_02-00-00
+iperf_achieved	edge-dmz-p2-b	98.25	peer=edge-dmz-p1-b	run=2026-08-31_02-00-00
+iperf_mbps_out	edge-dmz-p2-b	19707	peer=edge-dmz-p2-a	at=20260831022355	run=2026-08-31_02-00-00
+iperf_mbps_in	edge-dmz-p2-a	19707	peer=edge-dmz-p2-b	at=20260831022355	run=2026-08-31_02-00-00
+iperf_rel_median	edge-dmz-p2-b	99.51	peer=edge-dmz-p2-a	run=2026-08-31_02-00-00
+iperf_line_util	edge-dmz-p2-b	78.83	peer=edge-dmz-p2-a	run=2026-08-31_02-00-00
+iperf_achieved	edge-dmz-p2-b	98.54	peer=edge-dmz-p2-a	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r01u01	19679	peer=edge-core-p1-a	at=20260831022430	run=2026-08-31_02-00-00
+iperf_mbps_in	edge-core-p1-a	19679	peer=h1r01u01	at=20260831022430	run=2026-08-31_02-00-00
+iperf_rel_median	h1r01u01	99.37	peer=edge-core-p1-a	run=2026-08-31_02-00-00
+iperf_line_util	h1r01u01	78.72	peer=edge-core-p1-a	run=2026-08-31_02-00-00
+iperf_achieved	h1r01u01	98.4	peer=edge-core-p1-a	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r01u01	19530	peer=edge-dmz-p1-a	at=20260831022505	run=2026-08-31_02-00-00
+iperf_mbps_in	edge-dmz-p1-a	19530	peer=h1r01u01	at=20260831022505	run=2026-08-31_02-00-00
+iperf_rel_median	h1r01u01	98.61	peer=edge-dmz-p1-a	run=2026-08-31_02-00-00
+iperf_line_util	h1r01u01	78.12	peer=edge-dmz-p1-a	run=2026-08-31_02-00-00
+iperf_achieved	h1r01u01	97.65	peer=edge-dmz-p1-a	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r01u01	20069	peer=h1r01u02	at=20260831022540	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r01u02	20069	peer=h1r01u01	at=20260831022540	run=2026-08-31_02-00-00
+iperf_rel_median	h1r01u01	101.3	peer=h1r01u02	run=2026-08-31_02-00-00
+iperf_line_util	h1r01u01	80.27	peer=h1r01u02	run=2026-08-31_02-00-00
+iperf_achieved	h1r01u01	100.3	peer=h1r01u02	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r01u01	19899	peer=h1r01u03	at=20260831022615	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r01u03	19899	peer=h1r01u01	at=20260831022615	run=2026-08-31_02-00-00
+iperf_rel_median	h1r01u01	100.5	peer=h1r01u03	run=2026-08-31_02-00-00
+iperf_line_util	h1r01u01	79.6	peer=h1r01u03	run=2026-08-31_02-00-00
+iperf_achieved	h1r01u01	99.5	peer=h1r01u03	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r01u01	19528	peer=h1r01u04	at=20260831022650	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r01u04	19528	peer=h1r01u01	at=20260831022650	run=2026-08-31_02-00-00
+iperf_rel_median	h1r01u01	98.6	peer=h1r01u04	run=2026-08-31_02-00-00
+iperf_line_util	h1r01u01	78.11	peer=h1r01u04	run=2026-08-31_02-00-00
+iperf_achieved	h1r01u01	97.64	peer=h1r01u04	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r01u01	19742	peer=h1r02u01	at=20260831022725	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r02u01	19742	peer=h1r01u01	at=20260831022725	run=2026-08-31_02-00-00
+iperf_rel_median	h1r01u01	99.68	peer=h1r02u01	run=2026-08-31_02-00-00
+iperf_line_util	h1r01u01	78.97	peer=h1r02u01	run=2026-08-31_02-00-00
+iperf_achieved	h1r01u01	98.71	peer=h1r02u01	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r01u01	19551	peer=h1r03u01	at=20260831022800	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r03u01	19551	peer=h1r01u01	at=20260831022800	run=2026-08-31_02-00-00
+iperf_rel_median	h1r01u01	98.72	peer=h1r03u01	run=2026-08-31_02-00-00
+iperf_line_util	h1r01u01	78.21	peer=h1r03u01	run=2026-08-31_02-00-00
+iperf_achieved	h1r01u01	97.76	peer=h1r03u01	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r01u01	19964	peer=h1r04u01	at=20260831022835	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r04u01	19964	peer=h1r01u01	at=20260831022835	run=2026-08-31_02-00-00
+iperf_rel_median	h1r01u01	100.8	peer=h1r04u01	run=2026-08-31_02-00-00
+iperf_line_util	h1r01u01	79.86	peer=h1r04u01	run=2026-08-31_02-00-00
+iperf_achieved	h1r01u01	99.82	peer=h1r04u01	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r01u01	19520	peer=h1r05u01	at=20260831022910	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r05u01	19520	peer=h1r01u01	at=20260831022910	run=2026-08-31_02-00-00
+iperf_rel_median	h1r01u01	98.56	peer=h1r05u01	run=2026-08-31_02-00-00
+iperf_line_util	h1r01u01	78.08	peer=h1r05u01	run=2026-08-31_02-00-00
+iperf_achieved	h1r01u01	97.6	peer=h1r05u01	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r01u01	19814	peer=h1r06d04	at=20260831022945	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r06d04	19814	peer=h1r01u01	at=20260831022945	run=2026-08-31_02-00-00
+iperf_rel_median	h1r01u01	100	peer=h1r06d04	run=2026-08-31_02-00-00
+iperf_line_util	h1r01u01	79.26	peer=h1r06d04	run=2026-08-31_02-00-00
+iperf_achieved	h1r01u01	99.07	peer=h1r06d04	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r01u01	19932	peer=h2r01u01	at=20260831023020	run=2026-08-31_02-00-00
+iperf_mbps_in	h2r01u01	19932	peer=h1r01u01	at=20260831023020	run=2026-08-31_02-00-00
+iperf_rel_median	h1r01u01	100.6	peer=h2r01u01	run=2026-08-31_02-00-00
+iperf_line_util	h1r01u01	79.73	peer=h2r01u01	run=2026-08-31_02-00-00
+iperf_achieved	h1r01u01	99.66	peer=h2r01u01	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r01u01	19905	peer=h2r02u01	at=20260831023055	run=2026-08-31_02-00-00
+iperf_mbps_in	h2r02u01	19905	peer=h1r01u01	at=20260831023055	run=2026-08-31_02-00-00
+iperf_rel_median	h1r01u01	100.5	peer=h2r02u01	run=2026-08-31_02-00-00
+iperf_line_util	h1r01u01	79.62	peer=h2r02u01	run=2026-08-31_02-00-00
+iperf_achieved	h1r01u01	99.52	peer=h2r02u01	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r01u02	19597	peer=h1r01u01	at=20260831023130	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r01u01	19597	peer=h1r01u02	at=20260831023130	run=2026-08-31_02-00-00
+iperf_rel_median	h1r01u02	98.95	peer=h1r01u01	run=2026-08-31_02-00-00
+iperf_line_util	h1r01u02	78.39	peer=h1r01u01	run=2026-08-31_02-00-00
+iperf_achieved	h1r01u02	97.98	peer=h1r01u01	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r01u02	20045	peer=h1r01u03	at=20260831023205	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r01u03	20045	peer=h1r01u02	at=20260831023205	run=2026-08-31_02-00-00
+iperf_rel_median	h1r01u02	101.2	peer=h1r01u03	run=2026-08-31_02-00-00
+iperf_line_util	h1r01u02	80.18	peer=h1r01u03	run=2026-08-31_02-00-00
+iperf_achieved	h1r01u02	100.2	peer=h1r01u03	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r01u02	19555	peer=h1r01u04	at=20260831023240	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r01u04	19555	peer=h1r01u02	at=20260831023240	run=2026-08-31_02-00-00
+iperf_rel_median	h1r01u02	98.74	peer=h1r01u04	run=2026-08-31_02-00-00
+iperf_line_util	h1r01u02	78.22	peer=h1r01u04	run=2026-08-31_02-00-00
+iperf_achieved	h1r01u02	97.77	peer=h1r01u04	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r01u03	19885	peer=h1r01u01	at=20260831023315	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r01u01	19885	peer=h1r01u03	at=20260831023315	run=2026-08-31_02-00-00
+iperf_rel_median	h1r01u03	100.4	peer=h1r01u01	run=2026-08-31_02-00-00
+iperf_line_util	h1r01u03	79.54	peer=h1r01u01	run=2026-08-31_02-00-00
+iperf_achieved	h1r01u03	99.43	peer=h1r01u01	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r01u03	19531	peer=h1r01u02	at=20260831023350	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r01u02	19531	peer=h1r01u03	at=20260831023350	run=2026-08-31_02-00-00
+iperf_rel_median	h1r01u03	98.62	peer=h1r01u02	run=2026-08-31_02-00-00
+iperf_line_util	h1r01u03	78.12	peer=h1r01u02	run=2026-08-31_02-00-00
+iperf_achieved	h1r01u03	97.65	peer=h1r01u02	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r01u03	7600	peer=h1r01u04	at=20260831023425	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r01u04	7600	peer=h1r01u03	at=20260831023425	run=2026-08-31_02-00-00
+iperf_rel_median	h1r01u03	38.37	peer=h1r01u04	run=2026-08-31_02-00-00
+iperf_line_util	h1r01u03	30.4	peer=h1r01u04	run=2026-08-31_02-00-00
+iperf_achieved	h1r01u03	38	peer=h1r01u04	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r01u04	19607	peer=h1r01u01	at=20260831023500	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r01u01	19607	peer=h1r01u04	at=20260831023500	run=2026-08-31_02-00-00
+iperf_rel_median	h1r01u04	99	peer=h1r01u01	run=2026-08-31_02-00-00
+iperf_line_util	h1r01u04	78.43	peer=h1r01u01	run=2026-08-31_02-00-00
+iperf_achieved	h1r01u04	98.03	peer=h1r01u01	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r01u04	19597	peer=h1r01u02	at=20260831023535	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r01u02	19597	peer=h1r01u04	at=20260831023535	run=2026-08-31_02-00-00
+iperf_rel_median	h1r01u04	98.95	peer=h1r01u02	run=2026-08-31_02-00-00
+iperf_line_util	h1r01u04	78.39	peer=h1r01u02	run=2026-08-31_02-00-00
+iperf_achieved	h1r01u04	97.98	peer=h1r01u02	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r01u04	19644	peer=h1r01u03	at=20260831023610	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r01u03	19644	peer=h1r01u04	at=20260831023610	run=2026-08-31_02-00-00
+iperf_rel_median	h1r01u04	99.19	peer=h1r01u03	run=2026-08-31_02-00-00
+iperf_line_util	h1r01u04	78.58	peer=h1r01u03	run=2026-08-31_02-00-00
+iperf_achieved	h1r01u04	98.22	peer=h1r01u03	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r02u01	19760	peer=edge-core-p1-a	at=20260831023645	run=2026-08-31_02-00-00
+iperf_mbps_in	edge-core-p1-a	19760	peer=h1r02u01	at=20260831023645	run=2026-08-31_02-00-00
+iperf_rel_median	h1r02u01	99.77	peer=edge-core-p1-a	run=2026-08-31_02-00-00
+iperf_line_util	h1r02u01	79.04	peer=edge-core-p1-a	run=2026-08-31_02-00-00
+iperf_achieved	h1r02u01	98.8	peer=edge-core-p1-a	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r02u01	19666	peer=edge-dmz-p1-a	at=20260831023720	run=2026-08-31_02-00-00
+iperf_mbps_in	edge-dmz-p1-a	19666	peer=h1r02u01	at=20260831023720	run=2026-08-31_02-00-00
+iperf_rel_median	h1r02u01	99.3	peer=edge-dmz-p1-a	run=2026-08-31_02-00-00
+iperf_line_util	h1r02u01	78.66	peer=edge-dmz-p1-a	run=2026-08-31_02-00-00
+iperf_achieved	h1r02u01	98.33	peer=edge-dmz-p1-a	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r02u01	19736	peer=h1r01u01	at=20260831023755	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r01u01	19736	peer=h1r02u01	at=20260831023755	run=2026-08-31_02-00-00
+iperf_rel_median	h1r02u01	99.65	peer=h1r01u01	run=2026-08-31_02-00-00
+iperf_line_util	h1r02u01	78.95	peer=h1r01u01	run=2026-08-31_02-00-00
+iperf_achieved	h1r02u01	98.68	peer=h1r01u01	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r02u01	19560	peer=h1r02u02	at=20260831023830	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r02u02	19560	peer=h1r02u01	at=20260831023830	run=2026-08-31_02-00-00
+iperf_rel_median	h1r02u01	98.76	peer=h1r02u02	run=2026-08-31_02-00-00
+iperf_line_util	h1r02u01	78.24	peer=h1r02u02	run=2026-08-31_02-00-00
+iperf_achieved	h1r02u01	97.8	peer=h1r02u02	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r02u01	8865	peer=h1r02u03	at=20260831023905	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r02u03	8865	peer=h1r02u01	at=20260831023905	run=2026-08-31_02-00-00
+iperf_rel_median	h1r02u01	44.76	peer=h1r02u03	run=2026-08-31_02-00-00
+iperf_line_util	h1r02u01	35.46	peer=h1r02u03	run=2026-08-31_02-00-00
+iperf_achieved	h1r02u01	44.33	peer=h1r02u03	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r02u01	19976	peer=h1r02u04	at=20260831023940	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r02u04	19976	peer=h1r02u01	at=20260831023940	run=2026-08-31_02-00-00
+iperf_rel_median	h1r02u01	100.9	peer=h1r02u04	run=2026-08-31_02-00-00
+iperf_line_util	h1r02u01	79.9	peer=h1r02u04	run=2026-08-31_02-00-00
+iperf_achieved	h1r02u01	99.88	peer=h1r02u04	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r02u01	20054	peer=h1r03u01	at=20260831024015	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r03u01	20054	peer=h1r02u01	at=20260831024015	run=2026-08-31_02-00-00
+iperf_rel_median	h1r02u01	101.3	peer=h1r03u01	run=2026-08-31_02-00-00
+iperf_line_util	h1r02u01	80.22	peer=h1r03u01	run=2026-08-31_02-00-00
+iperf_achieved	h1r02u01	100.3	peer=h1r03u01	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r02u01	19691	peer=h1r04u01	at=20260831024050	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r04u01	19691	peer=h1r02u01	at=20260831024050	run=2026-08-31_02-00-00
+iperf_rel_median	h1r02u01	99.43	peer=h1r04u01	run=2026-08-31_02-00-00
+iperf_line_util	h1r02u01	78.77	peer=h1r04u01	run=2026-08-31_02-00-00
+iperf_achieved	h1r02u01	98.46	peer=h1r04u01	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r02u01	20006	peer=h1r05u01	at=20260831024125	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r05u01	20006	peer=h1r02u01	at=20260831024125	run=2026-08-31_02-00-00
+iperf_rel_median	h1r02u01	101	peer=h1r05u01	run=2026-08-31_02-00-00
+iperf_line_util	h1r02u01	80.03	peer=h1r05u01	run=2026-08-31_02-00-00
+iperf_achieved	h1r02u01	100	peer=h1r05u01	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r02u01	19797	peer=h1r06d04	at=20260831024200	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r06d04	19797	peer=h1r02u01	at=20260831024200	run=2026-08-31_02-00-00
+iperf_rel_median	h1r02u01	99.96	peer=h1r06d04	run=2026-08-31_02-00-00
+iperf_line_util	h1r02u01	79.19	peer=h1r06d04	run=2026-08-31_02-00-00
+iperf_achieved	h1r02u01	98.99	peer=h1r06d04	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r02u01	19804	peer=h2r01u01	at=20260831024235	run=2026-08-31_02-00-00
+iperf_mbps_in	h2r01u01	19804	peer=h1r02u01	at=20260831024235	run=2026-08-31_02-00-00
+iperf_rel_median	h1r02u01	100	peer=h2r01u01	run=2026-08-31_02-00-00
+iperf_line_util	h1r02u01	79.22	peer=h2r01u01	run=2026-08-31_02-00-00
+iperf_achieved	h1r02u01	99.02	peer=h2r01u01	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r02u01	19828	peer=h2r02u01	at=20260831024310	run=2026-08-31_02-00-00
+iperf_mbps_in	h2r02u01	19828	peer=h1r02u01	at=20260831024310	run=2026-08-31_02-00-00
+iperf_rel_median	h1r02u01	100.1	peer=h2r02u01	run=2026-08-31_02-00-00
+iperf_line_util	h1r02u01	79.31	peer=h2r02u01	run=2026-08-31_02-00-00
+iperf_achieved	h1r02u01	99.14	peer=h2r02u01	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r02u02	19702	peer=h1r02u01	at=20260831024345	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r02u01	19702	peer=h1r02u02	at=20260831024345	run=2026-08-31_02-00-00
+iperf_rel_median	h1r02u02	99.48	peer=h1r02u01	run=2026-08-31_02-00-00
+iperf_line_util	h1r02u02	78.81	peer=h1r02u01	run=2026-08-31_02-00-00
+iperf_achieved	h1r02u02	98.51	peer=h1r02u01	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r02u02	8753	peer=h1r02u03	at=20260831024420	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r02u03	8753	peer=h1r02u02	at=20260831024420	run=2026-08-31_02-00-00
+iperf_rel_median	h1r02u02	44.2	peer=h1r02u03	run=2026-08-31_02-00-00
+iperf_line_util	h1r02u02	35.01	peer=h1r02u03	run=2026-08-31_02-00-00
+iperf_achieved	h1r02u02	43.77	peer=h1r02u03	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r02u02	19630	peer=h1r02u04	at=20260831024455	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r02u04	19630	peer=h1r02u02	at=20260831024455	run=2026-08-31_02-00-00
+iperf_rel_median	h1r02u02	99.12	peer=h1r02u04	run=2026-08-31_02-00-00
+iperf_line_util	h1r02u02	78.52	peer=h1r02u04	run=2026-08-31_02-00-00
+iperf_achieved	h1r02u02	98.15	peer=h1r02u04	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r02u03	8878	peer=h1r02u01	at=20260831024530	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r02u01	8878	peer=h1r02u03	at=20260831024530	run=2026-08-31_02-00-00
+iperf_rel_median	h1r02u03	44.83	peer=h1r02u01	run=2026-08-31_02-00-00
+iperf_line_util	h1r02u03	35.51	peer=h1r02u01	run=2026-08-31_02-00-00
+iperf_achieved	h1r02u03	44.39	peer=h1r02u01	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r02u03	8888	peer=h1r02u02	at=20260831024605	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r02u02	8888	peer=h1r02u03	at=20260831024605	run=2026-08-31_02-00-00
+iperf_rel_median	h1r02u03	44.88	peer=h1r02u02	run=2026-08-31_02-00-00
+iperf_line_util	h1r02u03	35.55	peer=h1r02u02	run=2026-08-31_02-00-00
+iperf_achieved	h1r02u03	44.44	peer=h1r02u02	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r02u03	8866	peer=h1r02u04	at=20260831024640	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r02u04	8866	peer=h1r02u03	at=20260831024640	run=2026-08-31_02-00-00
+iperf_rel_median	h1r02u03	44.77	peer=h1r02u04	run=2026-08-31_02-00-00
+iperf_line_util	h1r02u03	35.46	peer=h1r02u04	run=2026-08-31_02-00-00
+iperf_achieved	h1r02u03	44.33	peer=h1r02u04	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r02u04	20008	peer=h1r02u01	at=20260831024715	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r02u01	20008	peer=h1r02u04	at=20260831024715	run=2026-08-31_02-00-00
+iperf_rel_median	h1r02u04	101	peer=h1r02u01	run=2026-08-31_02-00-00
+iperf_line_util	h1r02u04	80.03	peer=h1r02u01	run=2026-08-31_02-00-00
+iperf_achieved	h1r02u04	100	peer=h1r02u01	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r02u04	19592	peer=h1r02u02	at=20260831024750	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r02u02	19592	peer=h1r02u04	at=20260831024750	run=2026-08-31_02-00-00
+iperf_rel_median	h1r02u04	98.93	peer=h1r02u02	run=2026-08-31_02-00-00
+iperf_line_util	h1r02u04	78.37	peer=h1r02u02	run=2026-08-31_02-00-00
+iperf_achieved	h1r02u04	97.96	peer=h1r02u02	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r02u04	8881	peer=h1r02u03	at=20260831024825	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r02u03	8881	peer=h1r02u04	at=20260831024825	run=2026-08-31_02-00-00
+iperf_rel_median	h1r02u04	44.84	peer=h1r02u03	run=2026-08-31_02-00-00
+iperf_line_util	h1r02u04	35.52	peer=h1r02u03	run=2026-08-31_02-00-00
+iperf_achieved	h1r02u04	44.41	peer=h1r02u03	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r03u01	19601	peer=edge-core-p1-a	at=20260831024900	run=2026-08-31_02-00-00
+iperf_mbps_in	edge-core-p1-a	19601	peer=h1r03u01	at=20260831024900	run=2026-08-31_02-00-00
+iperf_rel_median	h1r03u01	98.97	peer=edge-core-p1-a	run=2026-08-31_02-00-00
+iperf_line_util	h1r03u01	78.4	peer=edge-core-p1-a	run=2026-08-31_02-00-00
+iperf_achieved	h1r03u01	98	peer=edge-core-p1-a	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r03u01	20087	peer=edge-dmz-p1-a	at=20260831024935	run=2026-08-31_02-00-00
+iperf_mbps_in	edge-dmz-p1-a	20087	peer=h1r03u01	at=20260831024935	run=2026-08-31_02-00-00
+iperf_rel_median	h1r03u01	101.4	peer=edge-dmz-p1-a	run=2026-08-31_02-00-00
+iperf_line_util	h1r03u01	80.35	peer=edge-dmz-p1-a	run=2026-08-31_02-00-00
+iperf_achieved	h1r03u01	100.4	peer=edge-dmz-p1-a	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r03u01	20070	peer=h1r01u01	at=20260831025010	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r01u01	20070	peer=h1r03u01	at=20260831025010	run=2026-08-31_02-00-00
+iperf_rel_median	h1r03u01	101.3	peer=h1r01u01	run=2026-08-31_02-00-00
+iperf_line_util	h1r03u01	80.28	peer=h1r01u01	run=2026-08-31_02-00-00
+iperf_achieved	h1r03u01	100.3	peer=h1r01u01	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r03u01	20097	peer=h1r02u01	at=20260831025045	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r02u01	20097	peer=h1r03u01	at=20260831025045	run=2026-08-31_02-00-00
+iperf_rel_median	h1r03u01	101.5	peer=h1r02u01	run=2026-08-31_02-00-00
+iperf_line_util	h1r03u01	80.39	peer=h1r02u01	run=2026-08-31_02-00-00
+iperf_achieved	h1r03u01	100.5	peer=h1r02u01	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r03u01	19588	peer=h1r03u02	at=20260831025120	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r03u02	19588	peer=h1r03u01	at=20260831025120	run=2026-08-31_02-00-00
+iperf_rel_median	h1r03u01	98.91	peer=h1r03u02	run=2026-08-31_02-00-00
+iperf_line_util	h1r03u01	78.35	peer=h1r03u02	run=2026-08-31_02-00-00
+iperf_achieved	h1r03u01	97.94	peer=h1r03u02	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r03u01	19920	peer=h1r03u03	at=20260831025155	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r03u03	19920	peer=h1r03u01	at=20260831025155	run=2026-08-31_02-00-00
+iperf_rel_median	h1r03u01	100.6	peer=h1r03u03	run=2026-08-31_02-00-00
+iperf_line_util	h1r03u01	79.68	peer=h1r03u03	run=2026-08-31_02-00-00
+iperf_achieved	h1r03u01	99.6	peer=h1r03u03	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r03u01	19848	peer=h1r03u04	at=20260831025230	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r03u04	19848	peer=h1r03u01	at=20260831025230	run=2026-08-31_02-00-00
+iperf_rel_median	h1r03u01	100.2	peer=h1r03u04	run=2026-08-31_02-00-00
+iperf_line_util	h1r03u01	79.39	peer=h1r03u04	run=2026-08-31_02-00-00
+iperf_achieved	h1r03u01	99.24	peer=h1r03u04	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r03u01	19870	peer=h1r04u01	at=20260831025305	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r04u01	19870	peer=h1r03u01	at=20260831025305	run=2026-08-31_02-00-00
+iperf_rel_median	h1r03u01	100.3	peer=h1r04u01	run=2026-08-31_02-00-00
+iperf_line_util	h1r03u01	79.48	peer=h1r04u01	run=2026-08-31_02-00-00
+iperf_achieved	h1r03u01	99.35	peer=h1r04u01	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r03u01	19597	peer=h1r05u01	at=20260831025340	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r05u01	19597	peer=h1r03u01	at=20260831025340	run=2026-08-31_02-00-00
+iperf_rel_median	h1r03u01	98.95	peer=h1r05u01	run=2026-08-31_02-00-00
+iperf_line_util	h1r03u01	78.39	peer=h1r05u01	run=2026-08-31_02-00-00
+iperf_achieved	h1r03u01	97.99	peer=h1r05u01	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r03u01	19944	peer=h1r06d04	at=20260831025415	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r06d04	19944	peer=h1r03u01	at=20260831025415	run=2026-08-31_02-00-00
+iperf_rel_median	h1r03u01	100.7	peer=h1r06d04	run=2026-08-31_02-00-00
+iperf_line_util	h1r03u01	79.78	peer=h1r06d04	run=2026-08-31_02-00-00
+iperf_achieved	h1r03u01	99.72	peer=h1r06d04	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r03u01	19962	peer=h2r01u01	at=20260831025450	run=2026-08-31_02-00-00
+iperf_mbps_in	h2r01u01	19962	peer=h1r03u01	at=20260831025450	run=2026-08-31_02-00-00
+iperf_rel_median	h1r03u01	100.8	peer=h2r01u01	run=2026-08-31_02-00-00
+iperf_line_util	h1r03u01	79.85	peer=h2r01u01	run=2026-08-31_02-00-00
+iperf_achieved	h1r03u01	99.81	peer=h2r01u01	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r03u01	19918	peer=h2r02u01	at=20260831025525	run=2026-08-31_02-00-00
+iperf_mbps_in	h2r02u01	19918	peer=h1r03u01	at=20260831025525	run=2026-08-31_02-00-00
+iperf_rel_median	h1r03u01	100.6	peer=h2r02u01	run=2026-08-31_02-00-00
+iperf_line_util	h1r03u01	79.67	peer=h2r02u01	run=2026-08-31_02-00-00
+iperf_achieved	h1r03u01	99.59	peer=h2r02u01	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r03u02	19536	peer=h1r03u01	at=20260831025600	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r03u01	19536	peer=h1r03u02	at=20260831025600	run=2026-08-31_02-00-00
+iperf_rel_median	h1r03u02	98.64	peer=h1r03u01	run=2026-08-31_02-00-00
+iperf_line_util	h1r03u02	78.14	peer=h1r03u01	run=2026-08-31_02-00-00
+iperf_achieved	h1r03u02	97.68	peer=h1r03u01	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r03u02	19841	peer=h1r03u03	at=20260831025635	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r03u03	19841	peer=h1r03u02	at=20260831025635	run=2026-08-31_02-00-00
+iperf_rel_median	h1r03u02	100.2	peer=h1r03u03	run=2026-08-31_02-00-00
+iperf_line_util	h1r03u02	79.36	peer=h1r03u03	run=2026-08-31_02-00-00
+iperf_achieved	h1r03u02	99.2	peer=h1r03u03	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r03u02	19698	peer=h1r03u04	at=20260831025710	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r03u04	19698	peer=h1r03u02	at=20260831025710	run=2026-08-31_02-00-00
+iperf_rel_median	h1r03u02	99.46	peer=h1r03u04	run=2026-08-31_02-00-00
+iperf_line_util	h1r03u02	78.79	peer=h1r03u04	run=2026-08-31_02-00-00
+iperf_achieved	h1r03u02	98.49	peer=h1r03u04	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r03u03	19578	peer=h1r03u01	at=20260831025745	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r03u01	19578	peer=h1r03u03	at=20260831025745	run=2026-08-31_02-00-00
+iperf_rel_median	h1r03u03	98.85	peer=h1r03u01	run=2026-08-31_02-00-00
+iperf_line_util	h1r03u03	78.31	peer=h1r03u01	run=2026-08-31_02-00-00
+iperf_achieved	h1r03u03	97.89	peer=h1r03u01	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r03u03	19811	peer=h1r03u02	at=20260831025820	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r03u02	19811	peer=h1r03u03	at=20260831025820	run=2026-08-31_02-00-00
+iperf_rel_median	h1r03u03	100	peer=h1r03u02	run=2026-08-31_02-00-00
+iperf_line_util	h1r03u03	79.24	peer=h1r03u02	run=2026-08-31_02-00-00
+iperf_achieved	h1r03u03	99.06	peer=h1r03u02	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r03u03	19852	peer=h1r03u04	at=20260831025855	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r03u04	19852	peer=h1r03u03	at=20260831025855	run=2026-08-31_02-00-00
+iperf_rel_median	h1r03u03	100.2	peer=h1r03u04	run=2026-08-31_02-00-00
+iperf_line_util	h1r03u03	79.41	peer=h1r03u04	run=2026-08-31_02-00-00
+iperf_achieved	h1r03u03	99.26	peer=h1r03u04	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r03u04	20031	peer=h1r03u01	at=20260831025930	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r03u01	20031	peer=h1r03u04	at=20260831025930	run=2026-08-31_02-00-00
+iperf_rel_median	h1r03u04	101.1	peer=h1r03u01	run=2026-08-31_02-00-00
+iperf_line_util	h1r03u04	80.13	peer=h1r03u01	run=2026-08-31_02-00-00
+iperf_achieved	h1r03u04	100.2	peer=h1r03u01	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r03u04	19556	peer=h1r03u02	at=20260831030005	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r03u02	19556	peer=h1r03u04	at=20260831030005	run=2026-08-31_02-00-00
+iperf_rel_median	h1r03u04	98.74	peer=h1r03u02	run=2026-08-31_02-00-00
+iperf_line_util	h1r03u04	78.22	peer=h1r03u02	run=2026-08-31_02-00-00
+iperf_achieved	h1r03u04	97.78	peer=h1r03u02	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r03u04	19656	peer=h1r03u03	at=20260831030040	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r03u03	19656	peer=h1r03u04	at=20260831030040	run=2026-08-31_02-00-00
+iperf_rel_median	h1r03u04	99.25	peer=h1r03u03	run=2026-08-31_02-00-00
+iperf_line_util	h1r03u04	78.62	peer=h1r03u03	run=2026-08-31_02-00-00
+iperf_achieved	h1r03u04	98.28	peer=h1r03u03	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r04u01	19571	peer=edge-core-p1-a	at=20260831030115	run=2026-08-31_02-00-00
+iperf_mbps_in	edge-core-p1-a	19571	peer=h1r04u01	at=20260831030115	run=2026-08-31_02-00-00
+iperf_rel_median	h1r04u01	98.82	peer=edge-core-p1-a	run=2026-08-31_02-00-00
+iperf_line_util	h1r04u01	78.29	peer=edge-core-p1-a	run=2026-08-31_02-00-00
+iperf_achieved	h1r04u01	97.86	peer=edge-core-p1-a	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r04u01	20087	peer=edge-dmz-p1-a	at=20260831030150	run=2026-08-31_02-00-00
+iperf_mbps_in	edge-dmz-p1-a	20087	peer=h1r04u01	at=20260831030150	run=2026-08-31_02-00-00
+iperf_rel_median	h1r04u01	101.4	peer=edge-dmz-p1-a	run=2026-08-31_02-00-00
+iperf_line_util	h1r04u01	80.35	peer=edge-dmz-p1-a	run=2026-08-31_02-00-00
+iperf_achieved	h1r04u01	100.4	peer=edge-dmz-p1-a	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r04u01	19650	peer=h1r01u01	at=20260831030225	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r01u01	19650	peer=h1r04u01	at=20260831030225	run=2026-08-31_02-00-00
+iperf_rel_median	h1r04u01	99.22	peer=h1r01u01	run=2026-08-31_02-00-00
+iperf_line_util	h1r04u01	78.6	peer=h1r01u01	run=2026-08-31_02-00-00
+iperf_achieved	h1r04u01	98.25	peer=h1r01u01	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r04u01	19906	peer=h1r02u01	at=20260831030300	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r02u01	19906	peer=h1r04u01	at=20260831030300	run=2026-08-31_02-00-00
+iperf_rel_median	h1r04u01	100.5	peer=h1r02u01	run=2026-08-31_02-00-00
+iperf_line_util	h1r04u01	79.62	peer=h1r02u01	run=2026-08-31_02-00-00
+iperf_achieved	h1r04u01	99.53	peer=h1r02u01	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r04u01	19677	peer=h1r03u01	at=20260831030335	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r03u01	19677	peer=h1r04u01	at=20260831030335	run=2026-08-31_02-00-00
+iperf_rel_median	h1r04u01	99.35	peer=h1r03u01	run=2026-08-31_02-00-00
+iperf_line_util	h1r04u01	78.71	peer=h1r03u01	run=2026-08-31_02-00-00
+iperf_achieved	h1r04u01	98.39	peer=h1r03u01	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r04u01	19654	peer=h1r04u02	at=20260831030410	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r04u02	19654	peer=h1r04u01	at=20260831030410	run=2026-08-31_02-00-00
+iperf_rel_median	h1r04u01	99.24	peer=h1r04u02	run=2026-08-31_02-00-00
+iperf_line_util	h1r04u01	78.61	peer=h1r04u02	run=2026-08-31_02-00-00
+iperf_achieved	h1r04u01	98.27	peer=h1r04u02	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r04u01	20012	peer=h1r04u03	at=20260831030445	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r04u03	20012	peer=h1r04u01	at=20260831030445	run=2026-08-31_02-00-00
+iperf_rel_median	h1r04u01	101	peer=h1r04u03	run=2026-08-31_02-00-00
+iperf_line_util	h1r04u01	80.05	peer=h1r04u03	run=2026-08-31_02-00-00
+iperf_achieved	h1r04u01	100.1	peer=h1r04u03	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r04u01	19818	peer=h1r04u04	at=20260831030520	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r04u04	19818	peer=h1r04u01	at=20260831030520	run=2026-08-31_02-00-00
+iperf_rel_median	h1r04u01	100.1	peer=h1r04u04	run=2026-08-31_02-00-00
+iperf_line_util	h1r04u01	79.27	peer=h1r04u04	run=2026-08-31_02-00-00
+iperf_achieved	h1r04u01	99.09	peer=h1r04u04	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r04u01	19680	peer=h1r05u01	at=20260831030555	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r05u01	19680	peer=h1r04u01	at=20260831030555	run=2026-08-31_02-00-00
+iperf_rel_median	h1r04u01	99.37	peer=h1r05u01	run=2026-08-31_02-00-00
+iperf_line_util	h1r04u01	78.72	peer=h1r05u01	run=2026-08-31_02-00-00
+iperf_achieved	h1r04u01	98.4	peer=h1r05u01	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r04u01	19597	peer=h1r06d04	at=20260831030630	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r06d04	19597	peer=h1r04u01	at=20260831030630	run=2026-08-31_02-00-00
+iperf_rel_median	h1r04u01	98.95	peer=h1r06d04	run=2026-08-31_02-00-00
+iperf_line_util	h1r04u01	78.39	peer=h1r06d04	run=2026-08-31_02-00-00
+iperf_achieved	h1r04u01	97.98	peer=h1r06d04	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r04u01	19982	peer=h2r01u01	at=20260831030705	run=2026-08-31_02-00-00
+iperf_mbps_in	h2r01u01	19982	peer=h1r04u01	at=20260831030705	run=2026-08-31_02-00-00
+iperf_rel_median	h1r04u01	100.9	peer=h2r01u01	run=2026-08-31_02-00-00
+iperf_line_util	h1r04u01	79.93	peer=h2r01u01	run=2026-08-31_02-00-00
+iperf_achieved	h1r04u01	99.91	peer=h2r01u01	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r04u01	19835	peer=h2r02u01	at=20260831030740	run=2026-08-31_02-00-00
+iperf_mbps_in	h2r02u01	19835	peer=h1r04u01	at=20260831030740	run=2026-08-31_02-00-00
+iperf_rel_median	h1r04u01	100.2	peer=h2r02u01	run=2026-08-31_02-00-00
+iperf_line_util	h1r04u01	79.34	peer=h2r02u01	run=2026-08-31_02-00-00
+iperf_achieved	h1r04u01	99.17	peer=h2r02u01	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r04u02	19881	peer=h1r04u01	at=20260831030815	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r04u01	19881	peer=h1r04u02	at=20260831030815	run=2026-08-31_02-00-00
+iperf_rel_median	h1r04u02	100.4	peer=h1r04u01	run=2026-08-31_02-00-00
+iperf_line_util	h1r04u02	79.53	peer=h1r04u01	run=2026-08-31_02-00-00
+iperf_achieved	h1r04u02	99.41	peer=h1r04u01	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r04u02	19946	peer=h1r04u03	at=20260831030850	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r04u03	19946	peer=h1r04u02	at=20260831030850	run=2026-08-31_02-00-00
+iperf_rel_median	h1r04u02	100.7	peer=h1r04u03	run=2026-08-31_02-00-00
+iperf_line_util	h1r04u02	79.78	peer=h1r04u03	run=2026-08-31_02-00-00
+iperf_achieved	h1r04u02	99.73	peer=h1r04u03	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r04u02	19898	peer=h1r04u04	at=20260831030925	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r04u04	19898	peer=h1r04u02	at=20260831030925	run=2026-08-31_02-00-00
+iperf_rel_median	h1r04u02	100.5	peer=h1r04u04	run=2026-08-31_02-00-00
+iperf_line_util	h1r04u02	79.59	peer=h1r04u04	run=2026-08-31_02-00-00
+iperf_achieved	h1r04u02	99.49	peer=h1r04u04	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r04u04	19957	peer=h1r04u01	at=20260831031145	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r04u01	19957	peer=h1r04u04	at=20260831031145	run=2026-08-31_02-00-00
+iperf_rel_median	h1r04u04	100.8	peer=h1r04u01	run=2026-08-31_02-00-00
+iperf_line_util	h1r04u04	79.83	peer=h1r04u01	run=2026-08-31_02-00-00
+iperf_achieved	h1r04u04	99.78	peer=h1r04u01	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r04u04	19980	peer=h1r04u02	at=20260831031220	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r04u02	19980	peer=h1r04u04	at=20260831031220	run=2026-08-31_02-00-00
+iperf_rel_median	h1r04u04	100.9	peer=h1r04u02	run=2026-08-31_02-00-00
+iperf_line_util	h1r04u04	79.92	peer=h1r04u02	run=2026-08-31_02-00-00
+iperf_achieved	h1r04u04	99.9	peer=h1r04u02	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r04u04	19576	peer=h1r04u03	at=20260831031255	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r04u03	19576	peer=h1r04u04	at=20260831031255	run=2026-08-31_02-00-00
+iperf_rel_median	h1r04u04	98.84	peer=h1r04u03	run=2026-08-31_02-00-00
+iperf_line_util	h1r04u04	78.3	peer=h1r04u03	run=2026-08-31_02-00-00
+iperf_achieved	h1r04u04	97.88	peer=h1r04u03	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r05u01	19505	peer=edge-core-p1-a	at=20260831031330	run=2026-08-31_02-00-00
+iperf_mbps_in	edge-core-p1-a	19505	peer=h1r05u01	at=20260831031330	run=2026-08-31_02-00-00
+iperf_rel_median	h1r05u01	98.49	peer=edge-core-p1-a	run=2026-08-31_02-00-00
+iperf_line_util	h1r05u01	78.02	peer=edge-core-p1-a	run=2026-08-31_02-00-00
+iperf_achieved	h1r05u01	97.53	peer=edge-core-p1-a	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r05u01	20068	peer=edge-dmz-p1-a	at=20260831031405	run=2026-08-31_02-00-00
+iperf_mbps_in	edge-dmz-p1-a	20068	peer=h1r05u01	at=20260831031405	run=2026-08-31_02-00-00
+iperf_rel_median	h1r05u01	101.3	peer=edge-dmz-p1-a	run=2026-08-31_02-00-00
+iperf_line_util	h1r05u01	80.27	peer=edge-dmz-p1-a	run=2026-08-31_02-00-00
+iperf_achieved	h1r05u01	100.3	peer=edge-dmz-p1-a	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r05u01	19992	peer=h1r01u01	at=20260831031440	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r01u01	19992	peer=h1r05u01	at=20260831031440	run=2026-08-31_02-00-00
+iperf_rel_median	h1r05u01	100.9	peer=h1r01u01	run=2026-08-31_02-00-00
+iperf_line_util	h1r05u01	79.97	peer=h1r01u01	run=2026-08-31_02-00-00
+iperf_achieved	h1r05u01	99.96	peer=h1r01u01	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r05u01	20094	peer=h1r02u01	at=20260831031515	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r02u01	20094	peer=h1r05u01	at=20260831031515	run=2026-08-31_02-00-00
+iperf_rel_median	h1r05u01	101.5	peer=h1r02u01	run=2026-08-31_02-00-00
+iperf_line_util	h1r05u01	80.38	peer=h1r02u01	run=2026-08-31_02-00-00
+iperf_achieved	h1r05u01	100.5	peer=h1r02u01	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r05u01	20017	peer=h1r03u01	at=20260831031550	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r03u01	20017	peer=h1r05u01	at=20260831031550	run=2026-08-31_02-00-00
+iperf_rel_median	h1r05u01	101.1	peer=h1r03u01	run=2026-08-31_02-00-00
+iperf_line_util	h1r05u01	80.07	peer=h1r03u01	run=2026-08-31_02-00-00
+iperf_achieved	h1r05u01	100.1	peer=h1r03u01	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r05u01	19539	peer=h1r04u01	at=20260831031625	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r04u01	19539	peer=h1r05u01	at=20260831031625	run=2026-08-31_02-00-00
+iperf_rel_median	h1r05u01	98.66	peer=h1r04u01	run=2026-08-31_02-00-00
+iperf_line_util	h1r05u01	78.15	peer=h1r04u01	run=2026-08-31_02-00-00
+iperf_achieved	h1r05u01	97.69	peer=h1r04u01	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r05u01	19936	peer=h1r05u02	at=20260831031700	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r05u02	19936	peer=h1r05u01	at=20260831031700	run=2026-08-31_02-00-00
+iperf_rel_median	h1r05u01	100.7	peer=h1r05u02	run=2026-08-31_02-00-00
+iperf_line_util	h1r05u01	79.74	peer=h1r05u02	run=2026-08-31_02-00-00
+iperf_achieved	h1r05u01	99.68	peer=h1r05u02	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r05u01	19884	peer=h1r05u03	at=20260831031735	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r05u03	19884	peer=h1r05u01	at=20260831031735	run=2026-08-31_02-00-00
+iperf_rel_median	h1r05u01	100.4	peer=h1r05u03	run=2026-08-31_02-00-00
+iperf_line_util	h1r05u01	79.54	peer=h1r05u03	run=2026-08-31_02-00-00
+iperf_achieved	h1r05u01	99.42	peer=h1r05u03	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r05u01	19933	peer=h1r05u04	at=20260831031810	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r05u04	19933	peer=h1r05u01	at=20260831031810	run=2026-08-31_02-00-00
+iperf_rel_median	h1r05u01	100.6	peer=h1r05u04	run=2026-08-31_02-00-00
+iperf_line_util	h1r05u01	79.73	peer=h1r05u04	run=2026-08-31_02-00-00
+iperf_achieved	h1r05u01	99.66	peer=h1r05u04	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r05u01	19564	peer=h1r06d04	at=20260831031845	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r06d04	19564	peer=h1r05u01	at=20260831031845	run=2026-08-31_02-00-00
+iperf_rel_median	h1r05u01	98.78	peer=h1r06d04	run=2026-08-31_02-00-00
+iperf_line_util	h1r05u01	78.25	peer=h1r06d04	run=2026-08-31_02-00-00
+iperf_achieved	h1r05u01	97.82	peer=h1r06d04	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r05u01	19800	peer=h2r01u01	at=20260831031920	run=2026-08-31_02-00-00
+iperf_mbps_in	h2r01u01	19800	peer=h1r05u01	at=20260831031920	run=2026-08-31_02-00-00
+iperf_rel_median	h1r05u01	99.98	peer=h2r01u01	run=2026-08-31_02-00-00
+iperf_line_util	h1r05u01	79.2	peer=h2r01u01	run=2026-08-31_02-00-00
+iperf_achieved	h1r05u01	99	peer=h2r01u01	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r05u01	19750	peer=h2r02u01	at=20260831031955	run=2026-08-31_02-00-00
+iperf_mbps_in	h2r02u01	19750	peer=h1r05u01	at=20260831031955	run=2026-08-31_02-00-00
+iperf_rel_median	h1r05u01	99.72	peer=h2r02u01	run=2026-08-31_02-00-00
+iperf_line_util	h1r05u01	79	peer=h2r02u01	run=2026-08-31_02-00-00
+iperf_achieved	h1r05u01	98.75	peer=h2r02u01	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r05u02	19961	peer=h1r05u01	at=20260831032030	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r05u01	19961	peer=h1r05u02	at=20260831032030	run=2026-08-31_02-00-00
+iperf_rel_median	h1r05u02	100.8	peer=h1r05u01	run=2026-08-31_02-00-00
+iperf_line_util	h1r05u02	79.84	peer=h1r05u01	run=2026-08-31_02-00-00
+iperf_achieved	h1r05u02	99.81	peer=h1r05u01	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r05u02	19569	peer=h1r05u03	at=20260831032105	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r05u03	19569	peer=h1r05u02	at=20260831032105	run=2026-08-31_02-00-00
+iperf_rel_median	h1r05u02	98.81	peer=h1r05u03	run=2026-08-31_02-00-00
+iperf_line_util	h1r05u02	78.27	peer=h1r05u03	run=2026-08-31_02-00-00
+iperf_achieved	h1r05u02	97.84	peer=h1r05u03	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r05u02	19976	peer=h1r05u04	at=20260831032140	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r05u04	19976	peer=h1r05u02	at=20260831032140	run=2026-08-31_02-00-00
+iperf_rel_median	h1r05u02	100.9	peer=h1r05u04	run=2026-08-31_02-00-00
+iperf_line_util	h1r05u02	79.91	peer=h1r05u04	run=2026-08-31_02-00-00
+iperf_achieved	h1r05u02	99.88	peer=h1r05u04	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r05u03	19662	peer=h1r05u01	at=20260831032215	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r05u01	19662	peer=h1r05u03	at=20260831032215	run=2026-08-31_02-00-00
+iperf_rel_median	h1r05u03	99.28	peer=h1r05u01	run=2026-08-31_02-00-00
+iperf_line_util	h1r05u03	78.65	peer=h1r05u01	run=2026-08-31_02-00-00
+iperf_achieved	h1r05u03	98.31	peer=h1r05u01	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r05u03	19506	peer=h1r05u02	at=20260831032250	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r05u02	19506	peer=h1r05u03	at=20260831032250	run=2026-08-31_02-00-00
+iperf_rel_median	h1r05u03	98.49	peer=h1r05u02	run=2026-08-31_02-00-00
+iperf_line_util	h1r05u03	78.02	peer=h1r05u02	run=2026-08-31_02-00-00
+iperf_achieved	h1r05u03	97.53	peer=h1r05u02	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r05u03	19806	peer=h1r05u04	at=20260831032325	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r05u04	19806	peer=h1r05u03	at=20260831032325	run=2026-08-31_02-00-00
+iperf_rel_median	h1r05u03	100	peer=h1r05u04	run=2026-08-31_02-00-00
+iperf_line_util	h1r05u03	79.22	peer=h1r05u04	run=2026-08-31_02-00-00
+iperf_achieved	h1r05u03	99.03	peer=h1r05u04	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r05u04	19615	peer=h1r05u01	at=20260831032400	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r05u01	19615	peer=h1r05u04	at=20260831032400	run=2026-08-31_02-00-00
+iperf_rel_median	h1r05u04	99.04	peer=h1r05u01	run=2026-08-31_02-00-00
+iperf_line_util	h1r05u04	78.46	peer=h1r05u01	run=2026-08-31_02-00-00
+iperf_achieved	h1r05u04	98.07	peer=h1r05u01	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r05u04	19758	peer=h1r05u02	at=20260831032435	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r05u02	19758	peer=h1r05u04	at=20260831032435	run=2026-08-31_02-00-00
+iperf_rel_median	h1r05u04	99.76	peer=h1r05u02	run=2026-08-31_02-00-00
+iperf_line_util	h1r05u04	79.03	peer=h1r05u02	run=2026-08-31_02-00-00
+iperf_achieved	h1r05u04	98.79	peer=h1r05u02	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r05u04	19967	peer=h1r05u03	at=20260831032510	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r05u03	19967	peer=h1r05u04	at=20260831032510	run=2026-08-31_02-00-00
+iperf_rel_median	h1r05u04	100.8	peer=h1r05u03	run=2026-08-31_02-00-00
+iperf_line_util	h1r05u04	79.87	peer=h1r05u03	run=2026-08-31_02-00-00
+iperf_achieved	h1r05u04	99.84	peer=h1r05u03	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r06d04	19989	peer=edge-core-p1-a	at=20260831032545	run=2026-08-31_02-00-00
+iperf_mbps_in	edge-core-p1-a	19989	peer=h1r06d04	at=20260831032545	run=2026-08-31_02-00-00
+iperf_rel_median	h1r06d04	100.9	peer=edge-core-p1-a	run=2026-08-31_02-00-00
+iperf_line_util	h1r06d04	79.96	peer=edge-core-p1-a	run=2026-08-31_02-00-00
+iperf_achieved	h1r06d04	99.95	peer=edge-core-p1-a	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r06d04	19664	peer=edge-dmz-p1-a	at=20260831032620	run=2026-08-31_02-00-00
+iperf_mbps_in	edge-dmz-p1-a	19664	peer=h1r06d04	at=20260831032620	run=2026-08-31_02-00-00
+iperf_rel_median	h1r06d04	99.29	peer=edge-dmz-p1-a	run=2026-08-31_02-00-00
+iperf_line_util	h1r06d04	78.65	peer=edge-dmz-p1-a	run=2026-08-31_02-00-00
+iperf_achieved	h1r06d04	98.32	peer=edge-dmz-p1-a	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r06d04	20078	peer=h1r01u01	at=20260831032655	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r01u01	20078	peer=h1r06d04	at=20260831032655	run=2026-08-31_02-00-00
+iperf_rel_median	h1r06d04	101.4	peer=h1r01u01	run=2026-08-31_02-00-00
+iperf_line_util	h1r06d04	80.31	peer=h1r01u01	run=2026-08-31_02-00-00
+iperf_achieved	h1r06d04	100.4	peer=h1r01u01	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r06d04	19576	peer=h1r02u01	at=20260831032730	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r02u01	19576	peer=h1r06d04	at=20260831032730	run=2026-08-31_02-00-00
+iperf_rel_median	h1r06d04	98.84	peer=h1r02u01	run=2026-08-31_02-00-00
+iperf_line_util	h1r06d04	78.3	peer=h1r02u01	run=2026-08-31_02-00-00
+iperf_achieved	h1r06d04	97.88	peer=h1r02u01	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r06d04	19687	peer=h1r03u01	at=20260831032805	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r03u01	19687	peer=h1r06d04	at=20260831032805	run=2026-08-31_02-00-00
+iperf_rel_median	h1r06d04	99.4	peer=h1r03u01	run=2026-08-31_02-00-00
+iperf_line_util	h1r06d04	78.75	peer=h1r03u01	run=2026-08-31_02-00-00
+iperf_achieved	h1r06d04	98.43	peer=h1r03u01	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r06d04	19689	peer=h1r04u01	at=20260831032840	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r04u01	19689	peer=h1r06d04	at=20260831032840	run=2026-08-31_02-00-00
+iperf_rel_median	h1r06d04	99.41	peer=h1r04u01	run=2026-08-31_02-00-00
+iperf_line_util	h1r06d04	78.76	peer=h1r04u01	run=2026-08-31_02-00-00
+iperf_achieved	h1r06d04	98.45	peer=h1r04u01	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r06d04	19904	peer=h1r05u01	at=20260831032915	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r05u01	19904	peer=h1r06d04	at=20260831032915	run=2026-08-31_02-00-00
+iperf_rel_median	h1r06d04	100.5	peer=h1r05u01	run=2026-08-31_02-00-00
+iperf_line_util	h1r06d04	79.62	peer=h1r05u01	run=2026-08-31_02-00-00
+iperf_achieved	h1r06d04	99.52	peer=h1r05u01	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r06d04	19881	peer=h1r06d06	at=20260831032950	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r06d06	19881	peer=h1r06d04	at=20260831032950	run=2026-08-31_02-00-00
+iperf_rel_median	h1r06d04	100.4	peer=h1r06d06	run=2026-08-31_02-00-00
+iperf_line_util	h1r06d04	79.53	peer=h1r06d06	run=2026-08-31_02-00-00
+iperf_achieved	h1r06d04	99.41	peer=h1r06d06	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r06d04	19514	peer=h1r06d08	at=20260831033025	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r06d08	19514	peer=h1r06d04	at=20260831033025	run=2026-08-31_02-00-00
+iperf_rel_median	h1r06d04	98.53	peer=h1r06d08	run=2026-08-31_02-00-00
+iperf_line_util	h1r06d04	78.06	peer=h1r06d08	run=2026-08-31_02-00-00
+iperf_achieved	h1r06d04	97.57	peer=h1r06d08	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r06d04	19887	peer=h1r06d10	at=20260831033100	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r06d10	19887	peer=h1r06d04	at=20260831033100	run=2026-08-31_02-00-00
+iperf_rel_median	h1r06d04	100.4	peer=h1r06d10	run=2026-08-31_02-00-00
+iperf_line_util	h1r06d04	79.55	peer=h1r06d10	run=2026-08-31_02-00-00
+iperf_achieved	h1r06d04	99.44	peer=h1r06d10	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r06d04	19879	peer=h2r01u01	at=20260831033135	run=2026-08-31_02-00-00
+iperf_mbps_in	h2r01u01	19879	peer=h1r06d04	at=20260831033135	run=2026-08-31_02-00-00
+iperf_rel_median	h1r06d04	100.4	peer=h2r01u01	run=2026-08-31_02-00-00
+iperf_line_util	h1r06d04	79.52	peer=h2r01u01	run=2026-08-31_02-00-00
+iperf_achieved	h1r06d04	99.39	peer=h2r01u01	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r06d04	19858	peer=h2r02u01	at=20260831033210	run=2026-08-31_02-00-00
+iperf_mbps_in	h2r02u01	19858	peer=h1r06d04	at=20260831033210	run=2026-08-31_02-00-00
+iperf_rel_median	h1r06d04	100.3	peer=h2r02u01	run=2026-08-31_02-00-00
+iperf_line_util	h1r06d04	79.43	peer=h2r02u01	run=2026-08-31_02-00-00
+iperf_achieved	h1r06d04	99.29	peer=h2r02u01	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r06d06	19728	peer=h1r06d04	at=20260831033245	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r06d04	19728	peer=h1r06d06	at=20260831033245	run=2026-08-31_02-00-00
+iperf_rel_median	h1r06d06	99.61	peer=h1r06d04	run=2026-08-31_02-00-00
+iperf_line_util	h1r06d06	78.91	peer=h1r06d04	run=2026-08-31_02-00-00
+iperf_achieved	h1r06d06	98.64	peer=h1r06d04	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r06d06	19776	peer=h1r06d08	at=20260831033320	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r06d08	19776	peer=h1r06d06	at=20260831033320	run=2026-08-31_02-00-00
+iperf_rel_median	h1r06d06	99.86	peer=h1r06d08	run=2026-08-31_02-00-00
+iperf_line_util	h1r06d06	79.1	peer=h1r06d08	run=2026-08-31_02-00-00
+iperf_achieved	h1r06d06	98.88	peer=h1r06d08	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r06d06	19881	peer=h1r06d10	at=20260831033355	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r06d10	19881	peer=h1r06d06	at=20260831033355	run=2026-08-31_02-00-00
+iperf_rel_median	h1r06d06	100.4	peer=h1r06d10	run=2026-08-31_02-00-00
+iperf_line_util	h1r06d06	79.52	peer=h1r06d10	run=2026-08-31_02-00-00
+iperf_achieved	h1r06d06	99.41	peer=h1r06d10	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r06d08	19856	peer=h1r06d04	at=20260831033430	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r06d04	19856	peer=h1r06d08	at=20260831033430	run=2026-08-31_02-00-00
+iperf_rel_median	h1r06d08	100.3	peer=h1r06d04	run=2026-08-31_02-00-00
+iperf_line_util	h1r06d08	79.42	peer=h1r06d04	run=2026-08-31_02-00-00
+iperf_achieved	h1r06d08	99.28	peer=h1r06d04	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r06d08	19827	peer=h1r06d06	at=20260831033505	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r06d06	19827	peer=h1r06d08	at=20260831033505	run=2026-08-31_02-00-00
+iperf_rel_median	h1r06d08	100.1	peer=h1r06d06	run=2026-08-31_02-00-00
+iperf_line_util	h1r06d08	79.31	peer=h1r06d06	run=2026-08-31_02-00-00
+iperf_achieved	h1r06d08	99.13	peer=h1r06d06	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r06d08	19763	peer=h1r06d10	at=20260831033540	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r06d10	19763	peer=h1r06d08	at=20260831033540	run=2026-08-31_02-00-00
+iperf_rel_median	h1r06d08	99.79	peer=h1r06d10	run=2026-08-31_02-00-00
+iperf_line_util	h1r06d08	79.05	peer=h1r06d10	run=2026-08-31_02-00-00
+iperf_achieved	h1r06d08	98.82	peer=h1r06d10	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r06d10	19517	peer=h1r06d04	at=20260831033615	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r06d04	19517	peer=h1r06d10	at=20260831033615	run=2026-08-31_02-00-00
+iperf_rel_median	h1r06d10	98.55	peer=h1r06d04	run=2026-08-31_02-00-00
+iperf_line_util	h1r06d10	78.07	peer=h1r06d04	run=2026-08-31_02-00-00
+iperf_achieved	h1r06d10	97.58	peer=h1r06d04	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r06d10	20069	peer=h1r06d06	at=20260831033650	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r06d06	20069	peer=h1r06d10	at=20260831033650	run=2026-08-31_02-00-00
+iperf_rel_median	h1r06d10	101.3	peer=h1r06d06	run=2026-08-31_02-00-00
+iperf_line_util	h1r06d10	80.27	peer=h1r06d06	run=2026-08-31_02-00-00
+iperf_achieved	h1r06d10	100.3	peer=h1r06d06	run=2026-08-31_02-00-00
+iperf_mbps_out	h1r06d10	19915	peer=h1r06d08	at=20260831033725	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r06d08	19915	peer=h1r06d10	at=20260831033725	run=2026-08-31_02-00-00
+iperf_rel_median	h1r06d10	100.6	peer=h1r06d08	run=2026-08-31_02-00-00
+iperf_line_util	h1r06d10	79.66	peer=h1r06d08	run=2026-08-31_02-00-00
+iperf_achieved	h1r06d10	99.58	peer=h1r06d08	run=2026-08-31_02-00-00
+iperf_mbps_out	h2r01u01	19606	peer=edge-core-p1-a	at=20260831033800	run=2026-08-31_02-00-00
+iperf_mbps_in	edge-core-p1-a	19606	peer=h2r01u01	at=20260831033800	run=2026-08-31_02-00-00
+iperf_rel_median	h2r01u01	99	peer=edge-core-p1-a	run=2026-08-31_02-00-00
+iperf_line_util	h2r01u01	78.43	peer=edge-core-p1-a	run=2026-08-31_02-00-00
+iperf_achieved	h2r01u01	98.03	peer=edge-core-p1-a	run=2026-08-31_02-00-00
+iperf_mbps_out	h2r01u01	19704	peer=edge-dmz-p1-a	at=20260831033835	run=2026-08-31_02-00-00
+iperf_mbps_in	edge-dmz-p1-a	19704	peer=h2r01u01	at=20260831033835	run=2026-08-31_02-00-00
+iperf_rel_median	h2r01u01	99.49	peer=edge-dmz-p1-a	run=2026-08-31_02-00-00
+iperf_line_util	h2r01u01	78.82	peer=edge-dmz-p1-a	run=2026-08-31_02-00-00
+iperf_achieved	h2r01u01	98.52	peer=edge-dmz-p1-a	run=2026-08-31_02-00-00
+iperf_mbps_out	h2r01u01	19910	peer=h1r01u01	at=20260831033910	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r01u01	19910	peer=h2r01u01	at=20260831033910	run=2026-08-31_02-00-00
+iperf_rel_median	h2r01u01	100.5	peer=h1r01u01	run=2026-08-31_02-00-00
+iperf_line_util	h2r01u01	79.64	peer=h1r01u01	run=2026-08-31_02-00-00
+iperf_achieved	h2r01u01	99.55	peer=h1r01u01	run=2026-08-31_02-00-00
+iperf_mbps_out	h2r01u01	19964	peer=h1r02u01	at=20260831033945	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r02u01	19964	peer=h2r01u01	at=20260831033945	run=2026-08-31_02-00-00
+iperf_rel_median	h2r01u01	100.8	peer=h1r02u01	run=2026-08-31_02-00-00
+iperf_line_util	h2r01u01	79.86	peer=h1r02u01	run=2026-08-31_02-00-00
+iperf_achieved	h2r01u01	99.82	peer=h1r02u01	run=2026-08-31_02-00-00
+iperf_mbps_out	h2r01u01	19681	peer=h1r03u01	at=20260831034020	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r03u01	19681	peer=h2r01u01	at=20260831034020	run=2026-08-31_02-00-00
+iperf_rel_median	h2r01u01	99.37	peer=h1r03u01	run=2026-08-31_02-00-00
+iperf_line_util	h2r01u01	78.72	peer=h1r03u01	run=2026-08-31_02-00-00
+iperf_achieved	h2r01u01	98.41	peer=h1r03u01	run=2026-08-31_02-00-00
+iperf_mbps_out	h2r01u01	19991	peer=h1r04u01	at=20260831034055	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r04u01	19991	peer=h2r01u01	at=20260831034055	run=2026-08-31_02-00-00
+iperf_rel_median	h2r01u01	100.9	peer=h1r04u01	run=2026-08-31_02-00-00
+iperf_line_util	h2r01u01	79.97	peer=h1r04u01	run=2026-08-31_02-00-00
+iperf_achieved	h2r01u01	99.96	peer=h1r04u01	run=2026-08-31_02-00-00
+iperf_mbps_out	h2r01u01	19806	peer=h1r05u01	at=20260831034130	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r05u01	19806	peer=h2r01u01	at=20260831034130	run=2026-08-31_02-00-00
+iperf_rel_median	h2r01u01	100	peer=h1r05u01	run=2026-08-31_02-00-00
+iperf_line_util	h2r01u01	79.23	peer=h1r05u01	run=2026-08-31_02-00-00
+iperf_achieved	h2r01u01	99.03	peer=h1r05u01	run=2026-08-31_02-00-00
+iperf_mbps_out	h2r01u01	19521	peer=h1r06d04	at=20260831034205	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r06d04	19521	peer=h2r01u01	at=20260831034205	run=2026-08-31_02-00-00
+iperf_rel_median	h2r01u01	98.57	peer=h1r06d04	run=2026-08-31_02-00-00
+iperf_line_util	h2r01u01	78.08	peer=h1r06d04	run=2026-08-31_02-00-00
+iperf_achieved	h2r01u01	97.61	peer=h1r06d04	run=2026-08-31_02-00-00
+iperf_mbps_out	h2r01u01	19825	peer=h2r01u02	at=20260831034240	run=2026-08-31_02-00-00
+iperf_mbps_in	h2r01u02	19825	peer=h2r01u01	at=20260831034240	run=2026-08-31_02-00-00
+iperf_rel_median	h2r01u01	100.1	peer=h2r01u02	run=2026-08-31_02-00-00
+iperf_line_util	h2r01u01	79.3	peer=h2r01u02	run=2026-08-31_02-00-00
+iperf_achieved	h2r01u01	99.12	peer=h2r01u02	run=2026-08-31_02-00-00
+iperf_mbps_out	h2r01u01	20088	peer=h2r01u03	at=20260831034315	run=2026-08-31_02-00-00
+iperf_mbps_in	h2r01u03	20088	peer=h2r01u01	at=20260831034315	run=2026-08-31_02-00-00
+iperf_rel_median	h2r01u01	101.4	peer=h2r01u03	run=2026-08-31_02-00-00
+iperf_line_util	h2r01u01	80.35	peer=h2r01u03	run=2026-08-31_02-00-00
+iperf_achieved	h2r01u01	100.4	peer=h2r01u03	run=2026-08-31_02-00-00
+iperf_mbps_out	h2r01u01	19619	peer=h2r01u04	at=20260831034350	run=2026-08-31_02-00-00
+iperf_mbps_in	h2r01u04	19619	peer=h2r01u01	at=20260831034350	run=2026-08-31_02-00-00
+iperf_rel_median	h2r01u01	99.06	peer=h2r01u04	run=2026-08-31_02-00-00
+iperf_line_util	h2r01u01	78.47	peer=h2r01u04	run=2026-08-31_02-00-00
+iperf_achieved	h2r01u01	98.09	peer=h2r01u04	run=2026-08-31_02-00-00
+iperf_mbps_out	h2r01u01	19613	peer=h2r02u01	at=20260831034425	run=2026-08-31_02-00-00
+iperf_mbps_in	h2r02u01	19613	peer=h2r01u01	at=20260831034425	run=2026-08-31_02-00-00
+iperf_rel_median	h2r01u01	99.03	peer=h2r02u01	run=2026-08-31_02-00-00
+iperf_line_util	h2r01u01	78.45	peer=h2r02u01	run=2026-08-31_02-00-00
+iperf_achieved	h2r01u01	98.06	peer=h2r02u01	run=2026-08-31_02-00-00
+iperf_mbps_out	h2r01u02	19812	peer=h2r01u01	at=20260831034500	run=2026-08-31_02-00-00
+iperf_mbps_in	h2r01u01	19812	peer=h2r01u02	at=20260831034500	run=2026-08-31_02-00-00
+iperf_rel_median	h2r01u02	100	peer=h2r01u01	run=2026-08-31_02-00-00
+iperf_line_util	h2r01u02	79.25	peer=h2r01u01	run=2026-08-31_02-00-00
+iperf_achieved	h2r01u02	99.06	peer=h2r01u01	run=2026-08-31_02-00-00
+iperf_mbps_out	h2r01u02	19506	peer=h2r01u03	at=20260831034535	run=2026-08-31_02-00-00
+iperf_mbps_in	h2r01u03	19506	peer=h2r01u02	at=20260831034535	run=2026-08-31_02-00-00
+iperf_rel_median	h2r01u02	98.49	peer=h2r01u03	run=2026-08-31_02-00-00
+iperf_line_util	h2r01u02	78.03	peer=h2r01u03	run=2026-08-31_02-00-00
+iperf_achieved	h2r01u02	97.53	peer=h2r01u03	run=2026-08-31_02-00-00
+iperf_mbps_out	h2r01u02	19912	peer=h2r01u04	at=20260831034610	run=2026-08-31_02-00-00
+iperf_mbps_in	h2r01u04	19912	peer=h2r01u02	at=20260831034610	run=2026-08-31_02-00-00
+iperf_rel_median	h2r01u02	100.5	peer=h2r01u04	run=2026-08-31_02-00-00
+iperf_line_util	h2r01u02	79.65	peer=h2r01u04	run=2026-08-31_02-00-00
+iperf_achieved	h2r01u02	99.56	peer=h2r01u04	run=2026-08-31_02-00-00
+iperf_mbps_out	h2r01u03	19658	peer=h2r01u01	at=20260831034645	run=2026-08-31_02-00-00
+iperf_mbps_in	h2r01u01	19658	peer=h2r01u03	at=20260831034645	run=2026-08-31_02-00-00
+iperf_rel_median	h2r01u03	99.26	peer=h2r01u01	run=2026-08-31_02-00-00
+iperf_line_util	h2r01u03	78.63	peer=h2r01u01	run=2026-08-31_02-00-00
+iperf_achieved	h2r01u03	98.29	peer=h2r01u01	run=2026-08-31_02-00-00
+iperf_mbps_out	h2r01u03	19789	peer=h2r01u02	at=20260831034720	run=2026-08-31_02-00-00
+iperf_mbps_in	h2r01u02	19789	peer=h2r01u03	at=20260831034720	run=2026-08-31_02-00-00
+iperf_rel_median	h2r01u03	99.92	peer=h2r01u02	run=2026-08-31_02-00-00
+iperf_line_util	h2r01u03	79.15	peer=h2r01u02	run=2026-08-31_02-00-00
+iperf_achieved	h2r01u03	98.94	peer=h2r01u02	run=2026-08-31_02-00-00
+iperf_mbps_out	h2r01u03	19720	peer=h2r01u04	at=20260831034755	run=2026-08-31_02-00-00
+iperf_mbps_in	h2r01u04	19720	peer=h2r01u03	at=20260831034755	run=2026-08-31_02-00-00
+iperf_rel_median	h2r01u03	99.57	peer=h2r01u04	run=2026-08-31_02-00-00
+iperf_line_util	h2r01u03	78.88	peer=h2r01u04	run=2026-08-31_02-00-00
+iperf_achieved	h2r01u03	98.6	peer=h2r01u04	run=2026-08-31_02-00-00
+iperf_mbps_out	h2r02u01	19938	peer=edge-core-p1-a	at=20260831035015	run=2026-08-31_02-00-00
+iperf_mbps_in	edge-core-p1-a	19938	peer=h2r02u01	at=20260831035015	run=2026-08-31_02-00-00
+iperf_rel_median	h2r02u01	100.7	peer=edge-core-p1-a	run=2026-08-31_02-00-00
+iperf_line_util	h2r02u01	79.75	peer=edge-core-p1-a	run=2026-08-31_02-00-00
+iperf_achieved	h2r02u01	99.69	peer=edge-core-p1-a	run=2026-08-31_02-00-00
+iperf_mbps_out	h2r02u01	19875	peer=edge-dmz-p1-a	at=20260831035050	run=2026-08-31_02-00-00
+iperf_mbps_in	edge-dmz-p1-a	19875	peer=h2r02u01	at=20260831035050	run=2026-08-31_02-00-00
+iperf_rel_median	h2r02u01	100.4	peer=edge-dmz-p1-a	run=2026-08-31_02-00-00
+iperf_line_util	h2r02u01	79.5	peer=edge-dmz-p1-a	run=2026-08-31_02-00-00
+iperf_achieved	h2r02u01	99.38	peer=edge-dmz-p1-a	run=2026-08-31_02-00-00
+iperf_mbps_out	h2r02u01	19960	peer=h1r01u01	at=20260831035125	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r01u01	19960	peer=h2r02u01	at=20260831035125	run=2026-08-31_02-00-00
+iperf_rel_median	h2r02u01	100.8	peer=h1r01u01	run=2026-08-31_02-00-00
+iperf_line_util	h2r02u01	79.84	peer=h1r01u01	run=2026-08-31_02-00-00
+iperf_achieved	h2r02u01	99.8	peer=h1r01u01	run=2026-08-31_02-00-00
+iperf_mbps_out	h2r02u01	19931	peer=h1r02u01	at=20260831035200	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r02u01	19931	peer=h2r02u01	at=20260831035200	run=2026-08-31_02-00-00
+iperf_rel_median	h2r02u01	100.6	peer=h1r02u01	run=2026-08-31_02-00-00
+iperf_line_util	h2r02u01	79.73	peer=h1r02u01	run=2026-08-31_02-00-00
+iperf_achieved	h2r02u01	99.66	peer=h1r02u01	run=2026-08-31_02-00-00
+iperf_mbps_out	h2r02u01	19931	peer=h1r03u01	at=20260831035235	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r03u01	19931	peer=h2r02u01	at=20260831035235	run=2026-08-31_02-00-00
+iperf_rel_median	h2r02u01	100.6	peer=h1r03u01	run=2026-08-31_02-00-00
+iperf_line_util	h2r02u01	79.72	peer=h1r03u01	run=2026-08-31_02-00-00
+iperf_achieved	h2r02u01	99.66	peer=h1r03u01	run=2026-08-31_02-00-00
+iperf_mbps_out	h2r02u01	20062	peer=h1r04u01	at=20260831035310	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r04u01	20062	peer=h2r02u01	at=20260831035310	run=2026-08-31_02-00-00
+iperf_rel_median	h2r02u01	101.3	peer=h1r04u01	run=2026-08-31_02-00-00
+iperf_line_util	h2r02u01	80.25	peer=h1r04u01	run=2026-08-31_02-00-00
+iperf_achieved	h2r02u01	100.3	peer=h1r04u01	run=2026-08-31_02-00-00
+iperf_mbps_out	h2r02u01	19945	peer=h1r05u01	at=20260831035345	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r05u01	19945	peer=h2r02u01	at=20260831035345	run=2026-08-31_02-00-00
+iperf_rel_median	h2r02u01	100.7	peer=h1r05u01	run=2026-08-31_02-00-00
+iperf_line_util	h2r02u01	79.78	peer=h1r05u01	run=2026-08-31_02-00-00
+iperf_achieved	h2r02u01	99.72	peer=h1r05u01	run=2026-08-31_02-00-00
+iperf_mbps_out	h2r02u01	19591	peer=h1r06d04	at=20260831035420	run=2026-08-31_02-00-00
+iperf_mbps_in	h1r06d04	19591	peer=h2r02u01	at=20260831035420	run=2026-08-31_02-00-00
+iperf_rel_median	h2r02u01	98.92	peer=h1r06d04	run=2026-08-31_02-00-00
+iperf_line_util	h2r02u01	78.36	peer=h1r06d04	run=2026-08-31_02-00-00
+iperf_achieved	h2r02u01	97.95	peer=h1r06d04	run=2026-08-31_02-00-00
+iperf_mbps_out	h2r02u01	19779	peer=h2r01u01	at=20260831035455	run=2026-08-31_02-00-00
+iperf_mbps_in	h2r01u01	19779	peer=h2r02u01	at=20260831035455	run=2026-08-31_02-00-00
+iperf_rel_median	h2r02u01	99.87	peer=h2r01u01	run=2026-08-31_02-00-00
+iperf_line_util	h2r02u01	79.12	peer=h2r01u01	run=2026-08-31_02-00-00
+iperf_achieved	h2r02u01	98.89	peer=h2r01u01	run=2026-08-31_02-00-00
+iperf_mbps_out	h2r02u01	19653	peer=h2r02u02	at=20260831035530	run=2026-08-31_02-00-00
+iperf_mbps_in	h2r02u02	19653	peer=h2r02u01	at=20260831035530	run=2026-08-31_02-00-00
+iperf_rel_median	h2r02u01	99.24	peer=h2r02u02	run=2026-08-31_02-00-00
+iperf_line_util	h2r02u01	78.61	peer=h2r02u02	run=2026-08-31_02-00-00
+iperf_achieved	h2r02u01	98.27	peer=h2r02u02	run=2026-08-31_02-00-00
+iperf_mbps_out	h2r02u01	19607	peer=h2r02u03	at=20260831035605	run=2026-08-31_02-00-00
+iperf_mbps_in	h2r02u03	19607	peer=h2r02u01	at=20260831035605	run=2026-08-31_02-00-00
+iperf_rel_median	h2r02u01	99	peer=h2r02u03	run=2026-08-31_02-00-00
+iperf_line_util	h2r02u01	78.43	peer=h2r02u03	run=2026-08-31_02-00-00
+iperf_achieved	h2r02u01	98.04	peer=h2r02u03	run=2026-08-31_02-00-00
+iperf_mbps_out	h2r02u02	19646	peer=h2r02u01	at=20260831035640	run=2026-08-31_02-00-00
+iperf_mbps_in	h2r02u01	19646	peer=h2r02u02	at=20260831035640	run=2026-08-31_02-00-00
+iperf_rel_median	h2r02u02	99.2	peer=h2r02u01	run=2026-08-31_02-00-00
+iperf_line_util	h2r02u02	78.58	peer=h2r02u01	run=2026-08-31_02-00-00
+iperf_achieved	h2r02u02	98.23	peer=h2r02u01	run=2026-08-31_02-00-00
+iperf_mbps_out	h2r02u02	20045	peer=h2r02u03	at=20260831035715	run=2026-08-31_02-00-00
+iperf_mbps_in	h2r02u03	20045	peer=h2r02u02	at=20260831035715	run=2026-08-31_02-00-00
+iperf_rel_median	h2r02u02	101.2	peer=h2r02u03	run=2026-08-31_02-00-00
+iperf_line_util	h2r02u02	80.18	peer=h2r02u03	run=2026-08-31_02-00-00
+iperf_achieved	h2r02u02	100.2	peer=h2r02u03	run=2026-08-31_02-00-00
+iperf_mbps_out	h2r02u03	19871	peer=h2r02u01	at=20260831035750	run=2026-08-31_02-00-00
+iperf_mbps_in	h2r02u01	19871	peer=h2r02u03	at=20260831035750	run=2026-08-31_02-00-00
+iperf_rel_median	h2r02u03	100.3	peer=h2r02u01	run=2026-08-31_02-00-00
+iperf_line_util	h2r02u03	79.48	peer=h2r02u01	run=2026-08-31_02-00-00
+iperf_achieved	h2r02u03	99.36	peer=h2r02u01	run=2026-08-31_02-00-00
+iperf_mbps_out	h2r02u03	19640	peer=h2r02u02	at=20260831035825	run=2026-08-31_02-00-00
+iperf_mbps_in	h2r02u02	19640	peer=h2r02u03	at=20260831035825	run=2026-08-31_02-00-00
+iperf_rel_median	h2r02u03	99.17	peer=h2r02u02	run=2026-08-31_02-00-00
+iperf_line_util	h2r02u03	78.56	peer=h2r02u02	run=2026-08-31_02-00-00
+iperf_achieved	h2r02u03	98.2	peer=h2r02u02	run=2026-08-31_02-00-00
+iperf_asymmetry	edge-core-p1-a	1.461	peer=edge-core-p1-b	run=2026-08-31_02-00-00
+iperf_asymmetry	edge-core-p1-b	1.461	peer=edge-core-p1-a	run=2026-08-31_02-00-00
+iperf_asymmetry	edge-core-p1-a	1.3	peer=edge-core-p2-a	run=2026-08-31_02-00-00
+iperf_asymmetry	edge-core-p2-a	1.3	peer=edge-core-p1-a	run=2026-08-31_02-00-00
+iperf_asymmetry	edge-core-p1-a	1.829	peer=edge-core-p2-b	run=2026-08-31_02-00-00
+iperf_asymmetry	edge-core-p2-b	1.829	peer=edge-core-p1-a	run=2026-08-31_02-00-00
+iperf_asymmetry	edge-core-p1-a	0.3952	peer=edge-dmz-p1-a	run=2026-08-31_02-00-00
+iperf_asymmetry	edge-dmz-p1-a	0.3952	peer=edge-core-p1-a	run=2026-08-31_02-00-00
+iperf_asymmetry	edge-core-p1-a	1.914	peer=h1r01u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r01u01	1.914	peer=edge-core-p1-a	run=2026-08-31_02-00-00
+iperf_asymmetry	edge-core-p1-a	1.503	peer=h1r02u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r02u01	1.503	peer=edge-core-p1-a	run=2026-08-31_02-00-00
+iperf_asymmetry	edge-core-p1-a	0.258	peer=h1r03u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r03u01	0.258	peer=edge-core-p1-a	run=2026-08-31_02-00-00
+iperf_asymmetry	edge-core-p1-a	0.1788	peer=h1r04u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r04u01	0.1788	peer=edge-core-p1-a	run=2026-08-31_02-00-00
+iperf_asymmetry	edge-core-p1-a	0.439	peer=h1r05u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r05u01	0.439	peer=edge-core-p1-a	run=2026-08-31_02-00-00
+iperf_asymmetry	edge-core-p1-a	0.8229	peer=h1r06d04	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r06d04	0.8229	peer=edge-core-p1-a	run=2026-08-31_02-00-00
+iperf_asymmetry	edge-core-p1-a	0.7683	peer=h2r01u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h2r01u01	0.7683	peer=edge-core-p1-a	run=2026-08-31_02-00-00
+iperf_asymmetry	edge-core-p1-a	0.7912	peer=h2r02u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h2r02u01	0.7912	peer=edge-core-p1-a	run=2026-08-31_02-00-00
+iperf_asymmetry	edge-core-p1-b	0.1106	peer=edge-core-p2-a	run=2026-08-31_02-00-00
+iperf_asymmetry	edge-core-p2-a	0.1106	peer=edge-core-p1-b	run=2026-08-31_02-00-00
+iperf_asymmetry	edge-core-p1-b	0.104	peer=edge-core-p2-b	run=2026-08-31_02-00-00
+iperf_asymmetry	edge-core-p2-b	0.104	peer=edge-core-p1-b	run=2026-08-31_02-00-00
+iperf_asymmetry	edge-core-p2-a	0.2876	peer=edge-core-p2-b	run=2026-08-31_02-00-00
+iperf_asymmetry	edge-core-p2-b	0.2876	peer=edge-core-p2-a	run=2026-08-31_02-00-00
+iperf_asymmetry	edge-dmz-p1-a	2.334	peer=edge-dmz-p1-b	run=2026-08-31_02-00-00
+iperf_asymmetry	edge-dmz-p1-b	2.334	peer=edge-dmz-p1-a	run=2026-08-31_02-00-00
+iperf_asymmetry	edge-dmz-p1-a	0.2736	peer=edge-dmz-p2-a	run=2026-08-31_02-00-00
+iperf_asymmetry	edge-dmz-p2-a	0.2736	peer=edge-dmz-p1-a	run=2026-08-31_02-00-00
+iperf_asymmetry	edge-dmz-p1-a	1.707	peer=edge-dmz-p2-b	run=2026-08-31_02-00-00
+iperf_asymmetry	edge-dmz-p2-b	1.707	peer=edge-dmz-p1-a	run=2026-08-31_02-00-00
+iperf_asymmetry	edge-dmz-p1-a	1.059	peer=h1r01u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r01u01	1.059	peer=edge-dmz-p1-a	run=2026-08-31_02-00-00
+iperf_asymmetry	edge-dmz-p1-a	0.4907	peer=h1r02u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r02u01	0.4907	peer=edge-dmz-p1-a	run=2026-08-31_02-00-00
+iperf_asymmetry	edge-dmz-p1-a	1.235	peer=h1r03u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r03u01	1.235	peer=edge-dmz-p1-a	run=2026-08-31_02-00-00
+iperf_asymmetry	edge-dmz-p1-a	1.887	peer=h1r04u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r04u01	1.887	peer=edge-dmz-p1-a	run=2026-08-31_02-00-00
+iperf_asymmetry	edge-dmz-p1-a	0.8675	peer=h1r05u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r05u01	0.8675	peer=edge-dmz-p1-a	run=2026-08-31_02-00-00
+iperf_asymmetry	edge-dmz-p1-a	1.462	peer=h1r06d04	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r06d04	1.462	peer=edge-dmz-p1-a	run=2026-08-31_02-00-00
+iperf_asymmetry	edge-dmz-p1-a	1.594	peer=h2r01u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h2r01u01	1.594	peer=edge-dmz-p1-a	run=2026-08-31_02-00-00
+iperf_asymmetry	edge-dmz-p1-a	0.6548	peer=h2r02u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h2r02u01	0.6548	peer=edge-dmz-p1-a	run=2026-08-31_02-00-00
+iperf_asymmetry	edge-dmz-p1-b	0.4906	peer=edge-dmz-p2-a	run=2026-08-31_02-00-00
+iperf_asymmetry	edge-dmz-p2-a	0.4906	peer=edge-dmz-p1-b	run=2026-08-31_02-00-00
+iperf_asymmetry	edge-dmz-p1-b	1.467	peer=edge-dmz-p2-b	run=2026-08-31_02-00-00
+iperf_asymmetry	edge-dmz-p2-b	1.467	peer=edge-dmz-p1-b	run=2026-08-31_02-00-00
+iperf_asymmetry	edge-dmz-p2-a	1.251	peer=edge-dmz-p2-b	run=2026-08-31_02-00-00
+iperf_asymmetry	edge-dmz-p2-b	1.251	peer=edge-dmz-p2-a	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r01u01	2.35	peer=h1r01u02	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r01u02	2.35	peer=h1r01u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r01u01	0.06935	peer=h1r01u03	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r01u03	0.06935	peer=h1r01u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r01u01	0.3999	peer=h1r01u04	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r01u04	0.3999	peer=h1r01u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r01u01	0.02837	peer=h1r02u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r02u01	0.02837	peer=h1r01u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r01u01	2.582	peer=h1r03u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r03u01	2.582	peer=h1r01u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r01u01	1.572	peer=h1r04u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r04u01	1.572	peer=h1r01u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r01u01	2.358	peer=h1r05u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r05u01	2.358	peer=h1r01u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r01u01	1.312	peer=h1r06d04	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r06d04	1.312	peer=h1r01u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r01u01	0.1084	peer=h2r01u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h2r01u01	0.1084	peer=h1r01u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r01u01	0.2761	peer=h2r02u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h2r02u01	0.2761	peer=h1r01u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r01u02	2.564	peer=h1r01u03	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r01u03	2.564	peer=h1r01u02	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r01u02	0.2153	peer=h1r01u04	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r01u04	0.2153	peer=h1r01u02	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r01u03	61.31	peer=h1r01u04	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r01u04	61.31	peer=h1r01u03	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r02u01	0.7258	peer=h1r02u02	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r02u02	0.7258	peer=h1r02u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r02u01	0.1419	peer=h1r02u03	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r02u03	0.1419	peer=h1r02u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r02u01	0.1619	peer=h1r02u04	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r02u04	0.1619	peer=h1r02u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r02u01	0.2105	peer=h1r03u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r03u01	0.2105	peer=h1r02u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r02u01	1.079	peer=h1r04u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r04u01	1.079	peer=h1r02u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r02u01	0.4379	peer=h1r05u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r05u01	0.4379	peer=h1r02u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r02u01	1.12	peer=h1r06d04	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r06d04	1.12	peer=h1r02u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r02u01	0.7999	peer=h2r01u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h2r01u01	0.7999	peer=h1r02u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r02u01	0.5163	peer=h2r02u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h2r02u01	0.5163	peer=h1r02u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r02u02	1.516	peer=h1r02u03	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r02u03	1.516	peer=h1r02u02	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r02u02	0.1936	peer=h1r02u04	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r02u04	0.1936	peer=h1r02u02	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r02u03	0.1723	peer=h1r02u04	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r02u04	0.1723	peer=h1r02u03	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r03u01	0.266	peer=h1r03u02	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r03u02	0.266	peer=h1r03u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r03u01	1.72	peer=h1r03u03	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r03u03	1.72	peer=h1r03u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r03u01	0.9151	peer=h1r03u04	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r03u04	0.9151	peer=h1r03u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r03u01	0.9688	peer=h1r04u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r04u01	0.9688	peer=h1r03u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r03u01	2.096	peer=h1r05u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r05u01	2.096	peer=h1r03u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r03u01	1.29	peer=h1r06d04	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r06d04	1.29	peer=h1r03u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r03u01	1.408	peer=h2r01u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h2r01u01	1.408	peer=h1r03u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r03u01	0.06522	peer=h2r02u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h2r02u01	0.06522	peer=h1r03u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r03u02	0.1497	peer=h1r03u03	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r03u03	0.1497	peer=h1r03u02	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r03u02	0.7204	peer=h1r03u04	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r03u04	0.7204	peer=h1r03u02	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r03u03	0.9863	peer=h1r03u04	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r03u04	0.9863	peer=h1r03u03	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r04u01	1.146	peer=h1r04u02	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r04u02	1.146	peer=h1r04u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r04u01	0.697	peer=h1r04u04	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r04u04	0.697	peer=h1r04u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r04u01	0.717	peer=h1r05u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r05u01	0.717	peer=h1r04u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r04u01	0.4693	peer=h1r06d04	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r06d04	0.4693	peer=h1r04u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r04u01	0.04802	peer=h2r01u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h2r01u01	0.04802	peer=h1r04u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r04u01	1.13	peer=h2r02u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h2r02u01	1.13	peer=h1r04u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r04u02	0.4114	peer=h1r04u04	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r04u04	0.4114	peer=h1r04u02	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r05u01	0.1257	peer=h1r05u02	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r05u02	0.1257	peer=h1r05u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r05u01	1.119	peer=h1r05u03	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r05u03	1.119	peer=h1r05u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r05u01	1.595	peer=h1r05u04	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r05u04	1.595	peer=h1r05u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r05u01	1.712	peer=h1r06d04	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r06d04	1.712	peer=h1r05u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r05u01	0.03181	peer=h2r01u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h2r01u01	0.03181	peer=h1r05u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r05u01	0.9767	peer=h2r02u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h2r02u01	0.9767	peer=h1r05u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r05u02	0.3219	peer=h1r05u03	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r05u03	0.3219	peer=h1r05u02	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r05u02	1.094	peer=h1r05u04	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r05u04	1.094	peer=h1r05u02	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r05u03	0.8108	peer=h1r05u04	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r05u04	0.8108	peer=h1r05u03	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r06d04	0.7716	peer=h1r06d06	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r06d06	0.7716	peer=h1r06d04	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r06d04	1.72	peer=h1r06d08	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r06d08	1.72	peer=h1r06d04	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r06d04	1.862	peer=h1r06d10	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r06d10	1.862	peer=h1r06d04	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r06d04	1.8	peer=h2r01u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h2r01u01	1.8	peer=h1r06d04	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r06d04	1.344	peer=h2r02u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h2r02u01	1.344	peer=h1r06d04	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r06d06	0.2542	peer=h1r06d08	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r06d08	0.2542	peer=h1r06d06	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r06d06	0.9348	peer=h1r06d10	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r06d10	0.9348	peer=h1r06d06	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r06d08	0.7622	peer=h1r06d10	run=2026-08-31_02-00-00
+iperf_asymmetry	h1r06d10	0.7622	peer=h1r06d08	run=2026-08-31_02-00-00
+iperf_asymmetry	h2r01u01	0.06356	peer=h2r01u02	run=2026-08-31_02-00-00
+iperf_asymmetry	h2r01u02	0.06356	peer=h2r01u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h2r01u01	2.139	peer=h2r01u03	run=2026-08-31_02-00-00
+iperf_asymmetry	h2r01u03	2.139	peer=h2r01u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h2r01u01	0.8388	peer=h2r02u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h2r02u01	0.8388	peer=h2r01u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h2r01u02	1.426	peer=h2r01u03	run=2026-08-31_02-00-00
+iperf_asymmetry	h2r01u03	1.426	peer=h2r01u02	run=2026-08-31_02-00-00
+iperf_asymmetry	h2r02u01	0.03969	peer=h2r02u02	run=2026-08-31_02-00-00
+iperf_asymmetry	h2r02u02	0.03969	peer=h2r02u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h2r02u01	1.33	peer=h2r02u03	run=2026-08-31_02-00-00
+iperf_asymmetry	h2r02u03	1.33	peer=h2r02u01	run=2026-08-31_02-00-00
+iperf_asymmetry	h2r02u02	2.021	peer=h2r02u03	run=2026-08-31_02-00-00
+iperf_asymmetry	h2r02u03	2.021	peer=h2r02u02	run=2026-08-31_02-00-00
+iperf_status	edge-core-p1-a	OK	peer=edge-core-p1-b	run=2026-08-31_02-00-00
+iperf_status	edge-core-p1-a	OK	peer=edge-core-p2-a	run=2026-08-31_02-00-00
+iperf_status	edge-core-p1-a	OK	peer=edge-core-p2-b	run=2026-08-31_02-00-00
+iperf_status	edge-core-p1-a	OK	peer=edge-dmz-p1-a	run=2026-08-31_02-00-00
+iperf_status	edge-core-p1-a	OK	peer=h1r01u01	run=2026-08-31_02-00-00
+iperf_status	edge-core-p1-a	OK	peer=h1r02u01	run=2026-08-31_02-00-00
+iperf_status	edge-core-p1-a	OK	peer=h1r03u01	run=2026-08-31_02-00-00
+iperf_status	edge-core-p1-a	OK	peer=h1r04u01	run=2026-08-31_02-00-00
+iperf_status	edge-core-p1-a	OK	peer=h1r05u01	run=2026-08-31_02-00-00
+iperf_status	edge-core-p1-a	OK	peer=h1r06d04	run=2026-08-31_02-00-00
+iperf_status	edge-core-p1-a	OK	peer=h2r01u01	run=2026-08-31_02-00-00
+iperf_status	edge-core-p1-a	OK	peer=h2r02u01	run=2026-08-31_02-00-00
+iperf_status	edge-core-p1-b	OK	peer=edge-core-p1-a	run=2026-08-31_02-00-00
+iperf_status	edge-core-p1-b	OK	peer=edge-core-p2-a	run=2026-08-31_02-00-00
+iperf_status	edge-core-p1-b	OK	peer=edge-core-p2-b	run=2026-08-31_02-00-00
+iperf_status	edge-core-p2-a	OK	peer=edge-core-p1-a	run=2026-08-31_02-00-00
+iperf_status	edge-core-p2-a	OK	peer=edge-core-p1-b	run=2026-08-31_02-00-00
+iperf_status	edge-core-p2-a	OK	peer=edge-core-p2-b	run=2026-08-31_02-00-00
+iperf_status	edge-core-p2-b	OK	peer=edge-core-p1-a	run=2026-08-31_02-00-00
+iperf_status	edge-core-p2-b	OK	peer=edge-core-p1-b	run=2026-08-31_02-00-00
+iperf_status	edge-core-p2-b	OK	peer=edge-core-p2-a	run=2026-08-31_02-00-00
+iperf_status	edge-dmz-p1-a	OK	peer=edge-core-p1-a	run=2026-08-31_02-00-00
+iperf_status	edge-dmz-p1-a	OK	peer=edge-dmz-p1-b	run=2026-08-31_02-00-00
+iperf_status	edge-dmz-p1-a	OK	peer=edge-dmz-p2-a	run=2026-08-31_02-00-00
+iperf_status	edge-dmz-p1-a	OK	peer=edge-dmz-p2-b	run=2026-08-31_02-00-00
+iperf_status	edge-dmz-p1-a	OK	peer=h1r01u01	run=2026-08-31_02-00-00
+iperf_status	edge-dmz-p1-a	OK	peer=h1r02u01	run=2026-08-31_02-00-00
+iperf_status	edge-dmz-p1-a	OK	peer=h1r03u01	run=2026-08-31_02-00-00
+iperf_status	edge-dmz-p1-a	OK	peer=h1r04u01	run=2026-08-31_02-00-00
+iperf_status	edge-dmz-p1-a	OK	peer=h1r05u01	run=2026-08-31_02-00-00
+iperf_status	edge-dmz-p1-a	OK	peer=h1r06d04	run=2026-08-31_02-00-00
+iperf_status	edge-dmz-p1-a	OK	peer=h2r01u01	run=2026-08-31_02-00-00
+iperf_status	edge-dmz-p1-a	OK	peer=h2r02u01	run=2026-08-31_02-00-00
+iperf_status	edge-dmz-p1-b	OK	peer=edge-dmz-p1-a	run=2026-08-31_02-00-00
+iperf_status	edge-dmz-p1-b	OK	peer=edge-dmz-p2-a	run=2026-08-31_02-00-00
+iperf_status	edge-dmz-p1-b	OK	peer=edge-dmz-p2-b	run=2026-08-31_02-00-00
+iperf_status	edge-dmz-p2-a	OK	peer=edge-dmz-p1-a	run=2026-08-31_02-00-00
+iperf_status	edge-dmz-p2-a	OK	peer=edge-dmz-p1-b	run=2026-08-31_02-00-00
+iperf_status	edge-dmz-p2-a	OK	peer=edge-dmz-p2-b	run=2026-08-31_02-00-00
+iperf_status	edge-dmz-p2-b	OK	peer=edge-dmz-p1-a	run=2026-08-31_02-00-00
+iperf_status	edge-dmz-p2-b	OK	peer=edge-dmz-p1-b	run=2026-08-31_02-00-00
+iperf_status	edge-dmz-p2-b	OK	peer=edge-dmz-p2-a	run=2026-08-31_02-00-00
+iperf_status	h1r01u01	OK	peer=edge-core-p1-a	run=2026-08-31_02-00-00
+iperf_status	h1r01u01	OK	peer=edge-dmz-p1-a	run=2026-08-31_02-00-00
+iperf_status	h1r01u01	OK	peer=h1r01u02	run=2026-08-31_02-00-00
+iperf_status	h1r01u01	OK	peer=h1r01u03	run=2026-08-31_02-00-00
+iperf_status	h1r01u01	OK	peer=h1r01u04	run=2026-08-31_02-00-00
+iperf_status	h1r01u01	OK	peer=h1r02u01	run=2026-08-31_02-00-00
+iperf_status	h1r01u01	OK	peer=h1r03u01	run=2026-08-31_02-00-00
+iperf_status	h1r01u01	OK	peer=h1r04u01	run=2026-08-31_02-00-00
+iperf_status	h1r01u01	OK	peer=h1r05u01	run=2026-08-31_02-00-00
+iperf_status	h1r01u01	OK	peer=h1r06d04	run=2026-08-31_02-00-00
+iperf_status	h1r01u01	OK	peer=h2r01u01	run=2026-08-31_02-00-00
+iperf_status	h1r01u01	OK	peer=h2r02u01	run=2026-08-31_02-00-00
+iperf_status	h1r01u02	OK	peer=h1r01u01	run=2026-08-31_02-00-00
+iperf_status	h1r01u02	OK	peer=h1r01u03	run=2026-08-31_02-00-00
+iperf_status	h1r01u02	OK	peer=h1r01u04	run=2026-08-31_02-00-00
+iperf_status	h1r01u03	OK	peer=h1r01u01	run=2026-08-31_02-00-00
+iperf_status	h1r01u03	OK	peer=h1r01u02	run=2026-08-31_02-00-00
+iperf_status	h1r01u03	OK	peer=h1r01u04	run=2026-08-31_02-00-00
+iperf_status	h1r01u04	OK	peer=h1r01u01	run=2026-08-31_02-00-00
+iperf_status	h1r01u04	OK	peer=h1r01u02	run=2026-08-31_02-00-00
+iperf_status	h1r01u04	OK	peer=h1r01u03	run=2026-08-31_02-00-00
+iperf_status	h1r02u01	OK	peer=edge-core-p1-a	run=2026-08-31_02-00-00
+iperf_status	h1r02u01	OK	peer=edge-dmz-p1-a	run=2026-08-31_02-00-00
+iperf_status	h1r02u01	OK	peer=h1r01u01	run=2026-08-31_02-00-00
+iperf_status	h1r02u01	OK	peer=h1r02u02	run=2026-08-31_02-00-00
+iperf_status	h1r02u01	OK	peer=h1r02u03	run=2026-08-31_02-00-00
+iperf_status	h1r02u01	OK	peer=h1r02u04	run=2026-08-31_02-00-00
+iperf_status	h1r02u01	OK	peer=h1r03u01	run=2026-08-31_02-00-00
+iperf_status	h1r02u01	OK	peer=h1r04u01	run=2026-08-31_02-00-00
+iperf_status	h1r02u01	OK	peer=h1r05u01	run=2026-08-31_02-00-00
+iperf_status	h1r02u01	OK	peer=h1r06d04	run=2026-08-31_02-00-00
+iperf_status	h1r02u01	OK	peer=h2r01u01	run=2026-08-31_02-00-00
+iperf_status	h1r02u01	OK	peer=h2r02u01	run=2026-08-31_02-00-00
+iperf_status	h1r02u02	OK	peer=h1r02u01	run=2026-08-31_02-00-00
+iperf_status	h1r02u02	OK	peer=h1r02u03	run=2026-08-31_02-00-00
+iperf_status	h1r02u02	OK	peer=h1r02u04	run=2026-08-31_02-00-00
+iperf_status	h1r02u03	OK	peer=h1r02u01	run=2026-08-31_02-00-00
+iperf_status	h1r02u03	OK	peer=h1r02u02	run=2026-08-31_02-00-00
+iperf_status	h1r02u03	OK	peer=h1r02u04	run=2026-08-31_02-00-00
+iperf_status	h1r02u04	OK	peer=h1r02u01	run=2026-08-31_02-00-00
+iperf_status	h1r02u04	OK	peer=h1r02u02	run=2026-08-31_02-00-00
+iperf_status	h1r02u04	OK	peer=h1r02u03	run=2026-08-31_02-00-00
+iperf_status	h1r03u01	OK	peer=edge-core-p1-a	run=2026-08-31_02-00-00
+iperf_status	h1r03u01	OK	peer=edge-dmz-p1-a	run=2026-08-31_02-00-00
+iperf_status	h1r03u01	OK	peer=h1r01u01	run=2026-08-31_02-00-00
+iperf_status	h1r03u01	OK	peer=h1r02u01	run=2026-08-31_02-00-00
+iperf_status	h1r03u01	OK	peer=h1r03u02	run=2026-08-31_02-00-00
+iperf_status	h1r03u01	OK	peer=h1r03u03	run=2026-08-31_02-00-00
+iperf_status	h1r03u01	OK	peer=h1r03u04	run=2026-08-31_02-00-00
+iperf_status	h1r03u01	OK	peer=h1r04u01	run=2026-08-31_02-00-00
+iperf_status	h1r03u01	OK	peer=h1r05u01	run=2026-08-31_02-00-00
+iperf_status	h1r03u01	OK	peer=h1r06d04	run=2026-08-31_02-00-00
+iperf_status	h1r03u01	OK	peer=h2r01u01	run=2026-08-31_02-00-00
+iperf_status	h1r03u01	OK	peer=h2r02u01	run=2026-08-31_02-00-00
+iperf_status	h1r03u02	OK	peer=h1r03u01	run=2026-08-31_02-00-00
+iperf_status	h1r03u02	OK	peer=h1r03u03	run=2026-08-31_02-00-00
+iperf_status	h1r03u02	OK	peer=h1r03u04	run=2026-08-31_02-00-00
+iperf_status	h1r03u03	OK	peer=h1r03u01	run=2026-08-31_02-00-00
+iperf_status	h1r03u03	OK	peer=h1r03u02	run=2026-08-31_02-00-00
+iperf_status	h1r03u03	OK	peer=h1r03u04	run=2026-08-31_02-00-00
+iperf_status	h1r03u04	OK	peer=h1r03u01	run=2026-08-31_02-00-00
+iperf_status	h1r03u04	OK	peer=h1r03u02	run=2026-08-31_02-00-00
+iperf_status	h1r03u04	OK	peer=h1r03u03	run=2026-08-31_02-00-00
+iperf_status	h1r04u01	OK	peer=edge-core-p1-a	run=2026-08-31_02-00-00
+iperf_status	h1r04u01	OK	peer=edge-dmz-p1-a	run=2026-08-31_02-00-00
+iperf_status	h1r04u01	OK	peer=h1r01u01	run=2026-08-31_02-00-00
+iperf_status	h1r04u01	OK	peer=h1r02u01	run=2026-08-31_02-00-00
+iperf_status	h1r04u01	OK	peer=h1r03u01	run=2026-08-31_02-00-00
+iperf_status	h1r04u01	OK	peer=h1r04u02	run=2026-08-31_02-00-00
+iperf_status	h1r04u01	OK	peer=h1r04u03	run=2026-08-31_02-00-00
+iperf_status	h1r04u01	OK	peer=h1r04u04	run=2026-08-31_02-00-00
+iperf_status	h1r04u01	OK	peer=h1r05u01	run=2026-08-31_02-00-00
+iperf_status	h1r04u01	OK	peer=h1r06d04	run=2026-08-31_02-00-00
+iperf_status	h1r04u01	OK	peer=h2r01u01	run=2026-08-31_02-00-00
+iperf_status	h1r04u01	OK	peer=h2r02u01	run=2026-08-31_02-00-00
+iperf_status	h1r04u02	OK	peer=h1r04u01	run=2026-08-31_02-00-00
+iperf_status	h1r04u02	OK	peer=h1r04u03	run=2026-08-31_02-00-00
+iperf_status	h1r04u02	OK	peer=h1r04u04	run=2026-08-31_02-00-00
+iperf_status	h1r04u03	FAIL	peer=h1r04u01	status=NO_SUMMARY	err=no_summary_line_in_iperf_output	log=iperf_test_h1r04u03_to_h1r04u01_20260831031000.log	run=2026-08-31_02-00-00
+iperf_fail_kind	h1r04u03	NO_SUMMARY	peer=h1r04u01	run=2026-08-31_02-00-00
+iperf_status	h1r04u03	FAIL	peer=h1r04u02	status=NO_SUMMARY	err=no_summary_line_in_iperf_output	log=iperf_test_h1r04u03_to_h1r04u02_20260831031035.log	run=2026-08-31_02-00-00
+iperf_fail_kind	h1r04u03	NO_SUMMARY	peer=h1r04u02	run=2026-08-31_02-00-00
+iperf_status	h1r04u03	FAIL	peer=h1r04u04	status=NO_SUMMARY	err=no_summary_line_in_iperf_output	log=iperf_test_h1r04u03_to_h1r04u04_20260831031110.log	run=2026-08-31_02-00-00
+iperf_fail_kind	h1r04u03	NO_SUMMARY	peer=h1r04u04	run=2026-08-31_02-00-00
+iperf_status	h1r04u04	OK	peer=h1r04u01	run=2026-08-31_02-00-00
+iperf_status	h1r04u04	OK	peer=h1r04u02	run=2026-08-31_02-00-00
+iperf_status	h1r04u04	OK	peer=h1r04u03	run=2026-08-31_02-00-00
+iperf_status	h1r05u01	OK	peer=edge-core-p1-a	run=2026-08-31_02-00-00
+iperf_status	h1r05u01	OK	peer=edge-dmz-p1-a	run=2026-08-31_02-00-00
+iperf_status	h1r05u01	OK	peer=h1r01u01	run=2026-08-31_02-00-00
+iperf_status	h1r05u01	OK	peer=h1r02u01	run=2026-08-31_02-00-00
+iperf_status	h1r05u01	OK	peer=h1r03u01	run=2026-08-31_02-00-00
+iperf_status	h1r05u01	OK	peer=h1r04u01	run=2026-08-31_02-00-00
+iperf_status	h1r05u01	OK	peer=h1r05u02	run=2026-08-31_02-00-00
+iperf_status	h1r05u01	OK	peer=h1r05u03	run=2026-08-31_02-00-00
+iperf_status	h1r05u01	OK	peer=h1r05u04	run=2026-08-31_02-00-00
+iperf_status	h1r05u01	OK	peer=h1r06d04	run=2026-08-31_02-00-00
+iperf_status	h1r05u01	OK	peer=h2r01u01	run=2026-08-31_02-00-00
+iperf_status	h1r05u01	OK	peer=h2r02u01	run=2026-08-31_02-00-00
+iperf_status	h1r05u02	OK	peer=h1r05u01	run=2026-08-31_02-00-00
+iperf_status	h1r05u02	OK	peer=h1r05u03	run=2026-08-31_02-00-00
+iperf_status	h1r05u02	OK	peer=h1r05u04	run=2026-08-31_02-00-00
+iperf_status	h1r05u03	OK	peer=h1r05u01	run=2026-08-31_02-00-00
+iperf_status	h1r05u03	OK	peer=h1r05u02	run=2026-08-31_02-00-00
+iperf_status	h1r05u03	OK	peer=h1r05u04	run=2026-08-31_02-00-00
+iperf_status	h1r05u04	OK	peer=h1r05u01	run=2026-08-31_02-00-00
+iperf_status	h1r05u04	OK	peer=h1r05u02	run=2026-08-31_02-00-00
+iperf_status	h1r05u04	OK	peer=h1r05u03	run=2026-08-31_02-00-00
+iperf_status	h1r06d04	OK	peer=edge-core-p1-a	run=2026-08-31_02-00-00
+iperf_status	h1r06d04	OK	peer=edge-dmz-p1-a	run=2026-08-31_02-00-00
+iperf_status	h1r06d04	OK	peer=h1r01u01	run=2026-08-31_02-00-00
+iperf_status	h1r06d04	OK	peer=h1r02u01	run=2026-08-31_02-00-00
+iperf_status	h1r06d04	OK	peer=h1r03u01	run=2026-08-31_02-00-00
+iperf_status	h1r06d04	OK	peer=h1r04u01	run=2026-08-31_02-00-00
+iperf_status	h1r06d04	OK	peer=h1r05u01	run=2026-08-31_02-00-00
+iperf_status	h1r06d04	OK	peer=h1r06d06	run=2026-08-31_02-00-00
+iperf_status	h1r06d04	OK	peer=h1r06d08	run=2026-08-31_02-00-00
+iperf_status	h1r06d04	OK	peer=h1r06d10	run=2026-08-31_02-00-00
+iperf_status	h1r06d04	OK	peer=h2r01u01	run=2026-08-31_02-00-00
+iperf_status	h1r06d04	OK	peer=h2r02u01	run=2026-08-31_02-00-00
+iperf_status	h1r06d06	OK	peer=h1r06d04	run=2026-08-31_02-00-00
+iperf_status	h1r06d06	OK	peer=h1r06d08	run=2026-08-31_02-00-00
+iperf_status	h1r06d06	OK	peer=h1r06d10	run=2026-08-31_02-00-00
+iperf_status	h1r06d08	OK	peer=h1r06d04	run=2026-08-31_02-00-00
+iperf_status	h1r06d08	OK	peer=h1r06d06	run=2026-08-31_02-00-00
+iperf_status	h1r06d08	OK	peer=h1r06d10	run=2026-08-31_02-00-00
+iperf_status	h1r06d10	OK	peer=h1r06d04	run=2026-08-31_02-00-00
+iperf_status	h1r06d10	OK	peer=h1r06d06	run=2026-08-31_02-00-00
+iperf_status	h1r06d10	OK	peer=h1r06d08	run=2026-08-31_02-00-00
+iperf_status	h2r01u01	OK	peer=edge-core-p1-a	run=2026-08-31_02-00-00
+iperf_status	h2r01u01	OK	peer=edge-dmz-p1-a	run=2026-08-31_02-00-00
+iperf_status	h2r01u01	OK	peer=h1r01u01	run=2026-08-31_02-00-00
+iperf_status	h2r01u01	OK	peer=h1r02u01	run=2026-08-31_02-00-00
+iperf_status	h2r01u01	OK	peer=h1r03u01	run=2026-08-31_02-00-00
+iperf_status	h2r01u01	OK	peer=h1r04u01	run=2026-08-31_02-00-00
+iperf_status	h2r01u01	OK	peer=h1r05u01	run=2026-08-31_02-00-00
+iperf_status	h2r01u01	OK	peer=h1r06d04	run=2026-08-31_02-00-00
+iperf_status	h2r01u01	OK	peer=h2r01u02	run=2026-08-31_02-00-00
+iperf_status	h2r01u01	OK	peer=h2r01u03	run=2026-08-31_02-00-00
+iperf_status	h2r01u01	OK	peer=h2r01u04	run=2026-08-31_02-00-00
+iperf_status	h2r01u01	OK	peer=h2r02u01	run=2026-08-31_02-00-00
+iperf_status	h2r01u02	OK	peer=h2r01u01	run=2026-08-31_02-00-00
+iperf_status	h2r01u02	OK	peer=h2r01u03	run=2026-08-31_02-00-00
+iperf_status	h2r01u02	OK	peer=h2r01u04	run=2026-08-31_02-00-00
+iperf_status	h2r01u03	OK	peer=h2r01u01	run=2026-08-31_02-00-00
+iperf_status	h2r01u03	OK	peer=h2r01u02	run=2026-08-31_02-00-00
+iperf_status	h2r01u03	OK	peer=h2r01u04	run=2026-08-31_02-00-00
+iperf_status	h2r01u04	FAIL	peer=h2r01u01	status=DIRECTION_MISSING	err=no_log_for_this_direction	log=iperf_test_h2r01u04_to_h2r01u01_20260831034830.log	run=2026-08-31_02-00-00
+iperf_fail_kind	h2r01u04	DIRECTION_MISSING	peer=h2r01u01	run=2026-08-31_02-00-00
+iperf_status	h2r01u04	FAIL	peer=h2r01u02	status=DIRECTION_MISSING	err=no_log_for_this_direction	log=iperf_test_h2r01u04_to_h2r01u02_20260831034905.log	run=2026-08-31_02-00-00
+iperf_fail_kind	h2r01u04	DIRECTION_MISSING	peer=h2r01u02	run=2026-08-31_02-00-00
+iperf_status	h2r01u04	FAIL	peer=h2r01u03	status=DIRECTION_MISSING	err=no_log_for_this_direction	log=iperf_test_h2r01u04_to_h2r01u03_20260831034940.log	run=2026-08-31_02-00-00
+iperf_fail_kind	h2r01u04	DIRECTION_MISSING	peer=h2r01u03	run=2026-08-31_02-00-00
+iperf_status	h2r02u01	OK	peer=edge-core-p1-a	run=2026-08-31_02-00-00
+iperf_status	h2r02u01	OK	peer=edge-dmz-p1-a	run=2026-08-31_02-00-00
+iperf_status	h2r02u01	OK	peer=h1r01u01	run=2026-08-31_02-00-00
+iperf_status	h2r02u01	OK	peer=h1r02u01	run=2026-08-31_02-00-00
+iperf_status	h2r02u01	OK	peer=h1r03u01	run=2026-08-31_02-00-00
+iperf_status	h2r02u01	OK	peer=h1r04u01	run=2026-08-31_02-00-00
+iperf_status	h2r02u01	OK	peer=h1r05u01	run=2026-08-31_02-00-00
+iperf_status	h2r02u01	OK	peer=h1r06d04	run=2026-08-31_02-00-00
+iperf_status	h2r02u01	OK	peer=h2r01u01	run=2026-08-31_02-00-00
+iperf_status	h2r02u01	OK	peer=h2r02u02	run=2026-08-31_02-00-00
+iperf_status	h2r02u01	OK	peer=h2r02u03	run=2026-08-31_02-00-00
+iperf_status	h2r02u02	OK	peer=h2r02u01	run=2026-08-31_02-00-00
+iperf_status	h2r02u02	OK	peer=h2r02u03	run=2026-08-31_02-00-00
+iperf_status	h2r02u03	OK	peer=h2r02u01	run=2026-08-31_02-00-00
+iperf_status	h2r02u03	OK	peer=h2r02u02	run=2026-08-31_02-00-00
+iperf_bind_iface	edge-core-p1-a	eno1	peer=edge-core-p1-b	ip=10.20.0.70	run=2026-08-31_02-00-00
+iperf_bind_iface	edge-core-p1-a	eno1	peer=edge-core-p2-a	ip=10.20.0.70	run=2026-08-31_02-00-00
+iperf_bind_iface	edge-core-p1-a	eno1	peer=edge-core-p2-b	ip=10.20.0.70	run=2026-08-31_02-00-00
+iperf_bind_iface	edge-core-p1-a	eno1	peer=edge-dmz-p1-a	ip=10.20.0.70	run=2026-08-31_02-00-00
+iperf_bind_iface	edge-core-p1-a	eno1	peer=h1r01u01	ip=10.20.0.70	run=2026-08-31_02-00-00
+iperf_bind_iface	edge-core-p1-a	eno1	peer=h1r02u01	ip=10.20.0.70	run=2026-08-31_02-00-00
+iperf_bind_iface	edge-core-p1-a	eno1	peer=h1r03u01	ip=10.20.0.70	run=2026-08-31_02-00-00
+iperf_bind_iface	edge-core-p1-a	eno1	peer=h1r04u01	ip=10.20.0.70	run=2026-08-31_02-00-00
+iperf_bind_iface	edge-core-p1-a	eno1	peer=h1r05u01	ip=10.20.0.70	run=2026-08-31_02-00-00
+iperf_bind_iface	edge-core-p1-a	eno1	peer=h1r06d04	ip=10.20.0.70	run=2026-08-31_02-00-00
+iperf_bind_iface	edge-core-p1-a	eno1	peer=h2r01u01	ip=10.20.0.70	run=2026-08-31_02-00-00
+iperf_bind_iface	edge-core-p1-a	eno1	peer=h2r02u01	ip=10.20.0.70	run=2026-08-31_02-00-00
+iperf_bind_iface	edge-core-p1-b	eno1	peer=edge-core-p1-a	ip=10.20.0.71	run=2026-08-31_02-00-00
+iperf_bind_iface	edge-core-p1-b	eno1	peer=edge-core-p2-a	ip=10.20.0.71	run=2026-08-31_02-00-00
+iperf_bind_iface	edge-core-p1-b	eno1	peer=edge-core-p2-b	ip=10.20.0.71	run=2026-08-31_02-00-00
+iperf_bind_iface	edge-core-p2-a	eno1	peer=edge-core-p1-a	ip=10.20.0.72	run=2026-08-31_02-00-00
+iperf_bind_iface	edge-core-p2-a	eno1	peer=edge-core-p1-b	ip=10.20.0.72	run=2026-08-31_02-00-00
+iperf_bind_iface	edge-core-p2-a	eno1	peer=edge-core-p2-b	ip=10.20.0.72	run=2026-08-31_02-00-00
+iperf_bind_iface	edge-core-p2-b	eno1	peer=edge-core-p1-a	ip=10.20.0.73	run=2026-08-31_02-00-00
+iperf_bind_iface	edge-core-p2-b	eno1	peer=edge-core-p1-b	ip=10.20.0.73	run=2026-08-31_02-00-00
+iperf_bind_iface	edge-core-p2-b	eno1	peer=edge-core-p2-a	ip=10.20.0.73	run=2026-08-31_02-00-00
+iperf_bind_iface	edge-dmz-p1-a	eno1	peer=edge-core-p1-a	ip=10.20.0.74	run=2026-08-31_02-00-00
+iperf_bind_iface	edge-dmz-p1-a	eno1	peer=edge-dmz-p1-b	ip=10.20.0.74	run=2026-08-31_02-00-00
+iperf_bind_iface	edge-dmz-p1-a	eno1	peer=edge-dmz-p2-a	ip=10.20.0.74	run=2026-08-31_02-00-00
+iperf_bind_iface	edge-dmz-p1-a	eno1	peer=edge-dmz-p2-b	ip=10.20.0.74	run=2026-08-31_02-00-00
+iperf_bind_iface	edge-dmz-p1-a	eno1	peer=h1r01u01	ip=10.20.0.74	run=2026-08-31_02-00-00
+iperf_bind_iface	edge-dmz-p1-a	eno1	peer=h1r02u01	ip=10.20.0.74	run=2026-08-31_02-00-00
+iperf_bind_iface	edge-dmz-p1-a	eno1	peer=h1r03u01	ip=10.20.0.74	run=2026-08-31_02-00-00
+iperf_bind_iface	edge-dmz-p1-a	eno1	peer=h1r04u01	ip=10.20.0.74	run=2026-08-31_02-00-00
+iperf_bind_iface	edge-dmz-p1-a	eno1	peer=h1r05u01	ip=10.20.0.74	run=2026-08-31_02-00-00
+iperf_bind_iface	edge-dmz-p1-a	eno1	peer=h1r06d04	ip=10.20.0.74	run=2026-08-31_02-00-00
+iperf_bind_iface	edge-dmz-p1-a	eno1	peer=h2r01u01	ip=10.20.0.74	run=2026-08-31_02-00-00
+iperf_bind_iface	edge-dmz-p1-a	eno1	peer=h2r02u01	ip=10.20.0.74	run=2026-08-31_02-00-00
+iperf_bind_iface	edge-dmz-p1-b	eno1	peer=edge-dmz-p1-a	ip=10.20.0.75	run=2026-08-31_02-00-00
+iperf_bind_iface	edge-dmz-p1-b	eno1	peer=edge-dmz-p2-a	ip=10.20.0.75	run=2026-08-31_02-00-00
+iperf_bind_iface	edge-dmz-p1-b	eno1	peer=edge-dmz-p2-b	ip=10.20.0.75	run=2026-08-31_02-00-00
+iperf_bind_iface	edge-dmz-p2-a	eno1	peer=edge-dmz-p1-a	ip=10.20.0.76	run=2026-08-31_02-00-00
+iperf_bind_iface	edge-dmz-p2-a	eno1	peer=edge-dmz-p1-b	ip=10.20.0.76	run=2026-08-31_02-00-00
+iperf_bind_iface	edge-dmz-p2-a	eno1	peer=edge-dmz-p2-b	ip=10.20.0.76	run=2026-08-31_02-00-00
+iperf_bind_iface	edge-dmz-p2-b	eno1	peer=edge-dmz-p1-a	ip=10.20.0.77	run=2026-08-31_02-00-00
+iperf_bind_iface	edge-dmz-p2-b	eno1	peer=edge-dmz-p1-b	ip=10.20.0.77	run=2026-08-31_02-00-00
+iperf_bind_iface	edge-dmz-p2-b	eno1	peer=edge-dmz-p2-a	ip=10.20.0.77	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r01u01	ens1f0	peer=edge-core-p1-a	ip=10.20.0.10	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r01u01	ens1f0	peer=edge-dmz-p1-a	ip=10.20.0.10	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r01u01	ens1f0	peer=h1r01u02	ip=10.20.0.10	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r01u01	ens1f0	peer=h1r01u03	ip=10.20.0.10	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r01u01	ens1f0	peer=h1r01u04	ip=10.20.0.10	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r01u01	ens1f0	peer=h1r02u01	ip=10.20.0.10	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r01u01	ens1f0	peer=h1r03u01	ip=10.20.0.10	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r01u01	ens1f0	peer=h1r04u01	ip=10.20.0.10	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r01u01	ens1f0	peer=h1r05u01	ip=10.20.0.10	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r01u01	ens1f0	peer=h1r06d04	ip=10.20.0.10	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r01u01	ens1f0	peer=h2r01u01	ip=10.20.0.10	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r01u01	ens1f0	peer=h2r02u01	ip=10.20.0.10	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r01u02	ens1f0	peer=h1r01u01	ip=10.20.0.11	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r01u02	ens1f0	peer=h1r01u03	ip=10.20.0.11	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r01u02	ens1f0	peer=h1r01u04	ip=10.20.0.11	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r01u03	ens1f0	peer=h1r01u01	ip=10.20.0.12	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r01u03	ens1f0	peer=h1r01u02	ip=10.20.0.12	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r01u03	ens1f0	peer=h1r01u04	ip=10.20.0.12	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r01u04	ens1f0	peer=h1r01u01	ip=10.20.0.13	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r01u04	ens1f0	peer=h1r01u02	ip=10.20.0.13	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r01u04	ens1f0	peer=h1r01u03	ip=10.20.0.13	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r02u01	ens1f0	peer=edge-core-p1-a	ip=10.20.0.18	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r02u01	ens1f0	peer=edge-dmz-p1-a	ip=10.20.0.18	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r02u01	ens1f0	peer=h1r01u01	ip=10.20.0.18	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r02u01	ens1f0	peer=h1r02u02	ip=10.20.0.18	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r02u01	ens1f0	peer=h1r02u03	ip=10.20.0.18	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r02u01	ens1f0	peer=h1r02u04	ip=10.20.0.18	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r02u01	ens1f0	peer=h1r03u01	ip=10.20.0.18	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r02u01	ens1f0	peer=h1r04u01	ip=10.20.0.18	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r02u01	ens1f0	peer=h1r05u01	ip=10.20.0.18	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r02u01	ens1f0	peer=h1r06d04	ip=10.20.0.18	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r02u01	ens1f0	peer=h2r01u01	ip=10.20.0.18	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r02u01	ens1f0	peer=h2r02u01	ip=10.20.0.18	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r02u02	ens1f0	peer=h1r02u01	ip=10.20.0.19	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r02u02	ens1f0	peer=h1r02u03	ip=10.20.0.19	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r02u02	ens1f0	peer=h1r02u04	ip=10.20.0.19	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r02u03	ens1f0	peer=h1r02u01	ip=10.20.0.20	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r02u03	ens1f0	peer=h1r02u02	ip=10.20.0.20	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r02u03	ens1f0	peer=h1r02u04	ip=10.20.0.20	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r02u04	ens1f0	peer=h1r02u01	ip=10.20.0.21	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r02u04	ens1f0	peer=h1r02u02	ip=10.20.0.21	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r02u04	ens1f0	peer=h1r02u03	ip=10.20.0.21	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r03u01	ens1f0	peer=edge-core-p1-a	ip=10.20.0.26	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r03u01	ens1f0	peer=edge-dmz-p1-a	ip=10.20.0.26	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r03u01	ens1f0	peer=h1r01u01	ip=10.20.0.26	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r03u01	ens1f0	peer=h1r02u01	ip=10.20.0.26	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r03u01	ens1f0	peer=h1r03u02	ip=10.20.0.26	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r03u01	ens1f0	peer=h1r03u03	ip=10.20.0.26	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r03u01	ens1f0	peer=h1r03u04	ip=10.20.0.26	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r03u01	ens1f0	peer=h1r04u01	ip=10.20.0.26	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r03u01	ens1f0	peer=h1r05u01	ip=10.20.0.26	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r03u01	ens1f0	peer=h1r06d04	ip=10.20.0.26	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r03u01	ens1f0	peer=h2r01u01	ip=10.20.0.26	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r03u01	ens1f0	peer=h2r02u01	ip=10.20.0.26	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r03u02	ens1f0	peer=h1r03u01	ip=10.20.0.27	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r03u02	ens1f0	peer=h1r03u03	ip=10.20.0.27	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r03u02	ens1f0	peer=h1r03u04	ip=10.20.0.27	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r03u03	ens1f0	peer=h1r03u01	ip=10.20.0.28	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r03u03	ens1f0	peer=h1r03u02	ip=10.20.0.28	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r03u03	ens1f0	peer=h1r03u04	ip=10.20.0.28	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r03u04	ens1f0	peer=h1r03u01	ip=10.20.0.29	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r03u04	ens1f0	peer=h1r03u02	ip=10.20.0.29	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r03u04	ens1f0	peer=h1r03u03	ip=10.20.0.29	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r04u01	ens1f0	peer=edge-core-p1-a	ip=10.20.0.34	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r04u01	ens1f0	peer=edge-dmz-p1-a	ip=10.20.0.34	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r04u01	ens1f0	peer=h1r01u01	ip=10.20.0.34	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r04u01	ens1f0	peer=h1r02u01	ip=10.20.0.34	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r04u01	ens1f0	peer=h1r03u01	ip=10.20.0.34	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r04u01	ens1f0	peer=h1r04u02	ip=10.20.0.34	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r04u01	ens1f0	peer=h1r04u03	ip=10.20.0.34	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r04u01	ens1f0	peer=h1r04u04	ip=10.20.0.34	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r04u01	ens1f0	peer=h1r05u01	ip=10.20.0.34	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r04u01	ens1f0	peer=h1r06d04	ip=10.20.0.34	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r04u01	ens1f0	peer=h2r01u01	ip=10.20.0.34	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r04u01	ens1f0	peer=h2r02u01	ip=10.20.0.34	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r04u02	ens1f0	peer=h1r04u01	ip=10.20.0.35	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r04u02	ens1f0	peer=h1r04u03	ip=10.20.0.35	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r04u02	ens1f0	peer=h1r04u04	ip=10.20.0.35	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r04u04	ens1f0	peer=h1r04u01	ip=10.20.0.37	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r04u04	ens1f0	peer=h1r04u02	ip=10.20.0.37	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r04u04	ens1f0	peer=h1r04u03	ip=10.20.0.37	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r05u01	ens1f0	peer=edge-core-p1-a	ip=10.20.0.42	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r05u01	ens1f0	peer=edge-dmz-p1-a	ip=10.20.0.42	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r05u01	ens1f0	peer=h1r01u01	ip=10.20.0.42	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r05u01	ens1f0	peer=h1r02u01	ip=10.20.0.42	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r05u01	ens1f0	peer=h1r03u01	ip=10.20.0.42	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r05u01	ens1f0	peer=h1r04u01	ip=10.20.0.42	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r05u01	ens1f0	peer=h1r05u02	ip=10.20.0.42	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r05u01	ens1f0	peer=h1r05u03	ip=10.20.0.42	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r05u01	ens1f0	peer=h1r05u04	ip=10.20.0.42	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r05u01	ens1f0	peer=h1r06d04	ip=10.20.0.42	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r05u01	ens1f0	peer=h2r01u01	ip=10.20.0.42	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r05u01	ens1f0	peer=h2r02u01	ip=10.20.0.42	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r05u02	ens1f0	peer=h1r05u01	ip=10.20.0.43	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r05u02	ens1f0	peer=h1r05u03	ip=10.20.0.43	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r05u02	ens1f0	peer=h1r05u04	ip=10.20.0.43	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r05u03	ens1f0	peer=h1r05u01	ip=10.20.0.44	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r05u03	ens1f0	peer=h1r05u02	ip=10.20.0.44	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r05u03	ens1f0	peer=h1r05u04	ip=10.20.0.44	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r05u04	ens1f0	peer=h1r05u01	ip=10.20.0.45	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r05u04	ens1f0	peer=h1r05u02	ip=10.20.0.45	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r05u04	ens1f0	peer=h1r05u03	ip=10.20.0.45	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r06d04	ens1f0	peer=edge-core-p1-a	ip=10.20.0.50	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r06d04	ens1f0	peer=edge-dmz-p1-a	ip=10.20.0.50	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r06d04	ens1f0	peer=h1r01u01	ip=10.20.0.50	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r06d04	ens1f0	peer=h1r02u01	ip=10.20.0.50	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r06d04	ens1f0	peer=h1r03u01	ip=10.20.0.50	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r06d04	ens1f0	peer=h1r04u01	ip=10.20.0.50	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r06d04	ens1f0	peer=h1r05u01	ip=10.20.0.50	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r06d04	ens1f0	peer=h1r06d06	ip=10.20.0.50	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r06d04	ens1f0	peer=h1r06d08	ip=10.20.0.50	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r06d04	ens1f0	peer=h1r06d10	ip=10.20.0.50	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r06d04	ens1f0	peer=h2r01u01	ip=10.20.0.50	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r06d04	ens1f0	peer=h2r02u01	ip=10.20.0.50	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r06d06	ens1f0	peer=h1r06d04	ip=10.20.0.51	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r06d06	ens1f0	peer=h1r06d08	ip=10.20.0.51	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r06d06	ens1f0	peer=h1r06d10	ip=10.20.0.51	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r06d08	ens1f0	peer=h1r06d04	ip=10.20.0.52	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r06d08	ens1f0	peer=h1r06d06	ip=10.20.0.52	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r06d08	ens1f0	peer=h1r06d10	ip=10.20.0.52	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r06d10	ens1f0	peer=h1r06d04	ip=10.20.0.53	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r06d10	ens1f0	peer=h1r06d06	ip=10.20.0.53	run=2026-08-31_02-00-00
+iperf_bind_iface	h1r06d10	ens1f0	peer=h1r06d08	ip=10.20.0.53	run=2026-08-31_02-00-00
+iperf_bind_iface	h2r01u01	ens2f0	peer=edge-core-p1-a	ip=10.20.0.54	run=2026-08-31_02-00-00
+iperf_bind_iface	h2r01u01	ens2f0	peer=edge-dmz-p1-a	ip=10.20.0.54	run=2026-08-31_02-00-00
+iperf_bind_iface	h2r01u01	ens2f0	peer=h1r01u01	ip=10.20.0.54	run=2026-08-31_02-00-00
+iperf_bind_iface	h2r01u01	ens2f0	peer=h1r02u01	ip=10.20.0.54	run=2026-08-31_02-00-00
+iperf_bind_iface	h2r01u01	ens2f0	peer=h1r03u01	ip=10.20.0.54	run=2026-08-31_02-00-00
+iperf_bind_iface	h2r01u01	ens2f0	peer=h1r04u01	ip=10.20.0.54	run=2026-08-31_02-00-00
+iperf_bind_iface	h2r01u01	ens2f0	peer=h1r05u01	ip=10.20.0.54	run=2026-08-31_02-00-00
+iperf_bind_iface	h2r01u01	ens2f0	peer=h1r06d04	ip=10.20.0.54	run=2026-08-31_02-00-00
+iperf_bind_iface	h2r01u01	ens2f0	peer=h2r01u02	ip=10.20.0.54	run=2026-08-31_02-00-00
+iperf_bind_iface	h2r01u01	ens2f0	peer=h2r01u03	ip=10.20.0.54	run=2026-08-31_02-00-00
+iperf_bind_iface	h2r01u01	ens2f0	peer=h2r01u04	ip=10.20.0.54	run=2026-08-31_02-00-00
+iperf_bind_iface	h2r01u01	ens2f0	peer=h2r02u01	ip=10.20.0.54	run=2026-08-31_02-00-00
+iperf_bind_iface	h2r01u02	ens2f0	peer=h2r01u01	ip=10.20.0.55	run=2026-08-31_02-00-00
+iperf_bind_iface	h2r01u02	ens2f0	peer=h2r01u03	ip=10.20.0.55	run=2026-08-31_02-00-00
+iperf_bind_iface	h2r01u02	ens2f0	peer=h2r01u04	ip=10.20.0.55	run=2026-08-31_02-00-00
+iperf_bind_iface	h2r01u03	ens2f0	peer=h2r01u01	ip=10.20.0.56	run=2026-08-31_02-00-00
+iperf_bind_iface	h2r01u03	ens2f0	peer=h2r01u02	ip=10.20.0.56	run=2026-08-31_02-00-00
+iperf_bind_iface	h2r01u03	ens2f0	peer=h2r01u04	ip=10.20.0.56	run=2026-08-31_02-00-00
+iperf_bind_iface	h2r02u01	ens2f0	peer=edge-core-p1-a	ip=10.20.0.62	run=2026-08-31_02-00-00
+iperf_bind_iface	h2r02u01	ens2f0	peer=edge-dmz-p1-a	ip=10.20.0.62	run=2026-08-31_02-00-00
+iperf_bind_iface	h2r02u01	ens2f0	peer=h1r01u01	ip=10.20.0.62	run=2026-08-31_02-00-00
+iperf_bind_iface	h2r02u01	ens2f0	peer=h1r02u01	ip=10.20.0.62	run=2026-08-31_02-00-00
+iperf_bind_iface	h2r02u01	ens2f0	peer=h1r03u01	ip=10.20.0.62	run=2026-08-31_02-00-00
+iperf_bind_iface	h2r02u01	ens2f0	peer=h1r04u01	ip=10.20.0.62	run=2026-08-31_02-00-00
+iperf_bind_iface	h2r02u01	ens2f0	peer=h1r05u01	ip=10.20.0.62	run=2026-08-31_02-00-00
+iperf_bind_iface	h2r02u01	ens2f0	peer=h1r06d04	ip=10.20.0.62	run=2026-08-31_02-00-00
+iperf_bind_iface	h2r02u01	ens2f0	peer=h2r01u01	ip=10.20.0.62	run=2026-08-31_02-00-00
+iperf_bind_iface	h2r02u01	ens2f0	peer=h2r02u02	ip=10.20.0.62	run=2026-08-31_02-00-00
+iperf_bind_iface	h2r02u01	ens2f0	peer=h2r02u03	ip=10.20.0.62	run=2026-08-31_02-00-00
+iperf_bind_iface	h2r02u02	ens2f0	peer=h2r02u01	ip=10.20.0.63	run=2026-08-31_02-00-00
+iperf_bind_iface	h2r02u02	ens2f0	peer=h2r02u03	ip=10.20.0.63	run=2026-08-31_02-00-00
+iperf_bind_iface	h2r02u03	ens2f0	peer=h2r02u01	ip=10.20.0.64	run=2026-08-31_02-00-00
+iperf_bind_iface	h2r02u03	ens2f0	peer=h2r02u02	ip=10.20.0.64	run=2026-08-31_02-00-00
+iperf_ok_pct	edge-core-p1-a	100	sent=12/12	recv=12/12	run=2026-08-31_02-00-00
+iperf_peers	edge-core-p1-a	12	run=2026-08-31_02-00-00
+iperf_coverage	edge-core-p1-a	100	of=12	run=2026-08-31_02-00-00
+iperf_tests	edge-core-p1-a	24	run=2026-08-31_02-00-00
+iperf_state	edge-core-p1-a	TESTED	run=2026-08-31_02-00-00
+iperf_gbytes	edge-core-p1-a	1781	flows=24	run=2026-08-31_02-00-00
+iperf_mbps_duplex	edge-core-p1-a	19784	flows=24	run=2026-08-31_02-00-00
+iperf_ok_pct	edge-core-p1-b	100	sent=3/3	recv=3/3	run=2026-08-31_02-00-00
+iperf_peers	edge-core-p1-b	3	run=2026-08-31_02-00-00
+iperf_coverage	edge-core-p1-b	100	of=3	run=2026-08-31_02-00-00
+iperf_tests	edge-core-p1-b	6	run=2026-08-31_02-00-00
+iperf_state	edge-core-p1-b	TESTED	run=2026-08-31_02-00-00
+iperf_gbytes	edge-core-p1-b	444.3	flows=6	run=2026-08-31_02-00-00
+iperf_mbps_duplex	edge-core-p1-b	19746	flows=6	run=2026-08-31_02-00-00
+iperf_ok_pct	edge-core-p2-a	100	sent=3/3	recv=3/3	run=2026-08-31_02-00-00
+iperf_peers	edge-core-p2-a	3	run=2026-08-31_02-00-00
+iperf_coverage	edge-core-p2-a	100	of=3	run=2026-08-31_02-00-00
+iperf_tests	edge-core-p2-a	6	run=2026-08-31_02-00-00
+iperf_state	edge-core-p2-a	TESTED	run=2026-08-31_02-00-00
+iperf_gbytes	edge-core-p2-a	446.3	flows=6	run=2026-08-31_02-00-00
+iperf_mbps_duplex	edge-core-p2-a	19835	flows=6	run=2026-08-31_02-00-00
+iperf_ok_pct	edge-core-p2-b	100	sent=3/3	recv=3/3	run=2026-08-31_02-00-00
+iperf_peers	edge-core-p2-b	3	run=2026-08-31_02-00-00
+iperf_coverage	edge-core-p2-b	100	of=3	run=2026-08-31_02-00-00
+iperf_tests	edge-core-p2-b	6	run=2026-08-31_02-00-00
+iperf_state	edge-core-p2-b	TESTED	run=2026-08-31_02-00-00
+iperf_gbytes	edge-core-p2-b	446.4	flows=6	run=2026-08-31_02-00-00
+iperf_mbps_duplex	edge-core-p2-b	19842	flows=6	run=2026-08-31_02-00-00
+iperf_ok_pct	edge-dmz-p1-a	100	sent=12/12	recv=12/12	run=2026-08-31_02-00-00
+iperf_peers	edge-dmz-p1-a	12	run=2026-08-31_02-00-00
+iperf_coverage	edge-dmz-p1-a	100	of=12	run=2026-08-31_02-00-00
+iperf_tests	edge-dmz-p1-a	24	run=2026-08-31_02-00-00
+iperf_state	edge-dmz-p1-a	TESTED	run=2026-08-31_02-00-00
+iperf_gbytes	edge-dmz-p1-a	1785	flows=24	run=2026-08-31_02-00-00
+iperf_mbps_duplex	edge-dmz-p1-a	19832	flows=24	run=2026-08-31_02-00-00
+iperf_ok_pct	h1r01u01	100	sent=12/12	recv=12/12	run=2026-08-31_02-00-00
+iperf_peers	h1r01u01	12	run=2026-08-31_02-00-00
+iperf_coverage	h1r01u01	100	of=12	run=2026-08-31_02-00-00
+iperf_tests	h1r01u01	24	run=2026-08-31_02-00-00
+iperf_state	h1r01u01	TESTED	run=2026-08-31_02-00-00
+iperf_gbytes	h1r01u01	1783	flows=24	run=2026-08-31_02-00-00
+iperf_mbps_duplex	h1r01u01	19809	flows=24	run=2026-08-31_02-00-00
+iperf_ok_pct	h1r02u01	100	sent=12/12	recv=12/12	run=2026-08-31_02-00-00
+iperf_peers	h1r02u01	12	run=2026-08-31_02-00-00
+iperf_coverage	h1r02u01	100	of=12	run=2026-08-31_02-00-00
+iperf_tests	h1r02u01	24	run=2026-08-31_02-00-00
+iperf_state	h1r02u01	TESTED	run=2026-08-31_02-00-00
+iperf_gbytes	h1r02u01	1704	flows=24	run=2026-08-31_02-00-00
+iperf_mbps_duplex	h1r02u01	18928	flows=24	run=2026-08-31_02-00-00
+iperf_ok_pct	h1r03u01	100	sent=12/12	recv=12/12	run=2026-08-31_02-00-00
+iperf_peers	h1r03u01	12	run=2026-08-31_02-00-00
+iperf_coverage	h1r03u01	100	of=12	run=2026-08-31_02-00-00
+iperf_tests	h1r03u01	24	run=2026-08-31_02-00-00
+iperf_state	h1r03u01	TESTED	run=2026-08-31_02-00-00
+iperf_gbytes	h1r03u01	1784	flows=24	run=2026-08-31_02-00-00
+iperf_mbps_duplex	h1r03u01	19822	flows=24	run=2026-08-31_02-00-00
+iperf_ok_pct	h1r04u01	91.67	sent=12/12	recv=11/12	run=2026-08-31_02-00-00
+iperf_peers	h1r04u01	12	run=2026-08-31_02-00-00
+iperf_coverage	h1r04u01	100	of=12	run=2026-08-31_02-00-00
+iperf_tests	h1r04u01	24	run=2026-08-31_02-00-00
+iperf_state	h1r04u01	TESTED	run=2026-08-31_02-00-00
+iperf_gbytes	h1r04u01	1708	flows=23	run=2026-08-31_02-00-00
+iperf_mbps_duplex	h1r04u01	19798	flows=23	run=2026-08-31_02-00-00
+iperf_ok_pct	h1r05u01	100	sent=12/12	recv=12/12	run=2026-08-31_02-00-00
+iperf_peers	h1r05u01	12	run=2026-08-31_02-00-00
+iperf_coverage	h1r05u01	100	of=12	run=2026-08-31_02-00-00
+iperf_tests	h1r05u01	24	run=2026-08-31_02-00-00
+iperf_state	h1r05u01	TESTED	run=2026-08-31_02-00-00
+iperf_gbytes	h1r05u01	1782	flows=24	run=2026-08-31_02-00-00
+iperf_mbps_duplex	h1r05u01	19803	flows=24	run=2026-08-31_02-00-00
+iperf_ok_pct	h1r06d04	100	sent=12/12	recv=12/12	run=2026-08-31_02-00-00
+iperf_peers	h1r06d04	12	run=2026-08-31_02-00-00
+iperf_coverage	h1r06d04	100	of=12	run=2026-08-31_02-00-00
+iperf_tests	h1r06d04	24	run=2026-08-31_02-00-00
+iperf_state	h1r06d04	TESTED	run=2026-08-31_02-00-00
+iperf_gbytes	h1r06d04	1779	flows=24	run=2026-08-31_02-00-00
+iperf_mbps_duplex	h1r06d04	19763	flows=24	run=2026-08-31_02-00-00
+iperf_ok_pct	h2r01u01	91.67	sent=12/12	recv=11/12	run=2026-08-31_02-00-00
+iperf_peers	h2r01u01	12	run=2026-08-31_02-00-00
+iperf_coverage	h2r01u01	100	of=12	run=2026-08-31_02-00-00
+iperf_tests	h2r01u01	24	run=2026-08-31_02-00-00
+iperf_state	h2r01u01	TESTED	run=2026-08-31_02-00-00
+iperf_gbytes	h2r01u01	1709	flows=23	run=2026-08-31_02-00-00
+iperf_mbps_duplex	h2r01u01	19814	flows=23	run=2026-08-31_02-00-00
+iperf_ok_pct	h2r02u01	100	sent=11/11	recv=11/11	run=2026-08-31_02-00-00
+iperf_peers	h2r02u01	11	run=2026-08-31_02-00-00
+iperf_coverage	h2r02u01	91.67	of=12	run=2026-08-31_02-00-00
+iperf_tests	h2r02u01	22	run=2026-08-31_02-00-00
+iperf_state	h2r02u01	TESTED	run=2026-08-31_02-00-00
+iperf_gbytes	h2r02u01	1637	flows=22	run=2026-08-31_02-00-00
+iperf_mbps_duplex	h2r02u01	19845	flows=22	run=2026-08-31_02-00-00
+iperf_ok_pct	edge-dmz-p1-b	100	sent=3/3	recv=3/3	run=2026-08-31_02-00-00
+iperf_peers	edge-dmz-p1-b	3	run=2026-08-31_02-00-00
+iperf_coverage	edge-dmz-p1-b	100	of=3	run=2026-08-31_02-00-00
+iperf_tests	edge-dmz-p1-b	6	run=2026-08-31_02-00-00
+iperf_state	edge-dmz-p1-b	TESTED	run=2026-08-31_02-00-00
+iperf_gbytes	edge-dmz-p1-b	446.8	flows=6	run=2026-08-31_02-00-00
+iperf_mbps_duplex	edge-dmz-p1-b	19856	flows=6	run=2026-08-31_02-00-00
+iperf_ok_pct	edge-dmz-p2-a	100	sent=3/3	recv=3/3	run=2026-08-31_02-00-00
+iperf_peers	edge-dmz-p2-a	3	run=2026-08-31_02-00-00
+iperf_coverage	edge-dmz-p2-a	100	of=3	run=2026-08-31_02-00-00
+iperf_tests	edge-dmz-p2-a	6	run=2026-08-31_02-00-00
+iperf_state	edge-dmz-p2-a	TESTED	run=2026-08-31_02-00-00
+iperf_gbytes	edge-dmz-p2-a	446.8	flows=6	run=2026-08-31_02-00-00
+iperf_mbps_duplex	edge-dmz-p2-a	19860	flows=6	run=2026-08-31_02-00-00
+iperf_ok_pct	edge-dmz-p2-b	100	sent=3/3	recv=3/3	run=2026-08-31_02-00-00
+iperf_peers	edge-dmz-p2-b	3	run=2026-08-31_02-00-00
+iperf_coverage	edge-dmz-p2-b	100	of=3	run=2026-08-31_02-00-00
+iperf_tests	edge-dmz-p2-b	6	run=2026-08-31_02-00-00
+iperf_state	edge-dmz-p2-b	TESTED	run=2026-08-31_02-00-00
+iperf_gbytes	edge-dmz-p2-b	445.5	flows=6	run=2026-08-31_02-00-00
+iperf_mbps_duplex	edge-dmz-p2-b	19799	flows=6	run=2026-08-31_02-00-00
+iperf_ok_pct	h1r01u02	100	sent=3/3	recv=3/3	run=2026-08-31_02-00-00
+iperf_peers	h1r01u02	3	run=2026-08-31_02-00-00
+iperf_coverage	h1r01u02	100	of=3	run=2026-08-31_02-00-00
+iperf_tests	h1r01u02	6	run=2026-08-31_02-00-00
+iperf_state	h1r01u02	TESTED	run=2026-08-31_02-00-00
+iperf_gbytes	h1r01u02	444	flows=6	run=2026-08-31_02-00-00
+iperf_mbps_duplex	h1r01u02	19732	flows=6	run=2026-08-31_02-00-00
+iperf_ok_pct	h1r01u03	100	sent=3/3	recv=3/3	run=2026-08-31_02-00-00
+iperf_peers	h1r01u03	3	run=2026-08-31_02-00-00
+iperf_coverage	h1r01u03	100	of=3	run=2026-08-31_02-00-00
+iperf_tests	h1r01u03	6	run=2026-08-31_02-00-00
+iperf_state	h1r01u03	TESTED	run=2026-08-31_02-00-00
+iperf_gbytes	h1r01u03	399.8	flows=6	run=2026-08-31_02-00-00
+iperf_mbps_duplex	h1r01u03	17767	flows=6	run=2026-08-31_02-00-00
+iperf_ok_pct	h1r01u04	100	sent=3/3	recv=3/3	run=2026-08-31_02-00-00
+iperf_peers	h1r01u04	3	run=2026-08-31_02-00-00
+iperf_coverage	h1r01u04	100	of=3	run=2026-08-31_02-00-00
+iperf_tests	h1r01u04	6	run=2026-08-31_02-00-00
+iperf_state	h1r01u04	TESTED	run=2026-08-31_02-00-00
+iperf_gbytes	h1r01u04	395.7	flows=6	run=2026-08-31_02-00-00
+iperf_mbps_duplex	h1r01u04	17588	flows=6	run=2026-08-31_02-00-00
+iperf_ok_pct	h1r02u02	100	sent=3/3	recv=3/3	run=2026-08-31_02-00-00
+iperf_peers	h1r02u02	3	run=2026-08-31_02-00-00
+iperf_coverage	h1r02u02	100	of=3	run=2026-08-31_02-00-00
+iperf_tests	h1r02u02	6	run=2026-08-31_02-00-00
+iperf_state	h1r02u02	TESTED	run=2026-08-31_02-00-00
+iperf_gbytes	h1r02u02	360.5	flows=6	run=2026-08-31_02-00-00
+iperf_mbps_duplex	h1r02u02	16021	flows=6	run=2026-08-31_02-00-00
+iperf_ok_pct	h1r02u03	100	sent=3/3	recv=3/3	run=2026-08-31_02-00-00
+iperf_peers	h1r02u03	3	run=2026-08-31_02-00-00
+iperf_coverage	h1r02u03	100	of=3	run=2026-08-31_02-00-00
+iperf_tests	h1r02u03	6	run=2026-08-31_02-00-00
+iperf_state	h1r02u03	TESTED	run=2026-08-31_02-00-00
+iperf_gbytes	h1r02u03	199.2	flows=6	run=2026-08-31_02-00-00
+iperf_mbps_duplex	h1r02u03	8855	flows=6	run=2026-08-31_02-00-00
+iperf_ok_pct	h1r02u04	100	sent=3/3	recv=3/3	run=2026-08-31_02-00-00
+iperf_peers	h1r02u04	3	run=2026-08-31_02-00-00
+iperf_coverage	h1r02u04	100	of=3	run=2026-08-31_02-00-00
+iperf_tests	h1r02u04	6	run=2026-08-31_02-00-00
+iperf_state	h1r02u04	TESTED	run=2026-08-31_02-00-00
+iperf_gbytes	h1r02u04	363.6	flows=6	run=2026-08-31_02-00-00
+iperf_mbps_duplex	h1r02u04	16159	flows=6	run=2026-08-31_02-00-00
+iperf_ok_pct	h1r03u02	100	sent=3/3	recv=3/3	run=2026-08-31_02-00-00
+iperf_peers	h1r03u02	3	run=2026-08-31_02-00-00
+iperf_coverage	h1r03u02	100	of=3	run=2026-08-31_02-00-00
+iperf_tests	h1r03u02	6	run=2026-08-31_02-00-00
+iperf_state	h1r03u02	TESTED	run=2026-08-31_02-00-00
+iperf_gbytes	h1r03u02	442.6	flows=6	run=2026-08-31_02-00-00
+iperf_mbps_duplex	h1r03u02	19672	flows=6	run=2026-08-31_02-00-00
+iperf_ok_pct	h1r03u03	100	sent=3/3	recv=3/3	run=2026-08-31_02-00-00
+iperf_peers	h1r03u03	3	run=2026-08-31_02-00-00
+iperf_coverage	h1r03u03	100	of=3	run=2026-08-31_02-00-00
+iperf_tests	h1r03u03	6	run=2026-08-31_02-00-00
+iperf_state	h1r03u03	TESTED	run=2026-08-31_02-00-00
+iperf_gbytes	h1r03u03	445	flows=6	run=2026-08-31_02-00-00
+iperf_mbps_duplex	h1r03u03	19776	flows=6	run=2026-08-31_02-00-00
+iperf_ok_pct	h1r03u04	100	sent=3/3	recv=3/3	run=2026-08-31_02-00-00
+iperf_peers	h1r03u04	3	run=2026-08-31_02-00-00
+iperf_coverage	h1r03u04	100	of=3	run=2026-08-31_02-00-00
+iperf_tests	h1r03u04	6	run=2026-08-31_02-00-00
+iperf_state	h1r03u04	TESTED	run=2026-08-31_02-00-00
+iperf_gbytes	h1r03u04	444.9	flows=6	run=2026-08-31_02-00-00
+iperf_mbps_duplex	h1r03u04	19774	flows=6	run=2026-08-31_02-00-00
+iperf_ok_pct	h1r04u02	66.67	sent=3/3	recv=2/3	run=2026-08-31_02-00-00
+iperf_peers	h1r04u02	3	run=2026-08-31_02-00-00
+iperf_coverage	h1r04u02	100	of=3	run=2026-08-31_02-00-00
+iperf_tests	h1r04u02	6	run=2026-08-31_02-00-00
+iperf_state	h1r04u02	TESTED	run=2026-08-31_02-00-00
+iperf_gbytes	h1r04u02	372.6	flows=5	run=2026-08-31_02-00-00
+iperf_mbps_duplex	h1r04u02	19872	flows=5	run=2026-08-31_02-00-00
+iperf_ok_pct	h1r04u03	0	sent=0/3	recv=3/3	run=2026-08-31_02-00-00
+iperf_peers	h1r04u03	3	run=2026-08-31_02-00-00
+iperf_coverage	h1r04u03	100	of=3	run=2026-08-31_02-00-00
+iperf_tests	h1r04u03	6	run=2026-08-31_02-00-00
+iperf_state	h1r04u03	TESTED	run=2026-08-31_02-00-00
+iperf_gbytes	h1r04u03	223.3	flows=3	run=2026-08-31_02-00-00
+iperf_mbps_duplex	h1r04u03	19845	flows=3	run=2026-08-31_02-00-00
+iperf_ok_pct	h1r04u04	66.67	sent=3/3	recv=2/3	run=2026-08-31_02-00-00
+iperf_peers	h1r04u04	3	run=2026-08-31_02-00-00
+iperf_coverage	h1r04u04	100	of=3	run=2026-08-31_02-00-00
+iperf_tests	h1r04u04	6	run=2026-08-31_02-00-00
+iperf_state	h1r04u04	TESTED	run=2026-08-31_02-00-00
+iperf_gbytes	h1r04u04	372.1	flows=5	run=2026-08-31_02-00-00
+iperf_mbps_duplex	h1r04u04	19846	flows=5	run=2026-08-31_02-00-00
+iperf_ok_pct	h1r05u02	100	sent=3/3	recv=3/3	run=2026-08-31_02-00-00
+iperf_peers	h1r05u02	3	run=2026-08-31_02-00-00
+iperf_coverage	h1r05u02	100	of=3	run=2026-08-31_02-00-00
+iperf_tests	h1r05u02	6	run=2026-08-31_02-00-00
+iperf_state	h1r05u02	TESTED	run=2026-08-31_02-00-00
+iperf_gbytes	h1r05u02	445.1	flows=6	run=2026-08-31_02-00-00
+iperf_mbps_duplex	h1r05u02	19784	flows=6	run=2026-08-31_02-00-00
+iperf_ok_pct	h1r05u03	100	sent=3/3	recv=3/3	run=2026-08-31_02-00-00
+iperf_peers	h1r05u03	3	run=2026-08-31_02-00-00
+iperf_coverage	h1r05u03	100	of=3	run=2026-08-31_02-00-00
+iperf_tests	h1r05u03	6	run=2026-08-31_02-00-00
+iperf_state	h1r05u03	TESTED	run=2026-08-31_02-00-00
+iperf_gbytes	h1r05u03	444	flows=6	run=2026-08-31_02-00-00
+iperf_mbps_duplex	h1r05u03	19732	flows=6	run=2026-08-31_02-00-00
+iperf_ok_pct	h1r05u04	100	sent=3/3	recv=3/3	run=2026-08-31_02-00-00
+iperf_peers	h1r05u04	3	run=2026-08-31_02-00-00
+iperf_coverage	h1r05u04	100	of=3	run=2026-08-31_02-00-00
+iperf_tests	h1r05u04	6	run=2026-08-31_02-00-00
+iperf_state	h1r05u04	TESTED	run=2026-08-31_02-00-00
+iperf_gbytes	h1r05u04	446.5	flows=6	run=2026-08-31_02-00-00
+iperf_mbps_duplex	h1r05u04	19842	flows=6	run=2026-08-31_02-00-00
+iperf_ok_pct	h1r06d06	100	sent=3/3	recv=3/3	run=2026-08-31_02-00-00
+iperf_peers	h1r06d06	3	run=2026-08-31_02-00-00
+iperf_coverage	h1r06d06	100	of=3	run=2026-08-31_02-00-00
+iperf_tests	h1r06d06	6	run=2026-08-31_02-00-00
+iperf_state	h1r06d06	TESTED	run=2026-08-31_02-00-00
+iperf_gbytes	h1r06d06	446.9	flows=6	run=2026-08-31_02-00-00
+iperf_mbps_duplex	h1r06d06	19860	flows=6	run=2026-08-31_02-00-00
+iperf_ok_pct	h1r06d08	100	sent=3/3	recv=3/3	run=2026-08-31_02-00-00
+iperf_peers	h1r06d08	3	run=2026-08-31_02-00-00
+iperf_coverage	h1r06d08	100	of=3	run=2026-08-31_02-00-00
+iperf_tests	h1r06d08	6	run=2026-08-31_02-00-00
+iperf_state	h1r06d08	TESTED	run=2026-08-31_02-00-00
+iperf_gbytes	h1r06d08	444.9	flows=6	run=2026-08-31_02-00-00
+iperf_mbps_duplex	h1r06d08	19775	flows=6	run=2026-08-31_02-00-00
+iperf_ok_pct	h1r06d10	100	sent=3/3	recv=3/3	run=2026-08-31_02-00-00
+iperf_peers	h1r06d10	3	run=2026-08-31_02-00-00
+iperf_coverage	h1r06d10	100	of=3	run=2026-08-31_02-00-00
+iperf_tests	h1r06d10	6	run=2026-08-31_02-00-00
+iperf_state	h1r06d10	TESTED	run=2026-08-31_02-00-00
+iperf_gbytes	h1r06d10	446.4	flows=6	run=2026-08-31_02-00-00
+iperf_mbps_duplex	h1r06d10	19839	flows=6	run=2026-08-31_02-00-00
+iperf_ok_pct	h2r01u02	66.67	sent=3/3	recv=2/3	run=2026-08-31_02-00-00
+iperf_peers	h2r01u02	3	run=2026-08-31_02-00-00
+iperf_coverage	h2r01u02	100	of=3	run=2026-08-31_02-00-00
+iperf_tests	h2r01u02	6	run=2026-08-31_02-00-00
+iperf_state	h2r01u02	TESTED	run=2026-08-31_02-00-00
+iperf_gbytes	h2r01u02	370.7	flows=5	run=2026-08-31_02-00-00
+iperf_mbps_duplex	h2r01u02	19769	flows=5	run=2026-08-31_02-00-00
+iperf_ok_pct	h2r01u03	66.67	sent=3/3	recv=2/3	run=2026-08-31_02-00-00
+iperf_peers	h2r01u03	3	run=2026-08-31_02-00-00
+iperf_coverage	h2r01u03	100	of=3	run=2026-08-31_02-00-00
+iperf_tests	h2r01u03	6	run=2026-08-31_02-00-00
+iperf_state	h2r01u03	TESTED	run=2026-08-31_02-00-00
+iperf_gbytes	h2r01u03	370.4	flows=5	run=2026-08-31_02-00-00
+iperf_mbps_duplex	h2r01u03	19752	flows=5	run=2026-08-31_02-00-00
+iperf_ok_pct	h2r01u04	0	sent=0/3	recv=3/3	run=2026-08-31_02-00-00
+iperf_peers	h2r01u04	3	run=2026-08-31_02-00-00
+iperf_coverage	h2r01u04	100	of=3	run=2026-08-31_02-00-00
+iperf_tests	h2r01u04	6	run=2026-08-31_02-00-00
+iperf_state	h2r01u04	TESTED	run=2026-08-31_02-00-00
+iperf_gbytes	h2r01u04	222.2	flows=3	run=2026-08-31_02-00-00
+iperf_mbps_duplex	h2r01u04	19750	flows=3	run=2026-08-31_02-00-00
+iperf_ok_pct	h2r02u02	100	sent=2/2	recv=2/2	run=2026-08-31_02-00-00
+iperf_peers	h2r02u02	2	run=2026-08-31_02-00-00
+iperf_coverage	h2r02u02	66.67	of=3	run=2026-08-31_02-00-00
+iperf_tests	h2r02u02	4	run=2026-08-31_02-00-00
+iperf_state	h2r02u02	TESTED	run=2026-08-31_02-00-00
+iperf_gbytes	h2r02u02	296.2	flows=4	run=2026-08-31_02-00-00
+iperf_mbps_duplex	h2r02u02	19746	flows=4	run=2026-08-31_02-00-00
+iperf_ok_pct	h2r02u03	100	sent=2/2	recv=2/2	run=2026-08-31_02-00-00
+iperf_peers	h2r02u03	2	run=2026-08-31_02-00-00
+iperf_coverage	h2r02u03	66.67	of=3	run=2026-08-31_02-00-00
+iperf_tests	h2r02u03	4	run=2026-08-31_02-00-00
+iperf_state	h2r02u03	TESTED	run=2026-08-31_02-00-00
+iperf_gbytes	h2r02u03	296.9	flows=4	run=2026-08-31_02-00-00
+iperf_mbps_duplex	h2r02u03	19791	flows=4	run=2026-08-31_02-00-00
+iperf_state	h2r02u04	NO-DATA	run=2026-08-31_02-00-00
+iperf_ok_pct	h2r02u04	0	sent=0/0	recv=0/0	run=2026-08-31_02-00-00
+iperf_coverage	h2r02u04	0	of=3	run=2026-08-31_02-00-00
+iperf_cpu_peak	h1r01u01	40.5	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_mean	h1r01u01	33.2	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_softirq	h1r01u01	12.6	src=mpstat	cores=64	core=16	run=2026-08-31_02-00-00
+iperf_cpu_sys	h1r01u01	17.8	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_user	h1r01u01	10.9	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_idle_floor	h1r01u01	43.3	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_peak	h1r01u02	41.1	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_mean	h1r01u02	33.7	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_softirq	h1r01u02	12.7	src=mpstat	cores=64	core=56	run=2026-08-31_02-00-00
+iperf_cpu_sys	h1r01u02	18.1	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_user	h1r01u02	11.1	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_idle_floor	h1r01u02	42.5	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_peak	h1r01u03	49.2	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_mean	h1r01u03	40.3	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_softirq	h1r01u03	15.3	src=mpstat	cores=64	core=12	run=2026-08-31_02-00-00
+iperf_cpu_sys	h1r01u03	21.6	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_user	h1r01u03	13.3	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_idle_floor	h1r01u03	31.1	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_peak	h1r01u04	50.3	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_mean	h1r01u04	41.2	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_softirq	h1r01u04	15.6	src=mpstat	cores=64	core=17	run=2026-08-31_02-00-00
+iperf_cpu_sys	h1r01u04	22.1	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_user	h1r01u04	13.6	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_idle_floor	h1r01u04	29.6	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_peak	h1r02u01	49.7	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_mean	h1r02u01	40.8	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_softirq	h1r02u01	15.4	src=mpstat	cores=64	core=4	run=2026-08-31_02-00-00
+iperf_cpu_sys	h1r02u01	21.9	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_user	h1r02u01	13.4	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_idle_floor	h1r02u01	30.4	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_peak	h1r02u02	43.9	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_mean	h1r02u02	36	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_softirq	h1r02u02	13.6	src=mpstat	cores=64	core=2	run=2026-08-31_02-00-00
+iperf_cpu_sys	h1r02u02	19.3	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_user	h1r02u02	11.9	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_idle_floor	h1r02u02	38.5	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_peak	h1r02u03	42.5	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_mean	h1r02u03	34.9	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_softirq	h1r02u03	13.2	src=mpstat	cores=64	core=27	run=2026-08-31_02-00-00
+iperf_cpu_sys	h1r02u03	18.7	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_user	h1r02u03	11.5	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_idle_floor	h1r02u03	40.5	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_peak	h1r02u04	45.1	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_mean	h1r02u04	37	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_softirq	h1r02u04	14	src=mpstat	cores=64	core=30	run=2026-08-31_02-00-00
+iperf_cpu_sys	h1r02u04	19.8	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_user	h1r02u04	12.2	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_idle_floor	h1r02u04	36.9	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_peak	h1r03u01	53.4	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_mean	h1r03u01	43.8	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_softirq	h1r03u01	16.6	src=mpstat	cores=64	core=54	run=2026-08-31_02-00-00
+iperf_cpu_sys	h1r03u01	23.5	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_user	h1r03u01	14.4	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_idle_floor	h1r03u01	25.2	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_peak	h1r03u02	98.6	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_mean	h1r03u02	91.4	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_softirq	h1r03u02	47.2	src=mpstat	cores=64	core=7	run=2026-08-31_02-00-00
+iperf_cpu_sys	h1r03u02	61	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_user	h1r03u02	28.3	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_idle_floor	h1r03u02	0.4	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_peak	h1r03u03	52.7	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_mean	h1r03u03	43.2	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_softirq	h1r03u03	16.3	src=mpstat	cores=64	core=47	run=2026-08-31_02-00-00
+iperf_cpu_sys	h1r03u03	23.2	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_user	h1r03u03	14.2	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_idle_floor	h1r03u03	26.2	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_peak	h1r03u04	54	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_mean	h1r03u04	44.3	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_softirq	h1r03u04	16.7	src=mpstat	cores=64	core=36	run=2026-08-31_02-00-00
+iperf_cpu_sys	h1r03u04	23.8	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_user	h1r03u04	14.6	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_idle_floor	h1r03u04	24.4	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_peak	h1r04u01	47.8	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_mean	h1r04u01	39.2	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_softirq	h1r04u01	14.8	src=mpstat	cores=64	core=52	run=2026-08-31_02-00-00
+iperf_cpu_sys	h1r04u01	21	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_user	h1r04u01	12.9	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_idle_floor	h1r04u01	33.1	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_peak	h1r04u02	41.6	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_mean	h1r04u02	34.1	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_softirq	h1r04u02	12.9	src=mpstat	cores=64	core=33	run=2026-08-31_02-00-00
+iperf_cpu_sys	h1r04u02	18.3	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_user	h1r04u02	11.2	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_idle_floor	h1r04u02	41.8	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_peak	h1r04u03	52.4	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_mean	h1r04u03	43	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_softirq	h1r04u03	16.2	src=mpstat	cores=64	core=60	run=2026-08-31_02-00-00
+iperf_cpu_sys	h1r04u03	23.1	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_user	h1r04u03	14.1	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_idle_floor	h1r04u03	26.6	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_peak	h1r04u04	42.7	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_mean	h1r04u04	35	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_softirq	h1r04u04	13.2	src=mpstat	cores=64	core=60	run=2026-08-31_02-00-00
+iperf_cpu_sys	h1r04u04	18.8	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_user	h1r04u04	11.5	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_idle_floor	h1r04u04	40.2	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_peak	h1r05u01	52.7	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_mean	h1r05u01	43.2	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_softirq	h1r05u01	16.3	src=mpstat	cores=64	core=34	run=2026-08-31_02-00-00
+iperf_cpu_sys	h1r05u01	23.2	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_user	h1r05u01	14.2	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_idle_floor	h1r05u01	26.2	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_peak	h1r05u02	34.5	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_mean	h1r05u02	28.3	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_softirq	h1r05u02	10.7	src=mpstat	cores=64	core=8	run=2026-08-31_02-00-00
+iperf_cpu_sys	h1r05u02	15.2	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_user	h1r05u02	9.3	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_idle_floor	h1r05u02	51.7	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_peak	h1r05u03	54.2	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_mean	h1r05u03	44.4	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_softirq	h1r05u03	16.8	src=mpstat	cores=64	core=41	run=2026-08-31_02-00-00
+iperf_cpu_sys	h1r05u03	23.8	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_user	h1r05u03	14.6	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_idle_floor	h1r05u03	24.1	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_peak	h1r05u04	49.4	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_mean	h1r05u04	40.5	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_softirq	h1r05u04	15.3	src=mpstat	cores=64	core=28	run=2026-08-31_02-00-00
+iperf_cpu_sys	h1r05u04	21.7	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_user	h1r05u04	13.3	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_idle_floor	h1r05u04	30.8	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_peak	h1r06d04	41	src=proc_stat	run=2026-08-31_02-00-00
+iperf_cpu_mean	h1r06d04	33.2	src=proc_stat	run=2026-08-31_02-00-00
+iperf_cpu_sys	h1r06d04	18	src=proc_stat	run=2026-08-31_02-00-00
+iperf_cpu_user	h1r06d04	12.4	src=proc_stat	run=2026-08-31_02-00-00
+iperf_cpu_peak	h1r06d06	45.3	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_mean	h1r06d06	37.1	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_softirq	h1r06d06	14	src=mpstat	cores=64	core=31	run=2026-08-31_02-00-00
+iperf_cpu_sys	h1r06d06	19.9	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_user	h1r06d06	12.2	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_idle_floor	h1r06d06	36.6	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_peak	h1r06d08	35.9	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_mean	h1r06d08	29.4	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_softirq	h1r06d08	11.1	src=mpstat	cores=64	core=5	run=2026-08-31_02-00-00
+iperf_cpu_sys	h1r06d08	15.8	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_user	h1r06d08	9.7	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_idle_floor	h1r06d08	49.7	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_peak	h1r06d10	41.5	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_mean	h1r06d10	34	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_softirq	h1r06d10	12.9	src=mpstat	cores=64	core=29	run=2026-08-31_02-00-00
+iperf_cpu_sys	h1r06d10	18.3	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_user	h1r06d10	11.2	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_idle_floor	h1r06d10	41.9	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_peak	h2r01u01	48.5	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_mean	h2r01u01	39.8	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_softirq	h2r01u01	15	src=mpstat	cores=64	core=48	run=2026-08-31_02-00-00
+iperf_cpu_sys	h2r01u01	21.3	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_user	h2r01u01	13.1	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_idle_floor	h2r01u01	32.1	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_peak	h2r01u02	52.5	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_mean	h2r01u02	43.1	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_softirq	h2r01u02	16.3	src=mpstat	cores=64	core=30	run=2026-08-31_02-00-00
+iperf_cpu_sys	h2r01u02	23.1	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_user	h2r01u02	14.2	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_idle_floor	h2r01u02	26.5	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_peak	h2r01u03	53.3	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_mean	h2r01u03	43.7	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_softirq	h2r01u03	16.5	src=mpstat	cores=64	core=44	run=2026-08-31_02-00-00
+iperf_cpu_sys	h2r01u03	23.5	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_user	h2r01u03	14.4	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_idle_floor	h2r01u03	25.4	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_peak	h2r01u04	42	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_mean	h2r01u04	34.4	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_softirq	h2r01u04	13	src=mpstat	cores=64	core=37	run=2026-08-31_02-00-00
+iperf_cpu_sys	h2r01u04	18.5	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_user	h2r01u04	11.3	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_idle_floor	h2r01u04	41.2	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_peak	h2r02u01	55.3	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_mean	h2r02u01	45.3	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_softirq	h2r02u01	17.1	src=mpstat	cores=64	core=10	run=2026-08-31_02-00-00
+iperf_cpu_sys	h2r02u01	24.3	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_user	h2r02u01	14.9	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_idle_floor	h2r02u01	22.6	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_peak	h2r02u02	34.8	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_mean	h2r02u02	28.5	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_softirq	h2r02u02	10.8	src=mpstat	cores=64	core=36	run=2026-08-31_02-00-00
+iperf_cpu_sys	h2r02u02	15.3	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_user	h2r02u02	9.4	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_idle_floor	h2r02u02	51.3	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_peak	h2r02u03	48.4	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_mean	h2r02u03	39.7	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_softirq	h2r02u03	15	src=mpstat	cores=64	core=23	run=2026-08-31_02-00-00
+iperf_cpu_sys	h2r02u03	21.3	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_user	h2r02u03	13.1	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_idle_floor	h2r02u03	32.2	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_peak	edge-core-p1-a	43.3	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_mean	edge-core-p1-a	35.5	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_softirq	edge-core-p1-a	13.4	src=mpstat	cores=64	core=22	run=2026-08-31_02-00-00
+iperf_cpu_sys	edge-core-p1-a	19.1	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_user	edge-core-p1-a	11.7	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_idle_floor	edge-core-p1-a	39.4	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_peak	edge-core-p1-b	48.2	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_mean	edge-core-p1-b	39.5	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_softirq	edge-core-p1-b	14.9	src=mpstat	cores=64	core=4	run=2026-08-31_02-00-00
+iperf_cpu_sys	edge-core-p1-b	21.2	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_user	edge-core-p1-b	13	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_idle_floor	edge-core-p1-b	32.5	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_peak	edge-core-p2-a	48.7	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_mean	edge-core-p2-a	39.9	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_softirq	edge-core-p2-a	15.1	src=mpstat	cores=64	core=38	run=2026-08-31_02-00-00
+iperf_cpu_sys	edge-core-p2-a	21.4	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_user	edge-core-p2-a	13.1	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_idle_floor	edge-core-p2-a	31.8	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_peak	edge-core-p2-b	42.3	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_mean	edge-core-p2-b	34.7	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_softirq	edge-core-p2-b	13.1	src=mpstat	cores=64	core=1	run=2026-08-31_02-00-00
+iperf_cpu_sys	edge-core-p2-b	18.6	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_user	edge-core-p2-b	11.4	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_idle_floor	edge-core-p2-b	40.8	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_peak	edge-dmz-p1-a	52.2	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_mean	edge-dmz-p1-a	42.8	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_softirq	edge-dmz-p1-a	16.2	src=mpstat	cores=64	core=19	run=2026-08-31_02-00-00
+iperf_cpu_sys	edge-dmz-p1-a	23	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_user	edge-dmz-p1-a	14.1	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_idle_floor	edge-dmz-p1-a	26.9	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_peak	edge-dmz-p1-b	49.2	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_mean	edge-dmz-p1-b	40.3	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_softirq	edge-dmz-p1-b	15.3	src=mpstat	cores=64	core=12	run=2026-08-31_02-00-00
+iperf_cpu_sys	edge-dmz-p1-b	21.6	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_user	edge-dmz-p1-b	13.3	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_idle_floor	edge-dmz-p1-b	31.1	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_peak	edge-dmz-p2-a	34.3	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_mean	edge-dmz-p2-a	28.1	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_softirq	edge-dmz-p2-a	10.6	src=mpstat	cores=64	core=30	run=2026-08-31_02-00-00
+iperf_cpu_sys	edge-dmz-p2-a	15.1	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_user	edge-dmz-p2-a	9.3	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_idle_floor	edge-dmz-p2-a	52	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_peak	edge-dmz-p2-b	53.1	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_mean	edge-dmz-p2-b	43.5	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_softirq	edge-dmz-p2-b	16.5	src=mpstat	cores=64	core=2	run=2026-08-31_02-00-00
+iperf_cpu_sys	edge-dmz-p2-b	23.4	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_user	edge-dmz-p2-b	14.3	src=mpstat	cores=64	run=2026-08-31_02-00-00
+iperf_cpu_idle_floor	edge-dmz-p2-b	25.7	src=mpstat	cores=64	run=2026-08-31_02-00-00

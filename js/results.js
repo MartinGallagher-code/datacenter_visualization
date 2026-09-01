@@ -388,7 +388,14 @@ export function overlayValue(overlay, el) {
   return result;
 }
 
-const SEVERITY = { fail: 3, error: 3, err: 3, bad: 3, crit: 3, warn: 2, warning: 2, degraded: 2 };
+// A container takes the worst verdict beneath it, so one bad element is still
+// visible with the rack collapsed. 'no-data' ranks with the failures: a host
+// that was asked and never answered is the one reading that must not vanish
+// when you zoom out -- both `mx export` and `export-overlay` write it.
+const SEVERITY = {
+  fail: 3, error: 3, err: 3, bad: 3, crit: 3, 'no-data': 3,
+  warn: 2, warning: 2, degraded: 2,
+};
 
 function worstOrMode(values) {
   let worst = null;
