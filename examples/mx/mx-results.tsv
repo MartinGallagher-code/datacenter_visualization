@@ -1,0 +1,916 @@
+# mx 1.7.0 export -- 22 host(s), last 60s, 884 sample(s)
+# run shape: 256 bytes out -> 4096 bytes back, 12 layers x 30s dwell
+# window covers 2026-08-31 18:14:45 .. 2026-08-31 18:15:45
+# NIC line rate 25 Gb/s: mx_line_util included
+# 1 host(s) went quiet before the window: wr01r04u05
+# 1 host(s) in the matrix never reported at all: wr01r04u06
+!test	mx_pps	unit=pps higher=good decimals=0 short=PPS label="Requests sent"
+!test	mx_rep_pps	unit=pps higher=good decimals=0 short=REP label="Replies received"
+!test	mx_loss	unit=% higher=bad decimals=2 short=LOSS label="Round-trip loss"
+!test	mx_achieved	unit=% higher=good palette=rdbu min=0 max=200 agg=median decimals=0 short=ACHV label="Rate achieved vs target"
+!test	mx_rtt_avg	unit=us higher=bad decimals=0 short=AVG label="RTT mean over this host's flows"
+!test	mx_rtt_p50	unit=us higher=bad decimals=0 short=P50 label="RTT p50, worst peer"
+!test	mx_rtt_p99	unit=us higher=bad agg=max decimals=0 short=P99 label="RTT p99, worst peer"
+!test	mx_rtt_max	unit=us higher=bad agg=max decimals=0 short=MAX label="RTT max, worst peer"
+!test	mx_cpu	unit=% higher=bad min=0 max=100 decimals=0 short=CPU label="Host CPU"
+!test	mx_cpu_core	unit=% higher=bad min=0 max=100 agg=max decimals=0 short=CORE label="Busiest core"
+!test	mx_agent_cpu	unit=% higher=bad agg=max decimals=0 short=ACPU label="Busiest mx worker, share of a core"
+!test	mx_request_gbps	unit=Gb/s higher=good decimals=2 short=REQ label="Requests on the wire" min=0 max=25
+!test	mx_rel_median	unit=% higher=good palette=rdbu min=0 max=200 agg=median decimals=0 short=REL label="Packet rate vs fleet median"
+!test	mx_served_pps	unit=pps higher=good decimals=0 short=SRV label="Requests arriving here"
+!test	mx_egress_gbps	unit=Gb/s higher=good decimals=2 short=EGR label="Egress on the wire" min=0 max=25
+!test	mx_line_util	unit=% higher=good min=0 max=100 agg=median decimals=0 short=UTIL label="Egress vs NIC line rate"
+!test	mx_coverage	unit=% higher=good min=0 max=100 agg=min decimals=0 short=COV label="Peers measured so far"
+!test	mx_peers	higher=good agg=min decimals=0 short=PEER label="Flows this host sends"
+!test	mx_intervals	higher=good agg=min decimals=0 short=IVL label="Report intervals in the window"
+!test	mx_workers	higher=good agg=min decimals=0 short=WRK label="Agent worker processes"
+!test	mx_forward_loss	unit=% higher=bad decimals=2 short=FWD label="Requests lost on the way out"
+!test	mx_return_loss	unit=% higher=bad decimals=2 short=RET label="Replies lost on the way back"
+!test	mx_state	agg=last short=STATE label="Did this host report?"
+!test	mx_peer_pps	unit=pps higher=good agg=mean decimals=0 short=PPS label="Requests sent to one peer"
+!test	mx_peer_loss	unit=% higher=bad agg=max decimals=2 short=LOSS label="Round-trip loss, worst peer"
+!test	mx_peer_rtt_p99	unit=us higher=bad agg=max decimals=0 short=P99 label="RTT p99, worst peer"
+mx_pps	wr01r01u01	80000	run=demo-01
+mx_rep_pps	wr01r01u01	79960	run=demo-01
+mx_loss	wr01r01u01	0.05	run=demo-01
+mx_achieved	wr01r01u01	100	run=demo-01
+mx_rtt_avg	wr01r01u01	178	run=demo-01
+mx_rtt_p50	wr01r01u01	104	run=demo-01
+mx_rtt_p99	wr01r01u01	430	run=demo-01
+mx_rtt_max	wr01r01u01	774	run=demo-01
+mx_cpu	wr01r01u01	29	run=demo-01
+mx_cpu_core	wr01r01u01	42	run=demo-01
+mx_agent_cpu	wr01r01u01	34	run=demo-01
+mx_request_gbps	wr01r01u01	0.2061	run=demo-01
+mx_rel_median	wr01r01u01	100	run=demo-01
+mx_served_pps	wr01r01u01	78769	run=demo-01
+mx_egress_gbps	wr01r01u01	2.827	run=demo-01
+mx_line_util	wr01r01u01	11.31	run=demo-01
+mx_coverage	wr01r01u01	43.48	run=demo-01
+mx_peers	wr01r01u01	6	run=demo-01
+mx_intervals	wr01r01u01	13	run=demo-01
+mx_workers	wr01r01u01	4	run=demo-01
+mx_pps	wr01r01u02	80000	run=demo-01
+mx_rep_pps	wr01r01u02	79960	run=demo-01
+mx_loss	wr01r01u02	0.05	run=demo-01
+mx_achieved	wr01r01u02	100	run=demo-01
+mx_rtt_avg	wr01r01u02	178	run=demo-01
+mx_rtt_p50	wr01r01u02	104	run=demo-01
+mx_rtt_p99	wr01r01u02	430	run=demo-01
+mx_rtt_max	wr01r01u02	774	run=demo-01
+mx_cpu	wr01r01u02	29	run=demo-01
+mx_cpu_core	wr01r01u02	42	run=demo-01
+mx_agent_cpu	wr01r01u02	34	run=demo-01
+mx_request_gbps	wr01r01u02	0.2061	run=demo-01
+mx_rel_median	wr01r01u02	100	run=demo-01
+mx_served_pps	wr01r01u02	72615	run=demo-01
+mx_egress_gbps	wr01r01u02	2.623	run=demo-01
+mx_line_util	wr01r01u02	10.49	run=demo-01
+mx_coverage	wr01r01u02	43.48	run=demo-01
+mx_peers	wr01r01u02	6	run=demo-01
+mx_intervals	wr01r01u02	13	run=demo-01
+mx_workers	wr01r01u02	4	run=demo-01
+mx_pps	wr01r01u03	80000	run=demo-01
+mx_rep_pps	wr01r01u03	79960	run=demo-01
+mx_loss	wr01r01u03	0.05	run=demo-01
+mx_achieved	wr01r01u03	100	run=demo-01
+mx_rtt_avg	wr01r01u03	178	run=demo-01
+mx_rtt_p50	wr01r01u03	104	run=demo-01
+mx_rtt_p99	wr01r01u03	430	run=demo-01
+mx_rtt_max	wr01r01u03	774	run=demo-01
+mx_cpu	wr01r01u03	29	run=demo-01
+mx_cpu_core	wr01r01u03	42	run=demo-01
+mx_agent_cpu	wr01r01u03	34	run=demo-01
+mx_request_gbps	wr01r01u03	0.2061	run=demo-01
+mx_rel_median	wr01r01u03	100	run=demo-01
+mx_served_pps	wr01r01u03	60062	run=demo-01
+mx_egress_gbps	wr01r01u03	2.168	run=demo-01
+mx_line_util	wr01r01u03	8.673	run=demo-01
+mx_coverage	wr01r01u03	43.48	run=demo-01
+mx_peers	wr01r01u03	6	run=demo-01
+mx_intervals	wr01r01u03	13	run=demo-01
+mx_workers	wr01r01u03	4	run=demo-01
+mx_pps	wr01r01u04	80000	run=demo-01
+mx_rep_pps	wr01r01u04	79960	run=demo-01
+mx_loss	wr01r01u04	0.05	run=demo-01
+mx_achieved	wr01r01u04	100	run=demo-01
+mx_rtt_avg	wr01r01u04	178	run=demo-01
+mx_rtt_p50	wr01r01u04	104	run=demo-01
+mx_rtt_p99	wr01r01u04	430	run=demo-01
+mx_rtt_max	wr01r01u04	774	run=demo-01
+mx_cpu	wr01r01u04	29	run=demo-01
+mx_cpu_core	wr01r01u04	42	run=demo-01
+mx_agent_cpu	wr01r01u04	34	run=demo-01
+mx_request_gbps	wr01r01u04	0.2061	run=demo-01
+mx_rel_median	wr01r01u04	100	run=demo-01
+mx_served_pps	wr01r01u04	75692	run=demo-01
+mx_egress_gbps	wr01r01u04	2.688	run=demo-01
+mx_line_util	wr01r01u04	10.75	run=demo-01
+mx_coverage	wr01r01u04	43.48	run=demo-01
+mx_peers	wr01r01u04	6	run=demo-01
+mx_intervals	wr01r01u04	13	run=demo-01
+mx_workers	wr01r01u04	4	run=demo-01
+mx_pps	wr01r01u05	80000	run=demo-01
+mx_rep_pps	wr01r01u05	79960	run=demo-01
+mx_loss	wr01r01u05	0.05	run=demo-01
+mx_achieved	wr01r01u05	100	run=demo-01
+mx_rtt_avg	wr01r01u05	178	run=demo-01
+mx_rtt_p50	wr01r01u05	104	run=demo-01
+mx_rtt_p99	wr01r01u05	430	run=demo-01
+mx_rtt_max	wr01r01u05	774	run=demo-01
+mx_cpu	wr01r01u05	92	run=demo-01
+mx_cpu_core	wr01r01u05	99	run=demo-01
+mx_agent_cpu	wr01r01u05	99	run=demo-01
+mx_request_gbps	wr01r01u05	0.2061	run=demo-01
+mx_rel_median	wr01r01u05	100	run=demo-01
+mx_served_pps	wr01r01u05	64000	run=demo-01
+mx_egress_gbps	wr01r01u05	2.299	run=demo-01
+mx_line_util	wr01r01u05	9.198	run=demo-01
+mx_forward_loss	wr01r01u05	0	run=demo-01
+mx_return_loss	wr01r01u05	0.05	run=demo-01
+mx_coverage	wr01r01u05	43.48	run=demo-01
+mx_peers	wr01r01u05	6	run=demo-01
+mx_intervals	wr01r01u05	13	run=demo-01
+mx_workers	wr01r01u05	2	run=demo-01
+mx_pps	wr01r01u06	80000	run=demo-01
+mx_rep_pps	wr01r01u06	73563	run=demo-01
+mx_loss	wr01r01u06	8.046	run=demo-01
+mx_achieved	wr01r01u06	100	run=demo-01
+mx_rtt_avg	wr01r01u06	178	run=demo-01
+mx_rtt_p50	wr01r01u06	104	run=demo-01
+mx_rtt_p99	wr01r01u06	430	run=demo-01
+mx_rtt_max	wr01r01u06	774	run=demo-01
+mx_cpu	wr01r01u06	29	run=demo-01
+mx_cpu_core	wr01r01u06	42	run=demo-01
+mx_agent_cpu	wr01r01u06	34	run=demo-01
+mx_request_gbps	wr01r01u06	0.2061	run=demo-01
+mx_rel_median	wr01r01u06	100	run=demo-01
+mx_served_pps	wr01r01u06	54154	run=demo-01
+mx_egress_gbps	wr01r01u06	2.008	run=demo-01
+mx_line_util	wr01r01u06	8.033	run=demo-01
+mx_forward_loss	wr01r01u06	8	run=demo-01
+mx_return_loss	wr01r01u06	0.046	run=demo-01
+mx_coverage	wr01r01u06	43.48	run=demo-01
+mx_peers	wr01r01u06	6	run=demo-01
+mx_intervals	wr01r01u06	13	run=demo-01
+mx_workers	wr01r01u06	4	run=demo-01
+mx_pps	wr01r02u01	80000	run=demo-01
+mx_rep_pps	wr01r02u01	79960	run=demo-01
+mx_loss	wr01r02u01	0.05	run=demo-01
+mx_achieved	wr01r02u01	100	run=demo-01
+mx_rtt_avg	wr01r02u01	213	run=demo-01
+mx_rtt_p50	wr01r02u01	118	run=demo-01
+mx_rtt_p99	wr01r02u01	520	run=demo-01
+mx_rtt_max	wr01r02u01	936	run=demo-01
+mx_cpu	wr01r02u01	30	run=demo-01
+mx_cpu_core	wr01r02u01	43	run=demo-01
+mx_agent_cpu	wr01r02u01	34	run=demo-01
+mx_request_gbps	wr01r02u01	0.2061	run=demo-01
+mx_rel_median	wr01r02u01	100	run=demo-01
+mx_served_pps	wr01r02u01	78769	run=demo-01
+mx_egress_gbps	wr01r02u01	2.827	run=demo-01
+mx_line_util	wr01r02u01	11.31	run=demo-01
+mx_coverage	wr01r02u01	43.48	run=demo-01
+mx_peers	wr01r02u01	6	run=demo-01
+mx_intervals	wr01r02u01	13	run=demo-01
+mx_workers	wr01r02u01	4	run=demo-01
+mx_pps	wr01r02u02	80000	run=demo-01
+mx_rep_pps	wr01r02u02	75200	run=demo-01
+mx_loss	wr01r02u02	6	run=demo-01
+mx_achieved	wr01r02u02	100	run=demo-01
+mx_rtt_avg	wr01r02u02	213	run=demo-01
+mx_rtt_p50	wr01r02u02	118	run=demo-01
+mx_rtt_p99	wr01r02u02	520	run=demo-01
+mx_rtt_max	wr01r02u02	936	run=demo-01
+mx_cpu	wr01r02u02	30	run=demo-01
+mx_cpu_core	wr01r02u02	43	run=demo-01
+mx_agent_cpu	wr01r02u02	34	run=demo-01
+mx_request_gbps	wr01r02u02	0.2061	run=demo-01
+mx_rel_median	wr01r02u02	100	run=demo-01
+mx_served_pps	wr01r02u02	64000	run=demo-01
+mx_egress_gbps	wr01r02u02	2.336	run=demo-01
+mx_line_util	wr01r02u02	9.344	run=demo-01
+mx_forward_loss	wr01r02u02	0	run=demo-01
+mx_return_loss	wr01r02u02	6	run=demo-01
+mx_coverage	wr01r02u02	43.48	run=demo-01
+mx_peers	wr01r02u02	6	run=demo-01
+mx_intervals	wr01r02u02	13	run=demo-01
+mx_workers	wr01r02u02	4	run=demo-01
+mx_pps	wr01r02u03	80000	run=demo-01
+mx_rep_pps	wr01r02u03	79960	run=demo-01
+mx_loss	wr01r02u03	0.05	run=demo-01
+mx_achieved	wr01r02u03	100	run=demo-01
+mx_rtt_avg	wr01r02u03	213	run=demo-01
+mx_rtt_p50	wr01r02u03	118	run=demo-01
+mx_rtt_p99	wr01r02u03	520	run=demo-01
+mx_rtt_max	wr01r02u03	936	run=demo-01
+mx_cpu	wr01r02u03	30	run=demo-01
+mx_cpu_core	wr01r02u03	43	run=demo-01
+mx_agent_cpu	wr01r02u03	34	run=demo-01
+mx_request_gbps	wr01r02u03	0.2061	run=demo-01
+mx_rel_median	wr01r02u03	100	run=demo-01
+mx_served_pps	wr01r02u03	78523	run=demo-01
+mx_egress_gbps	wr01r02u03	2.819	run=demo-01
+mx_line_util	wr01r02u03	11.28	run=demo-01
+mx_coverage	wr01r02u03	43.48	run=demo-01
+mx_peers	wr01r02u03	6	run=demo-01
+mx_intervals	wr01r02u03	13	run=demo-01
+mx_workers	wr01r02u03	4	run=demo-01
+mx_pps	wr01r02u04	80000	run=demo-01
+mx_rep_pps	wr01r02u04	79960	run=demo-01
+mx_loss	wr01r02u04	0.05	run=demo-01
+mx_achieved	wr01r02u04	100	run=demo-01
+mx_rtt_avg	wr01r02u04	213	run=demo-01
+mx_rtt_p50	wr01r02u04	118	run=demo-01
+mx_rtt_p99	wr01r02u04	520	run=demo-01
+mx_rtt_max	wr01r02u04	936	run=demo-01
+mx_cpu	wr01r02u04	30	run=demo-01
+mx_cpu_core	wr01r02u04	43	run=demo-01
+mx_agent_cpu	wr01r02u04	34	run=demo-01
+mx_request_gbps	wr01r02u04	0.2061	run=demo-01
+mx_rel_median	wr01r02u04	100	run=demo-01
+mx_served_pps	wr01r02u04	69908	run=demo-01
+mx_egress_gbps	wr01r02u04	2.526	run=demo-01
+mx_line_util	wr01r02u04	10.11	run=demo-01
+mx_coverage	wr01r02u04	43.48	run=demo-01
+mx_peers	wr01r02u04	6	run=demo-01
+mx_intervals	wr01r02u04	13	run=demo-01
+mx_workers	wr01r02u04	4	run=demo-01
+mx_pps	wr01r02u05	80000	run=demo-01
+mx_rep_pps	wr01r02u05	79960	run=demo-01
+mx_loss	wr01r02u05	0.05	run=demo-01
+mx_achieved	wr01r02u05	100	run=demo-01
+mx_rtt_avg	wr01r02u05	213	run=demo-01
+mx_rtt_p50	wr01r02u05	118	run=demo-01
+mx_rtt_p99	wr01r02u05	520	run=demo-01
+mx_rtt_max	wr01r02u05	936	run=demo-01
+mx_cpu	wr01r02u05	30	run=demo-01
+mx_cpu_core	wr01r02u05	43	run=demo-01
+mx_agent_cpu	wr01r02u05	34	run=demo-01
+mx_request_gbps	wr01r02u05	0.2061	run=demo-01
+mx_rel_median	wr01r02u05	100	run=demo-01
+mx_served_pps	wr01r02u05	46769	run=demo-01
+mx_egress_gbps	wr01r02u05	1.763	run=demo-01
+mx_line_util	wr01r02u05	7.05	run=demo-01
+mx_forward_loss	wr01r02u05	0	run=demo-01
+mx_return_loss	wr01r02u05	0.05	run=demo-01
+mx_coverage	wr01r02u05	43.48	run=demo-01
+mx_peers	wr01r02u05	6	run=demo-01
+mx_intervals	wr01r02u05	13	run=demo-01
+mx_workers	wr01r02u05	4	run=demo-01
+mx_pps	wr01r02u06	80000	run=demo-01
+mx_rep_pps	wr01r02u06	79960	run=demo-01
+mx_loss	wr01r02u06	0.05	run=demo-01
+mx_achieved	wr01r02u06	100	run=demo-01
+mx_rtt_avg	wr01r02u06	213	run=demo-01
+mx_rtt_p50	wr01r02u06	118	run=demo-01
+mx_rtt_p99	wr01r02u06	520	run=demo-01
+mx_rtt_max	wr01r02u06	936	run=demo-01
+mx_cpu	wr01r02u06	30	run=demo-01
+mx_cpu_core	wr01r02u06	43	run=demo-01
+mx_agent_cpu	wr01r02u06	34	run=demo-01
+mx_request_gbps	wr01r02u06	0.2061	run=demo-01
+mx_rel_median	wr01r02u06	100	run=demo-01
+mx_served_pps	wr01r02u06	64000	run=demo-01
+mx_egress_gbps	wr01r02u06	2.33	run=demo-01
+mx_line_util	wr01r02u06	9.319	run=demo-01
+mx_coverage	wr01r02u06	43.48	run=demo-01
+mx_peers	wr01r02u06	6	run=demo-01
+mx_intervals	wr01r02u06	13	run=demo-01
+mx_workers	wr01r02u06	4	run=demo-01
+mx_pps	wr01r03u01	48000	run=demo-01
+mx_rep_pps	wr01r03u01	47976	run=demo-01
+mx_loss	wr01r03u01	0.05	run=demo-01
+mx_achieved	wr01r03u01	60	run=demo-01
+mx_rtt_avg	wr01r03u01	247	run=demo-01
+mx_rtt_p50	wr01r03u01	132	run=demo-01
+mx_rtt_p99	wr01r03u01	610	run=demo-01
+mx_rtt_max	wr01r03u01	1098	run=demo-01
+mx_cpu	wr01r03u01	31	run=demo-01
+mx_cpu_core	wr01r03u01	44	run=demo-01
+mx_agent_cpu	wr01r03u01	34	run=demo-01
+mx_request_gbps	wr01r03u01	0.1236	run=demo-01
+mx_rel_median	wr01r03u01	60	run=demo-01
+mx_served_pps	wr01r03u01	70154	run=demo-01
+mx_egress_gbps	wr01r03u01	2.422	run=demo-01
+mx_line_util	wr01r03u01	9.687	run=demo-01
+mx_forward_loss	wr01r03u01	0	run=demo-01
+mx_return_loss	wr01r03u01	0.05	run=demo-01
+mx_coverage	wr01r03u01	43.48	run=demo-01
+mx_peers	wr01r03u01	6	run=demo-01
+mx_intervals	wr01r03u01	13	run=demo-01
+mx_workers	wr01r03u01	4	run=demo-01
+mx_pps	wr01r03u02	48000	run=demo-01
+mx_rep_pps	wr01r03u02	47976	run=demo-01
+mx_loss	wr01r03u02	0.05	run=demo-01
+mx_achieved	wr01r03u02	60	run=demo-01
+mx_rtt_avg	wr01r03u02	247	run=demo-01
+mx_rtt_p50	wr01r03u02	132	run=demo-01
+mx_rtt_p99	wr01r03u02	610	run=demo-01
+mx_rtt_max	wr01r03u02	1098	run=demo-01
+mx_cpu	wr01r03u02	31	run=demo-01
+mx_cpu_core	wr01r03u02	44	run=demo-01
+mx_agent_cpu	wr01r03u02	34	run=demo-01
+mx_request_gbps	wr01r03u02	0.1236	run=demo-01
+mx_rel_median	wr01r03u02	60	run=demo-01
+mx_served_pps	wr01r03u02	72369	run=demo-01
+mx_egress_gbps	wr01r03u02	2.532	run=demo-01
+mx_line_util	wr01r03u02	10.13	run=demo-01
+mx_forward_loss	wr01r03u02	0	run=demo-01
+mx_return_loss	wr01r03u02	0.05	run=demo-01
+mx_coverage	wr01r03u02	43.48	run=demo-01
+mx_peers	wr01r03u02	6	run=demo-01
+mx_intervals	wr01r03u02	13	run=demo-01
+mx_workers	wr01r03u02	4	run=demo-01
+mx_pps	wr01r03u03	48000	run=demo-01
+mx_rep_pps	wr01r03u03	47976	run=demo-01
+mx_loss	wr01r03u03	0.05	run=demo-01
+mx_achieved	wr01r03u03	60	run=demo-01
+mx_rtt_avg	wr01r03u03	247	run=demo-01
+mx_rtt_p50	wr01r03u03	132	run=demo-01
+mx_rtt_p99	wr01r03u03	610	run=demo-01
+mx_rtt_max	wr01r03u03	1098	run=demo-01
+mx_cpu	wr01r03u03	31	run=demo-01
+mx_cpu_core	wr01r03u03	44	run=demo-01
+mx_agent_cpu	wr01r03u03	34	run=demo-01
+mx_request_gbps	wr01r03u03	0.1236	run=demo-01
+mx_rel_median	wr01r03u03	60	run=demo-01
+mx_served_pps	wr01r03u03	65231	run=demo-01
+mx_egress_gbps	wr01r03u03	2.294	run=demo-01
+mx_line_util	wr01r03u03	9.178	run=demo-01
+mx_forward_loss	wr01r03u03	0	run=demo-01
+mx_return_loss	wr01r03u03	0.05	run=demo-01
+mx_coverage	wr01r03u03	43.48	run=demo-01
+mx_peers	wr01r03u03	6	run=demo-01
+mx_intervals	wr01r03u03	13	run=demo-01
+mx_workers	wr01r03u03	4	run=demo-01
+mx_pps	wr01r03u04	48000	run=demo-01
+mx_rep_pps	wr01r03u04	47976	run=demo-01
+mx_loss	wr01r03u04	0.05	run=demo-01
+mx_achieved	wr01r03u04	60	run=demo-01
+mx_rtt_avg	wr01r03u04	247	run=demo-01
+mx_rtt_p50	wr01r03u04	132	run=demo-01
+mx_rtt_p99	wr01r03u04	610	run=demo-01
+mx_rtt_max	wr01r03u04	1098	run=demo-01
+mx_cpu	wr01r03u04	31	run=demo-01
+mx_cpu_core	wr01r03u04	44	run=demo-01
+mx_agent_cpu	wr01r03u04	34	run=demo-01
+mx_request_gbps	wr01r03u04	0.1236	run=demo-01
+mx_rel_median	wr01r03u04	60	run=demo-01
+mx_served_pps	wr01r03u04	71385	run=demo-01
+mx_egress_gbps	wr01r03u04	2.499	run=demo-01
+mx_line_util	wr01r03u04	9.997	run=demo-01
+mx_forward_loss	wr01r03u04	0	run=demo-01
+mx_return_loss	wr01r03u04	0.05	run=demo-01
+mx_coverage	wr01r03u04	43.48	run=demo-01
+mx_peers	wr01r03u04	6	run=demo-01
+mx_intervals	wr01r03u04	13	run=demo-01
+mx_workers	wr01r03u04	4	run=demo-01
+mx_pps	wr01r03u05	48000	run=demo-01
+mx_rep_pps	wr01r03u05	47976	run=demo-01
+mx_loss	wr01r03u05	0.05	run=demo-01
+mx_achieved	wr01r03u05	60	run=demo-01
+mx_rtt_avg	wr01r03u05	247	run=demo-01
+mx_rtt_p50	wr01r03u05	132	run=demo-01
+mx_rtt_p99	wr01r03u05	610	run=demo-01
+mx_rtt_max	wr01r03u05	1098	run=demo-01
+mx_cpu	wr01r03u05	31	run=demo-01
+mx_cpu_core	wr01r03u05	44	run=demo-01
+mx_agent_cpu	wr01r03u05	34	run=demo-01
+mx_request_gbps	wr01r03u05	0.1236	run=demo-01
+mx_rel_median	wr01r03u05	60	run=demo-01
+mx_served_pps	wr01r03u05	64985	run=demo-01
+mx_egress_gbps	wr01r03u05	2.286	run=demo-01
+mx_line_util	wr01r03u05	9.145	run=demo-01
+mx_forward_loss	wr01r03u05	0	run=demo-01
+mx_return_loss	wr01r03u05	0.05	run=demo-01
+mx_coverage	wr01r03u05	43.48	run=demo-01
+mx_peers	wr01r03u05	6	run=demo-01
+mx_intervals	wr01r03u05	13	run=demo-01
+mx_workers	wr01r03u05	4	run=demo-01
+mx_pps	wr01r03u06	48000	run=demo-01
+mx_rep_pps	wr01r03u06	47976	run=demo-01
+mx_loss	wr01r03u06	0.05	run=demo-01
+mx_achieved	wr01r03u06	60	run=demo-01
+mx_rtt_avg	wr01r03u06	247	run=demo-01
+mx_rtt_p50	wr01r03u06	132	run=demo-01
+mx_rtt_p99	wr01r03u06	610	run=demo-01
+mx_rtt_max	wr01r03u06	1098	run=demo-01
+mx_cpu	wr01r03u06	31	run=demo-01
+mx_cpu_core	wr01r03u06	44	run=demo-01
+mx_agent_cpu	wr01r03u06	34	run=demo-01
+mx_request_gbps	wr01r03u06	0.1236	run=demo-01
+mx_rel_median	wr01r03u06	60	run=demo-01
+mx_served_pps	wr01r03u06	60677	run=demo-01
+mx_egress_gbps	wr01r03u06	2.143	run=demo-01
+mx_line_util	wr01r03u06	8.572	run=demo-01
+mx_forward_loss	wr01r03u06	0	run=demo-01
+mx_return_loss	wr01r03u06	0.05	run=demo-01
+mx_coverage	wr01r03u06	43.48	run=demo-01
+mx_peers	wr01r03u06	6	run=demo-01
+mx_intervals	wr01r03u06	13	run=demo-01
+mx_workers	wr01r03u06	4	run=demo-01
+mx_pps	wr01r04u01	80000	run=demo-01
+mx_rep_pps	wr01r04u01	79960	run=demo-01
+mx_loss	wr01r04u01	0.05	run=demo-01
+mx_achieved	wr01r04u01	100	run=demo-01
+mx_rtt_avg	wr01r04u01	1029	run=demo-01
+mx_rtt_p50	wr01r04u01	146	run=demo-01
+mx_rtt_p99	wr01r04u01	2940	run=demo-01
+mx_rtt_max	wr01r04u01	5292	run=demo-01
+mx_cpu	wr01r04u01	32	run=demo-01
+mx_cpu_core	wr01r04u01	45	run=demo-01
+mx_agent_cpu	wr01r04u01	34	run=demo-01
+mx_request_gbps	wr01r04u01	0.2061	run=demo-01
+mx_rel_median	wr01r04u01	100	run=demo-01
+mx_served_pps	wr01r04u01	72615	run=demo-01
+mx_egress_gbps	wr01r04u01	2.623	run=demo-01
+mx_line_util	wr01r04u01	10.49	run=demo-01
+mx_forward_loss	wr01r04u01	0	run=demo-01
+mx_return_loss	wr01r04u01	0.05	run=demo-01
+mx_coverage	wr01r04u01	43.48	run=demo-01
+mx_peers	wr01r04u01	6	run=demo-01
+mx_intervals	wr01r04u01	13	run=demo-01
+mx_workers	wr01r04u01	4	run=demo-01
+mx_pps	wr01r04u02	80000	run=demo-01
+mx_rep_pps	wr01r04u02	79960	run=demo-01
+mx_loss	wr01r04u02	0.05	run=demo-01
+mx_achieved	wr01r04u02	100	run=demo-01
+mx_rtt_avg	wr01r04u02	1029	run=demo-01
+mx_rtt_p50	wr01r04u02	146	run=demo-01
+mx_rtt_p99	wr01r04u02	2940	run=demo-01
+mx_rtt_max	wr01r04u02	5292	run=demo-01
+mx_cpu	wr01r04u02	32	run=demo-01
+mx_cpu_core	wr01r04u02	45	run=demo-01
+mx_agent_cpu	wr01r04u02	34	run=demo-01
+mx_request_gbps	wr01r04u02	0.2061	run=demo-01
+mx_rel_median	wr01r04u02	100	run=demo-01
+mx_served_pps	wr01r04u02	72615	run=demo-01
+mx_egress_gbps	wr01r04u02	2.623	run=demo-01
+mx_line_util	wr01r04u02	10.49	run=demo-01
+mx_coverage	wr01r04u02	43.48	run=demo-01
+mx_peers	wr01r04u02	6	run=demo-01
+mx_intervals	wr01r04u02	13	run=demo-01
+mx_workers	wr01r04u02	4	run=demo-01
+mx_pps	wr01r04u03	80000	run=demo-01
+mx_rep_pps	wr01r04u03	79960	run=demo-01
+mx_loss	wr01r04u03	0.05	run=demo-01
+mx_achieved	wr01r04u03	100	run=demo-01
+mx_rtt_avg	wr01r04u03	1029	run=demo-01
+mx_rtt_p50	wr01r04u03	146	run=demo-01
+mx_rtt_p99	wr01r04u03	2940	run=demo-01
+mx_rtt_max	wr01r04u03	5292	run=demo-01
+mx_cpu	wr01r04u03	32	run=demo-01
+mx_cpu_core	wr01r04u03	45	run=demo-01
+mx_agent_cpu	wr01r04u03	34	run=demo-01
+mx_request_gbps	wr01r04u03	0.2061	run=demo-01
+mx_rel_median	wr01r04u03	100	run=demo-01
+mx_served_pps	wr01r04u03	52923	run=demo-01
+mx_egress_gbps	wr01r04u03	1.967	run=demo-01
+mx_line_util	wr01r04u03	7.869	run=demo-01
+mx_coverage	wr01r04u03	43.48	run=demo-01
+mx_peers	wr01r04u03	6	run=demo-01
+mx_intervals	wr01r04u03	13	run=demo-01
+mx_workers	wr01r04u03	4	run=demo-01
+mx_pps	wr01r04u04	80000	run=demo-01
+mx_rep_pps	wr01r04u04	79960	run=demo-01
+mx_loss	wr01r04u04	0.05	run=demo-01
+mx_achieved	wr01r04u04	100	run=demo-01
+mx_rtt_avg	wr01r04u04	1029	run=demo-01
+mx_rtt_p50	wr01r04u04	146	run=demo-01
+mx_rtt_p99	wr01r04u04	2940	run=demo-01
+mx_rtt_max	wr01r04u04	5292	run=demo-01
+mx_cpu	wr01r04u04	32	run=demo-01
+mx_cpu_core	wr01r04u04	45	run=demo-01
+mx_agent_cpu	wr01r04u04	34	run=demo-01
+mx_request_gbps	wr01r04u04	0.2061	run=demo-01
+mx_rel_median	wr01r04u04	100	run=demo-01
+mx_served_pps	wr01r04u04	71385	run=demo-01
+mx_egress_gbps	wr01r04u04	2.582	run=demo-01
+mx_line_util	wr01r04u04	10.33	run=demo-01
+mx_forward_loss	wr01r04u04	0	run=demo-01
+mx_return_loss	wr01r04u04	0.05	run=demo-01
+mx_coverage	wr01r04u04	43.48	run=demo-01
+mx_peers	wr01r04u04	6	run=demo-01
+mx_intervals	wr01r04u04	13	run=demo-01
+mx_workers	wr01r04u04	4	run=demo-01
+mx_state	wr01r01u01	REPORTING	run=demo-01
+mx_state	wr01r01u02	REPORTING	run=demo-01
+mx_state	wr01r01u03	REPORTING	run=demo-01
+mx_state	wr01r01u04	REPORTING	run=demo-01
+mx_state	wr01r01u05	REPORTING	run=demo-01
+mx_state	wr01r01u06	REPORTING	run=demo-01
+mx_state	wr01r02u01	REPORTING	run=demo-01
+mx_state	wr01r02u02	REPORTING	run=demo-01
+mx_state	wr01r02u03	REPORTING	run=demo-01
+mx_state	wr01r02u04	REPORTING	run=demo-01
+mx_state	wr01r02u05	REPORTING	run=demo-01
+mx_state	wr01r02u06	REPORTING	run=demo-01
+mx_state	wr01r03u01	REPORTING	run=demo-01
+mx_state	wr01r03u02	REPORTING	run=demo-01
+mx_state	wr01r03u03	REPORTING	run=demo-01
+mx_state	wr01r03u04	REPORTING	run=demo-01
+mx_state	wr01r03u05	REPORTING	run=demo-01
+mx_state	wr01r03u06	REPORTING	run=demo-01
+mx_state	wr01r04u01	REPORTING	run=demo-01
+mx_state	wr01r04u02	REPORTING	run=demo-01
+mx_state	wr01r04u03	REPORTING	run=demo-01
+mx_state	wr01r04u04	REPORTING	run=demo-01
+mx_state	wr01r04u05	SILENT	run=demo-01
+mx_peer_pps	wr01r01u01	40000	peer=wr01r01u06	layer=2	run=demo-01
+mx_peer_loss	wr01r01u01	0.05	peer=wr01r01u06	layer=2	run=demo-01
+mx_peer_rtt_p99	wr01r01u01	430	peer=wr01r01u06	layer=2	run=demo-01
+mx_peer_pps	wr01r01u01	40000	peer=wr01r02u05	layer=2	run=demo-01
+mx_peer_loss	wr01r01u01	0.05	peer=wr01r02u05	layer=2	run=demo-01
+mx_peer_rtt_p99	wr01r01u01	430	peer=wr01r02u05	layer=2	run=demo-01
+mx_peer_pps	wr01r01u01	40000	peer=wr01r03u04	layer=4	run=demo-01
+mx_peer_loss	wr01r01u01	0.05	peer=wr01r03u04	layer=4	run=demo-01
+mx_peer_rtt_p99	wr01r01u01	430	peer=wr01r03u04	layer=4	run=demo-01
+mx_peer_pps	wr01r01u01	40000	peer=wr01r04u01	layer=3	run=demo-01
+mx_peer_loss	wr01r01u01	0.05	peer=wr01r04u01	layer=3	run=demo-01
+mx_peer_rtt_p99	wr01r01u01	430	peer=wr01r04u01	layer=3	run=demo-01
+mx_peer_pps	wr01r01u01	40000	peer=wr01r04u04	layer=4	run=demo-01
+mx_peer_loss	wr01r01u01	0.05	peer=wr01r04u04	layer=4	run=demo-01
+mx_peer_rtt_p99	wr01r01u01	430	peer=wr01r04u04	layer=4	run=demo-01
+mx_peer_pps	wr01r01u01	40000	peer=wr01r04u06	layer=3	run=demo-01
+mx_peer_loss	wr01r01u01	0.05	peer=wr01r04u06	layer=3	run=demo-01
+mx_peer_rtt_p99	wr01r01u01	430	peer=wr01r04u06	layer=3	run=demo-01
+mx_peer_pps	wr01r01u02	40000	peer=wr01r01u01	layer=4	run=demo-01
+mx_peer_loss	wr01r01u02	0.05	peer=wr01r01u01	layer=4	run=demo-01
+mx_peer_rtt_p99	wr01r01u02	430	peer=wr01r01u01	layer=4	run=demo-01
+mx_peer_pps	wr01r01u02	40000	peer=wr01r02u03	layer=3	run=demo-01
+mx_peer_loss	wr01r01u02	0.05	peer=wr01r02u03	layer=3	run=demo-01
+mx_peer_rtt_p99	wr01r01u02	430	peer=wr01r02u03	layer=3	run=demo-01
+mx_peer_pps	wr01r01u02	40000	peer=wr01r03u03	layer=2	run=demo-01
+mx_peer_loss	wr01r01u02	0.05	peer=wr01r03u03	layer=2	run=demo-01
+mx_peer_rtt_p99	wr01r01u02	430	peer=wr01r03u03	layer=2	run=demo-01
+mx_peer_pps	wr01r01u02	40000	peer=wr01r04u02	layer=4	run=demo-01
+mx_peer_loss	wr01r01u02	0.05	peer=wr01r04u02	layer=4	run=demo-01
+mx_peer_rtt_p99	wr01r01u02	430	peer=wr01r04u02	layer=4	run=demo-01
+mx_peer_pps	wr01r01u02	40000	peer=wr01r04u04	layer=3	run=demo-01
+mx_peer_loss	wr01r01u02	0.05	peer=wr01r04u04	layer=3	run=demo-01
+mx_peer_rtt_p99	wr01r01u02	430	peer=wr01r04u04	layer=3	run=demo-01
+mx_peer_pps	wr01r01u02	40000	peer=wr01r04u06	layer=2	run=demo-01
+mx_peer_loss	wr01r01u02	0.05	peer=wr01r04u06	layer=2	run=demo-01
+mx_peer_rtt_p99	wr01r01u02	430	peer=wr01r04u06	layer=2	run=demo-01
+mx_peer_pps	wr01r01u03	40000	peer=wr01r02u01	layer=4	run=demo-01
+mx_peer_loss	wr01r01u03	0.05	peer=wr01r02u01	layer=4	run=demo-01
+mx_peer_rtt_p99	wr01r01u03	430	peer=wr01r02u01	layer=4	run=demo-01
+mx_peer_pps	wr01r01u03	40000	peer=wr01r02u02	layer=2	run=demo-01
+mx_peer_loss	wr01r01u03	0.05	peer=wr01r02u02	layer=2	run=demo-01
+mx_peer_rtt_p99	wr01r01u03	430	peer=wr01r02u02	layer=2	run=demo-01
+mx_peer_pps	wr01r01u03	40000	peer=wr01r02u03	layer=4	run=demo-01
+mx_peer_loss	wr01r01u03	0.05	peer=wr01r02u03	layer=4	run=demo-01
+mx_peer_rtt_p99	wr01r01u03	430	peer=wr01r02u03	layer=4	run=demo-01
+mx_peer_pps	wr01r01u03	40000	peer=wr01r03u03	layer=2	run=demo-01
+mx_peer_loss	wr01r01u03	0.05	peer=wr01r03u03	layer=2	run=demo-01
+mx_peer_rtt_p99	wr01r01u03	430	peer=wr01r03u03	layer=2	run=demo-01
+mx_peer_pps	wr01r01u03	40000	peer=wr01r03u05	layer=3	run=demo-01
+mx_peer_loss	wr01r01u03	0.05	peer=wr01r03u05	layer=3	run=demo-01
+mx_peer_rtt_p99	wr01r01u03	430	peer=wr01r03u05	layer=3	run=demo-01
+mx_peer_pps	wr01r01u03	40000	peer=wr01r04u06	layer=3	run=demo-01
+mx_peer_loss	wr01r01u03	0.05	peer=wr01r04u06	layer=3	run=demo-01
+mx_peer_rtt_p99	wr01r01u03	430	peer=wr01r04u06	layer=3	run=demo-01
+mx_peer_pps	wr01r01u04	40000	peer=wr01r02u02	layer=3	run=demo-01
+mx_peer_loss	wr01r01u04	0.05	peer=wr01r02u02	layer=3	run=demo-01
+mx_peer_rtt_p99	wr01r01u04	430	peer=wr01r02u02	layer=3	run=demo-01
+mx_peer_pps	wr01r01u04	40000	peer=wr01r03u02	layer=4	run=demo-01
+mx_peer_loss	wr01r01u04	0.05	peer=wr01r03u02	layer=4	run=demo-01
+mx_peer_rtt_p99	wr01r01u04	430	peer=wr01r03u02	layer=4	run=demo-01
+mx_peer_pps	wr01r01u04	40000	peer=wr01r03u04	layer=2	run=demo-01
+mx_peer_loss	wr01r01u04	0.05	peer=wr01r03u04	layer=2	run=demo-01
+mx_peer_rtt_p99	wr01r01u04	430	peer=wr01r03u04	layer=2	run=demo-01
+mx_peer_pps	wr01r01u04	40000	peer=wr01r04u02	layer=3	run=demo-01
+mx_peer_loss	wr01r01u04	0.05	peer=wr01r04u02	layer=3	run=demo-01
+mx_peer_rtt_p99	wr01r01u04	430	peer=wr01r04u02	layer=3	run=demo-01
+mx_peer_pps	wr01r01u04	40000	peer=wr01r04u05	layer=2	run=demo-01
+mx_peer_loss	wr01r01u04	0.05	peer=wr01r04u05	layer=2	run=demo-01
+mx_peer_rtt_p99	wr01r01u04	430	peer=wr01r04u05	layer=2	run=demo-01
+mx_peer_pps	wr01r01u04	40000	peer=wr01r04u06	layer=4	run=demo-01
+mx_peer_loss	wr01r01u04	0.05	peer=wr01r04u06	layer=4	run=demo-01
+mx_peer_rtt_p99	wr01r01u04	430	peer=wr01r04u06	layer=4	run=demo-01
+mx_peer_pps	wr01r01u05	40000	peer=wr01r01u04	layer=4	run=demo-01
+mx_peer_loss	wr01r01u05	0.05	peer=wr01r01u04	layer=4	run=demo-01
+mx_peer_rtt_p99	wr01r01u05	430	peer=wr01r01u04	layer=4	run=demo-01
+mx_peer_pps	wr01r01u05	40000	peer=wr01r02u01	layer=2	run=demo-01
+mx_peer_loss	wr01r01u05	0.05	peer=wr01r02u01	layer=2	run=demo-01
+mx_peer_rtt_p99	wr01r01u05	430	peer=wr01r02u01	layer=2	run=demo-01
+mx_peer_pps	wr01r01u05	40000	peer=wr01r02u03	layer=4	run=demo-01
+mx_peer_loss	wr01r01u05	0.05	peer=wr01r02u03	layer=4	run=demo-01
+mx_peer_rtt_p99	wr01r01u05	430	peer=wr01r02u03	layer=4	run=demo-01
+mx_peer_pps	wr01r01u05	40000	peer=wr01r02u06	layer=3	run=demo-01
+mx_peer_loss	wr01r01u05	0.05	peer=wr01r02u06	layer=3	run=demo-01
+mx_peer_rtt_p99	wr01r01u05	430	peer=wr01r02u06	layer=3	run=demo-01
+mx_peer_pps	wr01r01u05	40000	peer=wr01r03u02	layer=3	run=demo-01
+mx_peer_loss	wr01r01u05	0.05	peer=wr01r03u02	layer=3	run=demo-01
+mx_peer_rtt_p99	wr01r01u05	430	peer=wr01r03u02	layer=3	run=demo-01
+mx_peer_pps	wr01r01u05	40000	peer=wr01r04u02	layer=2	run=demo-01
+mx_peer_loss	wr01r01u05	0.05	peer=wr01r04u02	layer=2	run=demo-01
+mx_peer_rtt_p99	wr01r01u05	430	peer=wr01r04u02	layer=2	run=demo-01
+mx_peer_pps	wr01r01u06	40000	peer=wr01r01u03	layer=4	run=demo-01
+mx_peer_loss	wr01r01u06	8.046	peer=wr01r01u03	layer=4	run=demo-01
+mx_peer_rtt_p99	wr01r01u06	430	peer=wr01r01u03	layer=4	run=demo-01
+mx_peer_pps	wr01r01u06	40000	peer=wr01r02u03	layer=3	run=demo-01
+mx_peer_loss	wr01r01u06	8.046	peer=wr01r02u03	layer=3	run=demo-01
+mx_peer_rtt_p99	wr01r01u06	430	peer=wr01r02u03	layer=3	run=demo-01
+mx_peer_pps	wr01r01u06	40000	peer=wr01r02u04	layer=4	run=demo-01
+mx_peer_loss	wr01r01u06	8.046	peer=wr01r02u04	layer=4	run=demo-01
+mx_peer_rtt_p99	wr01r01u06	430	peer=wr01r02u04	layer=4	run=demo-01
+mx_peer_pps	wr01r01u06	40000	peer=wr01r03u02	layer=2	run=demo-01
+mx_peer_loss	wr01r01u06	8.046	peer=wr01r03u02	layer=2	run=demo-01
+mx_peer_rtt_p99	wr01r01u06	430	peer=wr01r03u02	layer=2	run=demo-01
+mx_peer_pps	wr01r01u06	40000	peer=wr01r03u05	layer=2	run=demo-01
+mx_peer_loss	wr01r01u06	8.046	peer=wr01r03u05	layer=2	run=demo-01
+mx_peer_rtt_p99	wr01r01u06	430	peer=wr01r03u05	layer=2	run=demo-01
+mx_peer_pps	wr01r01u06	40000	peer=wr01r03u06	layer=3	run=demo-01
+mx_peer_loss	wr01r01u06	8.046	peer=wr01r03u06	layer=3	run=demo-01
+mx_peer_rtt_p99	wr01r01u06	430	peer=wr01r03u06	layer=3	run=demo-01
+mx_peer_pps	wr01r02u01	40000	peer=wr01r01u02	layer=2	run=demo-01
+mx_peer_loss	wr01r02u01	0.05	peer=wr01r01u02	layer=2	run=demo-01
+mx_peer_rtt_p99	wr01r02u01	520	peer=wr01r01u02	layer=2	run=demo-01
+mx_peer_pps	wr01r02u01	40000	peer=wr01r01u03	layer=2	run=demo-01
+mx_peer_loss	wr01r02u01	0.05	peer=wr01r01u03	layer=2	run=demo-01
+mx_peer_rtt_p99	wr01r02u01	520	peer=wr01r01u03	layer=2	run=demo-01
+mx_peer_pps	wr01r02u01	40000	peer=wr01r01u05	layer=4	run=demo-01
+mx_peer_loss	wr01r02u01	0.05	peer=wr01r01u05	layer=4	run=demo-01
+mx_peer_rtt_p99	wr01r02u01	520	peer=wr01r01u05	layer=4	run=demo-01
+mx_peer_pps	wr01r02u01	40000	peer=wr01r04u01	layer=3	run=demo-01
+mx_peer_loss	wr01r02u01	0.05	peer=wr01r04u01	layer=3	run=demo-01
+mx_peer_rtt_p99	wr01r02u01	520	peer=wr01r04u01	layer=3	run=demo-01
+mx_peer_pps	wr01r02u01	40000	peer=wr01r04u03	layer=3	run=demo-01
+mx_peer_loss	wr01r02u01	0.05	peer=wr01r04u03	layer=3	run=demo-01
+mx_peer_rtt_p99	wr01r02u01	520	peer=wr01r04u03	layer=3	run=demo-01
+mx_peer_pps	wr01r02u01	40000	peer=wr01r04u05	layer=4	run=demo-01
+mx_peer_loss	wr01r02u01	0.05	peer=wr01r04u05	layer=4	run=demo-01
+mx_peer_rtt_p99	wr01r02u01	520	peer=wr01r04u05	layer=4	run=demo-01
+mx_peer_pps	wr01r02u02	40000	peer=wr01r01u03	layer=4	run=demo-01
+mx_peer_loss	wr01r02u02	6	peer=wr01r01u03	layer=4	run=demo-01
+mx_peer_rtt_p99	wr01r02u02	520	peer=wr01r01u03	layer=4	run=demo-01
+mx_peer_pps	wr01r02u02	40000	peer=wr01r01u04	layer=3	run=demo-01
+mx_peer_loss	wr01r02u02	6	peer=wr01r01u04	layer=3	run=demo-01
+mx_peer_rtt_p99	wr01r02u02	520	peer=wr01r01u04	layer=3	run=demo-01
+mx_peer_pps	wr01r02u02	40000	peer=wr01r01u05	layer=4	run=demo-01
+mx_peer_loss	wr01r02u02	6	peer=wr01r01u05	layer=4	run=demo-01
+mx_peer_rtt_p99	wr01r02u02	520	peer=wr01r01u05	layer=4	run=demo-01
+mx_peer_pps	wr01r02u02	40000	peer=wr01r02u04	layer=2	run=demo-01
+mx_peer_loss	wr01r02u02	6	peer=wr01r02u04	layer=2	run=demo-01
+mx_peer_rtt_p99	wr01r02u02	520	peer=wr01r02u04	layer=2	run=demo-01
+mx_peer_pps	wr01r02u02	40000	peer=wr01r02u06	layer=2	run=demo-01
+mx_peer_loss	wr01r02u02	6	peer=wr01r02u06	layer=2	run=demo-01
+mx_peer_rtt_p99	wr01r02u02	520	peer=wr01r02u06	layer=2	run=demo-01
+mx_peer_pps	wr01r02u02	40000	peer=wr01r03u01	layer=3	run=demo-01
+mx_peer_loss	wr01r02u02	6	peer=wr01r03u01	layer=3	run=demo-01
+mx_peer_rtt_p99	wr01r02u02	520	peer=wr01r03u01	layer=3	run=demo-01
+mx_peer_pps	wr01r02u03	40000	peer=wr01r01u05	layer=2	run=demo-01
+mx_peer_loss	wr01r02u03	0.05	peer=wr01r01u05	layer=2	run=demo-01
+mx_peer_rtt_p99	wr01r02u03	520	peer=wr01r01u05	layer=2	run=demo-01
+mx_peer_pps	wr01r02u03	40000	peer=wr01r01u06	layer=3	run=demo-01
+mx_peer_loss	wr01r02u03	0.05	peer=wr01r01u06	layer=3	run=demo-01
+mx_peer_rtt_p99	wr01r02u03	520	peer=wr01r01u06	layer=3	run=demo-01
+mx_peer_pps	wr01r02u03	40000	peer=wr01r02u05	layer=2	run=demo-01
+mx_peer_loss	wr01r02u03	0.05	peer=wr01r02u05	layer=2	run=demo-01
+mx_peer_rtt_p99	wr01r02u03	520	peer=wr01r02u05	layer=2	run=demo-01
+mx_peer_pps	wr01r02u03	40000	peer=wr01r03u03	layer=3	run=demo-01
+mx_peer_loss	wr01r02u03	0.05	peer=wr01r03u03	layer=3	run=demo-01
+mx_peer_rtt_p99	wr01r02u03	520	peer=wr01r03u03	layer=3	run=demo-01
+mx_peer_pps	wr01r02u03	40000	peer=wr01r04u05	layer=4	run=demo-01
+mx_peer_loss	wr01r02u03	0.05	peer=wr01r04u05	layer=4	run=demo-01
+mx_peer_rtt_p99	wr01r02u03	520	peer=wr01r04u05	layer=4	run=demo-01
+mx_peer_pps	wr01r02u03	40000	peer=wr01r04u06	layer=4	run=demo-01
+mx_peer_loss	wr01r02u03	0.05	peer=wr01r04u06	layer=4	run=demo-01
+mx_peer_rtt_p99	wr01r02u03	520	peer=wr01r04u06	layer=4	run=demo-01
+mx_peer_pps	wr01r02u04	40000	peer=wr01r01u06	layer=2	run=demo-01
+mx_peer_loss	wr01r02u04	0.05	peer=wr01r01u06	layer=2	run=demo-01
+mx_peer_rtt_p99	wr01r02u04	520	peer=wr01r01u06	layer=2	run=demo-01
+mx_peer_pps	wr01r02u04	40000	peer=wr01r02u01	layer=4	run=demo-01
+mx_peer_loss	wr01r02u04	0.05	peer=wr01r02u01	layer=4	run=demo-01
+mx_peer_rtt_p99	wr01r02u04	520	peer=wr01r02u01	layer=4	run=demo-01
+mx_peer_pps	wr01r02u04	40000	peer=wr01r02u02	layer=4	run=demo-01
+mx_peer_loss	wr01r02u04	0.05	peer=wr01r02u02	layer=4	run=demo-01
+mx_peer_rtt_p99	wr01r02u04	520	peer=wr01r02u02	layer=4	run=demo-01
+mx_peer_pps	wr01r02u04	40000	peer=wr01r04u01	layer=2	run=demo-01
+mx_peer_loss	wr01r02u04	0.05	peer=wr01r04u01	layer=2	run=demo-01
+mx_peer_rtt_p99	wr01r02u04	520	peer=wr01r04u01	layer=2	run=demo-01
+mx_peer_pps	wr01r02u04	40000	peer=wr01r04u04	layer=3	run=demo-01
+mx_peer_loss	wr01r02u04	0.05	peer=wr01r04u04	layer=3	run=demo-01
+mx_peer_rtt_p99	wr01r02u04	520	peer=wr01r04u04	layer=3	run=demo-01
+mx_peer_pps	wr01r02u04	40000	peer=wr01r04u05	layer=3	run=demo-01
+mx_peer_loss	wr01r02u04	0.05	peer=wr01r04u05	layer=3	run=demo-01
+mx_peer_rtt_p99	wr01r02u04	520	peer=wr01r04u05	layer=3	run=demo-01
+mx_peer_pps	wr01r02u05	40000	peer=wr01r01u01	layer=4	run=demo-01
+mx_peer_loss	wr01r02u05	0.05	peer=wr01r01u01	layer=4	run=demo-01
+mx_peer_rtt_p99	wr01r02u05	520	peer=wr01r01u01	layer=4	run=demo-01
+mx_peer_pps	wr01r02u05	40000	peer=wr01r01u04	layer=3	run=demo-01
+mx_peer_loss	wr01r02u05	0.05	peer=wr01r01u04	layer=3	run=demo-01
+mx_peer_rtt_p99	wr01r02u05	520	peer=wr01r01u04	layer=3	run=demo-01
+mx_peer_pps	wr01r02u05	40000	peer=wr01r03u02	layer=2	run=demo-01
+mx_peer_loss	wr01r02u05	0.05	peer=wr01r03u02	layer=2	run=demo-01
+mx_peer_rtt_p99	wr01r02u05	520	peer=wr01r03u02	layer=2	run=demo-01
+mx_peer_pps	wr01r02u05	40000	peer=wr01r03u05	layer=3	run=demo-01
+mx_peer_loss	wr01r02u05	0.05	peer=wr01r03u05	layer=3	run=demo-01
+mx_peer_rtt_p99	wr01r02u05	520	peer=wr01r03u05	layer=3	run=demo-01
+mx_peer_pps	wr01r02u05	40000	peer=wr01r03u06	layer=4	run=demo-01
+mx_peer_loss	wr01r02u05	0.05	peer=wr01r03u06	layer=4	run=demo-01
+mx_peer_rtt_p99	wr01r02u05	520	peer=wr01r03u06	layer=4	run=demo-01
+mx_peer_pps	wr01r02u05	40000	peer=wr01r04u02	layer=2	run=demo-01
+mx_peer_loss	wr01r02u05	0.05	peer=wr01r04u02	layer=2	run=demo-01
+mx_peer_rtt_p99	wr01r02u05	520	peer=wr01r04u02	layer=2	run=demo-01
+mx_peer_pps	wr01r02u06	40000	peer=wr01r02u01	layer=3	run=demo-01
+mx_peer_loss	wr01r02u06	0.05	peer=wr01r02u01	layer=3	run=demo-01
+mx_peer_rtt_p99	wr01r02u06	520	peer=wr01r02u01	layer=3	run=demo-01
+mx_peer_pps	wr01r02u06	40000	peer=wr01r03u03	layer=4	run=demo-01
+mx_peer_loss	wr01r02u06	0.05	peer=wr01r03u03	layer=4	run=demo-01
+mx_peer_rtt_p99	wr01r02u06	520	peer=wr01r03u03	layer=4	run=demo-01
+mx_peer_pps	wr01r02u06	40000	peer=wr01r03u04	layer=3	run=demo-01
+mx_peer_loss	wr01r02u06	0.05	peer=wr01r03u04	layer=3	run=demo-01
+mx_peer_rtt_p99	wr01r02u06	520	peer=wr01r03u04	layer=3	run=demo-01
+mx_peer_pps	wr01r02u06	40000	peer=wr01r04u01	layer=2	run=demo-01
+mx_peer_loss	wr01r02u06	0.05	peer=wr01r04u01	layer=2	run=demo-01
+mx_peer_rtt_p99	wr01r02u06	520	peer=wr01r04u01	layer=2	run=demo-01
+mx_peer_pps	wr01r02u06	40000	peer=wr01r04u02	layer=4	run=demo-01
+mx_peer_loss	wr01r02u06	0.05	peer=wr01r04u02	layer=4	run=demo-01
+mx_peer_rtt_p99	wr01r02u06	520	peer=wr01r04u02	layer=4	run=demo-01
+mx_peer_pps	wr01r02u06	40000	peer=wr01r04u05	layer=2	run=demo-01
+mx_peer_loss	wr01r02u06	0.05	peer=wr01r04u05	layer=2	run=demo-01
+mx_peer_rtt_p99	wr01r02u06	520	peer=wr01r04u05	layer=2	run=demo-01
+mx_peer_pps	wr01r03u01	24000	peer=wr01r02u01	layer=2	run=demo-01
+mx_peer_loss	wr01r03u01	0.05	peer=wr01r02u01	layer=2	run=demo-01
+mx_peer_rtt_p99	wr01r03u01	610	peer=wr01r02u01	layer=2	run=demo-01
+mx_peer_pps	wr01r03u01	24000	peer=wr01r02u04	layer=3	run=demo-01
+mx_peer_loss	wr01r03u01	0.05	peer=wr01r02u04	layer=3	run=demo-01
+mx_peer_rtt_p99	wr01r03u01	610	peer=wr01r02u04	layer=3	run=demo-01
+mx_peer_pps	wr01r03u01	24000	peer=wr01r02u06	layer=4	run=demo-01
+mx_peer_loss	wr01r03u01	0.05	peer=wr01r02u06	layer=4	run=demo-01
+mx_peer_rtt_p99	wr01r03u01	610	peer=wr01r02u06	layer=4	run=demo-01
+mx_peer_pps	wr01r03u01	24000	peer=wr01r03u05	layer=4	run=demo-01
+mx_peer_loss	wr01r03u01	0.05	peer=wr01r03u05	layer=4	run=demo-01
+mx_peer_rtt_p99	wr01r03u01	610	peer=wr01r03u05	layer=4	run=demo-01
+mx_peer_pps	wr01r03u01	24000	peer=wr01r04u02	layer=3	run=demo-01
+mx_peer_loss	wr01r03u01	0.05	peer=wr01r04u02	layer=3	run=demo-01
+mx_peer_rtt_p99	wr01r03u01	610	peer=wr01r04u02	layer=3	run=demo-01
+mx_peer_pps	wr01r03u01	24000	peer=wr01r04u04	layer=2	run=demo-01
+mx_peer_loss	wr01r03u01	0.05	peer=wr01r04u04	layer=2	run=demo-01
+mx_peer_rtt_p99	wr01r03u01	610	peer=wr01r04u04	layer=2	run=demo-01
+mx_peer_pps	wr01r03u02	24000	peer=wr01r01u05	layer=3	run=demo-01
+mx_peer_loss	wr01r03u02	0.05	peer=wr01r01u05	layer=3	run=demo-01
+mx_peer_rtt_p99	wr01r03u02	610	peer=wr01r01u05	layer=3	run=demo-01
+mx_peer_pps	wr01r03u02	24000	peer=wr01r01u06	layer=4	run=demo-01
+mx_peer_loss	wr01r03u02	0.05	peer=wr01r01u06	layer=4	run=demo-01
+mx_peer_rtt_p99	wr01r03u02	610	peer=wr01r01u06	layer=4	run=demo-01
+mx_peer_pps	wr01r03u02	24000	peer=wr01r02u02	layer=4	run=demo-01
+mx_peer_loss	wr01r03u02	0.05	peer=wr01r02u02	layer=4	run=demo-01
+mx_peer_rtt_p99	wr01r03u02	610	peer=wr01r02u02	layer=4	run=demo-01
+mx_peer_pps	wr01r03u02	24000	peer=wr01r03u01	layer=2	run=demo-01
+mx_peer_loss	wr01r03u02	0.05	peer=wr01r03u01	layer=2	run=demo-01
+mx_peer_rtt_p99	wr01r03u02	610	peer=wr01r03u01	layer=2	run=demo-01
+mx_peer_pps	wr01r03u02	24000	peer=wr01r03u04	layer=3	run=demo-01
+mx_peer_loss	wr01r03u02	0.05	peer=wr01r03u04	layer=3	run=demo-01
+mx_peer_rtt_p99	wr01r03u02	610	peer=wr01r03u04	layer=3	run=demo-01
+mx_peer_pps	wr01r03u02	24000	peer=wr01r04u03	layer=2	run=demo-01
+mx_peer_loss	wr01r03u02	0.05	peer=wr01r04u03	layer=2	run=demo-01
+mx_peer_rtt_p99	wr01r03u02	610	peer=wr01r04u03	layer=2	run=demo-01
+mx_peer_pps	wr01r03u03	24000	peer=wr01r01u02	layer=4	run=demo-01
+mx_peer_loss	wr01r03u03	0.05	peer=wr01r01u02	layer=4	run=demo-01
+mx_peer_rtt_p99	wr01r03u03	610	peer=wr01r01u02	layer=4	run=demo-01
+mx_peer_pps	wr01r03u03	24000	peer=wr01r01u04	layer=2	run=demo-01
+mx_peer_loss	wr01r03u03	0.05	peer=wr01r01u04	layer=2	run=demo-01
+mx_peer_rtt_p99	wr01r03u03	610	peer=wr01r01u04	layer=2	run=demo-01
+mx_peer_pps	wr01r03u03	24000	peer=wr01r01u05	layer=3	run=demo-01
+mx_peer_loss	wr01r03u03	0.05	peer=wr01r01u05	layer=3	run=demo-01
+mx_peer_rtt_p99	wr01r03u03	610	peer=wr01r01u05	layer=3	run=demo-01
+mx_peer_pps	wr01r03u03	24000	peer=wr01r02u05	layer=4	run=demo-01
+mx_peer_loss	wr01r03u03	0.05	peer=wr01r02u05	layer=4	run=demo-01
+mx_peer_rtt_p99	wr01r03u03	610	peer=wr01r02u05	layer=4	run=demo-01
+mx_peer_pps	wr01r03u03	24000	peer=wr01r02u06	layer=2	run=demo-01
+mx_peer_loss	wr01r03u03	0.05	peer=wr01r02u06	layer=2	run=demo-01
+mx_peer_rtt_p99	wr01r03u03	610	peer=wr01r02u06	layer=2	run=demo-01
+mx_peer_pps	wr01r03u03	24000	peer=wr01r03u06	layer=3	run=demo-01
+mx_peer_loss	wr01r03u03	0.05	peer=wr01r03u06	layer=3	run=demo-01
+mx_peer_rtt_p99	wr01r03u03	610	peer=wr01r03u06	layer=3	run=demo-01
+mx_peer_pps	wr01r03u04	24000	peer=wr01r01u01	layer=2	run=demo-01
+mx_peer_loss	wr01r03u04	0.05	peer=wr01r01u01	layer=2	run=demo-01
+mx_peer_rtt_p99	wr01r03u04	610	peer=wr01r01u01	layer=2	run=demo-01
+mx_peer_pps	wr01r03u04	24000	peer=wr01r02u04	layer=2	run=demo-01
+mx_peer_loss	wr01r03u04	0.05	peer=wr01r02u04	layer=2	run=demo-01
+mx_peer_rtt_p99	wr01r03u04	610	peer=wr01r02u04	layer=2	run=demo-01
+mx_peer_pps	wr01r03u04	24000	peer=wr01r02u06	layer=3	run=demo-01
+mx_peer_loss	wr01r03u04	0.05	peer=wr01r02u06	layer=3	run=demo-01
+mx_peer_rtt_p99	wr01r03u04	610	peer=wr01r02u06	layer=3	run=demo-01
+mx_peer_pps	wr01r03u04	24000	peer=wr01r03u01	layer=4	run=demo-01
+mx_peer_loss	wr01r03u04	0.05	peer=wr01r03u01	layer=4	run=demo-01
+mx_peer_rtt_p99	wr01r03u04	610	peer=wr01r03u01	layer=4	run=demo-01
+mx_peer_pps	wr01r03u04	24000	peer=wr01r03u06	layer=4	run=demo-01
+mx_peer_loss	wr01r03u04	0.05	peer=wr01r03u06	layer=4	run=demo-01
+mx_peer_rtt_p99	wr01r03u04	610	peer=wr01r03u06	layer=4	run=demo-01
+mx_peer_pps	wr01r03u04	24000	peer=wr01r04u03	layer=3	run=demo-01
+mx_peer_loss	wr01r03u04	0.05	peer=wr01r04u03	layer=3	run=demo-01
+mx_peer_rtt_p99	wr01r03u04	610	peer=wr01r04u03	layer=3	run=demo-01
+mx_peer_pps	wr01r03u05	24000	peer=wr01r01u05	layer=2	run=demo-01
+mx_peer_loss	wr01r03u05	0.05	peer=wr01r01u05	layer=2	run=demo-01
+mx_peer_rtt_p99	wr01r03u05	610	peer=wr01r01u05	layer=2	run=demo-01
+mx_peer_pps	wr01r03u05	24000	peer=wr01r02u02	layer=3	run=demo-01
+mx_peer_loss	wr01r03u05	0.05	peer=wr01r02u02	layer=3	run=demo-01
+mx_peer_rtt_p99	wr01r03u05	610	peer=wr01r02u02	layer=3	run=demo-01
+mx_peer_pps	wr01r03u05	24000	peer=wr01r02u05	layer=3	run=demo-01
+mx_peer_loss	wr01r03u05	0.05	peer=wr01r02u05	layer=3	run=demo-01
+mx_peer_rtt_p99	wr01r03u05	610	peer=wr01r02u05	layer=3	run=demo-01
+mx_peer_pps	wr01r03u05	24000	peer=wr01r03u01	layer=2	run=demo-01
+mx_peer_loss	wr01r03u05	0.05	peer=wr01r03u01	layer=2	run=demo-01
+mx_peer_rtt_p99	wr01r03u05	610	peer=wr01r03u01	layer=2	run=demo-01
+mx_peer_pps	wr01r03u05	24000	peer=wr01r03u03	layer=4	run=demo-01
+mx_peer_loss	wr01r03u05	0.05	peer=wr01r03u03	layer=4	run=demo-01
+mx_peer_rtt_p99	wr01r03u05	610	peer=wr01r03u03	layer=4	run=demo-01
+mx_peer_pps	wr01r03u05	24000	peer=wr01r04u01	layer=4	run=demo-01
+mx_peer_loss	wr01r03u05	0.05	peer=wr01r04u01	layer=4	run=demo-01
+mx_peer_rtt_p99	wr01r03u05	610	peer=wr01r04u01	layer=4	run=demo-01
+mx_peer_pps	wr01r03u06	24000	peer=wr01r02u02	layer=2	run=demo-01
+mx_peer_loss	wr01r03u06	0.05	peer=wr01r02u02	layer=2	run=demo-01
+mx_peer_rtt_p99	wr01r03u06	610	peer=wr01r02u02	layer=2	run=demo-01
+mx_peer_pps	wr01r03u06	24000	peer=wr01r03u02	layer=3	run=demo-01
+mx_peer_loss	wr01r03u06	0.05	peer=wr01r03u02	layer=3	run=demo-01
+mx_peer_rtt_p99	wr01r03u06	610	peer=wr01r03u02	layer=3	run=demo-01
+mx_peer_pps	wr01r03u06	24000	peer=wr01r03u03	layer=3	run=demo-01
+mx_peer_loss	wr01r03u06	0.05	peer=wr01r03u03	layer=3	run=demo-01
+mx_peer_rtt_p99	wr01r03u06	610	peer=wr01r03u03	layer=3	run=demo-01
+mx_peer_pps	wr01r03u06	24000	peer=wr01r03u04	layer=2	run=demo-01
+mx_peer_loss	wr01r03u06	0.05	peer=wr01r03u04	layer=2	run=demo-01
+mx_peer_rtt_p99	wr01r03u06	610	peer=wr01r03u04	layer=2	run=demo-01
+mx_peer_pps	wr01r03u06	24000	peer=wr01r03u05	layer=4	run=demo-01
+mx_peer_loss	wr01r03u06	0.05	peer=wr01r03u05	layer=4	run=demo-01
+mx_peer_rtt_p99	wr01r03u06	610	peer=wr01r03u05	layer=4	run=demo-01
+mx_peer_pps	wr01r03u06	24000	peer=wr01r04u04	layer=4	run=demo-01
+mx_peer_loss	wr01r03u06	0.05	peer=wr01r04u04	layer=4	run=demo-01
+mx_peer_rtt_p99	wr01r03u06	610	peer=wr01r04u04	layer=4	run=demo-01
+mx_peer_pps	wr01r04u01	40000	peer=wr01r01u01	layer=3	run=demo-01
+mx_peer_loss	wr01r04u01	0.05	peer=wr01r01u01	layer=3	run=demo-01
+mx_peer_rtt_p99	wr01r04u01	2940	peer=wr01r01u01	layer=3	run=demo-01
+mx_peer_pps	wr01r04u01	40000	peer=wr01r01u02	layer=4	run=demo-01
+mx_peer_loss	wr01r04u01	0.05	peer=wr01r01u02	layer=4	run=demo-01
+mx_peer_rtt_p99	wr01r04u01	2940	peer=wr01r01u02	layer=4	run=demo-01
+mx_peer_pps	wr01r04u01	40000	peer=wr01r01u03	layer=3	run=demo-01
+mx_peer_loss	wr01r04u01	0.05	peer=wr01r01u03	layer=3	run=demo-01
+mx_peer_rtt_p99	wr01r04u01	2940	peer=wr01r01u03	layer=3	run=demo-01
+mx_peer_pps	wr01r04u01	40000	peer=wr01r02u03	layer=2	run=demo-01
+mx_peer_loss	wr01r04u01	0.05	peer=wr01r02u03	layer=2	run=demo-01
+mx_peer_rtt_p99	wr01r04u01	2940	peer=wr01r02u03	layer=2	run=demo-01
+mx_peer_pps	wr01r04u01	40000	peer=wr01r02u06	layer=4	run=demo-01
+mx_peer_loss	wr01r04u01	0.05	peer=wr01r02u06	layer=4	run=demo-01
+mx_peer_rtt_p99	wr01r04u01	2940	peer=wr01r02u06	layer=4	run=demo-01
+mx_peer_pps	wr01r04u01	40000	peer=wr01r03u05	layer=2	run=demo-01
+mx_peer_loss	wr01r04u01	0.05	peer=wr01r03u05	layer=2	run=demo-01
+mx_peer_rtt_p99	wr01r04u01	2940	peer=wr01r03u05	layer=2	run=demo-01
+mx_peer_pps	wr01r04u02	40000	peer=wr01r01u02	layer=2	run=demo-01
+mx_peer_loss	wr01r04u02	0.05	peer=wr01r01u02	layer=2	run=demo-01
+mx_peer_rtt_p99	wr01r04u02	2940	peer=wr01r01u02	layer=2	run=demo-01
+mx_peer_pps	wr01r04u02	40000	peer=wr01r02u05	layer=4	run=demo-01
+mx_peer_loss	wr01r04u02	0.05	peer=wr01r02u05	layer=4	run=demo-01
+mx_peer_rtt_p99	wr01r04u02	2940	peer=wr01r02u05	layer=4	run=demo-01
+mx_peer_pps	wr01r04u02	40000	peer=wr01r03u01	layer=3	run=demo-01
+mx_peer_loss	wr01r04u02	0.05	peer=wr01r03u01	layer=3	run=demo-01
+mx_peer_rtt_p99	wr01r04u02	2940	peer=wr01r03u01	layer=3	run=demo-01
+mx_peer_pps	wr01r04u02	40000	peer=wr01r03u04	layer=4	run=demo-01
+mx_peer_loss	wr01r04u02	0.05	peer=wr01r03u04	layer=4	run=demo-01
+mx_peer_rtt_p99	wr01r04u02	2940	peer=wr01r03u04	layer=4	run=demo-01
+mx_peer_pps	wr01r04u02	40000	peer=wr01r04u03	layer=2	run=demo-01
+mx_peer_loss	wr01r04u02	0.05	peer=wr01r04u03	layer=2	run=demo-01
+mx_peer_rtt_p99	wr01r04u02	2940	peer=wr01r04u03	layer=2	run=demo-01
+mx_peer_pps	wr01r04u02	40000	peer=wr01r04u05	layer=3	run=demo-01
+mx_peer_loss	wr01r04u02	0.05	peer=wr01r04u05	layer=3	run=demo-01
+mx_peer_rtt_p99	wr01r04u02	2940	peer=wr01r04u05	layer=3	run=demo-01
+mx_peer_pps	wr01r04u03	40000	peer=wr01r01u01	layer=3	run=demo-01
+mx_peer_loss	wr01r04u03	0.05	peer=wr01r01u01	layer=3	run=demo-01
+mx_peer_rtt_p99	wr01r04u03	2940	peer=wr01r01u01	layer=3	run=demo-01
+mx_peer_pps	wr01r04u03	40000	peer=wr01r02u01	layer=3	run=demo-01
+mx_peer_loss	wr01r04u03	0.05	peer=wr01r02u01	layer=3	run=demo-01
+mx_peer_rtt_p99	wr01r04u03	2940	peer=wr01r02u01	layer=3	run=demo-01
+mx_peer_pps	wr01r04u03	40000	peer=wr01r02u04	layer=4	run=demo-01
+mx_peer_loss	wr01r04u03	0.05	peer=wr01r02u04	layer=4	run=demo-01
+mx_peer_rtt_p99	wr01r04u03	2940	peer=wr01r02u04	layer=4	run=demo-01
+mx_peer_pps	wr01r04u03	40000	peer=wr01r03u02	layer=4	run=demo-01
+mx_peer_loss	wr01r04u03	0.05	peer=wr01r03u02	layer=4	run=demo-01
+mx_peer_rtt_p99	wr01r04u03	2940	peer=wr01r03u02	layer=4	run=demo-01
+mx_peer_pps	wr01r04u03	40000	peer=wr01r04u04	layer=2	run=demo-01
+mx_peer_loss	wr01r04u03	0.05	peer=wr01r04u04	layer=2	run=demo-01
+mx_peer_rtt_p99	wr01r04u03	2940	peer=wr01r04u04	layer=2	run=demo-01
+mx_peer_pps	wr01r04u03	40000	peer=wr01r04u06	layer=2	run=demo-01
+mx_peer_loss	wr01r04u03	0.05	peer=wr01r04u06	layer=2	run=demo-01
+mx_peer_rtt_p99	wr01r04u03	2940	peer=wr01r04u06	layer=2	run=demo-01
+mx_peer_pps	wr01r04u04	40000	peer=wr01r01u02	layer=3	run=demo-01
+mx_peer_loss	wr01r04u04	0.05	peer=wr01r01u02	layer=3	run=demo-01
+mx_peer_rtt_p99	wr01r04u04	2940	peer=wr01r01u02	layer=3	run=demo-01
+mx_peer_pps	wr01r04u04	40000	peer=wr01r01u03	layer=2	run=demo-01
+mx_peer_loss	wr01r04u04	0.05	peer=wr01r01u03	layer=2	run=demo-01
+mx_peer_rtt_p99	wr01r04u04	2940	peer=wr01r01u03	layer=2	run=demo-01
+mx_peer_pps	wr01r04u04	40000	peer=wr01r01u06	layer=3	run=demo-01
+mx_peer_loss	wr01r04u04	0.05	peer=wr01r01u06	layer=3	run=demo-01
+mx_peer_rtt_p99	wr01r04u04	2940	peer=wr01r01u06	layer=3	run=demo-01
+mx_peer_pps	wr01r04u04	40000	peer=wr01r03u01	layer=4	run=demo-01
+mx_peer_loss	wr01r04u04	0.05	peer=wr01r03u01	layer=4	run=demo-01
+mx_peer_rtt_p99	wr01r04u04	2940	peer=wr01r03u01	layer=4	run=demo-01
+mx_peer_pps	wr01r04u04	40000	peer=wr01r03u06	layer=2	run=demo-01
+mx_peer_loss	wr01r04u04	0.05	peer=wr01r03u06	layer=2	run=demo-01
+mx_peer_rtt_p99	wr01r04u04	2940	peer=wr01r03u06	layer=2	run=demo-01
+mx_peer_pps	wr01r04u04	40000	peer=wr01r04u01	layer=4	run=demo-01
+mx_peer_loss	wr01r04u04	0.05	peer=wr01r04u01	layer=4	run=demo-01
+mx_peer_rtt_p99	wr01r04u04	2940	peer=wr01r04u01	layer=4	run=demo-01
+mx_state	wr01r04u06	NO-DATA	run=demo-01
