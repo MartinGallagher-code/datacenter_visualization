@@ -276,6 +276,14 @@ input[type="checkbox"] { accent-color: var(--accent); }
 }
 #editor-summary .bad { color: var(--warn); }
 
+#editor-keys {
+  flex: none;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: #6b7484;
+  white-space: nowrap;
+}
+
 #editor-text {
   flex: 1;
   min-height: 0;

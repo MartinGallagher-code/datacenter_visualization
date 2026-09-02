@@ -131,6 +131,19 @@ eq([...small.counts], [['dc', 1], ['room', 3], ['row', 9], ['rack', 52], ['node'
   eq(oneSided.links.length, 0, 'and indeed wired nothing');
 }
 
+// Declared nets start visible on a modest floor -- a fabric that draws
+// nothing reads as a broken rule -- and start unticked past the auto-show
+// ceiling; show=/on= on the net line overrides in either direction.
+{
+  ok([...small.nets.values()].every((n) => n.enabled), 'small.dc nets start visible');
+  const pick = parseLayout(
+    'rack A\n  node n[1..3] role=server\n'
+    + 'net x show=false\nnet y\n'
+    + 'link x role=server mode=mesh\nlink y role=server mode=mesh\n');
+  ok(!pick.nets.get('x').enabled, 'show=false keeps a net unticked');
+  ok(pick.nets.get('y').enabled, 'an undeclared preference starts visible');
+}
+
 // pair with one selector pairs consecutive matches off; with B === A the old
 // A[i]-B[i] joining paired every element with itself and never wired anything.
 {
@@ -167,6 +180,13 @@ eq([...small.counts], [['dc', 1], ['room', 3], ['row', 9], ['rack', 52], ['node'
   ok(sug('        node u10 +').includes('+switch'), 'tags harvested from the doc');
   ok(sug('        node u10 di').includes('dir='), 'layout keys offered');
   ok(sug('link ').includes('data'), 'net names after link');
+  ok(sug('net ').includes('mgmt') && !sug('net ').includes('data'),
+     'fresh fabric names in the id position, ones already declared excluded');
+  ok(sug('net x sh').includes('show='), 'net visibility key offered');
+  ok(sug('net x show=').includes('show=false'), 'net visibility values');
+  ok(sug('rack ').includes('R[01..12]') && sug('rack ').includes('[1..4,7..10]'),
+     'range examples in the id position');
+  ok(sug('rack ').includes('u='), 'and the keys still follow them');
   ok(sug('link data +compute mode=').includes('mode=mesh'), 'link modes enumerated');
   ok(sug('link data +compute scope=').includes('scope=rack'), 'scope offers the kinds in the doc');
   ok(sug('net x sty').includes('style='), 'net keys');
@@ -317,6 +337,8 @@ ok(contrastInk('#ffffff') !== contrastInk('#000000'), 'contrast ink flips');
   eq(mega.warnings, [], 'mega.dc parses clean');
   ok(mega.all.length > 250000, `mega scale (${mega.all.length} elements)`);
   ok(mega.links.length > 500000, `mega links (${mega.links.length})`);
+  ok([...mega.nets.values()].every((n) => !n.enabled),
+     'past the auto-show ceiling, nets start unticked');
   const t1 = Date.now();
   layout(mega.root, () => true);
   const layoutMs = Date.now() - t1;

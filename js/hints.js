@@ -43,6 +43,7 @@ const NET_KEYS = [
   ['color=#', 'cable color'],
   ['style=', 'solid or dashed'],
   ['width=', 'line width'],
+  ['show=', 'true/false: start visible or unticked'],
 ];
 
 const LINK_KEYS = [
@@ -134,9 +135,23 @@ export function suggestionsFor(text, caret) {
     const kind = priorTokens[0].toLowerCase();
     const eq = word.indexOf('=');
     const key = eq > 0 ? word.slice(0, eq).toLowerCase() : null;
+    // Right after the kind is the id position (attributes are legal there too,
+    // since the id is optional) -- the one place a beginner goes quiet, so it
+    // offers example ids and range shapes ahead of the keys.
+    const idPosition = priorTokens.length === 1 && !key;
 
     if (kind === 'net') {
-      options = key ? valueOptions(key, { style: STYLES }, h) : [...NET_KEYS];
+      if (key) {
+        options = valueOptions(key, { style: STYLES, show: ['true', 'false'] }, h);
+      } else {
+        options = [];
+        if (idPosition) {
+          for (const n of ['data', 'mgmt', 'storage', 'uplink']) {
+            if (!h.nets.has(n)) options.push([n, 'a name for this fabric — then label= color=']);
+          }
+        }
+        options.push(...NET_KEYS);
+      }
     } else if (kind === 'link') {
       if (key) {
         options = valueOptions(key, { mode: MODES, scope: ['dc', ...h.kinds] }, h);
@@ -153,7 +168,16 @@ export function suggestionsFor(text, caret) {
       if (key) {
         options = valueOptions(key, { dir: DIRS }, h);
       } else {
-        options = [...ELEMENT_KEYS];
+        options = [];
+        if (idPosition) {
+          options.push(
+            ['R[01..12]', 'a range id: twelve of these, zero-padded'],
+            ['A..D', 'letter range'],
+            ['[1..4,7..10]', 'segments skip a numbering gap'],
+            ['u[01..20]', 'twenty, u01…u20'],
+          );
+        }
+        options.push(...ELEMENT_KEYS);
         for (const k of h.keys) {
           if (!ELEMENT_KEYS.some(([t]) => t.slice(0, -1) === k)) {
             options.push([`${k}=`, 'attribute used in this layout']);
@@ -236,11 +260,15 @@ export function attachHints(textarea) {
   };
 
   const accept = (opt) => {
-    textarea.setRangeText(opt.text, current.from, textarea.selectionStart, 'end');
+    // Accepting a kind at the start of a line also takes the space after it,
+    // so the id-position suggestions appear without another keystroke; a
+    // completed `key=` likewise flows straight into its values.
+    const atLineStart = /(^|\n)[ \t]*$/.test(textarea.value.slice(0, current.from));
+    const isKind = atLineStart && !opt.text.includes('=') && !opt.text.startsWith('+');
+    textarea.setRangeText(opt.text + (isKind ? ' ' : ''), current.from, textarea.selectionStart, 'end');
     close();
     textarea.dispatchEvent(new Event('input', { bubbles: true }));
-    // A completed `key=` immediately offers its values.
-    if (opt.text.endsWith('=')) open();
+    if (opt.text.endsWith('=') || isKind) open();
   };
 
   textarea.addEventListener('keydown', (e) => {
