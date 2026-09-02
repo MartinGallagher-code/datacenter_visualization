@@ -231,6 +231,15 @@ const actions = {
     invalidate();
   },
 
+  setAllOverlays(enabled) {
+    for (const overlay of state.overlays.values()) {
+      overlay.enabled = enabled;
+      if (enabled && overlay.autoDomain) recomputeDomain(overlay, state.model);
+    }
+    refreshPanels();
+    invalidate();
+  },
+
   removeAllOverlays() {
     state.rawOverlays.clear();
     state.overlays.clear();
@@ -346,6 +355,77 @@ async function boot() {
   }
   if (texts.length) loadResultsText(texts);
   else { refresh(); renderWarnings($('left').firstElementChild, state.warnings, jumpToLine); }
+}
+
+// ---------------------------------------------------------------- picking
+// A plain <input type="file"> cannot say where to open: the starting
+// directory is the browser's to choose. The File System Access API can, so
+// where it exists (Chromium) the picker reopens where it last left off, and
+// everywhere else the plain input still runs.
+
+const HANDLE_DB = 'dcviewer';
+const HANDLE_KEY = 'lastPick';
+
+function handleStore(mode) {
+  return new Promise((resolve, reject) => {
+    const open = indexedDB.open(HANDLE_DB, 1);
+    open.onupgradeneeded = () => open.result.createObjectStore('handles');
+    open.onerror = () => reject(open.error);
+    open.onsuccess = () => {
+      const tx = open.result.transaction('handles', mode);
+      resolve(tx.objectStore('handles'));
+    };
+  });
+}
+
+async function rememberedHandle() {
+  try {
+    const store = await handleStore('readonly');
+    return await new Promise((resolve) => {
+      const req = store.get(HANDLE_KEY);
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror = () => resolve(null);
+    });
+  } catch {
+    return null;      // private window, or a browser refusing IndexedDB
+  }
+}
+
+async function rememberHandle(handle) {
+  try {
+    const store = await handleStore('readwrite');
+    store.put(handle, HANDLE_KEY);
+  } catch { /* not remembering is not a failure worth reporting */ }
+}
+
+async function pickFiles() {
+  if (!window.showOpenFilePicker) { $('filepicker').click(); return; }
+  const opts = {
+    // Chromium keeps a directory per id, so this picker never lands in
+    // whatever folder some other page on the origin used last.
+    id: 'dc-layout-files',
+    multiple: true,
+    types: [{
+      description: 'Layouts and results',
+      accept: { 'text/plain': ['.dc', '.layout', '.tsv', '.csv', '.txt', '.ndjson', '.json', '.results'] },
+    }],
+  };
+  // A file handle starts the picker in the directory that holds it, which
+  // survives a restart where the per-id memory may not.
+  const last = await rememberedHandle();
+  if (last) opts.startIn = last;
+
+  let handles;
+  try {
+    handles = await window.showOpenFilePicker(opts);
+  } catch (err) {
+    if (err && err.name === 'AbortError') return;         // dismissed, not broken
+    $('filepicker').click();                              // anything else: fall back
+    return;
+  }
+  if (!handles.length) return;
+  rememberHandle(handles[0]);
+  ingestFiles(await Promise.all(handles.map((h) => h.getFile())));
 }
 
 const isLayoutFile = (name) => /\.(dc|layout)$/i.test(name);
@@ -602,7 +682,7 @@ $('filter').addEventListener('input', debounce(() => refresh(), 140));
 $('opt-hide').addEventListener('change', (e) => { state.hideUnmatched = e.target.checked; refresh(); });
 $('opt-values').addEventListener('change', (e) => { state.showValues = e.target.checked; invalidate(); });
 $('btn-fit').addEventListener('click', () => { renderer.fit(); invalidate(); });
-$('btn-load').addEventListener('click', () => $('filepicker').click());
+$('btn-load').addEventListener('click', () => pickFiles());
 $('filepicker').addEventListener('change', (e) => ingestFiles([...e.target.files]));
 $('link-opacity').addEventListener('input', (e) => {
   state.linkOpacity = Number(e.target.value) / 100;

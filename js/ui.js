@@ -94,14 +94,24 @@ export function renderOverlays(state, host, actions) {
     return;
   }
 
+  // Controls first: a results file can carry twenty-odd overlays, and a
+  // button under the last card is a button nobody finds.
+  const bar = el('div', 'btnrow');
+  const shown = overlays.filter((o) => o.enabled).length;
+  if (shown) {
+    const hide = el('button', null, 'Hide all');
+    hide.title = 'Untick every overlay, keeping them loaded';
+    hide.addEventListener('click', () => actions.setAllOverlays(false));
+    bar.append(hide);
+  }
+  const clear = el('button', null, 'Remove all');
+  clear.title = `Remove all ${overlays.length} overlays and their samples — reload the results file to get them back`;
+  clear.addEventListener('click', () => actions.removeAllOverlays());
+  bar.append(clear);
+  host.append(bar);
+
   for (const overlay of overlays) {
     host.append(overlayCard(state, overlay, actions));
-  }
-
-  if (overlays.length > 1) {
-    const clear = el('button', 'overlay-clear', 'Remove all overlays');
-    clear.addEventListener('click', () => actions.removeAllOverlays());
-    host.append(clear);
   }
 }
 
