@@ -524,7 +524,11 @@ netmesh run --for 60 && dcimport results.tsv --tidy reports/
   pick the aggregation, palette, and value range live.
   **Hide all** unticks every overlay without unloading it, and **Remove all**
   drops them and their samples — both at the top of the panel, since a
-  results file can carry twenty-odd overlays.
+  results file can carry twenty-odd overlays. Overlays are **grouped by the
+  file they came from**, and each group's header collapses it, so an mx export
+  and an iperf export loaded together stay tellable apart; the header counts
+  the group's overlays and how many are shown. A test fed by several files
+  (the append-only workflow) is filed under the first that carried it.
 - **Networks** — toggle each named fabric, or **Show all** / **Hide all** them
   at once; opacity slider for dense views.
 - **Measured flows** — `mx export --peers` and `iperf_orchestrator` write one

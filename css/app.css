@@ -202,6 +202,25 @@ body.resizing { cursor: col-resize; user-select: none; }
 
 /* ---------------------------------------------------------------- overlays */
 
+.overlay-group {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: 6px 0 4px;
+  padding: 2px 3px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink-dim);
+}
+.overlay-group:hover { background: #1c2330; color: var(--ink); }
+.overlay-group-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.overlay-group-count {
+  margin-left: auto; flex: none;
+  background: #0f141c; border-radius: 3px; padding: 0 5px; font-size: 10px;
+}
+
 .overlay {
   border: 1px solid var(--line);
   border-radius: 6px;

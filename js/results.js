@@ -121,9 +121,16 @@ function parseMetaTokens(tokens) {
  * starts with `{` or `[`. Nothing has to declare which it is: a results file
  * that begins with a brace cannot be a `test target value` line.
  */
-export function parseResults(text, into = new Map(), warnings = []) {
-  if (looksLikeJson(text)) return parseJsonResults(text, into, warnings);
-  return parseTextResults(text, into, warnings);
+export function parseResults(text, into = new Map(), warnings = [], source = '') {
+  // `source` rides along on the map so ensureOverlay can tag what it creates
+  // without threading a parameter through every JSON and text path below.
+  into.source = source;
+  try {
+    return looksLikeJson(text) ? parseJsonResults(text, into, warnings)
+                               : parseTextResults(text, into, warnings);
+  } finally {
+    into.source = '';
+  }
 }
 
 /** First meaningful character, ignoring blank lines and `#` comments. */
@@ -294,9 +301,13 @@ const truncate = (line) => (line.length > 60 ? `${line.slice(0, 57)}…` : line)
 function ensureOverlay(map, name) {
   let overlay = map.get(name);
   if (!overlay) {
-    overlay = { name, samples: [], meta: {} };
+    overlay = { name, samples: [], meta: {}, sources: [] };
     map.set(name, overlay);
   }
+  // The same test can arrive from several files -- that is the append-only
+  // workflow working -- so every contributing file is recorded, in order.
+  const source = map.source;
+  if (source && !overlay.sources.includes(source)) overlay.sources.push(source);
   return overlay;
 }
 
@@ -361,6 +372,7 @@ export function bindOverlay(overlay, model) {
     numericByEl,
     textByEl,
     direct,
+    sources: overlay.sources || [],
     flowsByEl,
     hasFlows: flowsByEl.size > 0,
     sampleCount: overlay.samples.length,
