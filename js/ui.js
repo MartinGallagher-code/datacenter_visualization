@@ -110,9 +110,39 @@ export function renderOverlays(state, host, actions) {
   bar.append(clear);
   host.append(bar);
 
+  // Grouped by the file they came from: one results file can carry twenty-odd
+  // overlays, and two files loaded together are otherwise indistinguishable.
+  // A test fed by several files is filed under the first that carried it.
+  const groups = new Map();
   for (const overlay of overlays) {
-    host.append(overlayCard(state, overlay, actions));
+    const key = (overlay.sources && overlay.sources[0]) || '';
+    const bucket = groups.get(key);
+    if (bucket) bucket.push(overlay);
+    else groups.set(key, [overlay]);
   }
+
+  // With everything from one unnamed source there is nothing to group by.
+  const grouped = groups.size > 1 || (groups.size === 1 && [...groups.keys()][0] !== '');
+
+  for (const [source, list] of groups) {
+    if (grouped) host.append(groupHeader(state, source, list, actions));
+    if (grouped && state.groupsOff.has(source)) continue;
+    for (const overlay of list) host.append(overlayCard(state, overlay, actions));
+  }
+}
+
+function groupHeader(state, source, list, actions) {
+  const off = state.groupsOff.has(source);
+  const row = el('div', `overlay-group${off ? ' off' : ''}`);
+  row.append(el('span', `caret${off ? '' : ' open'}`, '▸'));
+  row.append(el('span', 'overlay-group-name', source || 'loaded results'));
+
+  const on = list.filter((o) => o.enabled).length;
+  row.append(el('span', 'overlay-group-count', on ? `${on}/${list.length}` : String(list.length)));
+  row.title = `${list.length} overlay${list.length === 1 ? '' : 's'} from ${source || 'this file'}`
+    + (on ? `, ${on} shown` : '');
+  row.addEventListener('click', () => actions.toggleOverlayGroup(source));
+  return row;
 }
 
 function overlayCard(state, overlay, actions) {

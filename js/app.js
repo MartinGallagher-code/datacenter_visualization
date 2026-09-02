@@ -31,6 +31,7 @@ const state = {
   netOverrides: new Map(),  // net name -> enabled, the user's own panel toggles
   rawOverlays: new Map(),   // test name -> { name, samples, meta } straight from the files
   overlays: new Map(),      // test name -> bound overlay with display settings
+  groupsOff: new Set(),     // source files whose overlay group is collapsed
   activeOverlays: [],
   showValues: true,
   hideUnmatched: false,
@@ -231,6 +232,12 @@ const actions = {
     invalidate();
   },
 
+  toggleOverlayGroup(source) {
+    if (state.groupsOff.has(source)) state.groupsOff.delete(source);
+    else state.groupsOff.add(source);
+    refreshPanels();
+  },
+
   setAllOverlays(enabled) {
     for (const overlay of state.overlays.values()) {
       overlay.enabled = enabled;
@@ -283,10 +290,11 @@ function loadLayoutText(text, { keepCamera = false } = {}) {
   syncEditor();
 }
 
-function loadResultsText(texts, { replace = false } = {}) {
+/** @param files [{ text, name }] -- the name groups the overlays in the panel. */
+function loadResultsText(files, { replace = false } = {}) {
   if (replace) state.rawOverlays = new Map();
   const warnings = [];
-  for (const text of texts) parseResults(text, state.rawOverlays, warnings);
+  for (const file of files) parseResults(file.text, state.rawOverlays, warnings, file.name || '');
   state.warnings.push(...warnings);
   rebindOverlays();
   refresh();
@@ -348,7 +356,7 @@ async function boot() {
   const texts = [];
   for (const url of resultUrls) {
     try {
-      texts.push(await fetchText(url));
+      texts.push({ text: await fetchText(url), name: url.split('/').pop() || url });
     } catch (err) {
       state.warnings.push(`could not load results: ${err.message}`);
     }
@@ -435,7 +443,8 @@ async function ingestFiles(files) {
   const results = [];
   for (const file of files) {
     const text = await file.text();
-    (isLayoutFile(file.name) ? layouts : results).push(text);
+    if (isLayoutFile(file.name)) layouts.push(text);
+    else results.push({ text, name: file.name });
   }
   if (layouts.length) loadLayoutText(layouts[layouts.length - 1]);
   if (results.length) loadResultsText(results, { replace: layouts.length > 0 });

@@ -342,6 +342,28 @@ ok(missing[0].includes('target'), 'missing target is reported');
 const braced = parseResults('# {not json}\ntemp_c\tDH1/A/R01/u05\t61.2\n');
 eq(braced.get('temp_c').samples.length, 1, 'comment starting with { stays text');
 
+// ----------------------------------------------------------- overlay source
+// Overlays remember the file they came from, so the panel can group them:
+// one results file can carry twenty-odd, and two loaded together are
+// otherwise indistinguishable.
+{
+  const into = new Map();
+  parseResults('temp_c\tDH1/A/R01/u05\t61\n', into, [], 'nightly.tsv');
+  parseResults('temp_c\tDH1/A/R01/u06\t62\niops\tDH1/A/R01/u05\t900\n', into, [], 'fio.tsv');
+  eq(into.get('temp_c').sources, ['nightly.tsv', 'fio.tsv'],
+     'a test fed by two files records both, in order');
+  eq(into.get('iops').sources, ['fio.tsv'], 'and one fed by a single file records it');
+  eq(into.get('temp_c').samples.length, 2, 'the samples still merge across files');
+  eq(into.source, '', 'the parse leaves no source marker behind');
+
+  // Binding carries the sources through to the panel.
+  eq(bindOverlay(into.get('iops'), small).sources, ['fio.tsv'], 'sources survive binding');
+  // A file that is not named still parses; the panel treats it as one group.
+  const anon = new Map();
+  parseResults('t\ta\t1\n', anon);
+  eq(anon.get('t').sources, [], 'an unnamed load records no source');
+}
+
 // -------------------------------------------------------------- flow data
 // mx and iperf measure a host PAIR, and those samples carry `peer=`. They are
 // kept whole beside the aggregate, because the aggregate is exactly what
