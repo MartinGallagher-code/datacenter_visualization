@@ -516,7 +516,8 @@ netmesh run --for 60 && dcimport results.tsv --tidy reports/
   split into N side-by-side slices, each colored by its test with the test's
   short name and value printed on it (2, 3, 4, 5… all work). Per overlay you
   pick the aggregation, palette, and value range live.
-- **Networks** — toggle each named fabric; opacity slider for dense views.
+- **Networks** — toggle each named fabric, or **Show all** / **Hide all** them
+  at once; opacity slider for dense views.
 - **Inspector** — click an element for its tags (click a tag to filter by
   it), attributes, U-slot, link counts, and all its readings. Cables hang off
   the leaf devices, so a rack, row or room reports **links below** instead:

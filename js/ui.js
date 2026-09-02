@@ -234,6 +234,19 @@ export function renderNets(state, host, actions) {
   const counts = new Map();
   for (const link of state.model.links) counts.set(link.net, (counts.get(link.net) || 0) + 1);
 
+  // All / none, for a floor with more fabrics than it is worth clicking one
+  // at a time -- and the way back after isolating down to one.
+  if (nets.length > 1) {
+    const bar = el('div', 'btnrow');
+    for (const [label, on] of [['Show all', true], ['Hide all', false]]) {
+      const b = el('button', null, label);
+      b.disabled = nets.every((n) => !!n.enabled === on);
+      b.addEventListener('click', () => actions.setAllNets(on));
+      bar.append(b);
+    }
+    host.append(bar);
+  }
+
   for (const net of nets) {
     const row = el('label', 'net');
     const check = el('input');
