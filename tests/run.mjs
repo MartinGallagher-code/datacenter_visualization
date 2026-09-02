@@ -131,6 +131,20 @@ eq([...small.counts], [['dc', 1], ['room', 3], ['row', 9], ['rack', 52], ['node'
   eq(oneSided.links.length, 0, 'and indeed wired nothing');
 }
 
+// A node pinned above its rack's declared height draws outside the rack --
+// the shape an at= copied from a taller rack makes -- so it warns, once per
+// declaration rather than once per expanded rack.
+{
+  const tall = parseLayout('row A\n  rack r[1..10] u=11\n    node tor at=42\n    node u[1..8]\n');
+  eq(tall.warnings.length, 1, 'one overflow warning for ten expanded racks');
+  ok(tall.warnings[0].includes('"tor" reaches U42') && tall.warnings[0].includes('u=11'),
+     'the warning names the node, its slot and the rack height');
+  const fits = parseLayout('rack A u=11\n  node tor at=11\n  node u[1..8]\n');
+  eq(fits.warnings, [], 'a tor at the top of a short rack is fine');
+  const undeclared = parseLayout('rack A\n  node top at=60\n');
+  eq(undeclared.warnings, [], 'no declared height, no overflow to judge');
+}
+
 // Declared nets start visible on a modest floor -- a fabric that draws
 // nothing reads as a broken rule -- and start unticked past the auto-show
 // ceiling; show=/on= on the net line overrides in either direction.

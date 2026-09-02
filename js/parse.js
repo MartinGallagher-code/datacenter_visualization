@@ -281,6 +281,21 @@ function materialize(syn, parent, model) {
       let used = 0;
       for (const c of el.children) used = Math.max(used, (c.uAt || 1) + (c.uSize || 1) - 1);
       el.uHeight = declared || Math.max(used, 42);
+      // A child above the declared height draws outside the rack -- usually an
+      // at= copied from a taller rack's example -- and nothing else says so.
+      // One warning per declaration, not one per expanded rack.
+      if (declared && used > declared) {
+        const over = el.children.find((c) => (c.uAt || 1) + (c.uSize || 1) - 1 > declared);
+        const top = (over.uAt || 1) + (over.uSize || 1) - 1;
+        const onceKey = `${syn.line}:${over.id}`;
+        const seen = model.overflowWarned || (model.overflowWarned = new Set());
+        if (!seen.has(onceKey)) {
+          seen.add(onceKey);
+          model.warnings.push(
+            `line ${syn.line}: node "${over.id}" reaches U${top}, above rack "${el.id}" u=${declared}`
+            + ` — raise the rack's u= or lower the node's at=`);
+        }
+      }
       el.uUsed = undefined;
       el.tagCache = undefined;
     }
