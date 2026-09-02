@@ -36,6 +36,9 @@ const THEME = {
   match: '#4fa3ff',
 };
 
+// Enough to read a floor at a glance; past this the marks are the noise.
+const MAX_ENDPOINT_MARKS = 4000;
+
 const KIND_TINT = {
   dc: 'rgba(79,163,255,0.05)',
   room: 'rgba(79,163,255,0.04)',
@@ -140,11 +143,16 @@ export class Renderer {
     ctx.textBaseline = 'middle';
     this.stats.drawn = 0;
     this.stats.flows = 0;
+    // Endpoints of whatever connections are on screen, so the eye does not
+    // have to trace a hairline to find where it lands. Only filled when the
+    // set is a selective one -- see markEndpoint.
+    this.endpoints = new Map();
 
     const root = this.state.model.root;
     if (root && root.box) this.drawElement(root);
     this.drawLinks();
     this.drawFlows();
+    this.drawEndpoints();
     this.drawSelection();
   }
 
@@ -379,6 +387,7 @@ export class Renderer {
         let by = b.y + b.h / 2;
         if (!this.segmentVisible(ax, ay, bx, by)) continue;
         if (only && !sharesLineage(edge.a, only) && !sharesLineage(edge.b, only)) continue;
+        if (only) { this.markEndpoint(edge.a, net.color); this.markEndpoint(edge.b, net.color); }
         if (off) {
           const len = Math.hypot(bx - ax, by - ay) || 1;
           const ox = ((ay - by) / len) * off;
@@ -448,12 +457,60 @@ export class Renderer {
           ctx.moveTo(ax, ay);
           ctx.quadraticCurveTo(mx, my, bx, by);
           ctx.stroke();
+          this.markEndpoint(a, ctx.strokeStyle);
+          this.markEndpoint(b, ctx.strokeStyle);
           this.stats.flows++;
         }
       }
     }
 
     ctx.setLineDash([]);
+    ctx.globalAlpha = 1;
+  }
+
+  /** Remember an element as one end of a drawn connection. First colour wins. */
+  markEndpoint(el, color) {
+    if (!el || !el.box || this.endpoints.size >= MAX_ENDPOINT_MARKS) return;
+    if (!this.endpoints.has(el)) this.endpoints.set(el, color);
+  }
+
+  /**
+   * A soft halo on each end of the connections being shown. Deliberately
+   * quiet -- a thin outline just outside the element's own edge, plus a faint
+   * wash -- so it reads at a glance without competing with the selection
+   * outline or the overlay colours inside the box.
+   */
+  drawEndpoints() {
+    if (!this.endpoints.size) return;
+    const ctx = this.ctx;
+    const scale = this.camera.scale;
+    ctx.setLineDash([]);
+
+    for (const [el, color] of this.endpoints) {
+      const b = el.box;
+      if (!this.intersects(b)) continue;
+      const pad = 1.5 / scale;
+
+      // Too small to outline legibly: a dot beside it carries the same news.
+      if (b.w * scale < 5 || b.h * scale < 5) {
+        ctx.globalAlpha = 0.9;
+        ctx.fillStyle = color;
+        const r = 2.5 / scale;
+        ctx.beginPath();
+        ctx.arc(b.x + b.w / 2, b.y + b.h / 2, r, 0, Math.PI * 2);
+        ctx.fill();
+        continue;
+      }
+
+      ctx.globalAlpha = 0.14;
+      ctx.fillStyle = color;
+      ctx.fillRect(b.x, b.y, b.w, b.h);
+
+      ctx.globalAlpha = 0.75;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1.4 / scale;
+      ctx.strokeRect(b.x - pad, b.y - pad, b.w + pad * 2, b.h + pad * 2);
+    }
     ctx.globalAlpha = 1;
   }
 
