@@ -426,7 +426,10 @@ export class Renderer {
    */
   drawFlows() {
     const state = this.state;
-    const layers = [...state.overlays.values()].filter((o) => o.drawFlows && o.hasFlows);
+    // Enabled as well: the flow checkbox is only reachable inside a ticked
+    // overlay's body, so drawing them for an unticked one would put curves on
+    // the floor with no visible control to remove them.
+    const layers = [...state.overlays.values()].filter((o) => o.enabled && o.drawFlows && o.hasFlows);
     if (!layers.length) return;
 
     const ctx = this.ctx;
