@@ -98,7 +98,9 @@ without appearing in the name — see `examples/hostnames.dc`.
 - `+tag` tags are free-form keywords; every element can carry many, and every
   element also carries its ancestors' tags. `+a,b,c` adds three at once.
 - Rack children: `u=4` gives a node 4 U of height, `at=42` pins it to a slot;
-  unplaced children auto-fill the lowest free run of slots.
+  unplaced children auto-fill the lowest free run of slots. A node that lands
+  above the rack's declared `u=` height is reported as a warning — `at=42`
+  only fits a rack at least 42 U tall.
 - `cols=2` / `dir=x|y` shape generic containers.
 
 ### Networks
