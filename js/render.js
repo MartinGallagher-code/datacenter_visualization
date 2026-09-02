@@ -345,9 +345,17 @@ export class Renderer {
     // not a solid sheet; zooming in restores full opacity as edges drop out.
     const density = Math.min(1, 1500 / Math.max(1, totalEdges));
 
+    // Fabrics that share a pair of endpoints would overdraw each other, so
+    // each enabled net rides a small perpendicular offset -- a couple of
+    // screen pixels, centred so a lone net stays exactly on the line and two
+    // nets straddle it, one either side, each colour visible.
+    const netIndex = new Map();
+    enabled.forEach((net, i) => netIndex.set(net.name, (i - (enabled.length - 1) / 2) * (2.5 / scale)));
+
     for (const net of enabled) {
       const edges = this.linkCache.nets.get(net.name);
       if (!edges || !edges.length) continue;
+      const off = netIndex.get(net.name);
 
       ctx.strokeStyle = net.color;
       ctx.globalAlpha = Math.max(0.02, state.linkOpacity * density);
@@ -359,11 +367,17 @@ export class Renderer {
       for (const edge of edges) {
         const a = edge.a.box;
         const b = edge.b.box;
-        const ax = a.x + a.w / 2;
-        const ay = a.y + a.h / 2;
-        const bx = b.x + b.w / 2;
-        const by = b.y + b.h / 2;
+        let ax = a.x + a.w / 2;
+        let ay = a.y + a.h / 2;
+        let bx = b.x + b.w / 2;
+        let by = b.y + b.h / 2;
         if (!this.segmentVisible(ax, ay, bx, by)) continue;
+        if (off) {
+          const len = Math.hypot(bx - ax, by - ay) || 1;
+          const ox = ((ay - by) / len) * off;
+          const oy = ((bx - ax) / len) * off;
+          ax += ox; ay += oy; bx += ox; by += oy;
+        }
         ctx.lineWidth = (net.width * (edge.count > 1 ? Math.min(4, 1 + Math.log2(edge.count)) : 1)) / scale;
         ctx.beginPath();
         ctx.moveTo(ax, ay);
