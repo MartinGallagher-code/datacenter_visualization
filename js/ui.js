@@ -341,11 +341,30 @@ export function renderInspector(state, host, actions) {
   }
 }
 
-export function renderWarnings(host, warnings) {
+// A warning that names a line of the layout is a link to it: clicking one
+// opens the editor there. Results warnings say "results line N" -- a line of
+// a different file -- so only a leading "line N:" counts as jumpable.
+const LAYOUT_LINE = /^line (\d+):/;
+
+export function fillWarnings(box, warnings, onJump) {
+  box.textContent = '';
+  for (const warning of warnings.slice(0, 40)) {
+    const row = el('div', 'warnline', warning);
+    const at = LAYOUT_LINE.exec(warning);
+    if (at && onJump) {
+      row.classList.add('jump');
+      row.title = `Go to line ${at[1]}`;
+      row.addEventListener('click', () => onJump(Number(at[1])));
+    }
+    box.append(row);
+  }
+}
+
+export function renderWarnings(host, warnings, onJump) {
   const existing = host.querySelector('.warnings');
   if (existing) existing.remove();
   if (!warnings.length) return;
   const box = el('div', 'warnings');
-  box.textContent = warnings.slice(0, 40).join('\n');
+  fillWarnings(box, warnings, onJump);
   host.append(box);
 }

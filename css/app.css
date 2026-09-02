@@ -313,8 +313,11 @@ input[type="checkbox"] { accent-color: var(--accent); }
   color: #e0c06a;
 }
 #editor-warnings[hidden] { display: none; }
-#editor-warnings .warnline { cursor: pointer; }
-#editor-warnings .warnline:hover { text-decoration: underline; }
+/* A warning that names a line is a link to it; one that does not stays plain. */
+.warnline { padding: 1px 0; }
+.warnline.jump { cursor: pointer; }
+.warnline.jump:hover { text-decoration: underline; }
+.warnline.jump::after { content: ' \2192'; opacity: 0.55; }
 
 #editor-main { position: relative; display: flex; flex: 1; min-height: 0; }
 

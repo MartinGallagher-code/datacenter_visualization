@@ -18,7 +18,7 @@ import { Renderer, countDescendants } from './render.js';
 import {
   bindOverlay, clearOverlayCache, formatValue, overlayValue, parseResults, recomputeDomain,
 } from './results.js';
-import { renderInspector, renderNets, renderOverlays, renderTree, renderWarnings } from './ui.js';
+import { fillWarnings, renderInspector, renderNets, renderOverlays, renderTree, renderWarnings } from './ui.js';
 import { attachHints, renderReference } from './hints.js';
 
 const $ = (id) => document.getElementById(id);
@@ -235,7 +235,7 @@ function loadLayoutText(text, { keepCamera = false } = {}) {
   if (state.model.all.length > AUTO_COLLAPSE_ABOVE) setCollapseAtKind('rack');
   rebindOverlays();
   refresh({ keepCamera });
-  renderWarnings($('left').firstElementChild, state.warnings);
+  renderWarnings($('left').firstElementChild, state.warnings, jumpToLine);
   syncEditor();
 }
 
@@ -246,7 +246,7 @@ function loadResultsText(texts, { replace = false } = {}) {
   state.warnings.push(...warnings);
   rebindOverlays();
   refresh();
-  renderWarnings($('left').firstElementChild, state.warnings);
+  renderWarnings($('left').firstElementChild, state.warnings, jumpToLine);
 }
 
 /** Rebuild bound overlays against the current model, keeping display settings. */
@@ -296,7 +296,7 @@ async function boot() {
     loadLayoutText(await fetchText(layoutUrl));
   } catch (err) {
     state.warnings.push(`could not load layout: ${err.message}`);
-    renderWarnings($('left').firstElementChild, state.warnings);
+    renderWarnings($('left').firstElementChild, state.warnings, jumpToLine);
     refresh();
     return;
   }
@@ -310,7 +310,7 @@ async function boot() {
     }
   }
   if (texts.length) loadResultsText(texts);
-  else { refresh(); renderWarnings($('left').firstElementChild, state.warnings); }
+  else { refresh(); renderWarnings($('left').firstElementChild, state.warnings, jumpToLine); }
 }
 
 const isLayoutFile = (name) => /\.(dc|layout)$/i.test(name);
@@ -380,19 +380,15 @@ function renderEditorStatus() {
   }
 
   const box = $('editor-warnings');
-  box.textContent = '';
   box.hidden = !m.warnings.length;
-  for (const warning of m.warnings.slice(0, 40)) {
-    const row = document.createElement('div');
-    row.className = 'warnline';
-    row.textContent = warning;
-    const at = /\bline (\d+)/.exec(warning);
-    if (at) {
-      row.title = 'Jump to this line';
-      row.addEventListener('click', () => selectEditorLine(Number(at[1])));
-    }
-    box.append(row);
-  }
+  fillWarnings(box, m.warnings, selectEditorLine);
+}
+
+// Clicking a warning anywhere goes to its line, opening the editor first if
+// it is closed -- a warning that cannot be acted on is only half a warning.
+function jumpToLine(lineNo) {
+  if ($('editor').hidden) toggleEditor(true);
+  selectEditorLine(lineNo);
 }
 
 function selectEditorLine(lineNo) {
@@ -402,6 +398,10 @@ function selectEditorLine(lineNo) {
   for (let i = 0; i < Math.min(lineNo - 1, lines.length); i++) start += lines[i].length + 1;
   text.focus();
   text.setSelectionRange(start, start + (lines[lineNo - 1] || '').length);
+  // Selecting does not reliably scroll a textarea, so put the line a few
+  // rows down from the top rather than leaving it off screen.
+  const lineHeight = parseFloat(getComputedStyle(text).lineHeight) || 18;
+  text.scrollTop = Math.max(0, (lineNo - 4) * lineHeight);
 }
 
 const applyEditor = debounce(() => {
