@@ -502,6 +502,100 @@ $('editor-download').addEventListener('click', () => {
   URL.revokeObjectURL(url);
 });
 
+// -------------------------------------------------------------------- panels
+// Both side panels collapse and resize. The canvas re-measures itself on the
+// next draw, so every change here only has to invalidate.
+
+const PANEL_MIN = 150;
+const PANEL_MAX = 640;
+const PANEL_DEFAULT = { left: 268, right: 300 };
+const PANEL_STORE = 'dcviewer.panels';
+
+const clampPanel = (w) => Math.min(PANEL_MAX, Math.max(PANEL_MIN, w));
+
+function loadPanels() {
+  const fallback = { left: { w: PANEL_DEFAULT.left, off: false }, right: { w: PANEL_DEFAULT.right, off: false } };
+  let saved;
+  // Only the storage read is guarded: a private window or corrupt JSON falls
+  // back, but a mistake in the code below should surface, not degrade quietly.
+  try {
+    saved = JSON.parse(localStorage.getItem(PANEL_STORE) || 'null');
+  } catch {
+    return fallback;
+  }
+  if (!saved || typeof saved !== 'object') return fallback;
+  for (const side of ['left', 'right']) {
+    if (!saved[side] || typeof saved[side] !== 'object') saved[side] = { ...fallback[side] };
+    saved[side].w = clampPanel(Number(saved[side].w) || PANEL_DEFAULT[side]);
+    saved[side].off = !!saved[side].off;
+  }
+  return saved;
+}
+
+const panelState = loadPanels();
+
+function savePanels() {
+  try { localStorage.setItem(PANEL_STORE, JSON.stringify(panelState)); } catch { /* not fatal */ }
+}
+
+function applyPanels() {
+  for (const side of ['left', 'right']) {
+    const { w, off } = panelState[side];
+    $(side).style.width = `${w}px`;
+    $(side).hidden = off;
+    $(`${side}-resize`).hidden = off;
+    $(`${side}-rail`).hidden = !off;
+  }
+  invalidate();
+}
+
+function setPanelCollapsed(side, off) {
+  panelState[side].off = off;
+  applyPanels();
+  savePanels();
+}
+
+for (const button of document.querySelectorAll('.collapse-panel')) {
+  button.addEventListener('click', () => setPanelCollapsed(button.dataset.panel, true));
+}
+$('left-rail').addEventListener('click', () => setPanelCollapsed('left', false));
+$('right-rail').addEventListener('click', () => setPanelCollapsed('right', false));
+
+for (const side of ['left', 'right']) {
+  const handle = $(`${side}-resize`);
+  handle.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    handle.setPointerCapture(e.pointerId);
+    handle.classList.add('dragging');
+    document.body.classList.add('resizing');
+    const startX = e.clientX;
+    const startW = panelState[side].w;
+
+    const move = (ev) => {
+      const delta = ev.clientX - startX;
+      panelState[side].w = clampPanel(startW + (side === 'left' ? delta : -delta));
+      applyPanels();
+    };
+    const up = () => {
+      handle.removeEventListener('pointermove', move);
+      handle.removeEventListener('pointerup', up);
+      handle.classList.remove('dragging');
+      document.body.classList.remove('resizing');
+      savePanels();
+    };
+    handle.addEventListener('pointermove', move);
+    handle.addEventListener('pointerup', up);
+  });
+
+  handle.addEventListener('dblclick', () => {
+    panelState[side].w = PANEL_DEFAULT[side];
+    applyPanels();
+    savePanels();
+  });
+}
+
+applyPanels();
+
 // -------------------------------------------------------------------- events
 
 $('filter').addEventListener('input', debounce(() => refresh(), 140));
