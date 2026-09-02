@@ -39,6 +39,10 @@ const NON_INHERITED = new Set(['id', 'name', 'at', 'u', 'cols', 'dir', 'gap', 'l
 
 const DEFAULT_NET_COLORS = ['#4fa3ff', '#ff9f43', '#4dd4ac', '#c986ff', '#ff6b8b', '#f5d442'];
 
+// Nets start visible up to this many total cables; beyond it they start
+// unticked, as a hyperscale floor's first render should be the floor.
+const AUTO_SHOW_LINKS = 20000;
+
 const EMPTY_TAGS = new Set();
 const NO_LINKS = [];
 
@@ -402,13 +406,16 @@ export function parseLayout(text) {
     for (const child of node.children) {
       if (child.kind === 'net') {
         const name = child.idSpec || 'net';
+        // show=/on= decides visibility outright; without it the call is made
+        // after the links are built (null = decide by size, below).
+        const explicit = child.attrs.show ?? child.attrs.on;
         model.nets.set(name, {
           name,
           label: child.attrs.label || name,
           color: child.attrs.color || DEFAULT_NET_COLORS[model.nets.size % DEFAULT_NET_COLORS.length],
           style: child.attrs.style || 'solid',
           width: parseFloat(child.attrs.width || '1') || 1,
-          enabled: child.attrs.on === 'true' || child.attrs.show === 'true',
+          enabled: explicit === undefined ? null : explicit === 'true',
         });
       } else if (child.kind === 'link') {
         const positional = [];
@@ -459,11 +466,19 @@ export function parseLayout(text) {
         color: DEFAULT_NET_COLORS[model.nets.size % DEFAULT_NET_COLORS.length],
         style: 'solid',
         width: 1,
-        enabled: false,
+        enabled: null,
       });
     }
   }
   model.links = buildLinks(rules, model);
+
+  // A declared fabric that draws nothing looks like a broken rule, so nets
+  // start visible -- except on a floor big enough that half a million cables
+  // would swamp the first render, where they start unticked as before.
+  // `show=true`/`show=false` (or `on=`) on the net line overrides either way.
+  for (const net of model.nets.values()) {
+    if (net.enabled === null) net.enabled = model.links.length <= AUTO_SHOW_LINKS;
+  }
   model.resolve = makeResolver(model);
   return model;
 }

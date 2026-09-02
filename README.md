@@ -125,9 +125,14 @@ link storage +storage,role=server scope=row mode=mesh  # full mesh within a row
 - A rule that wires nothing says so: a selector that matched no elements (the
   shape a typo makes) and a rule whose matches produced no cables are both
   reported as warnings rather than left as a silently empty fabric.
+- Declared nets **start visible** on a modest floor (up to 20,000 cables in
+  total), so wiring something draws something. Past that they start unticked —
+  a hyperscale floor's first render should be the floor. `show=false` on a
+  `net` line starts it hidden either way; `show=true` forces it on.
 
-Networks toggle on and off in the UI. Collapsed or zoomed-out regions merge
-their cables into one thicker line; very dense views fade automatically.
+Networks toggle on and off in the UI, and modest fabrics start on (see
+above). Collapsed or zoomed-out regions merge their cables into one thicker
+line; very dense views fade automatically.
 
 ## The results file (`.tsv`)
 
