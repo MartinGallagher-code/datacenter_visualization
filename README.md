@@ -140,8 +140,10 @@ link storage +storage,role=server scope=row mode=mesh  # full mesh within a row
   `net` line starts it hidden either way; `show=true` forces it on.
 
 Networks toggle on and off in the UI, and modest fabrics start on (see
-above). Collapsed or zoomed-out regions merge their cables into one thicker
-line; very dense views fade automatically.
+above). Fabrics that run over the same pair of endpoints draw slightly
+offset from one another, so every enabled net's colour stays visible.
+Collapsed or zoomed-out regions merge their cables into one thicker line;
+very dense views fade automatically.
 
 ## The results file (`.tsv`)
 
