@@ -36,6 +36,13 @@ const THEME = {
   match: '#4fa3ff',
 };
 
+// Labels are drawn at px/scale world units, so they render at exactly px
+// SCREEN pixels: the ceiling is what a label can grow to, however far you
+// zoom. It used to be 11-13, which meant zooming in to read something never
+// made it any bigger. Sized from each element's on-screen height, so text
+// grows with the zoom and stops where a rack label would start shouting.
+const TEXT_MAX = 30;
+
 // Enough to read a floor at a glance; past this the marks are the noise.
 const MAX_ENDPOINT_MARKS = 4000;
 
@@ -230,7 +237,7 @@ export class Renderer {
     if (sh < 8 || sw < 26) return;
     const ctx = this.ctx;
     const scale = this.camera.scale;
-    const px = Math.min(11, Math.max(7, sh * (collapsed ? 0.28 : 0.6)));
+    const px = Math.min(TEXT_MAX, Math.max(7, sh * (collapsed ? 0.28 : 0.6)));
     ctx.font = `${px / scale}px ui-sans-serif, system-ui, sans-serif`;
     ctx.fillStyle = overlaysShown ? 'rgba(255,255,255,0.95)' : THEME.ink;
     if (overlaysShown) {
@@ -284,7 +291,7 @@ export class Renderer {
 
       const text = formatValue(overlay, reading.value);
       const twoLines = sh > 22 && overlays.length <= 6;
-      const px = Math.min(11, Math.max(7, sh * (twoLines ? 0.34 : 0.55)));
+      const px = Math.min(TEXT_MAX, Math.max(7, sh * (twoLines ? 0.34 : 0.55)));
       ctx.fillStyle = contrastInk(color);
       ctx.textAlign = 'center';
       ctx.font = `${px / this.camera.scale}px ui-monospace, SFMono-Regular, Menlo, monospace`;
@@ -317,7 +324,7 @@ export class Renderer {
     if (sh < 7 || sw < 24) return;
     const ctx = this.ctx;
     const scale = this.camera.scale;
-    const px = Math.min(13, Math.max(7, h * 0.72));
+    const px = Math.min(TEXT_MAX, Math.max(7, sh * 0.72));
     ctx.font = `${px / scale}px ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif`;
     ctx.textAlign = 'left';
     ctx.fillStyle = this.state.activeOverlays.length ? 'rgba(255,255,255,0.92)' : THEME.ink;

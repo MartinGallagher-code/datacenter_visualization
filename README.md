@@ -507,7 +507,9 @@ netmesh run --for 60 && dcimport results.tsv --tidy reports/
   beside the canvas; double-click that edge to reset a width. Widths and
   collapsed state are remembered between visits.
 - **Zoom / pan** — wheel and drag (level-of-detail keeps hundreds of
-  thousands of elements smooth). `f` fits selection, `0` fits all.
+  thousands of elements smooth). `f` fits selection, `0` fits all. Labels grow
+  with the zoom — each is sized from its element's on-screen height — so
+  zooming in to read something makes it bigger, up to a ceiling.
 - **Expand / collapse** — double-click any container, use the tree, or the
   Collapse racks/rows/rooms buttons. Collapsed containers show their
   aggregate results computed from all raw samples inside them.
@@ -527,8 +529,9 @@ netmesh run --for 60 && dcimport results.tsv --tidy reports/
   results file can carry twenty-odd overlays. Overlays are **grouped by the
   file they came from**, and each group's header collapses it, so an mx export
   and an iperf export loaded together stay tellable apart; the header counts
-  the group's overlays and how many are shown. A test fed by several files
-  (the append-only workflow) is filed under the first that carried it.
+  the group's overlays and how many are shown, and its **×** removes that
+  file's overlays alone. A test fed by several files (the append-only
+  workflow) is filed under the first that carried it.
 - **Networks** — toggle each named fabric, or **Show all** / **Hide all** them
   at once; opacity slider for dense views.
 - **Measured flows** — `mx export --peers` and `iperf_orchestrator` write one

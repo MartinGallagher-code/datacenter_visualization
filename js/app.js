@@ -238,6 +238,20 @@ const actions = {
     refreshPanels();
   },
 
+  // Everything one results file contributed, dropped together. A test that
+  // several files fed is grouped under the first, so that is the group that
+  // owns it here too.
+  removeOverlayGroup(source) {
+    for (const overlay of [...state.overlays.values()]) {
+      if (((overlay.sources && overlay.sources[0]) || '') !== source) continue;
+      state.rawOverlays.delete(overlay.name);
+      state.overlays.delete(overlay.name);
+    }
+    state.groupsOff.delete(source);
+    refreshPanels();
+    invalidate();
+  },
+
   setAllOverlays(enabled) {
     for (const overlay of state.overlays.values()) {
       overlay.enabled = enabled;
