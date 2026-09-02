@@ -32,6 +32,13 @@ written. **Insert template** drops in a commented skeleton to start from, and
 **Download .dc** saves the result as a file. The same editor works on a loaded
 file, which makes it the quickest way to learn what a line expands to.
 
+The editor completes as you type (or on **Ctrl+Space**): kinds at the start of
+a line, then the keys that line takes, then values — enumerated ones like
+`mode=` and `style=`, and ones harvested from the layout itself, so `role=`
+offers the roles this file already uses and `+` offers its tags. **Syntax**
+opens a reference panel beside the text with every construct as a
+click-to-insert snippet.
+
 ## The layout file (`.dc`)
 
 Indentation-based. Every line is `<kind> <id> [key=value ...] [+tag ...]`:

@@ -19,6 +19,7 @@ import {
   bindOverlay, clearOverlayCache, formatValue, overlayValue, parseResults, recomputeDomain,
 } from './results.js';
 import { renderInspector, renderNets, renderOverlays, renderTree, renderWarnings } from './ui.js';
+import { attachHints, renderReference } from './hints.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -416,12 +417,22 @@ $('editor-text').addEventListener('input', () => {
   applyEditor();
 });
 
-// Tab indents (the format is indentation-based); the default would leave the field.
-$('editor-text').addEventListener('keydown', (e) => {
-  if (e.key !== 'Tab') return;
-  e.preventDefault();
-  e.target.setRangeText('  ', e.target.selectionStart, e.target.selectionEnd, 'end');
-  applyEditor();
+// Completions (as you type, or Ctrl+Space) and Tab-indent live in hints.js;
+// accepting a completion fires `input`, so the re-parse path above runs.
+attachHints($('editor-text'));
+
+// The syntax reference: click a snippet to insert it at the cursor.
+renderReference($('editor-help'), (snippet, ownLine) => {
+  const text = $('editor-text');
+  const pos = text.selectionStart;
+  const atLineStart = pos === 0 || text.value[pos - 1] === '\n';
+  text.setRangeText(ownLine && !atLineStart ? `\n${snippet}` : snippet, pos, text.selectionEnd, 'end');
+  text.focus();
+  text.dispatchEvent(new Event('input', { bubbles: true }));
+});
+
+$('editor-syntax').addEventListener('click', () => {
+  $('editor-help').hidden = !$('editor-help').hidden;
 });
 
 $('editor-template').addEventListener('click', () => {

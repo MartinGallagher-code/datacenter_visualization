@@ -78,11 +78,14 @@ SPDX-License-Identifier: GPL-3.0-or-later
       <div id="editor-bar">
         <span id="editor-summary"></span>
         <button id="editor-template" title="Start from a commented skeleton">Insert template</button>
+        <button id="editor-syntax" title="Syntax reference with click-to-insert snippets">Syntax</button>
         <button id="editor-download" title="Save the layout as a .dc file">Download .dc</button>
         <button id="editor-close" title="Close the editor">×</button>
       </div>
-      <textarea id="editor-text" spellcheck="false" autocomplete="off"
-                placeholder="Write a layout here — the floor plan follows as you type.
+      <div id="editor-main">
+        <textarea id="editor-text" spellcheck="false" autocomplete="off"
+                  placeholder="Write a layout here — the floor plan follows as you type.
+Ctrl+Space completes; Syntax (above) opens a reference.
 
   dc DC1 name=&quot;My Datacenter&quot;
     room R1
@@ -92,6 +95,8 @@ SPDX-License-Identifier: GPL-3.0-or-later
           node u[01..20] role=server
 
 Insert template (above) drops in a commented starting point."></textarea>
+        <aside id="editor-help" hidden></aside>
+      </div>
       <div id="editor-warnings" hidden></div>
     </section>
   </div>

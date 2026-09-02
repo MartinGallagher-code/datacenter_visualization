@@ -22,6 +22,7 @@ import { parseResults, bindOverlay, overlayValue, AGGREGATIONS } from '../js/res
 import { layout } from '../js/layout.js';
 import { compileQuery, applyFilter } from '../js/filter.js';
 import { ramp, categoricalColor, colorFor, contrastInk } from '../js/palette.js';
+import { suggestionsFor } from '../js/hints.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 let failures = 0;
@@ -147,6 +148,32 @@ eq([...small.counts], [['dc', 1], ['room', 3], ['row', 9], ['rack', 52], ['node'
   ok(sel('role=tor|role=spine') === sel('role=tor') + sel('role=spine'), 'OR');
   ok(sel('DH2') > 0 && sel('DH2') < small.all.length, 'ancestor glob');
   ok(sel('!kind=node') === small.all.length - sel('kind=node'), 'negation');
+}
+
+// -------------------------------------------------------------------- hints
+// Editor completions: the grammar plus this document's own vocabulary.
+{
+  const doc = 'dc D1\n  room R1\n    row A..B +compute\n      rack R[1..2] u=42\n'
+    + '        node tor at=42 role=tor +switch\n        node u[01..05] role=server model=r760\n'
+    + 'net data color=#4fa3ff\nlink data role=server role=tor scope=rack\n';
+  const sug = (extra) => {
+    const text = doc + extra;
+    const s = suggestionsFor(text, text.length);
+    return s ? s.options.map((o) => o.text) : [];
+  };
+  ok(suggestionsFor('', 0).options.some((o) => o.text === 'rack'), 'kinds at line start');
+  ok(sug('        node u10 ro').includes('role='), 'attribute keys, harvested and filtered');
+  ok(sug('        node u10 role=').includes('role=server'), 'attribute values harvested from the doc');
+  ok(sug('        node u10 +').includes('+switch'), 'tags harvested from the doc');
+  ok(sug('        node u10 di').includes('dir='), 'layout keys offered');
+  ok(sug('link ').includes('data'), 'net names after link');
+  ok(sug('link data +compute mode=').includes('mode=mesh'), 'link modes enumerated');
+  ok(sug('link data +compute scope=').includes('scope=rack'), 'scope offers the kinds in the doc');
+  ok(sug('net x sty').includes('style='), 'net keys');
+  ok(sug('net x style=').includes('style=dashed'), 'net style values');
+  eq(sug('# a comment abo'), [], 'no suggestions inside a comment');
+  eq(suggestionsFor(doc + 'nonsense zz', doc.length + 'nonsense zz'.length), null,
+     'nothing matching returns null');
 }
 
 // ------------------------------------------------------------------ results
