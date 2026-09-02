@@ -140,8 +140,16 @@ function groupHeader(state, source, list, actions) {
   const on = list.filter((o) => o.enabled).length;
   row.append(el('span', 'overlay-group-count', on ? `${on}/${list.length}` : String(list.length)));
   row.title = `${list.length} overlay${list.length === 1 ? '' : 's'} from ${source || 'this file'}`
-    + (on ? `, ${on} shown` : '');
+    + (on ? `, ${on} shown` : '') + ' — click to collapse';
   row.addEventListener('click', () => actions.toggleOverlayGroup(source));
+
+  const remove = el('button', 'overlay-x', '×');
+  remove.title = `Remove all ${list.length} overlays from ${source || 'this file'}`;
+  remove.addEventListener('click', (ev) => {
+    ev.stopPropagation();               // the row itself collapses; this removes
+    actions.removeOverlayGroup(source);
+  });
+  row.append(remove);
   return row;
 }
 
