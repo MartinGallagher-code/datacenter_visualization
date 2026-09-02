@@ -166,6 +166,10 @@ const actions = {
   setOverlayEnabled(overlay, enabled) {
     overlay.enabled = enabled;
     if (enabled && overlay.autoDomain) recomputeDomain(overlay, state.model);
+    // Its flow layer goes with it: the "draw measured flows" box lives in the
+    // overlay's body, which an unticked overlay hides, so leaving it set would
+    // keep drawing curves with no visible control to stop them.
+    else overlay.drawFlows = false;
     refreshPanels();
     invalidate();
   },
@@ -256,6 +260,7 @@ const actions = {
     for (const overlay of state.overlays.values()) {
       overlay.enabled = enabled;
       if (enabled && overlay.autoDomain) recomputeDomain(overlay, state.model);
+      else overlay.drawFlows = false;        // as above, for every overlay at once
     }
     refreshPanels();
     invalidate();
