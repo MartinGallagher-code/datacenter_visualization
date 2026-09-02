@@ -342,6 +342,56 @@ ok(missing[0].includes('target'), 'missing target is reported');
 const braced = parseResults('# {not json}\ntemp_c\tDH1/A/R01/u05\t61.2\n');
 eq(braced.get('temp_c').samples.length, 1, 'comment starting with { stays text');
 
+// -------------------------------------------------------------- flow data
+// mx and iperf measure a host PAIR, and those samples carry `peer=`. They are
+// kept whole beside the aggregate, because the aggregate is exactly what
+// hides the pair: a host with four flows reads as one number.
+{
+  const flat = parseLayout(readFileSync(join(root, 'examples/hostnames.dc'), 'utf8'));
+  const raw = parseResults(readFileSync(join(root, 'tests/fixtures/mx-export/results.tsv'), 'utf8'));
+
+  const peers = bindOverlay(raw.get('mx_peer_pps'), flat);
+  ok(peers.hasFlows, 'a per-peer overlay carries flows');
+  const host = flat.resolve('wr01r01u01');
+  const flows = peers.flowsByEl.get(host.key);
+  eq(flows.map((f) => f.peer), ['wr01r01u02', 'wr01r02u01'], 'both of the host\'s flows are kept');
+  ok(flows.every((f) => f.peerEl), 'and each peer resolves to an element to draw to');
+  // The aggregate reduces them to one number -- the thing the flows recover.
+  eq(overlayValue(peers, host).samples, 2, 'the host reading aggregates the same two');
+
+  // A per-host overlay has no flows at all, so nothing offers to draw them.
+  ok(!bindOverlay(raw.get('mx_pps'), flat).hasFlows, 'a per-host overlay carries none');
+
+  // iperf writes the same shape, so one code path serves both tools.
+  const iperf = parseResults(readFileSync(join(root, 'tests/fixtures/iperf-overlay.tsv'), 'utf8'));
+  const out = bindOverlay(iperf.get('iperf_mbps_out'), flat);
+  ok(out.hasFlows, 'iperf per-direction throughput carries flows too');
+  eq(out.flowsByEl.get(flat.resolve('wr01r01u01').key).map((f) => [f.peer, f.value]),
+     [['wr01r01u02', 1000], ['wr01r02u01', 800]],
+     'each direction keeps the peer it was measured against');
+
+  // `peer=` selects the hosts that measured a flow to a given host, which no
+  // attribute lookup can do -- it lives in sample metadata.
+  const overlays = new Map([['mx_peer_pps', peers]]);
+  const ctx = {
+    hasOverlay: (n) => overlays.has(n),
+    readingOf: () => null,
+    flowsOf: (el) => {
+      const out2 = [];
+      for (const ov of overlays.values()) {
+        const f = ov.flowsByEl.get(el.key);
+        if (f) for (const one of f) out2.push({ overlay: ov, ...one });
+      }
+      return out2;
+    },
+  };
+  const hits = (q) => applyFilter(flat, compileQuery(q, ctx));
+  eq(hits('peer=wr01r01u02'), 1, 'peer= finds the host that measured to it');
+  eq(hits('peer=wr01r02*'), 2, 'peer= globs like every other selector');
+  eq(hits('peer=nosuch'), 0, 'and matches nothing when no flow went there');
+  applyFilter(flat, null);
+}
+
 // ------------------------------------------------------------- link summary
 // Cables hang off the leaf devices, so a rack or a room carries none of its
 // own: the only way to answer "what is wired to this rack" is the subtree.

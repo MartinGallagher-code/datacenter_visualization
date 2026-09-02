@@ -20,6 +20,7 @@
 //   ^gpu                tag written on the element itself
 //   kind:rack           element kind (kind=rack works too)
 //   model=r76*          attribute, glob-aware
+//   peer=wr01r01u02     measured a flow to that host (mx/iperf per-peer data)
 //   temp_c>70           overlay reading comparison (also < <= >= = !=)
 //   has:temp_c          element has a reading for that test
 //   net:storage         element is attached to that network
@@ -76,6 +77,12 @@ function compileAtom(atom, ctx) {
   if (lower.startsWith('kind:')) {
     const re = globToRegExp(atom.slice(5));
     return (el) => re.test(el.kind);
+  }
+  // `peer=host` selects the elements that measured a flow to it -- sample
+  // metadata, which the attribute lookup below cannot see.
+  if (/^peer\s*=/.test(lower)) {
+    const re = globToRegExp(atom.slice(atom.indexOf('=') + 1).trim());
+    return (el) => ctx.flowsOf && ctx.flowsOf(el).some((f) => re.test(f.peer));
   }
   if (lower.startsWith('net:')) {
     const re = globToRegExp(atom.slice(4));

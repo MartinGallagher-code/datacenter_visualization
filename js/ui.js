@@ -206,8 +206,24 @@ function overlayCard(state, overlay, actions) {
     body.append(scale);
   }
 
+  if (overlay.hasFlows) {
+    const row = el('label', 'chk flowchk');
+    const box = el('input');
+    box.type = 'checkbox';
+    box.checked = !!overlay.drawFlows;
+    box.addEventListener('change', () => actions.setOverlayFlows(overlay, box.checked));
+    row.append(box, el('span', null, 'draw measured flows'));
+    row.title = 'Draw each measured host-to-host pair as a curve. These are flows, '
+      + 'not cables: the traffic crossed every hop between the two ends.';
+    body.append(row);
+  }
+
   const stats = el('div', 'overlay-stats');
   stats.append(el('span', null, `${overlay.sampleCount} samples`));
+  if (overlay.hasFlows) {
+    stats.append(document.createTextNode(' · '));
+    stats.append(el('span', null, `${overlay.flowsByEl.size} hosts with flows`));
+  }
   if (overlay.unresolved.length) {
     stats.append(document.createTextNode(' · '));
     const bad = el('span', 'bad', `${overlay.unresolved.length} unmatched target${overlay.unresolved.length === 1 ? '' : 's'}`);
@@ -373,6 +389,54 @@ export function renderInspector(state, host, actions) {
   if (any) {
     host.append(el('h2', null, 'Readings'));
     host.append(readings);
+  }
+
+  renderFlows(state, host, node);
+}
+
+const FLOWS_SHOWN = 12;
+
+/**
+ * Per-peer readings for the selected element. mx and iperf measure a pair, so
+ * these say how much moved between two hosts -- which the aggregate above
+ * ("max of 4") deliberately hides.
+ */
+function renderFlows(state, host, node) {
+  const flows = state.flowsOf(node);
+  if (!flows.length) return;
+
+  host.append(el('h2', null, 'Measured flows'));
+  const note = el('p', 'flownote',
+    'End to end between two hosts, not one cable: the traffic crossed every hop between them.');
+  host.append(note);
+
+  const byOverlay = new Map();
+  for (const flow of flows) {
+    const bucket = byOverlay.get(flow.overlay);
+    if (bucket) bucket.push(flow);
+    else byOverlay.set(flow.overlay, [flow]);
+  }
+
+  for (const [overlay, list] of byOverlay) {
+    host.append(el('div', 'flowhead', overlay.label));
+    const box = el('div', 'flows');
+    // Worst first: the reason to open this panel is usually one bad peer.
+    const sorted = overlay.numeric ? [...list].sort((a, b) => b.value - a.value) : list;
+    for (const flow of sorted.slice(0, FLOWS_SHOWN)) {
+      const row = el('div', 'flow');
+      const dot = el('span', 'dot');
+      dot.style.background = colorFor(overlay, { numeric: flow.numeric, value: flow.value }) || '#444';
+      row.append(dot);
+      const name = el('span', 'flowpeer', `→ ${flow.peerEl ? flow.peerEl.name : flow.peer}`);
+      if (!flow.peerEl) name.title = `${flow.peer} is not an element in this layout`;
+      row.append(name);
+      row.append(el('span', 'val', `${formatValue(overlay, flow.value)}${overlay.unit}`));
+      box.append(row);
+    }
+    if (sorted.length > FLOWS_SHOWN) {
+      box.append(el('div', 'tree-more', `… ${sorted.length - FLOWS_SHOWN} more`));
+    }
+    host.append(box);
   }
 }
 

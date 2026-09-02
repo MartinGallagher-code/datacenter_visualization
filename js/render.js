@@ -51,7 +51,7 @@ export class Renderer {
     this.camera = { x: 0, y: 0, scale: 1 };
     this.hover = null;
     this.linkCache = { version: -1, nets: new Map() };
-    this.stats = { drawn: 0, links: 0 };
+    this.stats = { drawn: 0, links: 0, flows: 0 };
   }
 
   // ------------------------------------------------------------- coordinates
@@ -139,10 +139,12 @@ export class Renderer {
     ctx.lineJoin = 'miter';
     ctx.textBaseline = 'middle';
     this.stats.drawn = 0;
+    this.stats.flows = 0;
 
     const root = this.state.model.root;
     if (root && root.box) this.drawElement(root);
     this.drawLinks();
+    this.drawFlows();
     this.drawSelection();
   }
 
@@ -392,6 +394,63 @@ export class Renderer {
         if (drawn > state.maxLinksDrawn) break;
       }
       this.stats.links += drawn;
+    }
+
+    ctx.setLineDash([]);
+    ctx.globalAlpha = 1;
+  }
+
+  /**
+   * Measured host-to-host flows, drawn as their own layer.
+   *
+   * These are NOT cables: mx and iperf measure end to end, so a flow between
+   * two servers in one rack really crossed server -> ToR -> server, two hops.
+   * They are drawn dashed and curved so they never read as a fabric, coloured
+   * by the overlay's own ramp at the flow's value.
+   */
+  drawFlows() {
+    const state = this.state;
+    const layers = [...state.overlays.values()].filter((o) => o.drawFlows && o.hasFlows);
+    if (!layers.length) return;
+
+    const ctx = this.ctx;
+    const scale = this.camera.scale;
+    const only = state.isolateLinks ? state.selected : null;
+    ctx.lineCap = 'round';
+    ctx.setLineDash([6 / scale, 4 / scale]);
+
+    for (const overlay of layers) {
+      for (const [key, flows] of overlay.flowsByEl) {
+        const from = state.model.byKey.get(key);
+        if (!from) continue;
+        for (const flow of flows) {
+          const to = flow.peerEl;
+          if (!to || to === from) continue;
+          if (only && !sharesLineage(from, only) && !sharesLineage(to, only)) continue;
+
+          const a = state.drawnEndpoint(from);
+          const b = state.drawnEndpoint(to);
+          if (!a || !b || a === b || !a.box || !b.box) continue;
+          const ax = a.box.x + a.box.w / 2;
+          const ay = a.box.y + a.box.h / 2;
+          const bx = b.box.x + b.box.w / 2;
+          const by = b.box.y + b.box.h / 2;
+          if (!this.segmentVisible(ax, ay, bx, by)) continue;
+
+          ctx.strokeStyle = colorFor(overlay, { numeric: flow.numeric, value: flow.value }) || '#c986ff';
+          ctx.globalAlpha = Math.max(0.25, state.linkOpacity);
+          ctx.lineWidth = 2.2 / scale;
+          // Bowed away from the straight line, so a flow and the cable under
+          // it stay separable even when the pair is directly wired.
+          const mx = (ax + bx) / 2 + (ay - by) * 0.12;
+          const my = (ay + by) / 2 + (bx - ax) * 0.12;
+          ctx.beginPath();
+          ctx.moveTo(ax, ay);
+          ctx.quadraticCurveTo(mx, my, bx, by);
+          ctx.stroke();
+          this.stats.flows++;
+        }
+      }
     }
 
     ctx.setLineDash([]);

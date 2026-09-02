@@ -518,6 +518,17 @@ netmesh run --for 60 && dcimport results.tsv --tidy reports/
   pick the aggregation, palette, and value range live.
 - **Networks** — toggle each named fabric, or **Show all** / **Hide all** them
   at once; opacity slider for dense views.
+- **Measured flows** — `mx export --peers` and `iperf_orchestrator` write one
+  sample per *flow*, tagged `peer=`. Those overlays offer **draw measured
+  flows**, which paints each measured pair as a dashed curve coloured by its
+  own value, and the inspector lists a host's flows per peer (worst first)
+  rather than only the aggregate that hides them. `peer=wr01r01u02` in the
+  filter bar selects the hosts that measured a flow to that host, globs
+  included. **A flow is not a cable**: mx and iperf measure end to end, so a
+  flow between two servers in one rack really crossed server → ToR → server,
+  and neither tool can say how the traffic divided across the hops. For
+  per-cable numbers you need switch interface counters, which are a different
+  measurement entirely.
 - **Inspector** — click an element for its tags (click a tag to filter by
   it), attributes, U-slot, link counts, and all its readings. Cables hang off
   the leaf devices, so a rack, row or room reports **links below** instead:
