@@ -28,6 +28,7 @@ const AUTO_COLLAPSE_ABOVE = 20000;   // elements, before racks start out collaps
 const state = {
   model: parseLayout(''),
   layoutText: '',           // the source of the current model, as the editor sees it
+  netOverrides: new Map(),  // net name -> enabled, the user's own panel toggles
   rawOverlays: new Map(),   // test name -> { name, samples, meta } straight from the files
   overlays: new Map(),      // test name -> bound overlay with display settings
   activeOverlays: [],
@@ -178,6 +179,10 @@ const actions = {
 
   setNetEnabled(net, enabled) {
     net.enabled = enabled;
+    // Remember the choice by name: every re-parse (each editor keystroke)
+    // builds fresh net objects, and without this the checkbox snaps back to
+    // the file's default mid-edit.
+    state.netOverrides.set(net.name, enabled);
     state.version++;          // force the link cache to rebuild
     invalidate();
   },
@@ -215,6 +220,13 @@ function setCollapseAtKind(kind) {
 function loadLayoutText(text, { keepCamera = false } = {}) {
   state.layoutText = text;
   state.model = parseLayout(text);
+  // The user's own panel toggles outlive the re-parse; a net the file no
+  // longer declares just drops its stale entry.
+  for (const [name, enabled] of state.netOverrides) {
+    const net = state.model.nets.get(name);
+    if (net) net.enabled = enabled;
+    else state.netOverrides.delete(name);
+  }
   state.selected = null;
   state.warnings = [...state.model.warnings];
   $('title').textContent = state.model.title;
