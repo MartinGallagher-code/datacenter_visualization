@@ -301,6 +301,8 @@ function buildLinks(rules, model) {
     netIndex++;
     const cap = parseInt(rule.cap ?? '2000000', 10);
     let made = 0;
+    let matchedA = 0;
+    let matchedB = 0;
     const matchA = compileSelector(rule.selA);
     const matchB = rule.selB ? compileSelector(rule.selB) : null;
 
@@ -309,6 +311,8 @@ function buildLinks(rules, model) {
       const a = matchA(el);
       const b = matchB ? matchB(el) : false;
       if (!a && !b) continue;
+      if (a) matchedA++;
+      if (b) matchedB++;
       const gk = groupKeyFor(el, rule.scope);
       if (gk === null) continue;
       let g = groups.get(gk);
@@ -344,13 +348,32 @@ function buildLinks(rules, model) {
         for (let i = 0; i + 1 < A.length; i++) emit(A[i], A[i + 1]);
         if (mode === 'ring' && A.length > 2) emit(A[A.length - 1], A[0]);
       } else if (mode === 'pair') {
-        for (let i = 0; i < Math.min(A.length, B.length); i++) emit(A[i], B[i]);
+        if (matchB) {
+          for (let i = 0; i < Math.min(A.length, B.length); i++) emit(A[i], B[i]);
+        } else {
+          // One selector pairs consecutive matches off (1-2, 3-4, ...); joining
+          // A[i] to B[i] with B === A would pair every element with itself,
+          // which emit drops -- a rule that could never wire anything.
+          for (let i = 0; i + 1 < A.length; i += 2) emit(A[i], A[i + 1]);
+        }
       } else {
         model.warnings.push(`unknown link mode "${mode}"`);
       }
     }
 
     if (made >= cap) model.warnings.push(`net "${rule.net}": link rule hit the cap of ${cap}`);
+
+    // A mistyped selector matches nothing and the rule silently wires nothing,
+    // which reads as "no cables" rather than "typo" -- so say which it was.
+    if (!matchedA) {
+      model.warnings.push(`net "${rule.net}": selector "${rule.selA}" matched no elements`);
+    } else if (matchB && !matchedB) {
+      model.warnings.push(`net "${rule.net}": selector "${rule.selB}" matched no elements`);
+    } else if (!made) {
+      model.warnings.push(
+        `net "${rule.net}": rule matched ${matchedA + matchedB} elements but wired nothing`
+        + (rule.scope ? ` — check scope=${rule.scope}` : ''));
+    }
   }
 
   return links;
@@ -418,9 +441,14 @@ export function parseLayout(text) {
     if (n === 1) rootSyn = only;
   }
 
-  materialize(rootSyn, null, model);
+  if (elementNodes.length) materialize(rootSyn, null, model);
   model.root = model.all[0] || null;
   if (model.root) model.title = model.root.name;
+
+  // Per-kind tally, in first-seen (outermost-first) order: the one-line answer
+  // to "did the expansion produce what I meant" -- 48 racks, not 480.
+  model.counts = new Map();
+  for (const el of model.all) model.counts.set(el.kind, (model.counts.get(el.kind) || 0) + 1);
 
   const rules = linkRules.filter((r) => r.net && r.selA);
   for (const rule of rules) {

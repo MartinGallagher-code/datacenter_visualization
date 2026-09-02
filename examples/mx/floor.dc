@@ -69,6 +69,7 @@ link storage +storage,role=server scope=row mode=mesh
 link mgmt    kind=node,+mgmt scope=dc mode=chain
 # ring: the spines close a loop among themselves.
 link uplink  role=spine scope=dc mode=ring
-# pair, with a non-inherited tag, a glob and a negation: ToRs pair off across
-# the halls, skipping anything decommissioned.
-link mgmt    ^switch,model=sn3700*,!+decom scope=dc mode=pair
+# pair, with non-inherited tags, a glob and a negation: each compute-hall ToR
+# in hall A pairs with its opposite number in hall B, skipping anything
+# decommissioned. (The storage ToRs inherit model=r760, so the glob skips them.)
+link mgmt    ^switch,model=sn3700*,+hall-a,!+decom ^switch,model=sn3700*,+hall-b,!+decom scope=dc mode=pair

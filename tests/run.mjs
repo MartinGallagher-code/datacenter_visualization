@@ -22,6 +22,7 @@ import { parseResults, bindOverlay, overlayValue, AGGREGATIONS } from '../js/res
 import { layout } from '../js/layout.js';
 import { compileQuery, applyFilter } from '../js/filter.js';
 import { ramp, categoricalColor, colorFor, contrastInk } from '../js/palette.js';
+import { suggestionsFor } from '../js/hints.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 let failures = 0;
@@ -44,6 +45,10 @@ eq(expand('[a|b|c]'), ['a', 'b', 'c'], 'alternatives');
 eq(expand('r[1..2]-[a|b]'), ['r1-a', 'r1-b', 'r2-a', 'r2-b'], 'cartesian');
 eq(expand('plain'), ['plain'], 'no-op');
 eq(expand('[10..8]'), ['10', '9', '8'], 'descending');
+eq(expand('R[1..4,7..10]'), ['R1', 'R2', 'R3', 'R4', 'R7', 'R8', 'R9', 'R10'], 'segmented range');
+eq(expand('[7..11x2,25..26]'), ['7', '9', '11', '25', '26'], 'stepped segments');
+eq(expand('[01..02,07..08]'), ['01', '02', '07', '08'], 'segments keep padding');
+eq(expand('[a|b,X..Y]'), ['a', 'b', 'X', 'Y'], 'segments mix with alternatives');
 eq(subst('Hall {id} of {dc}', { id: 'H1', dc: 'MEGA' }), 'Hall H1 of MEGA', 'subst');
 eq(subst('{missing}', {}), '{missing}', 'subst leaves unknown keys');
 
@@ -82,6 +87,59 @@ const generic = parseLayout('pod P[1..2]\n  shelf S[1..3]\n    node n[1..4]\nnet
 eq(generic.all.length, 1 + 2 + 6 + 24, 'generic kinds materialize');
 eq(generic.links.length, 6 * 4, 'ring links per shelf');
 
+// Empty text is an empty model, not a synthetic lone box: the viewer starts
+// blank and the editor's first keystroke is what brings elements into being.
+{
+  const empty = parseLayout('');
+  eq(empty.all.length, 0, 'empty text parses to an empty model');
+  eq(empty.root, null, 'empty model has no root');
+}
+
+// Per-kind tally, the sanity check that the expansion multiplied as intended.
+eq([...small.counts], [['dc', 1], ['room', 3], ['row', 9], ['rack', 52], ['node', 1092]],
+   'per-kind counts in outermost-first order');
+
+// Segmented ranges: numbering with holes stays one declaration, and expands
+// to exactly what the two-block spelling would have.
+{
+  const rows3 = parseLayout(readFileSync(join(root, 'examples/three-rows.dc'), 'utf8'));
+  eq(rows3.warnings, [], 'three-rows.dc parses clean');
+  eq([rows3.counts.get('rack'), rows3.counts.get('node')], [24, 216], 'three-rows.dc counts');
+  eq(rows3.resolve('ROOM1/A/R7/u25').uAt, 25, 'segmented node pinned to its slot');
+  ok(!rows3.resolve('ROOM1/A/R5'), 'the gap racks are not declared');
+
+  const seg = parseLayout('row A\n  rack R[1..2,7..8]\n    node n[1..2]\n');
+  const two = parseLayout('row A\n  rack R[1..2]\n    node n[1..2]\n  rack R[7..8]\n    node n[1..2]\n');
+  eq(seg.all.map((e) => e.key), two.all.map((e) => e.key), 'segments equal the two-block spelling');
+}
+
+// A link rule that wires nothing says why, instead of leaving a silently
+// empty fabric: a typo'd selector is named, and a rule whose matches were
+// all one-sided within its scope is reported too.
+{
+  const typo = parseLayout('rack A\n  node n1 role=server\nnet x\nlink x role=sever role=tor\n');
+  ok(typo.warnings.some((w) => w.includes('"role=sever" matched no elements')),
+     'zero-match first selector warns');
+  const oneWay = parseLayout('rack A\n  node n[1..2] role=server\nnet x\nlink x role=server role=tor\n');
+  ok(oneWay.warnings.some((w) => w.includes('"role=tor" matched no elements')),
+     'zero-match second selector warns');
+  const oneSided = parseLayout(
+    'row A\n  rack R1\n    node n1 role=server\n  rack R2\n    node m1 role=tor\n'
+    + 'net x\nlink x role=server role=tor scope=rack\n');
+  ok(oneSided.warnings.some((w) => w.includes('wired nothing') && w.includes('scope=rack')),
+     'matched-but-unwired rule warns with its scope');
+  eq(oneSided.links.length, 0, 'and indeed wired nothing');
+}
+
+// pair with one selector pairs consecutive matches off; with B === A the old
+// A[i]-B[i] joining paired every element with itself and never wired anything.
+{
+  const paired = parseLayout('rack A\n  node n[1..5] role=server\nnet x\nlink x role=server mode=pair\n');
+  eq(paired.warnings, [], 'single-selector pair parses clean');
+  eq(paired.links.map((l) => `${l.a.id}-${l.b.id}`), ['n1-n2', 'n3-n4'],
+     'consecutive matches pair off, the odd one out stays unwired');
+}
+
 // --------------------------------------------------------------- selectors
 {
   const sel = (s) => small.all.filter(compileSelector(s)).length;
@@ -90,6 +148,32 @@ eq(generic.links.length, 6 * 4, 'ring links per shelf');
   ok(sel('role=tor|role=spine') === sel('role=tor') + sel('role=spine'), 'OR');
   ok(sel('DH2') > 0 && sel('DH2') < small.all.length, 'ancestor glob');
   ok(sel('!kind=node') === small.all.length - sel('kind=node'), 'negation');
+}
+
+// -------------------------------------------------------------------- hints
+// Editor completions: the grammar plus this document's own vocabulary.
+{
+  const doc = 'dc D1\n  room R1\n    row A..B +compute\n      rack R[1..2] u=42\n'
+    + '        node tor at=42 role=tor +switch\n        node u[01..05] role=server model=r760\n'
+    + 'net data color=#4fa3ff\nlink data role=server role=tor scope=rack\n';
+  const sug = (extra) => {
+    const text = doc + extra;
+    const s = suggestionsFor(text, text.length);
+    return s ? s.options.map((o) => o.text) : [];
+  };
+  ok(suggestionsFor('', 0).options.some((o) => o.text === 'rack'), 'kinds at line start');
+  ok(sug('        node u10 ro').includes('role='), 'attribute keys, harvested and filtered');
+  ok(sug('        node u10 role=').includes('role=server'), 'attribute values harvested from the doc');
+  ok(sug('        node u10 +').includes('+switch'), 'tags harvested from the doc');
+  ok(sug('        node u10 di').includes('dir='), 'layout keys offered');
+  ok(sug('link ').includes('data'), 'net names after link');
+  ok(sug('link data +compute mode=').includes('mode=mesh'), 'link modes enumerated');
+  ok(sug('link data +compute scope=').includes('scope=rack'), 'scope offers the kinds in the doc');
+  ok(sug('net x sty').includes('style='), 'net keys');
+  ok(sug('net x style=').includes('style=dashed'), 'net style values');
+  eq(sug('# a comment abo'), [], 'no suggestions inside a comment');
+  eq(suggestionsFor(doc + 'nonsense zz', doc.length + 'nonsense zz'.length), null,
+     'nothing matching returns null');
 }
 
 // ------------------------------------------------------------------ results
@@ -501,6 +585,13 @@ if (python.error) {
   eq(floor.warnings, [], 'examples/mx/floor.dc parses clean');
   ok(floor.links.length > 300, `and wires its four nets (${floor.links.length} cables)`);
   eq([...floor.nets.keys()], ['data', 'uplink', 'mgmt', 'storage'], 'all four nets declared');
+  // The pair rule wires the halls' ToRs to each other: 8 pairs, plus the
+  // service cage's 5-link chain. It read 0 before zero-wire rules warned.
+  eq(floor.links.filter((l) => l.net === 'mgmt').length, 13, 'the mgmt pair rule wires');
+
+  const iperfFloor = parseLayout(readFileSync(join(root, 'examples/iperf/floor.dc'), 'utf8'));
+  eq(iperfFloor.warnings, [], 'examples/iperf/floor.dc parses clean');
+  ok(iperfFloor.links.length > 100, `and wires its five nets (${iperfFloor.links.length} cables)`);
   // Every naming form the layout uses has to be reachable from a results file.
   for (const target of ['wr01r01u01', 'wr01r09d01', 'wr02r01u11', 'sp1', 'web-1'])
     ok(floor.resolve(target), `${target} resolves in the demo floor`);

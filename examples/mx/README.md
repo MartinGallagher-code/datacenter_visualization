@@ -24,10 +24,10 @@ output carrying every overlay that tool writes.
 | Container shaping | `cols=2` on the halls, `dir=x` on the cage |
 | Networks: colour, style, width | the four `net` lines |
 | Link modes: `star`, `mesh`, `chain`, `ring`, `pair` | the six `link` lines |
-| Selectors: tag, non-inherited `^tag`, `kind=`, `attr=` glob, negation | `^switch,model=sn3700*,!+decom` |
+| Selectors: tag, non-inherited `^tag`, `kind=`, `attr=` glob, negation | `^switch,model=sn3700*,+hall-a,!+decom` |
 | `scope=` grouping | `scope=rack`, `scope=row`, `scope=dc` |
 
-168 elements and 313 cables from 74 lines, most of it comment.
+168 elements and 321 cables from 76 lines, most of it comment.
 
 ## What the results demonstrate
 

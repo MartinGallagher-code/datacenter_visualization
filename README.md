@@ -15,16 +15,29 @@ python3 -m http.server 8000        # any static file server works
 # open http://localhost:8000/
 ```
 
-The viewer boots with the bundled example (`examples/small.dc` +
-`examples/small-results.tsv`). Load your own files with the **Load files…**
-button, by dragging them onto the window, or with URL parameters:
+The viewer starts empty. Load files with the **Load files…** button, by
+dragging them onto the window, or with URL parameters:
 
 ```
-http://localhost:8000/?layout=examples/mega.dc&results=a.tsv,b.tsv
+http://localhost:8000/?layout=examples/small.dc&results=examples/small-results.tsv
 ```
 
-Try the scale test: `?layout=examples/mega.dc&results=` is a ~256,000-element
+Try the scale test: `?layout=examples/mega.dc` is a ~256,000-element
 campus with ~560,000 cables, described in 45 lines.
+
+Or write a layout from nothing: **Edit layout** opens an editor under the
+canvas that re-parses on every keystroke, so the floor plan, a per-kind tally
+(`3 rows · 24 racks · 216 nodes`) and any warnings follow the line being
+written. **Insert template** drops in a commented skeleton to start from, and
+**Download .dc** saves the result as a file. The same editor works on a loaded
+file, which makes it the quickest way to learn what a line expands to.
+
+The editor completes as you type (or on **Ctrl+Space**): kinds at the start of
+a line, then the keys that line takes, then values — enumerated ones like
+`mode=` and `style=`, and ones harvested from the layout itself, so `role=`
+offers the roles this file already uses and `+` offers its tags. **Syntax**
+opens a reference panel beside the text with every construct as a
+click-to-insert snippet.
 
 ## The layout file (`.dc`)
 
@@ -62,6 +75,12 @@ generic container. There is no schema to declare.
 | `A..H` | `A B … H` (letters; bare or bracketed) |
 | `[web\|db\|cache]` | `web db cache` (alternatives) |
 | `r[1..2]-[a\|b]` | `r1-a r1-b r2-a r2-b` (cartesian) |
+| `R[1..4,7..10]` | `R1 … R4 R7 … R10` (comma-separated segments) |
+
+Segments are how numbering with holes stays on one line: racks 1–4 and 7–10
+around a gap are `rack R[1..4,7..10]`, with the children written once instead
+of once per block — see `examples/three-rows.dc`, which also pins sparse
+U-slots the same way (`node [7..15x2,25..31x2] id=u{id} at={id}`).
 
 `{placeholders}` in attributes refer to enclosing elements:
 `name="Hall {id}"`, `power=grid-{i}`, `{room}`, `{row}`, `{parent}`.
@@ -101,7 +120,11 @@ link storage +storage,role=server scope=row mode=mesh  # full mesh within a row
   `!` negation, `|` alternatives, `,` for AND.
 - `scope=` groups matches per rack/row/room/… before wiring.
 - `mode=` is `star` (A×B, default with two selectors), `mesh` (default with
-  one), `chain`, `ring`, or `pair`.
+  one), `chain`, `ring`, or `pair` (A[i] to B[i]; with one selector,
+  consecutive matches pair off — 1st–2nd, 3rd–4th, …).
+- A rule that wires nothing says so: a selector that matched no elements (the
+  shape a typo makes) and a rule whose matches produced no cables are both
+  reported as warnings rather than left as a silently empty fabric.
 
 Networks toggle on and off in the UI. Collapsed or zoomed-out regions merge
 their cables into one thicker line; very dense views fade automatically.
