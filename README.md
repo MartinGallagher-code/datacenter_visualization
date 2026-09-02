@@ -536,6 +536,9 @@ netmesh run --for 60 && dcimport results.tsv --tidy reports/
   it and the ones that leave. **Show only this element's cables** then hides
   every cable that neither starts nor ends inside the selection, at any level
   — one server's two cables, or everything entering and leaving a room.
+  The elements at either end of the surviving cables are marked with a faint
+  wash and outline (a dot where they are too small to outline), so the far
+  end of a hairline is visible without tracing it.
 
 ## Repository layout
 
