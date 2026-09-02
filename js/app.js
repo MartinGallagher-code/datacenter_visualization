@@ -614,3 +614,9 @@ function debounce(fn, ms) {
 
 boot();
 requestAnimationFrame(frame);
+
+// The fallback banner in index.html watches for this flag. If the module
+// graph did not run to completion -- file:// blocks modules entirely, and a
+// browser cache holding a previous js/ behind a newer index.html runs old
+// code that never sets it -- the banner appears and says what to do.
+window.__dcLayoutViewer = 'ready';
