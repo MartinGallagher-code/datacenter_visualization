@@ -27,7 +27,7 @@
 // Matching an element implicitly reveals its ancestors, so a hit deep in a rack
 // does not leave the rack itself filtered out from around it.
 
-import { globToRegExp } from './select.js';
+import { globToRegExp, hasGlob, tagMatcher } from './select.js';
 
 const OPS = {
   '>=': (a, b) => a >= b,
@@ -67,14 +67,8 @@ function haystack(el) {
 function compileAtom(atom, ctx) {
   const lower = atom.toLowerCase();
 
-  if (atom.startsWith('+')) {
-    const tag = lower.slice(1);
-    return (el) => el.tagsAll.has(tag);
-  }
-  if (atom.startsWith('^')) {
-    const tag = lower.slice(1);
-    return (el) => el.tags.has(tag);
-  }
+  if (atom.startsWith('+')) return tagMatcher(lower.slice(1), false);
+  if (atom.startsWith('^')) return tagMatcher(lower.slice(1), true);
   if (lower.startsWith('has:')) {
     const test = atom.slice(4);
     return (el) => ctx.readingOf(test, el, true) !== null;
@@ -131,7 +125,7 @@ function compileAtom(atom, ctx) {
   }
 
   // Bare word: substring across everything searchable, or a glob if it has one.
-  if (/[*?]/.test(atom)) {
+  if (hasGlob(atom)) {
     const re = globToRegExp(atom);
     return (el) => re.test(el.id) || re.test(el.name) || re.test(el.path) ||
                    [...el.tagsAll].some((t) => re.test(t));
