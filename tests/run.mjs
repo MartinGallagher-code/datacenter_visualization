@@ -131,6 +131,21 @@ eq([...small.counts], [['dc', 1], ['room', 3], ['row', 9], ['rack', 52], ['node'
   eq(oneSided.links.length, 0, 'and indeed wired nothing');
 }
 
+// A node line at the same indent as its rack becomes the rack's SIBLING, and
+// the deeper lines below become the node's children -- the rack empties out
+// and its "contents" draw beside it. Nodes rarely contain elements, so that
+// shape warns; a deliberate container uses a non-node kind and stays silent.
+{
+  const slipped = parseLayout(
+    'row A\n  rack r[1..2] u=18\n  node tor at=18\n    node u[1..16]\n');
+  eq(slipped.resolve('A/r1').children.length, 0, 'the mis-indented rack is empty');
+  eq(slipped.warnings.length, 1, 'and one warning says so');
+  ok(slipped.warnings[0].includes('node "tor" contains') && slipped.warnings[0].includes('indentation'),
+     'the warning names the node and points at indentation');
+  const chassis = parseLayout('rack A u=18\n  chassis c1 u=4\n    node blade[1..4]\n');
+  eq(chassis.warnings, [], 'a non-node container kind nests silently');
+}
+
 // A node pinned above its rack's declared height draws outside the rack --
 // the shape an at= copied from a taller rack makes -- so it warns, once per
 // declaration rather than once per expanded rack.

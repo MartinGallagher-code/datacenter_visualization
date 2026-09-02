@@ -238,6 +238,23 @@ function materialize(syn, parent, model) {
 
   const attrEntries = Object.entries(syn.attrs);
 
+  // A node holding other elements is almost always a slipped indent: a line at
+  // the same depth as its rack becomes the rack's sibling, and everything below
+  // it becomes the node's children -- racks empty out and the "contents" draw
+  // beside them. A deliberate container should use a non-node kind (chassis,
+  // shelf, ...), which draws as one and stays silent here.
+  if (syn.kind === 'node' && syn.children.length) {
+    const seen = model.nestedWarned || (model.nestedWarned = new Set());
+    if (!seen.has(syn.line)) {
+      seen.add(syn.line);
+      const inner = syn.children[0];
+      model.warnings.push(
+        `line ${syn.line}: node "${syn.idSpec ?? syn.kind}" contains the lines below it`
+        + ` (from line ${inner.line}) — nodes rarely contain elements; if the indentation`
+        + ` slipped, children sit deeper than their parent and siblings align`);
+    }
+  }
+
   for (let i = 0; i < ids.length; i++) {
     const rawId = ids[i];
     const ctx = { ...baseCtx, id: rawId, i: i + 1, i0: i, n: ids.length, kind: syn.kind };
