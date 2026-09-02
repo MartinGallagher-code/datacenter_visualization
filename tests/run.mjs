@@ -180,6 +180,13 @@ eq([...small.counts], [['dc', 1], ['room', 3], ['row', 9], ['rack', 52], ['node'
   ok(sug('        node u10 +').includes('+switch'), 'tags harvested from the doc');
   ok(sug('        node u10 di').includes('dir='), 'layout keys offered');
   ok(sug('link ').includes('data'), 'net names after link');
+  ok(sug('net ').includes('mgmt') && !sug('net ').includes('data'),
+     'fresh fabric names in the id position, ones already declared excluded');
+  ok(sug('net x sh').includes('show='), 'net visibility key offered');
+  ok(sug('net x show=').includes('show=false'), 'net visibility values');
+  ok(sug('rack ').includes('R[01..12]') && sug('rack ').includes('[1..4,7..10]'),
+     'range examples in the id position');
+  ok(sug('rack ').includes('u='), 'and the keys still follow them');
   ok(sug('link data +compute mode=').includes('mode=mesh'), 'link modes enumerated');
   ok(sug('link data +compute scope=').includes('scope=rack'), 'scope offers the kinds in the doc');
   ok(sug('net x sty').includes('style='), 'net keys');
