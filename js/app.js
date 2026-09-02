@@ -62,6 +62,17 @@ const state = {
     return state.overlays.has(name);
   },
 
+  // Every measured flow on an element, across loaded overlays. A flow is a
+  // host-to-host measurement, not a cable: mx and iperf measure end to end.
+  flowsOf(node) {
+    const out = [];
+    for (const overlay of state.overlays.values()) {
+      const flows = overlay.flowsByEl.get(node.key);
+      if (flows) for (const flow of flows) out.push({ overlay, ...flow });
+    }
+    return out;
+  },
+
   readingOf(name, node, directOnly = false) {
     const overlay = state.overlays.get(name);
     if (!overlay) return null;
@@ -191,6 +202,12 @@ const actions = {
       state.netOverrides.set(net.name, enabled);   // survive the next re-parse
     }
     state.version++;          // force the link cache to rebuild
+    refreshPanels();
+    invalidate();
+  },
+
+  setOverlayFlows(overlay, on) {
+    overlay.drawFlows = on;
     refreshPanels();
     invalidate();
   },
@@ -628,7 +645,9 @@ function frame() {
     renderer.draw();
     $('statusinfo').textContent =
       `${state.model.all.length.toLocaleString()} elements · ${renderer.stats.drawn.toLocaleString()} drawn · ` +
-      `${renderer.stats.links.toLocaleString()} links · zoom ${renderer.camera.scale.toFixed(2)}× · ` +
+      `${renderer.stats.links.toLocaleString()} links · ` +
+      (renderer.stats.flows ? `${renderer.stats.flows.toLocaleString()} flows · ` : '') +
+      `zoom ${renderer.camera.scale.toFixed(2)}× · ` +
       'drag pan · wheel zoom · dbl-click collapse · / filter · f fit';
   }
   requestAnimationFrame(frame);

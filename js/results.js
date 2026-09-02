@@ -322,6 +322,11 @@ export function bindOverlay(overlay, model) {
   };
 
   const direct = new Set();
+  // A sample tagged `peer=` measured a flow between two hosts, not a property
+  // of one. Those are kept whole, alongside the aggregate, so the pair can be
+  // read back: which peer, and what the number was for that peer.
+  const flowsByEl = new Map();
+
   for (const sample of overlay.samples) {
     const el = model.resolve(sample.target);
     if (!el) { unresolved.add(sample.target); continue; }
@@ -330,6 +335,14 @@ export function bindOverlay(overlay, model) {
     direct.add(el.key);
     push(map, el, sample.value);
     for (let p = el.parent; p; p = p.parent) push(map, p, sample.value);
+
+    const peer = sample.meta && sample.meta.peer;
+    if (peer) {
+      const flow = { peer, peerEl: model.resolve(peer), value: sample.value, numeric: sample.numeric };
+      const bucket = flowsByEl.get(el.key);
+      if (bucket) bucket.push(flow);
+      else flowsByEl.set(el.key, [flow]);
+    }
   }
 
   const meta = overlay.meta;
@@ -348,10 +361,13 @@ export function bindOverlay(overlay, model) {
     numericByEl,
     textByEl,
     direct,
+    flowsByEl,
+    hasFlows: flowsByEl.size > 0,
     sampleCount: overlay.samples.length,
     unresolved: [...unresolved],
     // Display state, all user-adjustable from the overlay panel.
     enabled: false,
+    drawFlows: false,   // paint the measured pairs as their own edge layer
     agg: AGGREGATIONS[meta.agg] ? meta.agg : DEFAULT_AGG,
     // `higher=bad` / `higher=good` pick the green-to-red ramp and its direction;
     // an explicit palette= always wins.
