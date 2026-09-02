@@ -45,7 +45,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 <main id="stage">
   <aside id="left" class="panel">
     <section class="block">
-      <h2>Structure</h2>
+      <h2><button class="collapse-panel" data-panel="left" title="Hide this panel">‹</button>Structure</h2>
       <div class="btnrow">
         <button data-collapse="expand">Expand all</button>
         <button data-collapse="rack">Collapse racks</button>
@@ -64,6 +64,8 @@ SPDX-License-Identifier: GPL-3.0-or-later
          or later, with ABSOLUTELY NO WARRANTY.</p>
     </section>
   </aside>
+  <div class="resizer" id="left-resize" title="Drag to resize · double-click to reset"></div>
+  <button class="rail" id="left-rail" hidden title="Show the structure panel">›</button>
 
   <div id="canvaswrap">
     <div id="viewwrap">
@@ -102,9 +104,11 @@ Insert template (above) drops in a commented starting point."></textarea>
     </section>
   </div>
 
+  <button class="rail" id="right-rail" hidden title="Show the overlays panel">‹</button>
+  <div class="resizer" id="right-resize" title="Drag to resize · double-click to reset"></div>
   <aside id="right" class="panel">
     <section class="block">
-      <h2>Overlays <span id="overlay-hint" class="hint"></span></h2>
+      <h2><button class="collapse-panel" data-panel="right" title="Hide this panel">›</button>Overlays <span id="overlay-hint" class="hint"></span></h2>
       <div id="overlays"></div>
     </section>
 

@@ -500,6 +500,10 @@ netmesh run --for 60 && dcimport results.tsv --tidy reports/
 
 ## The viewer
 
+- **Panels** — either side panel collapses to a slim rail (the `‹` / `›` in
+  its heading, and the rail brings it back) and resizes by dragging the edge
+  beside the canvas; double-click that edge to reset a width. Widths and
+  collapsed state are remembered between visits.
 - **Zoom / pan** — wheel and drag (level-of-detail keeps hundreds of
   thousands of elements smooth). `f` fits selection, `0` fits all.
 - **Expand / collapse** — double-click any container, use the tree, or the
