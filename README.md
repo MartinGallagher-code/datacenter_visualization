@@ -518,7 +518,12 @@ netmesh run --for 60 && dcimport results.tsv --tidy reports/
   pick the aggregation, palette, and value range live.
 - **Networks** — toggle each named fabric; opacity slider for dense views.
 - **Inspector** — click an element for its tags (click a tag to filter by
-  it), attributes, U-slot, link counts, and all its readings.
+  it), attributes, U-slot, link counts, and all its readings. Cables hang off
+  the leaf devices, so a rack, row or room reports **links below** instead:
+  every cable in its subtree per fabric, split into the ones that stay inside
+  it and the ones that leave. **Show only this element's cables** then hides
+  every cable that neither starts nor ends inside the selection, at any level
+  — one server's two cables, or everything entering and leaving a room.
 
 ## Repository layout
 

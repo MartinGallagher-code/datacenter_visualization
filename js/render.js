@@ -352,6 +352,10 @@ export class Renderer {
     const netIndex = new Map();
     enabled.forEach((net, i) => netIndex.set(net.name, (i - (enabled.length - 1) / 2) * (2.5 / scale)));
 
+    // "Only this element's links": an edge survives when either end is the
+    // selection, inside it, or the collapsed block standing in for it.
+    const only = state.isolateLinks ? state.selected : null;
+
     for (const net of enabled) {
       const edges = this.linkCache.nets.get(net.name);
       if (!edges || !edges.length) continue;
@@ -372,6 +376,7 @@ export class Renderer {
         let bx = b.x + b.w / 2;
         let by = b.y + b.h / 2;
         if (!this.segmentVisible(ax, ay, bx, by)) continue;
+        if (only && !sharesLineage(edge.a, only) && !sharesLineage(edge.b, only)) continue;
         if (off) {
           const len = Math.hypot(bx - ax, by - ay) || 1;
           const ox = ((ay - by) / len) * off;
@@ -467,6 +472,40 @@ export class Renderer {
 }
 
 const LOD_RECURSE = 9;   // stop descending once a container is this many px wide
+
+/** True when `el` is `sel`, inside it, or an ancestor standing in for it. */
+export function sharesLineage(el, sel) {
+  for (let p = el; p; p = p.parent) if (p === sel) return true;
+  for (let p = sel; p; p = p.parent) if (p === el) return true;
+  return false;
+}
+
+/**
+ * Every cable in an element's subtree, per net, split into the ones that stay
+ * inside it and the ones that leave. Links hang off the leaf devices, so a
+ * rack or a room has none of its own and this is the only way to count them.
+ */
+export function linkSummary(el) {
+  const byNet = new Map();
+  const seen = new Set();
+  const inside = (x) => {
+    for (let p = x; p; p = p.parent) if (p === el) return true;
+    return false;
+  };
+  const walk = (node) => {
+    for (const link of node.links) {
+      if (seen.has(link)) continue;
+      seen.add(link);
+      let rec = byNet.get(link.net);
+      if (!rec) byNet.set(link.net, (rec = { inside: 0, out: 0 }));
+      if (inside(link.a) && inside(link.b)) rec.inside++;
+      else rec.out++;
+    }
+    for (const child of node.children) walk(child);
+  };
+  walk(el);
+  return byNet;
+}
 
 export function countDescendants(el) {
   if (el.descendantCount !== undefined) return el.descendantCount;
