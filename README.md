@@ -66,6 +66,13 @@ up on a shared floor; racks stack their children into real U-slots). **Any
 other word works too** — `pod`, `hall`, `cage`, `suite` — and is drawn as a
 generic container. There is no schema to declare.
 
+Indentation is the structure, so a line indented one level too shallow
+re-parents everything below it. The tell is a `node` that ends up containing
+other elements — its rack sits empty with the "contents" drawn beside it —
+and the parser reports it as a warning. Children sit deeper than their
+parent; siblings align. (A deliberate container should be a non-node kind
+like `chassis`, which nests silently.)
+
 ### Ranges
 
 | Spec | Expands to |
