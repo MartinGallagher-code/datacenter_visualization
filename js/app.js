@@ -38,6 +38,7 @@ const state = {
   filterActive: false,
   selected: null,
   version: 0,
+  isolateLinks: false,      // draw only the selected element's cables
   linkOpacity: 0.45,
   maxLinksDrawn: 60000,
   warnings: [],
@@ -119,6 +120,7 @@ const actions = {
     state.selected = node;
     renderInspector(state, $('inspector'), actions);
     renderTree(state, $('tree'), actions);
+    if (state.isolateLinks) state.version++;   // the isolated set changed
     invalidate();
   },
 
@@ -173,6 +175,12 @@ const actions = {
   autoDomain(overlay) {
     overlay.autoDomain = true;
     recomputeDomain(overlay, state.model);
+    refreshPanels();
+    invalidate();
+  },
+
+  setIsolateLinks(on) {
+    state.isolateLinks = on;
     refreshPanels();
     invalidate();
   },

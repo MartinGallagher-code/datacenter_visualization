@@ -15,7 +15,7 @@
 
 import { PALETTE_NAMES, categoricalColor, colorFor, ramp } from './palette.js';
 import { AGGREGATIONS, formatValue, overlayValue } from './results.js';
-import { countDescendants } from './render.js';
+import { countDescendants, linkSummary } from './render.js';
 
 const el = (tag, cls, text) => {
   const n = document.createElement(tag);
@@ -311,13 +311,35 @@ export function renderInspector(state, host, actions) {
     structural.append(el('dt', null, 'slot'));
     structural.append(el('dd', null, `U${node.uAt}${node.uSize > 1 ? `-U${node.uAt + node.uSize - 1}` : ''}`));
   }
-  if (node.links.length) {
-    const byNet = new Map();
-    for (const link of node.links) byNet.set(link.net, (byNet.get(link.net) || 0) + 1);
-    structural.append(el('dt', null, 'links'));
-    structural.append(el('dd', null, [...byNet].map(([n, c]) => `${n}×${c}`).join('  ')));
+  // Cables hang off the leaf devices, so a rack or a room has none of its own:
+  // summarise the whole subtree instead, split into the ones that stay inside
+  // and the ones that leave, which is the interesting number for a container.
+  const cables = linkSummary(node);
+  if (cables.size) {
+    const leaf = !node.children.length;
+    structural.append(el('dt', null, leaf ? 'links' : 'links below'));
+    const dd = el('dd');
+    for (const [net, rec] of cables) {
+      const line = leaf
+        ? `${net} ×${rec.inside + rec.out}`
+        : `${net} ×${rec.inside + rec.out}` +
+          (rec.out && rec.inside ? ` (${rec.out} leaving)` : rec.out ? ' (all leaving)' : ' (all internal)');
+      dd.append(el('div', null, line));
+    }
+    structural.append(dd);
   }
   if (structural.children.length) host.append(structural);
+
+  if (cables.size) {
+    const row = el('label', 'chk isolate');
+    const box = el('input');
+    box.type = 'checkbox';
+    box.checked = !!state.isolateLinks;
+    box.addEventListener('change', () => actions.setIsolateLinks(box.checked));
+    row.append(box, el('span', null, "show only this element's cables"));
+    row.title = 'Hide every cable that neither starts nor ends inside this element';
+    host.append(row);
+  }
 
   const readings = el('div', 'readings');
   let any = false;

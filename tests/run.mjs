@@ -20,6 +20,7 @@ import { compileSelector } from '../js/select.js';
 import { parseLayout } from '../js/parse.js';
 import { parseResults, bindOverlay, overlayValue, AGGREGATIONS } from '../js/results.js';
 import { layout } from '../js/layout.js';
+import { linkSummary, sharesLineage } from '../js/render.js';
 import { compileQuery, applyFilter } from '../js/filter.js';
 import { ramp, categoricalColor, colorFor, contrastInk } from '../js/palette.js';
 import { suggestionsFor } from '../js/hints.js';
@@ -340,6 +341,37 @@ ok(missing[0].includes('target'), 'missing target is reported');
 // Sniffing must not steal files that merely mention a brace.
 const braced = parseResults('# {not json}\ntemp_c\tDH1/A/R01/u05\t61.2\n');
 eq(braced.get('temp_c').samples.length, 1, 'comment starting with { stays text');
+
+// ------------------------------------------------------------- link summary
+// Cables hang off the leaf devices, so a rack or a room carries none of its
+// own: the only way to answer "what is wired to this rack" is the subtree.
+{
+  eq(small.resolve('DH1/A/R01').links.length, 0, 'a rack has no links of its own');
+  const rack = linkSummary(small.resolve('DH1/A/R01'));
+  // 20 servers x (data + mgmt) to their own ToR stay inside; the ToR's four
+  // spine uplinks leave.
+  eq(rack.get('data'), { inside: 20, out: 4 }, 'rack data cables, inside vs leaving');
+  eq(rack.get('mgmt'), { inside: 20, out: 0 }, 'mgmt stays within the rack');
+
+  // A room rolls its racks up, and the storage mesh that spans a row is
+  // internal at room level though it leaves each rack.
+  const room = linkSummary(small.resolve('DH1'));
+  ok(room.get('data').inside > rack.get('data').inside, 'the room counts every rack below it');
+  eq(linkSummary(small.resolve('DH1/E')).get('storage').out, 0,
+     'the storage mesh is internal to its row');
+
+  // A leaf agrees with its own link list.
+  const tor = small.resolve('DH1/A/R01/tor');
+  const leaf = linkSummary(tor);
+  eq([...leaf.values()].reduce((n, r) => n + r.inside + r.out, 0), tor.links.length,
+     'a leaf summary matches its link list');
+
+  // Isolation keeps an element, its subtree and the blocks standing in for it.
+  const u5 = small.resolve('DH1/A/R01/u05');
+  ok(sharesLineage(u5, small.resolve('DH1/A/R01')), 'a node is kept by its rack');
+  ok(sharesLineage(small.resolve('DH1/A/R01'), u5), 'and a collapsed rack by its node');
+  ok(!sharesLineage(u5, small.resolve('DH1/B/R01')), 'an unrelated rack is not');
+}
 
 // ------------------------------------------------------------------- filter
 const overlays = new Map([['temp_c', temp], ['burnin', burnin]]);

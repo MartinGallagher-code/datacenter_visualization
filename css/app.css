@@ -217,6 +217,11 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .kv { display: grid; grid-template-columns: auto 1fr; gap: 2px 8px; font-family: var(--mono); font-size: 11px; }
 .kv dt { color: var(--ink-dim); }
 .kv dd { margin: 0; word-break: break-word; }
+.isolate {
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--ink-dim);
+}
 .readings { margin: 8px 0 0; }
 .reading { display: flex; align-items: center; gap: 6px; padding: 2px 0; font-family: var(--mono); font-size: 11px; }
 .reading .dot { width: 10px; height: 10px; border-radius: 2px; flex: none; }
