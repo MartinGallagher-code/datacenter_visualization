@@ -38,6 +38,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
     <label class="chk"><input type="checkbox" id="opt-values" checked> values</label>
     <button id="btn-fit" title="Fit to view (F)">Fit</button>
     <button id="btn-load">Load files…</button>
+    <button id="btn-edit" title="Write or tweak the layout right here — the floor plan follows as you type">Edit layout</button>
   </div>
 </header>
 
@@ -65,12 +66,34 @@ SPDX-License-Identifier: GPL-3.0-or-later
   </aside>
 
   <div id="canvaswrap">
-    <canvas id="view"></canvas>
-    <div id="tooltip" class="tooltip" hidden></div>
-    <div id="statusbar">
-      <span id="statusinfo"></span>
-      <span id="statuslicense">© 2026 Martin J. Gallagher · GPLv3+ · no warranty</span>
+    <div id="viewwrap">
+      <canvas id="view"></canvas>
+      <div id="tooltip" class="tooltip" hidden></div>
+      <div id="statusbar">
+        <span id="statusinfo"></span>
+        <span id="statuslicense">© 2026 Martin J. Gallagher · GPLv3+ · no warranty</span>
+      </div>
     </div>
+    <section id="editor" hidden>
+      <div id="editor-bar">
+        <span id="editor-summary"></span>
+        <button id="editor-template" title="Start from a commented skeleton">Insert template</button>
+        <button id="editor-download" title="Save the layout as a .dc file">Download .dc</button>
+        <button id="editor-close" title="Close the editor">×</button>
+      </div>
+      <textarea id="editor-text" spellcheck="false" autocomplete="off"
+                placeholder="Write a layout here — the floor plan follows as you type.
+
+  dc DC1 name=&quot;My Datacenter&quot;
+    room R1
+      row A..C
+        rack R[01..04,07..10] u=42
+          node tor at=42 role=tor +switch
+          node u[01..20] role=server
+
+Insert template (above) drops in a commented starting point."></textarea>
+      <div id="editor-warnings" hidden></div>
+    </section>
   </div>
 
   <aside id="right" class="panel">

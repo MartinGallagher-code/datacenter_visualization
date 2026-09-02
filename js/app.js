@@ -22,11 +22,11 @@ import { renderInspector, renderNets, renderOverlays, renderTree, renderWarnings
 
 const $ = (id) => document.getElementById(id);
 
-const DEFAULTS = { layout: 'examples/small.dc', results: 'examples/small-results.tsv' };
 const AUTO_COLLAPSE_ABOVE = 20000;   // elements, before racks start out collapsed
 
 const state = {
   model: parseLayout(''),
+  layoutText: '',           // the source of the current model, as the editor sees it
   rawOverlays: new Map(),   // test name -> { name, samples, meta } straight from the files
   overlays: new Map(),      // test name -> bound overlay with display settings
   activeOverlays: [],
@@ -211,7 +211,8 @@ function setCollapseAtKind(kind) {
   for (const node of state.model.all) node.collapsed = node.depth >= depth && node.children.length > 0;
 }
 
-function loadLayoutText(text) {
+function loadLayoutText(text, { keepCamera = false } = {}) {
+  state.layoutText = text;
   state.model = parseLayout(text);
   state.selected = null;
   state.warnings = [...state.model.warnings];
@@ -220,8 +221,9 @@ function loadLayoutText(text) {
 
   if (state.model.all.length > AUTO_COLLAPSE_ABOVE) setCollapseAtKind('rack');
   rebindOverlays();
-  refresh({ keepCamera: false });
+  refresh({ keepCamera });
   renderWarnings($('left').firstElementChild, state.warnings);
+  syncEditor();
 }
 
 function loadResultsText(texts, { replace = false } = {}) {
@@ -264,12 +266,18 @@ async function fetchText(url) {
   return res.text();
 }
 
+// Nothing loads on its own: the viewer starts empty, and layouts arrive from
+// the ?layout=/?results= URL parameters, the Load files… button, drag and
+// drop, or the built-in editor.
 async function boot() {
   const params = new URLSearchParams(location.search);
-  const layoutUrl = params.has('layout') ? params.get('layout') : DEFAULTS.layout;
-  const resultsParam = params.has('results') ? params.get('results') : DEFAULTS.results;
-  const resultUrls = resultsParam.split(',').filter(Boolean);
-  if (!layoutUrl) return;
+  const layoutUrl = params.get('layout');
+  const resultUrls = (params.get('results') || '').split(',').filter(Boolean);
+  if (!layoutUrl) {
+    refresh({ keepCamera: false });
+    syncEditor();
+    return;
+  }
 
   try {
     loadLayoutText(await fetchText(layoutUrl));
@@ -304,6 +312,137 @@ async function ingestFiles(files) {
   if (layouts.length) loadLayoutText(layouts[layouts.length - 1]);
   if (results.length) loadResultsText(results, { replace: layouts.length > 0 });
 }
+
+// -------------------------------------------------------------------- editor
+// A drawer under the canvas holding the layout source. Every keystroke
+// re-parses (debounced), so the floor plan, the per-kind tally and the
+// warnings answer "did that line do what I meant" while the line is written.
+
+const STARTER = `# <kind> <id> [key=value ...] [+tag ...]      indentation nests, ranges expand
+#
+# Ranges: R[01..12]   A..D   [1..40x2] (step)   [1..4,7..10] (segments)   [web|db]
+# Children of an expanded line are created once per expansion.
+
+dc DC1 name="My Datacenter"
+
+  room R1 name="Room 1"
+
+    # 3 rows x 8 racks x (1 switch + 20 servers). Racks 05 and 06 do not
+    # exist on this floor, so the segments skip them.
+    row A..C
+      rack R[01..04,07..10] u=42
+        node tor at=42 role=tor +switch
+        node u[01..20] role=server +x86
+
+# Logical fabrics: rules match elements, so cables are never enumerated.
+net data label="Data / east-west" color=#4fa3ff
+link data role=server role=tor scope=rack
+`;
+
+function syncEditor() {
+  const editor = $('editor');
+  if (editor.hidden) return;
+  const text = $('editor-text');
+  if (text.value !== state.layoutText && document.activeElement !== text) {
+    text.value = state.layoutText;
+  }
+  $('editor-template').hidden = text.value.trim() !== '';
+  renderEditorStatus();
+}
+
+function renderEditorStatus() {
+  const m = state.model;
+  const parts = [...(m.counts || [])].map(([kind, n]) =>
+    `${n.toLocaleString()} ${kind}${n === 1 || kind.endsWith('s') ? '' : 's'}`);
+  if (m.nets.size) parts.push(`${m.nets.size} net${m.nets.size === 1 ? '' : 's'}`);
+  if (m.links.length) parts.push(`${m.links.length.toLocaleString()} cables`);
+
+  const summary = $('editor-summary');
+  summary.textContent = parts.length ? parts.join(' · ') : 'empty layout';
+  if (m.warnings.length) {
+    const bad = document.createElement('span');
+    bad.className = 'bad';
+    bad.textContent = ` · ${m.warnings.length} warning${m.warnings.length === 1 ? '' : 's'}`;
+    summary.append(bad);
+  }
+
+  const box = $('editor-warnings');
+  box.textContent = '';
+  box.hidden = !m.warnings.length;
+  for (const warning of m.warnings.slice(0, 40)) {
+    const row = document.createElement('div');
+    row.className = 'warnline';
+    row.textContent = warning;
+    const at = /\bline (\d+)/.exec(warning);
+    if (at) {
+      row.title = 'Jump to this line';
+      row.addEventListener('click', () => selectEditorLine(Number(at[1])));
+    }
+    box.append(row);
+  }
+}
+
+function selectEditorLine(lineNo) {
+  const text = $('editor-text');
+  const lines = text.value.split('\n');
+  let start = 0;
+  for (let i = 0; i < Math.min(lineNo - 1, lines.length); i++) start += lines[i].length + 1;
+  text.focus();
+  text.setSelectionRange(start, start + (lines[lineNo - 1] || '').length);
+}
+
+const applyEditor = debounce(() => {
+  const text = $('editor-text').value;
+  if (text === state.layoutText) { renderEditorStatus(); return; }
+  // The first content in an empty viewer gets a fit; after that the camera
+  // stays put so typing does not yank the view around.
+  loadLayoutText(text, { keepCamera: state.model.all.length > 0 });
+}, 250);
+
+function toggleEditor(show = $('editor').hidden) {
+  $('editor').hidden = !show;
+  invalidate();               // the canvas re-measures on the next draw
+  if (show) {
+    syncEditor();
+    $('editor-text').focus();
+  }
+}
+
+$('btn-edit').addEventListener('click', () => toggleEditor());
+$('editor-close').addEventListener('click', () => toggleEditor(false));
+
+$('editor-text').addEventListener('input', () => {
+  $('editor-template').hidden = $('editor-text').value.trim() !== '';
+  applyEditor();
+});
+
+// Tab indents (the format is indentation-based); the default would leave the field.
+$('editor-text').addEventListener('keydown', (e) => {
+  if (e.key !== 'Tab') return;
+  e.preventDefault();
+  e.target.setRangeText('  ', e.target.selectionStart, e.target.selectionEnd, 'end');
+  applyEditor();
+});
+
+$('editor-template').addEventListener('click', () => {
+  const text = $('editor-text');
+  if (text.value.trim()) return;
+  text.value = STARTER;
+  $('editor-template').hidden = true;
+  text.focus();
+  applyEditor();
+});
+
+$('editor-download').addEventListener('click', () => {
+  const text = $('editor').hidden ? state.layoutText : $('editor-text').value;
+  const name = `${(state.model.title || 'layout').replace(/[^\w.-]+/g, '_')}.dc`;
+  const url = URL.createObjectURL(new Blob([text], { type: 'text/plain' }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(url);
+});
 
 // -------------------------------------------------------------------- events
 

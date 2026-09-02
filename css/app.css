@@ -105,7 +105,8 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .btnrow { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 9px; }
 .btnrow button { font-size: 11.5px; padding: 3px 7px; }
 
-#canvaswrap { position: relative; flex: 1; min-width: 0; }
+#canvaswrap { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+#viewwrap { position: relative; flex: 1; min-height: 0; }
 #view { width: 100%; height: 100%; display: block; cursor: grab; }
 #view.dragging { cursor: grabbing; }
 
@@ -240,6 +241,72 @@ input[type="checkbox"] { accent-color: var(--accent); }
 }
 
 .dropzone[hidden] { display: none; }
+
+/* ----------------------------------------------------------------- editor */
+
+#editor {
+  display: flex;
+  flex-direction: column;
+  height: 42%;
+  min-height: 140px;
+  background: var(--panel);
+  border-top: 1px solid var(--line);
+}
+#editor[hidden] { display: none; }
+
+#editor-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--line);
+}
+#editor-bar button { font-size: 11.5px; padding: 3px 8px; }
+#editor-close { margin-left: 2px; padding: 3px 7px; color: var(--ink-dim); }
+
+#editor-summary {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-dim);
+}
+#editor-summary .bad { color: var(--warn); }
+
+#editor-text {
+  flex: 1;
+  min-height: 0;
+  resize: none;
+  padding: 8px 10px;
+  background: var(--bg);
+  color: var(--ink);
+  border: none;
+  border-radius: 0;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.5;
+  tab-size: 2;
+  white-space: pre;
+}
+#editor-text:focus { outline: none; }
+#editor-text::placeholder { color: #4d5766; }
+
+#editor-warnings {
+  max-height: 30%;
+  overflow: auto;
+  padding: 5px 10px;
+  border-top: 1px solid #4a3a12;
+  background: #241d0e;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: #e0c06a;
+}
+#editor-warnings[hidden] { display: none; }
+#editor-warnings .warnline { cursor: pointer; }
+#editor-warnings .warnline:hover { text-decoration: underline; }
 
 /* ------------------------------------------------------------------- about */
 

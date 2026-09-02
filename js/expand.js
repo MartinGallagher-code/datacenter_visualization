@@ -16,6 +16,7 @@
 //   [1..40x2]      -> 1 3 5 ... 39         (x<step>)
 //   [A..H]         -> A B ... H            (single letters)
 //   [web|db|cache] -> web db cache
+//   [1..4,7..10]   -> 1 2 3 4 7 8 9 10     (comma-separated segments)
 //   A..H           -> A B ... H            (bare, whole token only)
 //
 // Multiple bracket groups in one token expand as a cartesian product:
@@ -28,7 +29,14 @@ function isNum(s) {
 }
 
 function expandRangeSpec(spec) {
-  // "1..40x2" | "01..20" | "A..H" | "a|b|c" | "literal"
+  // "1..40x2" | "01..20" | "A..H" | "a|b|c" | "1..4,7..10" | "literal"
+  // Comma-separated segments concatenate, so numbering with holes stays one
+  // range: [1..4,7..10] declares racks 1-4 and 7-10 without a second block.
+  if (spec.includes(',')) {
+    const out = [];
+    for (const part of spec.split(',')) if (part !== '') out.push(...expandRangeSpec(part));
+    return out;
+  }
   if (spec.includes('|')) return spec.split('|');
 
   const m = /^(.+?)\.\.(.+?)(?:x(\d+))?$/.exec(spec);
