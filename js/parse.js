@@ -131,12 +131,13 @@ function buildSyntaxTree(text, warnings) {
 
 // --------------------------------------------------------------- materialize
 
-function makeElement(kind, id, parent, attrs, tags, model) {
+function makeElement(kind, id, parent, attrs, tags, model, line) {
   let key = parent ? `${parent.key}/${id}` : id;
   if (model.byKey.has(key)) {
     let n = 2;
     while (model.byKey.has(`${key}#${n}`)) n++;
-    model.warnings.push(`duplicate path "${key}" renamed to "${key}#${n}"`);
+    model.warnings.push(
+      `${line ? `line ${line}: ` : ''}duplicate path "${key}" renamed to "${key}#${n}"`);
     key = `${key}#${n}`;
   }
 
@@ -268,7 +269,7 @@ function materialize(syn, parent, model) {
     const tags = syn.tags.some((t) => t.includes('{')) ? syn.tags.map((t) => subst(t, ctx)) : syn.tags;
     const id = attrs.id || rawId;
 
-    const el = makeElement(syn.kind, id, parent, attrs, tags, model);
+    const el = makeElement(syn.kind, id, parent, attrs, tags, model, syn.line);
 
     // U-slot bookkeeping. Auto-placed children take the lowest run of free slots
     // that fits, so an explicitly placed `tor at=42` does not shove the rest of
@@ -289,6 +290,21 @@ function materialize(syn, parent, model) {
       for (let s = at; s < at + size; s++) used.add(s);
       el.uAt = at;
       el.uSize = size;
+
+      // A node above the rack's declared height draws outside it -- usually an
+      // at= copied from a taller rack's example. Warn on the node's own line,
+      // which is the one to edit, and once per line however many racks the
+      // enclosing range expanded to.
+      const rackU = parseInt(parent.attrs.u ?? '0', 10) || 0;
+      if (rackU && at + size - 1 > rackU) {
+        const seen = model.overflowWarned || (model.overflowWarned = new Set());
+        if (!seen.has(syn.line)) {
+          seen.add(syn.line);
+          model.warnings.push(
+            `line ${syn.line}: node "${id}" reaches U${at + size - 1}, above rack "${parent.id}"`
+            + ` u=${rackU} — raise the rack's u= or lower the node's at=`);
+        }
+      }
     }
 
     for (const child of syn.children) materialize(child, el, model);
@@ -298,21 +314,6 @@ function materialize(syn, parent, model) {
       let used = 0;
       for (const c of el.children) used = Math.max(used, (c.uAt || 1) + (c.uSize || 1) - 1);
       el.uHeight = declared || Math.max(used, 42);
-      // A child above the declared height draws outside the rack -- usually an
-      // at= copied from a taller rack's example -- and nothing else says so.
-      // One warning per declaration, not one per expanded rack.
-      if (declared && used > declared) {
-        const over = el.children.find((c) => (c.uAt || 1) + (c.uSize || 1) - 1 > declared);
-        const top = (over.uAt || 1) + (over.uSize || 1) - 1;
-        const onceKey = `${syn.line}:${over.id}`;
-        const seen = model.overflowWarned || (model.overflowWarned = new Set());
-        if (!seen.has(onceKey)) {
-          seen.add(onceKey);
-          model.warnings.push(
-            `line ${syn.line}: node "${over.id}" reaches U${top}, above rack "${el.id}" u=${declared}`
-            + ` — raise the rack's u= or lower the node's at=`);
-        }
-      }
       el.uUsed = undefined;
       el.tagCache = undefined;
     }
@@ -326,6 +327,10 @@ function groupKeyFor(el, scope) {
   for (let p = el; p; p = p.parent) if (p.kind === scope) return p.key;
   return null;   // element is outside the requested scope; it links to nothing
 }
+
+// Every warning that can name its source line does, so the editor can jump
+// there when the line is clicked.
+const at = (rule) => (rule.line ? `line ${rule.line}: ` : '');
 
 function buildLinks(rules, model) {
   const seen = new Set();
@@ -393,21 +398,21 @@ function buildLinks(rules, model) {
           for (let i = 0; i + 1 < A.length; i += 2) emit(A[i], A[i + 1]);
         }
       } else {
-        model.warnings.push(`unknown link mode "${mode}"`);
+        model.warnings.push(`${at(rule)}unknown link mode "${mode}"`);
       }
     }
 
-    if (made >= cap) model.warnings.push(`net "${rule.net}": link rule hit the cap of ${cap}`);
+    if (made >= cap) model.warnings.push(`${at(rule)}net "${rule.net}": link rule hit the cap of ${cap}`);
 
     // A mistyped selector matches nothing and the rule silently wires nothing,
     // which reads as "no cables" rather than "typo" -- so say which it was.
     if (!matchedA) {
-      model.warnings.push(`net "${rule.net}": selector "${rule.selA}" matched no elements`);
+      model.warnings.push(`${at(rule)}net "${rule.net}": selector "${rule.selA}" matched no elements`);
     } else if (matchB && !matchedB) {
-      model.warnings.push(`net "${rule.net}": selector "${rule.selB}" matched no elements`);
+      model.warnings.push(`${at(rule)}net "${rule.net}": selector "${rule.selB}" matched no elements`);
     } else if (!made) {
       model.warnings.push(
-        `net "${rule.net}": rule matched ${matchedA + matchedB} elements but wired nothing`
+        `${at(rule)}net "${rule.net}": rule matched ${matchedA + matchedB} elements but wired nothing`
         + (rule.scope ? ` — check scope=${rule.scope}` : ''));
     }
   }
@@ -458,7 +463,10 @@ export function parseLayout(text) {
           if (key && LINK_OPTS.has(key)) opts[key] = tok.slice(at + 1);
           else positional.push(tok);
         }
-        linkRules.push({ net: child.idSpec, selA: positional.shift(), selB: positional.shift(), ...opts });
+        linkRules.push({
+          net: child.idSpec, line: child.line,
+          selA: positional.shift(), selB: positional.shift(), ...opts,
+        });
       } else if (child.kind === 'title') {
         model.title = child.idSpec || child.attrs.name || model.title;
       } else {
