@@ -16,7 +16,9 @@ python3 -m http.server 8000        # any static file server works
 ```
 
 The viewer starts empty. Load files with the **Load files…** button, by
-dragging them onto the window, or with URL parameters:
+dragging them onto the window, or with URL parameters. Where the browser
+supports it (Chromium), the button reopens in the directory it was last used
+in; elsewhere it is the ordinary file input:
 
 ```
 http://localhost:8000/?layout=examples/small.dc&results=examples/small-results.tsv
@@ -520,6 +522,9 @@ netmesh run --for 60 && dcimport results.tsv --tidy reports/
   split into N side-by-side slices, each colored by its test with the test's
   short name and value printed on it (2, 3, 4, 5… all work). Per overlay you
   pick the aggregation, palette, and value range live.
+  **Hide all** unticks every overlay without unloading it, and **Remove all**
+  drops them and their samples — both at the top of the panel, since a
+  results file can carry twenty-odd overlays.
 - **Networks** — toggle each named fabric, or **Show all** / **Hide all** them
   at once; opacity slider for dense views.
 - **Measured flows** — `mx export --peers` and `iperf_orchestrator` write one
