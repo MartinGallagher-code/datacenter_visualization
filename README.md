@@ -124,9 +124,13 @@ link data  role=tor    role=spine scope=hall           # every ToR to every spin
 link storage +storage,role=server scope=row mode=mesh  # full mesh within a row
 ```
 
-- Selectors: `+tag`, `^tag` (non-inherited), `kind=rack`, `attr=value`
-  (globs allowed: `model=r76*`), bare glob against id/path/ancestors,
-  `!` negation, `|` alternatives, `,` for AND.
+- Selectors: `+tag`, `^tag` (non-inherited), `kind=rack`, `attr=value`,
+  bare glob against id/path/ancestors, `!` negation, `|` alternatives,
+  `,` for AND.
+- **Globs work in every part of a selector**, tags included: `*` stands for
+  any run of characters and `?` for exactly one. `model=r76*` takes r760 and
+  r7625 alike, `model=r762?` only the five-character one, `u1?` the slots
+  u10–u19, and `+stor*` any tag starting `stor`.
 - `scope=` groups matches per rack/row/room/… before wiring.
 - `mode=` is `star` (A×B, default with two selectors), `mesh` (default with
   one), `chain`, `ring`, or `pair` (A[i] to B[i]; with one selector,
@@ -502,7 +506,8 @@ netmesh run --for 60 && dcimport results.tsv --tidy reports/
   Collapse racks/rows/rooms buttons. Collapsed containers show their
   aggregate results computed from all raw samples inside them.
 - **Filter** — the top bar matches anything: bare words search ids, names,
-  tags and attributes; `+gpu` tags; `kind:rack`; `model=r76*`;
+  tags and attributes; `+gpu` tags (globs too: `+stor*`, `+gp?`);
+  `kind:rack`; `model=r76*` (`?` matches exactly one character);
   `net:storage`; result queries like `temp_c>70`, `burnin=FAIL`,
   `has:iperf_gbps`; `!` negates, `|` ors, space ands. Matches keep their
   ancestors visible; "hide non-matching" prunes everything else, otherwise

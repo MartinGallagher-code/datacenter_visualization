@@ -190,6 +190,30 @@ eq([...small.counts], [['dc', 1], ['room', 3], ['row', 9], ['rack', 52], ['node'
   ok(sel('role=tor|role=spine') === sel('role=tor') + sel('role=spine'), 'OR');
   ok(sel('DH2') > 0 && sel('DH2') < small.all.length, 'ancestor glob');
   ok(sel('!kind=node') === small.all.length - sel('kind=node'), 'negation');
+
+  // `?` stands for exactly one character, `*` for any run, in every form a
+  // value is matched -- attributes, kind, id, name, path, bare tokens and
+  // tags. `?` is the one that separates r760 from r7625.
+  // `?` is one character where `*` is any run: the model here is r7625, so
+  // `r762?` reaches it and `r76?` cannot, while `r76*` takes it either way.
+  eq(sel('model=r762?'), sel('model=r7625'), 'model=r762? reaches the five-character model');
+  eq(sel('model=r76?'), 0, 'model=r76? is one character short of r7625');
+  ok(sel('model=r76*') > 0, 'where model=r76* still takes it');
+  eq(sel('kind=rac?'), sel('kind=rack'), 'kind glob with ?');
+  eq(sel('id=u1?'), 400, 'id=u1? is the ten ids u10..u19, in all 40 server racks');
+  eq(sel('id=u?'), 0, 'and one ? cannot span a two-digit id');
+  eq(sel('path=IAD1/DH1/A/R01/u0?'), 9, 'path glob with ? (paths carry the root)');
+  // A bare token also matches through ancestors, so a rack glob keeps the
+  // rack's contents; what matters here is that ? counts characters.
+  ok(sel('R??') > 0, 'bare R?? matches the three-character rack ids');
+  eq(sel('R?'), 0, 'bare R? does not');
+
+  // Tags took an exact Set lookup, so no wildcard reached them at all.
+  eq(sel('+stora?e'), sel('+storage'), '+tag accepts ?');
+  eq(sel('+stor*'), sel('+storage'), '+tag accepts *');
+  eq(sel('^switc?'), sel('^switch'), '^tag globs against own tags only');
+  ok(sel('^pro?') < sel('+pro?'), 'and ^ keeps inherited tags out where + takes them');
+  eq(sel('+nosuch?'), 0, 'a glob matching no tag matches nothing');
 }
 
 // -------------------------------------------------------------------- hints

@@ -21,7 +21,12 @@
 //   !+decom           negation of any predicate
 //   +gpu|+fpga        OR between alternatives
 //
-// Matching is case-insensitive throughout; datacenter inventories are typed by hand.
+// Globs work wherever a value is matched: `*` stands for any run of characters
+// and `?` for exactly one, so `model=r76?` takes r760..r769 and `u??` the
+// two-digit slots. Matching is case-insensitive throughout; datacenter
+// inventories are typed by hand.
+
+export const hasGlob = (s) => /[*?]/.test(s);
 
 export function globToRegExp(glob) {
   const body = glob.replace(/[.+^${}()|[\]\\]/g, '\\$&')
@@ -30,23 +35,33 @@ export function globToRegExp(glob) {
   return new RegExp(`^${body}$`, 'i');
 }
 
+/**
+ * Tag test for `+tag` / `^tag`. A plain tag stays a Set lookup -- this runs
+ * per element per rule over hundreds of thousands of them -- and only a
+ * pattern carrying `*` or `?` pays for the scan.
+ */
+export function tagMatcher(pattern, own) {
+  const tag = pattern.toLowerCase();
+  const pick = own ? (el) => el.tags : (el) => el.tagsAll;
+  if (!hasGlob(tag)) return (el) => pick(el).has(tag);
+  const re = globToRegExp(tag);
+  return (el) => {
+    for (const t of pick(el)) if (re.test(t)) return true;
+    return false;
+  };
+}
+
 const eq = (a, b) => String(a).toLowerCase() === String(b).toLowerCase();
 
 function matchValue(value, pattern) {
   if (value === undefined || value === null) return false;
-  return /[*?]/.test(pattern) ? globToRegExp(pattern).test(String(value)) : eq(value, pattern);
+  return hasGlob(pattern) ? globToRegExp(pattern).test(String(value)) : eq(value, pattern);
 }
 
 // One predicate, no commas, no pipes, no leading '!'.
 function compileAtom(atom) {
-  if (atom.startsWith('+')) {
-    const tag = atom.slice(1).toLowerCase();
-    return (el) => el.tagsAll.has(tag);
-  }
-  if (atom.startsWith('^')) {
-    const tag = atom.slice(1).toLowerCase();
-    return (el) => el.tags.has(tag);
-  }
+  if (atom.startsWith('+')) return tagMatcher(atom.slice(1), false);
+  if (atom.startsWith('^')) return tagMatcher(atom.slice(1), true);
 
   const eqAt = atom.indexOf('=');
   if (eqAt > 0) {
