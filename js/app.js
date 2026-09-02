@@ -185,6 +185,16 @@ const actions = {
     invalidate();
   },
 
+  setAllNets(enabled) {
+    for (const net of state.model.nets.values()) {
+      net.enabled = enabled;
+      state.netOverrides.set(net.name, enabled);   // survive the next re-parse
+    }
+    state.version++;          // force the link cache to rebuild
+    refreshPanels();
+    invalidate();
+  },
+
   setNetEnabled(net, enabled) {
     net.enabled = enabled;
     // Remember the choice by name: every re-parse (each editor keystroke)
