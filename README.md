@@ -533,7 +533,9 @@ netmesh run --for 60 && dcimport results.tsv --tidy reports/
   file they came from**, and each group's header collapses it, so an mx export
   and an iperf export loaded together stay tellable apart; the header counts
   the group's overlays and how many are shown, and its **×** removes that
-  file's overlays alone. A test fed by several files (the append-only
+  file's overlays alone. **sort A–Z** orders the metrics alphabetically within
+  each file; unticked they keep the order the file wrote them in, which the
+  exports choose deliberately (mx and iperf write theirs in reading order). A test fed by several files (the append-only
   workflow) is filed under the first that carried it.
 - **Networks** — toggle each named fabric, or **Show all** / **Hide all** them
   at once; opacity slider for dense views.

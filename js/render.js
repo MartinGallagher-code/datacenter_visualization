@@ -196,7 +196,15 @@ export class Renderer {
     this.ctx.globalAlpha = dim ? 0.16 : 1;
 
     if (isLeaf) {
-      this.paintSlices(el, b.x, b.y, b.w, b.h, sw, sh, true);
+      // A collapsed container shows its name AND its readings. Give the name
+      // the top strip and the readings the rest: centred readings used to
+      // print straight through the name on a short box.
+      let nameH = 0;
+      if (el.children.length && state.activeOverlays.length && sh > 16) {
+        const namePx = Math.min(TEXT_MAX, Math.max(7, sh * 0.28));
+        nameH = Math.min(b.h * 0.5, (namePx * 1.5) / scale);
+      }
+      this.paintSlices(el, b.x, b.y + nameH, b.w, b.h - nameH, sw, sh - nameH * scale, true);
       if (sh > 3 && sw > 3) {
         this.ctx.strokeStyle = THEME.leafStroke;
         this.ctx.lineWidth = 0.6 / scale;
@@ -214,8 +222,13 @@ export class Renderer {
       if (band > 0 && band * scale > 3) {
         this.ctx.fillStyle = THEME.labelBand;
         this.ctx.fillRect(b.x, b.y, b.w, band);
-        this.paintSlices(el, b.x, b.y, b.w, band, sw, band * scale, false);
-        this.drawLabel(el, b.x, b.y, b.w, band, sw, band * scale);
+        // The name takes only the width it needs and the readings take the
+        // rest: painting both across the whole band printed one over the other.
+        const used = this.drawLabel(el, b.x, b.y, b.w, band, sw, band * scale);
+        const restW = b.w - used;
+        if (restW > 0) {
+          this.paintSlices(el, b.x + used, b.y, restW, band, restW * scale, band * scale, false);
+        }
       }
     }
 
@@ -230,6 +243,25 @@ export class Renderer {
    * A collapsed container keeps its name on screen; a plain leaf shows its id
    * once it is big enough and no overlay text is occupying the space.
    */
+  /**
+   * Trim text to fit a width, with an ellipsis. Canvas's own fillText maxWidth
+   * CONDENSES the glyphs instead of clipping, which is what made long names
+   * read as squashed. Assumes ctx.font is already set.
+   */
+  fitText(text, maxWidth) {
+    const ctx = this.ctx;
+    if (maxWidth <= 0) return '';
+    if (ctx.measureText(text).width <= maxWidth) return text;
+    let lo = 0;
+    let hi = text.length;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (ctx.measureText(`${text.slice(0, mid)}…`).width <= maxWidth) lo = mid;
+      else hi = mid - 1;
+    }
+    return lo > 0 ? `${text.slice(0, lo)}…` : '';
+  }
+
   drawLeafName(el, b, sw, sh) {
     const collapsed = el.children.length > 0;
     const overlaysShown = this.state.activeOverlays.length > 0;
@@ -246,10 +278,12 @@ export class Renderer {
     }
     if (collapsed) {
       ctx.textAlign = 'left';
-      ctx.fillText(`${el.name} [+${countDescendants(el)}]`, b.x + 2.5 / scale, b.y + (px * 0.75) / scale, b.w - 5 / scale);
+      const pad = 2.5 / scale;
+      ctx.fillText(this.fitText(`${el.name} [+${countDescendants(el)}]`, b.w - pad * 2),
+                   b.x + pad, b.y + (px * 0.75) / scale);
     } else {
       ctx.textAlign = 'center';
-      ctx.fillText(el.name, b.x + b.w / 2, b.y + b.h / 2, b.w * 0.94);
+      ctx.fillText(this.fitText(el.name, b.w * 0.94), b.x + b.w / 2, b.y + b.h / 2);
     }
     ctx.shadowBlur = 0;
   }
@@ -296,14 +330,15 @@ export class Renderer {
       ctx.textAlign = 'center';
       ctx.font = `${px / this.camera.scale}px ui-monospace, SFMono-Regular, Menlo, monospace`;
       const cx = sx + sliceW / 2;
+      const room = sliceW * 0.9;      // a gap either side of every reading
       if (twoLines) {
         const lead = px * 1.15 / this.camera.scale;
         ctx.globalAlpha *= 0.75;
-        ctx.fillText(overlay.short, cx, y + h / 2 - lead / 2, sliceW * 0.95);
+        ctx.fillText(this.fitText(overlay.short, room), cx, y + h / 2 - lead / 2);
         ctx.globalAlpha /= 0.75;
-        ctx.fillText(text, cx, y + h / 2 + lead / 2, sliceW * 0.95);
+        ctx.fillText(this.fitText(text, room), cx, y + h / 2 + lead / 2);
       } else {
-        ctx.fillText(text, cx, y + h / 2, sliceW * 0.95);
+        ctx.fillText(this.fitText(text, room), cx, y + h / 2);
       }
     }
 
@@ -320,21 +355,30 @@ export class Renderer {
     }
   }
 
+  /** Draws the container's name in its band. Returns the width it used. */
   drawLabel(el, x, y, w, h, sw, sh) {
-    if (sh < 7 || sw < 24) return;
+    if (sh < 7 || sw < 24) return 0;
     const ctx = this.ctx;
     const scale = this.camera.scale;
-    const px = Math.min(TEXT_MAX, Math.max(7, sh * 0.72));
+    const overlaid = this.state.activeOverlays.length > 0;
+    // The band holds the name at ~0.72 of its height on its own; sharing it
+    // with readings, the name steps back so both stay legible.
+    const px = Math.min(TEXT_MAX, Math.max(7, sh * (overlaid ? 0.58 : 0.72)));
     ctx.font = `${px / scale}px ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif`;
     ctx.textAlign = 'left';
-    ctx.fillStyle = this.state.activeOverlays.length ? 'rgba(255,255,255,0.92)' : THEME.ink;
+    ctx.fillStyle = overlaid ? 'rgba(255,255,255,0.92)' : THEME.ink;
 
     let text = el.name;
-    if (el.collapsed) {
-      const n = countDescendants(el);
-      text = `${el.name}  [+${n}]`;
-    }
-    ctx.fillText(text, x + 3 / scale, y + h / 2, w - 6 / scale);
+    if (el.collapsed) text = `${el.name}  [+${countDescendants(el)}]`;
+
+    const pad = 4 / scale;
+    // With readings in the band the name is capped so it can never crowd them
+    // out; alone it may use the lot.
+    const room = (overlaid ? w * 0.42 : w) - pad * 2;
+    const shown = this.fitText(text, room);
+    if (!shown) return 0;
+    ctx.fillText(shown, x + pad, y + h / 2);
+    return Math.min(w, ctx.measureText(shown).width + pad * 2);
   }
 
   // -------------------------------------------------------------------- links

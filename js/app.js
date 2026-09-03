@@ -32,6 +32,7 @@ const state = {
   rawOverlays: new Map(),   // test name -> { name, samples, meta } straight from the files
   overlays: new Map(),      // test name -> bound overlay with display settings
   groupsOff: new Set(),     // source files whose overlay group is collapsed
+  sortOverlays: false,      // list metrics A-Z within each file, not file order
   activeOverlays: [],
   showValues: true,
   hideUnmatched: false,
@@ -234,6 +235,11 @@ const actions = {
     state.overlays.delete(overlay.name);
     refreshPanels();
     invalidate();
+  },
+
+  setSortOverlays(on) {
+    state.sortOverlays = on;
+    refreshPanels();
   },
 
   toggleOverlayGroup(source) {
