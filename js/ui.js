@@ -108,6 +108,18 @@ export function renderOverlays(state, host, actions) {
   clear.title = `Remove all ${overlays.length} overlays and their samples — reload the results file to get them back`;
   clear.addEventListener('click', () => actions.removeAllOverlays());
   bar.append(clear);
+
+  if (overlays.length > 1) {
+    const sort = el('label', 'chk sortchk');
+    const box = el('input');
+    box.type = 'checkbox';
+    box.checked = !!state.sortOverlays;
+    box.addEventListener('change', () => actions.setSortOverlays(box.checked));
+    sort.append(box, el('span', null, 'sort A–Z'));
+    sort.title = 'Order the metrics alphabetically within each file. '
+      + 'Unticked, they keep the order the file wrote them in, which the exports choose deliberately.';
+    bar.append(sort);
+  }
   host.append(bar);
 
   // Grouped by the file they came from: one results file can carry twenty-odd
@@ -119,6 +131,13 @@ export function renderOverlays(state, host, actions) {
     const bucket = groups.get(key);
     if (bucket) bucket.push(overlay);
     else groups.set(key, [overlay]);
+  }
+
+  // Alphabetical within each file, or the order the file wrote them in.
+  if (state.sortOverlays) {
+    for (const list of groups.values()) {
+      list.sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true, sensitivity: 'base' }));
+    }
   }
 
   // With everything from one unnamed source there is nothing to group by.
