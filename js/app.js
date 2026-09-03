@@ -622,7 +622,11 @@ const PANEL_STORE = 'dcviewer.panels';
 const clampPanel = (w) => Math.min(PANEL_MAX, Math.max(PANEL_MIN, w));
 
 function loadPanels() {
-  const fallback = { left: { w: PANEL_DEFAULT.left, off: false }, right: { w: PANEL_DEFAULT.right, off: false } };
+  const fallback = {
+    left: { w: PANEL_DEFAULT.left, off: false },
+    right: { w: PANEL_DEFAULT.right, off: false },
+    sections: {},          // heading key -> true when that section is collapsed
+  };
   let saved;
   // Only the storage read is guarded: a private window or corrupt JSON falls
   // back, but a mistake in the code below should surface, not degrade quietly.
@@ -632,6 +636,7 @@ function loadPanels() {
     return fallback;
   }
   if (!saved || typeof saved !== 'object') return fallback;
+  if (!saved.sections || typeof saved.sections !== 'object') saved.sections = {};
   for (const side of ['left', 'right']) {
     if (!saved[side] || typeof saved[side] !== 'object') saved[side] = { ...fallback[side] };
     saved[side].w = clampPanel(Number(saved[side].w) || PANEL_DEFAULT[side]);
@@ -663,8 +668,44 @@ function setPanelCollapsed(side, off) {
   savePanels();
 }
 
+const sectionKey = (block) => block.dataset.section
+  || (block.querySelector('h2')?.textContent || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-');
+
+function setupSections() {
+  for (const block of document.querySelectorAll('.panel .block')) {
+    const head = block.querySelector('h2');
+    if (!head) continue;
+    const key = sectionKey(block);
+    if (!key) continue;
+
+    const caret = document.createElement('span');
+    caret.className = 'caret section-caret';
+    caret.textContent = '▸';
+    head.prepend(caret);
+
+    const apply = () => {
+      const off = !!panelState.sections[key];
+      block.classList.toggle('off', off);
+      caret.classList.toggle('open', !off);
+      head.title = off ? 'Show this section' : 'Hide this section';
+    };
+    head.addEventListener('click', (e) => {
+      if (e.target.closest('.collapse-panel')) return;   // that hides the whole panel
+      if (panelState.sections[key]) delete panelState.sections[key];
+      else panelState.sections[key] = true;
+      apply();
+      savePanels();
+      invalidate();
+    });
+    apply();
+  }
+}
+
 for (const button of document.querySelectorAll('.collapse-panel')) {
-  button.addEventListener('click', () => setPanelCollapsed(button.dataset.panel, true));
+  button.addEventListener('click', (e) => {
+    e.stopPropagation();                                  // not a section toggle
+    setPanelCollapsed(button.dataset.panel, true);
+  });
 }
 $('left-rail').addEventListener('click', () => setPanelCollapsed('left', false));
 $('right-rail').addEventListener('click', () => setPanelCollapsed('right', false));
@@ -703,6 +744,7 @@ for (const side of ['left', 'right']) {
 }
 
 applyPanels();
+setupSections();
 
 // -------------------------------------------------------------------- events
 

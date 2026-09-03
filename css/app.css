@@ -121,9 +121,14 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .rail:hover { background: #1c2330; color: var(--ink); }
 .rail[hidden] { display: none; }
 
+.section-caret { width: 11px; flex: none; font-size: 9px; }
+.block h2:hover { color: var(--ink); }
+
 .collapse-panel {
-  float: right;
-  margin: -2px -2px 0 0;
+  /* It sits before the heading text in the DOM, so order sends it to the end
+     of the flex line -- otherwise the auto margin drags the text right too. */
+  order: 9;
+  margin: -2px -2px 0 auto;
   padding: 0 5px;
   border: none;
   background: none;
@@ -137,7 +142,15 @@ input[type="checkbox"] { accent-color: var(--accent); }
 body.resizing { cursor: col-resize; user-select: none; }
 
 .block { padding: 10px 11px; border-bottom: 1px solid var(--line); }
+/* A collapsed section keeps only its heading, so the panel stays navigable. */
+.block.off > *:not(h2) { display: none; }
+.block.off h2 { margin-bottom: 0; }
 .block h2 {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  user-select: none;
   margin: 0 0 8px;
   font-size: 10.5px;
   letter-spacing: 0.09em;

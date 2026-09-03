@@ -504,8 +504,11 @@ netmesh run --for 60 && dcimport results.tsv --tidy reports/
 
 - **Panels** — either side panel collapses to a slim rail (the `‹` / `›` in
   its heading, and the rail brings it back) and resizes by dragging the edge
-  beside the canvas; double-click that edge to reset a width. Widths and
-  collapsed state are remembered between visits.
+  beside the canvas; double-click that edge to reset a width. Every section
+  inside a panel — Structure, About, Overlays, Networks, Inspector — folds to
+  its heading when the heading is clicked. Widths, collapsed panels and folded
+  sections are all remembered between visits. Sections are wired from the
+  markup, keyed by their heading, so one added later folds with no extra code.
 - **Zoom / pan** — wheel and drag (level-of-detail keeps hundreds of
   thousands of elements smooth). `f` fits selection, `0` fits all. Labels grow
   with the zoom — each is sized from its element's on-screen height — so
