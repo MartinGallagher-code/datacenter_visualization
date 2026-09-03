@@ -194,6 +194,67 @@ body.resizing { cursor: col-resize; user-select: none; }
   white-space: pre-line;
 }
 
+/* ---------------------------------------------------------- file browser */
+
+.browser { font-size: 11.5px; }
+.browser .warn { color: var(--warn); margin: 0 0 8px; }
+.browser p { margin: 0 0 8px; line-height: 1.5; }
+
+.crumbs {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 2px;
+  margin-bottom: 7px;
+  font-family: var(--mono); font-size: 11px;
+}
+.crumb {
+  padding: 1px 4px;
+  background: none; border: none;
+  color: var(--accent);
+  font-family: inherit; font-size: inherit;
+  cursor: pointer;
+}
+.crumb:hover { text-decoration: underline; }
+.crumb.here { color: var(--ink); cursor: default; }
+.crumb.here:hover { text-decoration: none; }
+.crumb-sep { color: var(--ink-dim); }
+
+.browse-controls { display: flex; align-items: center; gap: 7px; }
+.browse-controls .chk { font-size: 11px; }
+.browse-filter {
+  flex: 1; min-width: 0;
+  font-family: var(--mono); font-size: 11px; padding: 4px 7px;
+}
+.browse-filter:focus { outline: none; border-color: var(--accent); }
+
+.browse-list {
+  max-height: 260px;
+  overflow: auto;
+  margin-top: 6px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+}
+.browse-row {
+  display: flex; align-items: center; gap: 6px;
+  width: 100%;
+  padding: 3px 7px;
+  background: none; border: none; border-radius: 0;
+  color: var(--ink);
+  font-family: var(--mono); font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+.browse-row:hover:not(:disabled) { background: #1c2330; }
+.browse-row:disabled { color: #59616e; cursor: default; }
+.browse-row.dir .browse-icon { color: var(--accent); }
+.browse-row.layout .browse-icon { color: #4dd4ac; }
+.browse-row.results .browse-icon { color: var(--warn); }
+.browse-icon { width: 10px; flex: none; text-align: center; }
+/* The name gives up its room first: a size the eye can compare down the
+   column is worth more than the tail of a long filename. */
+.browse-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.browse-size { flex: none; color: var(--ink-dim); font-size: 10.5px; }
+.browse-flag { flex: none; color: #4dd4ac; }
+.browse-row.loaded .browse-name { color: var(--ink-dim); }
+
 /* -------------------------------------------------------------------- tree */
 
 .tree { font-family: var(--mono); font-size: 11.5px; }

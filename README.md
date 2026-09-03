@@ -15,10 +15,10 @@ python3 -m http.server 8000        # any static file server works
 # open http://localhost:8000/
 ```
 
-The viewer starts empty. Load files with the **Load files…** button, by
-dragging them onto the window, or with URL parameters. Where the browser
-supports it (Chromium), the button reopens in the directory it was last used
-in; elsewhere it is the ordinary file input:
+The viewer starts empty. Load files with the **Load files…** button, from the
+**Files** browser in the left panel, by dragging them onto the window, or with
+URL parameters. Where the browser supports it (Chromium), the button reopens in
+the directory it was last used in; elsewhere it is the ordinary file input:
 
 ```
 http://localhost:8000/?layout=examples/small.dc&results=examples/small-results.tsv
@@ -534,13 +534,28 @@ netmesh run --for 60 && dcimport results.tsv --tidy reports/
 
 ## The viewer
 
+- **Files** — the panel's **Open folder…** keeps a directory open beside the
+  canvas, instead of a dialog that shows one and forgets it. Layouts and
+  results are listed with their sizes (worth seeing before clicking a 300 MB
+  file); a click loads one — a `.dc` as the floor plan, a `.tsv` as overlays
+  added to what is already there — and a ✓ marks what is in. Subdirectories
+  open, the breadcrumb goes back up, `⟳` re-reads a folder that has gained a
+  file, and the name filter takes globs (`mx*.tsv`). Dropping a folder on the
+  window opens it here. In Chromium the folder and the path inside it come
+  back after a reload, behind one click for the permission the browser will
+  not keep; elsewhere it falls back to a directory input, which lists the same
+  tree but has to be chosen again each session. Nothing is read until it is
+  clicked, and clicking a results file that is already loaded re-reads it —
+  replacing its overlays rather than counting every sample twice, since the
+  format is append-only.
 - **Panels** — either side panel collapses to a slim rail (the `‹` / `›` in
   its heading, and the rail brings it back) and resizes by dragging the edge
   beside the canvas; double-click that edge to reset a width. Every section
-  inside a panel — Structure, About, Overlays, Networks, Inspector — folds to
-  its heading when the heading is clicked. Widths, collapsed panels and folded
-  sections are all remembered between visits. Sections are wired from the
-  markup, keyed by their heading, so one added later folds with no extra code.
+  inside a panel — Files, Structure, About, Overlays, Networks, Inspector —
+  folds to its heading when the heading is clicked. Widths, collapsed panels
+  and folded sections are all remembered between visits. Sections are wired
+  from the markup, keyed by their heading, so one added later folds with no
+  extra code.
 - **Zoom / pan** — wheel and drag (level-of-detail keeps hundreds of
   thousands of elements smooth). `f` fits selection, `0` fits all. Labels grow
   with the zoom — each is sized from its element's on-screen height — so

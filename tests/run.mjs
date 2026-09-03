@@ -27,6 +27,7 @@ import { linkSummary, sharesLineage } from '../js/render.js';
 import { compileQuery, applyFilter } from '../js/filter.js';
 import { ramp, categoricalColor, colorFor, contrastInk } from '../js/palette.js';
 import { suggestionsFor } from '../js/hints.js';
+import { classify, formatSize, matchesFilter, sortEntries, treeFromFiles } from '../js/browse.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 let failures = 0;
@@ -876,6 +877,64 @@ if (python.error) {
   const state = bindOverlay(demo.get('mx_state'), floor);
   eq(overlayValue(state, floor.resolve('wr01r04u06')).value, 'NO-DATA', 'the host that never started');
   eq(overlayValue(state, floor.resolve('wr01r04u05')).value, 'SILENT', 'the host that went quiet');
+}
+
+// ------------------------------------------------------------- file browser
+eq(classify('floor.dc'), 'layout', 'a .dc is a layout');
+eq(classify('FLOOR.LAYOUT'), 'layout', 'extensions are matched case-insensitively');
+eq(classify('mx-run.tsv'), 'results', 'a .tsv is results');
+eq(classify('notes.md'), 'other', 'anything else is neither');
+eq(classify('archive.tsv.gz'), 'other', 'the extension has to be the last one');
+
+eq(formatSize(0), '0 B', 'zero bytes');
+eq(formatSize(1023), '1023 B', 'under a kilobyte stays in bytes');
+eq(formatSize(1024), '1.0 KB', 'a kilobyte');
+eq(formatSize(5 * 1024 * 1024 + 512 * 1024), '5.5 MB', 'megabytes keep a decimal');
+eq(formatSize(300 * 1024 * 1024), '300 MB', 'past ten the decimal is noise');
+eq(formatSize(undefined), '', 'an unread size prints nothing');
+
+eq(sortEntries([
+  { kind: 'file', name: 'b.tsv' },
+  { kind: 'dir', name: 'zed' },
+  { kind: 'file', name: 'a10.tsv' },
+  { kind: 'file', name: 'a9.tsv' },
+  { kind: 'dir', name: 'apples' },
+]).map((e) => e.name), ['apples', 'zed', 'a9.tsv', 'a10.tsv', 'b.tsv'],
+  'directories first, then names in numeric order');
+
+ok(matchesFilter('mx-run-01.tsv', 'run'), 'a plain term is a substring');
+ok(matchesFilter('MX-RUN.tsv', 'mx'), 'and case-insensitive');
+ok(!matchesFilter('iperf.tsv', 'mx'), 'a term that is not there does not match');
+ok(matchesFilter('anything', ''), 'an empty filter matches everything');
+ok(matchesFilter('mx-run.tsv', 'mx*.tsv'), 'a * turns it into a glob');
+ok(!matchesFilter('mx-run.tsv.bak', 'mx*.tsv'), 'and a glob is anchored at both ends');
+ok(matchesFilter('r01.dc', 'r0?.dc'), '? is one character');
+ok(matchesFilter('mx.run.tsv', 'mx.*'), 'a glob matches through a literal dot');
+ok(!matchesFilter('mxrun.tsv', 'mx.*'), 'and that dot has to be there: it is not any-character');
+
+{
+  // The webkitdirectory fallback: one flat list, paths leading with the
+  // chosen folder's own name, becomes the tree the panel walks.
+  const file = (path, size) => ({ name: path.split('/').pop(), size, webkitRelativePath: path });
+  const root = treeFromFiles([
+    file('runs/floor.dc', 120),
+    file('runs/mx/one.tsv', 4096),
+    file('runs/mx/two.tsv', 8192),
+    file('runs/README.md', 10),
+  ]);
+  eq(root.name, 'runs', 'the chosen folder is the root');
+  eq(sortEntries([...root.children.values()]).map((e) => e.name), ['mx', 'floor.dc', 'README.md'],
+    'the root holds one subdirectory and two files');
+  const mx = root.children.get('mx');
+  eq(mx.kind, 'dir', 'the subdirectory is a directory');
+  eq([...mx.children.keys()], ['one.tsv', 'two.tsv'], 'and holds its own files');
+  eq(mx.children.get('two.tsv').size, 8192, 'sizes come free with a FileList');
+
+  // A plain multi-file selection carries no paths at all: everything is at
+  // the root, and the root has no name to show.
+  const flat = treeFromFiles([{ name: 'a.tsv', size: 1 }, { name: 'b.dc', size: 2 }]);
+  eq(flat.name, '', 'no relative paths means an unnamed root');
+  eq([...flat.children.keys()], ['a.tsv', 'b.dc'], 'with both files directly inside');
 }
 
 console.log(failures ? `${failures}/${count} tests FAILED` : `all ${count} tests passed`);
