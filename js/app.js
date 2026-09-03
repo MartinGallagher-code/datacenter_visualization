@@ -38,6 +38,10 @@ const state = {
   overlays: new Map(),      // test name -> bound overlay with display settings
   groupsOff: new Set(),     // source files whose overlay group is collapsed
   sortOverlays: false,      // list metrics A-Z within each file, not file order
+  // The panel-wide standardize switch. It overrides every metric's own
+  // setting without overwriting it, so turning it back off restores whatever
+  // each metric was set to individually.
+  standardizeAll: 'off',
   activeOverlays: [],
   showValues: true,
   hideUnmatched: false,
@@ -210,7 +214,19 @@ const actions = {
 
   setOverlayStandardize(overlay, mode) {
     overlay.standardize = mode;
-    if (mode !== 'off') recomputeStats(overlay, state.model);
+    if (overlay.stdMode !== 'off' && !overlay.stats) recomputeStats(overlay, state.model);
+    refreshPanels();
+    invalidate();
+  },
+
+  setStandardizeAll(mode) {
+    state.standardizeAll = mode;
+    for (const overlay of state.overlays.values()) {
+      overlay.standardizeAll = mode;
+      // Stats survive being switched off, so flipping this back and forth
+      // costs one pass over the model rather than one per flip.
+      if (overlay.stdMode !== 'off' && !overlay.stats) recomputeStats(overlay, state.model);
+    }
     refreshPanels();
     invalidate();
   },
@@ -381,7 +397,9 @@ function rebindOverlays() {
         max: old.autoDomain ? bound.max : old.max,
       });
     }
-    if (bound.standardize !== 'off') recomputeStats(bound, state.model);
+    // A metric loaded while "standardize all" is on is standardized too.
+    bound.standardizeAll = state.standardizeAll;
+    if (bound.stdMode !== 'off') recomputeStats(bound, state.model);
     next.set(name, bound);
   }
   state.overlays = next;

@@ -397,6 +397,32 @@ eq(braced.get('temp_c').samples.length, 1, 'comment starting with { stays text')
   ov.min = 0; ov.max = 100;
   eq(colorFor(ov, { numeric: true, value: 25 }), ramp('viridis', 0.25),
      'and switching off returns to the raw min..max mapping');
+
+  // "standardize all" overrides every metric without overwriting any of them:
+  // the card still shows what it was set to, and switching back off restores
+  // exactly that.
+  eq(ov.stdMode, 'off', 'with both off, nothing is standardized');
+  ov.standardizeAll = 'values';
+  eq(ov.standardize, 'off', 'the override leaves the metric\'s own setting alone');
+  eq(ov.stdMode, 'values', 'but what is in force is the override');
+  eq(formatValue(ov, 40), '+1.34', 'so the value prints as a z-score');
+  eq(unitFor(ov), 'σ', 'in sigma');
+  eq(colorFor(ov, { numeric: true, value: 25 }), ramp('viridis', 0.5),
+     'and the colour comes from z, not from min..max');
+
+  // A metric asked for something of its own loses to the override, and gets
+  // it back when the override lifts.
+  ov.standardize = 'colour';
+  eq(ov.stdMode, 'values', 'the override wins while it is on');
+  ov.standardizeAll = 'off';
+  eq(ov.stdMode, 'colour', 'and the metric has kept its own setting throughout');
+  eq(formatValue(ov, 40), '40', 'which colours by z but leaves the number alone');
+
+  // 'off' is the one value the override does not impose: it is the absence of
+  // an override, not a mode that forces raw values on a metric.
+  ov.standardize = 'values';
+  ov.standardizeAll = 'off';
+  eq(ov.stdMode, 'values', 'switching the override off does not force a metric raw');
 }
 
 // ------------------------------------------------------------ large results

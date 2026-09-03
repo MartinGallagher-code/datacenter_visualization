@@ -203,6 +203,15 @@ Use the first when the numbers matter and the colours should say "unusual for
 this metric"; the second when comparing metrics in different units side by
 side, where +2σ on temperature and +2σ on latency should look alike.
 
+**standardize all**, above the cards, switches every metric at once. It
+*overrides* the per-metric settings rather than rewriting them: each card goes
+on showing (and still lets you edit) the setting it was given, greyed to say it
+is not what is being drawn, and switching the override back off puts every
+metric back on its own setting — including the ones you had deliberately left
+raw. `off` there means "no override", not "force every metric raw". A metric
+loaded while it is on is standardized too. The ramp's spread stays per metric,
+since a shared one would have to overwrite what each card holds.
+
 The mean and spread are measured over **one aggregated value per measured
 element** — the devices being compared, not the raw sample rows, which repeat
 per run — so changing the aggregation re-measures them. The overlay card shows
@@ -576,7 +585,10 @@ netmesh run --for 60 && dcimport results.tsv --tidy reports/
   pick the aggregation, palette, and value range live.
   **Hide all** unticks every overlay without unloading it, and **Remove all**
   drops them and their samples — both at the top of the panel, since a
-  results file can carry twenty-odd overlays. Overlays are **grouped by the
+  results file can carry twenty-odd overlays. **standardize all** there
+  standardizes every metric at once, overriding each card's own setting
+  without overwriting it (see
+  [Standardizing a metric](#standardizing-a-metric)). Overlays are **grouped by the
   file they came from**, and each group's header collapses it, so an mx export
   and an iperf export loaded together stay tellable apart; the header counts
   the group's overlays and how many are shown, and its **×** removes that

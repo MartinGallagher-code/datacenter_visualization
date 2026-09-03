@@ -75,11 +75,12 @@ export function colorFor(overlay, reading) {
   // Standardised: the ramp spans -zRange..+zRange standard deviations, so the
   // same colour means the same thing on every metric, whatever its units.
   // (z is computed here rather than imported, to keep this module dependency
-  // free; overlay.stats is what results.js measured.)
+  // free; overlay.stats is what results.js measured, and overlay.stdMode
+  // resolves the per-metric setting against the panel's "standardize all".)
   let lo = overlay.min;
   let hi = overlay.max;
   let value = reading.value;
-  if (overlay.standardize && overlay.standardize !== 'off') {
+  if (overlay.stdMode && overlay.stdMode !== 'off') {
     const st = overlay.stats;
     value = st && st.sd ? (reading.value - st.mean) / st.sd : 0;
     hi = overlay.zRange || 3;
