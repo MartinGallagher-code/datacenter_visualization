@@ -15,10 +15,10 @@ python3 -m http.server 8000        # any static file server works
 # open http://localhost:8000/
 ```
 
-The viewer starts empty. Load files with the **Load files…** button, by
-dragging them onto the window, or with URL parameters. Where the browser
-supports it (Chromium), the button reopens in the directory it was last used
-in; elsewhere it is the ordinary file input:
+The viewer starts empty. Load files with the **Load files…** button, from the
+**Files** browser in the left panel, by dragging them onto the window, or with
+URL parameters. Where the browser supports it (Chromium), the button reopens in
+the directory it was last used in; elsewhere it is the ordinary file input:
 
 ```
 http://localhost:8000/?layout=examples/small.dc&results=examples/small-results.tsv
@@ -202,6 +202,15 @@ metric's own mean, in standard deviations:
 Use the first when the numbers matter and the colours should say "unusual for
 this metric"; the second when comparing metrics in different units side by
 side, where +2σ on temperature and +2σ on latency should look alike.
+
+**standardize all**, above the cards, switches every metric at once. It
+*overrides* the per-metric settings rather than rewriting them: each card goes
+on showing (and still lets you edit) the setting it was given, greyed to say it
+is not what is being drawn, and switching the override back off puts every
+metric back on its own setting — including the ones you had deliberately left
+raw. `off` there means "no override", not "force every metric raw". A metric
+loaded while it is on is standardized too. The ramp's spread stays per metric,
+since a shared one would have to overwrite what each card holds.
 
 The mean and spread are measured over **one aggregated value per measured
 element** — the devices being compared, not the raw sample rows, which repeat
@@ -534,13 +543,28 @@ netmesh run --for 60 && dcimport results.tsv --tidy reports/
 
 ## The viewer
 
+- **Files** — the panel's **Open folder…** keeps a directory open beside the
+  canvas, instead of a dialog that shows one and forgets it. Layouts and
+  results are listed with their sizes (worth seeing before clicking a 300 MB
+  file); a click loads one — a `.dc` as the floor plan, a `.tsv` as overlays
+  added to what is already there — and a ✓ marks what is in. Subdirectories
+  open, the breadcrumb goes back up, `⟳` re-reads a folder that has gained a
+  file, and the name filter takes globs (`mx*.tsv`). Dropping a folder on the
+  window opens it here. In Chromium the folder and the path inside it come
+  back after a reload, behind one click for the permission the browser will
+  not keep; elsewhere it falls back to a directory input, which lists the same
+  tree but has to be chosen again each session. Nothing is read until it is
+  clicked, and clicking a results file that is already loaded re-reads it —
+  replacing its overlays rather than counting every sample twice, since the
+  format is append-only.
 - **Panels** — either side panel collapses to a slim rail (the `‹` / `›` in
   its heading, and the rail brings it back) and resizes by dragging the edge
   beside the canvas; double-click that edge to reset a width. Every section
-  inside a panel — Structure, About, Overlays, Networks, Inspector — folds to
-  its heading when the heading is clicked. Widths, collapsed panels and folded
-  sections are all remembered between visits. Sections are wired from the
-  markup, keyed by their heading, so one added later folds with no extra code.
+  inside a panel — Files, Structure, About, Overlays, Networks, Inspector —
+  folds to its heading when the heading is clicked. Widths, collapsed panels
+  and folded sections are all remembered between visits. Sections are wired
+  from the markup, keyed by their heading, so one added later folds with no
+  extra code.
 - **Zoom / pan** — wheel and drag (level-of-detail keeps hundreds of
   thousands of elements smooth). `f` fits selection, `0` fits all. Labels grow
   with the zoom — each is sized from its element's on-screen height — so
@@ -561,7 +585,10 @@ netmesh run --for 60 && dcimport results.tsv --tidy reports/
   pick the aggregation, palette, and value range live.
   **Hide all** unticks every overlay without unloading it, and **Remove all**
   drops them and their samples — both at the top of the panel, since a
-  results file can carry twenty-odd overlays. Overlays are **grouped by the
+  results file can carry twenty-odd overlays. **standardize all** there
+  standardizes every metric at once, overriding each card's own setting
+  without overwriting it (see
+  [Standardizing a metric](#standardizing-a-metric)). Overlays are **grouped by the
   file they came from**, and each group's header collapses it, so an mx export
   and an iperf export loaded together stay tellable apart; the header counts
   the group's overlays and how many are shown, and its **×** removes that

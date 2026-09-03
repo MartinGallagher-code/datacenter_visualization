@@ -24,6 +24,12 @@ const el = (tag, cls, text) => {
   return n;
 };
 
+const STANDARDIZE_MODES = [
+  ['off', 'off — raw range'],
+  ['colour', 'colour by z-score'],
+  ['values', 'values as z-score'],
+];
+
 const TREE_ROW_BUDGET = 3000;
 const TREE_CHILDREN_PER_NODE = 250;
 
@@ -121,6 +127,27 @@ export function renderOverlays(state, host, actions) {
     bar.append(sort);
   }
   host.append(bar);
+
+  // One switch for every metric at once. It overrides each card's own
+  // setting rather than rewriting it, so a metric deliberately left raw is
+  // still raw when this goes back off.
+  if (overlays.some((o) => o.numeric)) {
+    const row = el('div', 'allstd');
+    row.append(el('span', null, 'standardize all'));
+    const pick = el('select');
+    for (const [key, label] of STANDARDIZE_MODES) {
+      const opt = el('option', null, label);
+      opt.value = key;
+      if (key === (state.standardizeAll || 'off')) opt.selected = true;
+      pick.append(opt);
+    }
+    pick.title = 'Standardize every metric at once, whatever each one is set to '
+      + 'individually. Their own settings are left alone: switch this back off and '
+      + 'each metric goes back to the one it was given.';
+    pick.addEventListener('change', () => actions.setStandardizeAll(pick.value));
+    row.append(pick);
+    host.append(row);
+  }
 
   // Grouped by the file they came from: one results file can carry twenty-odd
   // overlays, and two files loaded together are otherwise indistinguishable.
@@ -222,21 +249,24 @@ function overlayCard(state, overlay, actions) {
   grid.append(agg);
 
   if (overlay.numeric) {
+    // The card always shows this metric's own setting, even while
+    // "standardize all" is overriding it -- that is the setting it goes back
+    // to, and editing it under the override has to stay possible.
+    const overridden = state.standardizeAll && state.standardizeAll !== 'off';
     grid.append(el('label', null, 'standardize'));
-    const std = el('select');
-    for (const [key, label] of [
-      ['off', 'off — raw range'],
-      ['colour', 'colour by z-score'],
-      ['values', 'values as z-score'],
-    ]) {
+    const std = el('select', overridden ? 'overridden' : null);
+    for (const [key, label] of STANDARDIZE_MODES) {
       const opt = el('option', null, label);
       opt.value = key;
       if (key === (overlay.standardize || 'off')) opt.selected = true;
       std.append(opt);
     }
-    std.title = 'Colour by how far each value sits from this metric\'s mean, in '
-      + 'standard deviations, instead of across the smallest and largest value seen. '
-      + '"values as z-score" also replaces the printed number with that distance.';
+    std.title = overridden
+      ? `Overridden by "standardize all" (${state.standardizeAll}). This is what `
+        + 'this metric goes back to when that is switched off.'
+      : 'Colour by how far each value sits from this metric\'s mean, in '
+        + 'standard deviations, instead of across the smallest and largest value seen. '
+        + '"values as z-score" also replaces the printed number with that distance.';
     std.addEventListener('change', () => actions.setOverlayStandardize(overlay, std.value));
     grid.append(std);
 

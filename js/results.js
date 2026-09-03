@@ -383,7 +383,7 @@ export function bindOverlay(overlay, model) {
     ? extent(own)
     : [0, 1];
 
-  return {
+  const bound = {
     name: overlay.name,
     label: meta.label || overlay.name,
     short: meta.short || overlay.name,
@@ -406,6 +406,10 @@ export function bindOverlay(overlay, model) {
     //   'colour' raw values kept, coloured by z-score
     //   'values' the z-score itself becomes the number shown
     standardize: 'off',
+    // The panel's "standardize all" switch, mirrored onto every overlay. It
+    // overrides `standardize` without touching it, so turning it off puts each
+    // metric back on the setting it was given.
+    standardizeAll: 'off',
     zRange: 3,          // sigma at the ends of the ramp
     stats: null,        // { mean, sd, n } over the measured elements
     agg: AGGREGATIONS[meta.agg] ? meta.agg : DEFAULT_AGG,
@@ -420,6 +424,20 @@ export function bindOverlay(overlay, model) {
     decimals: meta.decimals !== undefined ? Number(meta.decimals) : null,
     cache: new Map(),
   };
+
+  // Which standardization is actually in force. A getter rather than a field
+  // the callers have to keep in step: colour, printed value, legend and
+  // inspector all read it, and every one of them would be wrong for a frame
+  // if a switch forgot to recompute it. palette.js reads it too, which is why
+  // it lives on the overlay and not in a function that module would import.
+  Object.defineProperty(bound, 'stdMode', {
+    enumerable: false,
+    get() {
+      if (this.standardizeAll && this.standardizeAll !== 'off') return this.standardizeAll;
+      return this.standardize || 'off';
+    },
+  });
+  return bound;
 }
 
 /** Aggregated value for one element, or null when nothing was measured there. */
@@ -515,13 +533,13 @@ export function zScore(overlay, value) {
   return (value - s.mean) / s.sd;
 }
 
-export const isStandardized = (overlay) => overlay.standardize && overlay.standardize !== 'off';
+export const isStandardized = (overlay) => overlay.stdMode && overlay.stdMode !== 'off';
 
 /** The unit to print beside a value -- sigma once the value IS a z-score. */
-export const unitFor = (overlay) => (overlay.standardize === 'values' ? 'σ' : overlay.unit);
+export const unitFor = (overlay) => (overlay.stdMode === 'values' ? 'σ' : overlay.unit);
 
 export function formatValue(overlay, value) {
-  if (overlay.standardize === 'values' && typeof value === 'number') {
+  if (overlay.stdMode === 'values' && typeof value === 'number') {
     const z = zScore(overlay, value);
     return `${z >= 0 ? '+' : ''}${z.toFixed(2)}`;
   }

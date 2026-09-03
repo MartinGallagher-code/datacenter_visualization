@@ -21,6 +21,10 @@ import {
 } from './results.js';
 import { fillWarnings, renderInspector, renderNets, renderOverlays, renderTree, renderWarnings } from './ui.js';
 import { attachHints, renderReference } from './hints.js';
+import {
+  classify, directoryFromDataTransfer, ensureRead, getFile, pickDirectory, probeSizes,
+  readDir, renderBrowser, supportsDirectoryPicker, treeFromFiles, walkPath,
+} from './browse.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -34,6 +38,10 @@ const state = {
   overlays: new Map(),      // test name -> bound overlay with display settings
   groupsOff: new Set(),     // source files whose overlay group is collapsed
   sortOverlays: false,      // list metrics A-Z within each file, not file order
+  // The panel-wide standardize switch. It overrides every metric's own
+  // setting without overwriting it, so turning it back off restores whatever
+  // each metric was set to individually.
+  standardizeAll: 'off',
   activeOverlays: [],
   showValues: true,
   hideUnmatched: false,
@@ -45,6 +53,21 @@ const state = {
   linkOpacity: 0.45,
   maxLinksDrawn: 60000,
   warnings: [],
+  layoutName: '',           // the file the current floor plan came from, if any
+
+  // The file browser: a folder held open in the panel. `loaded` is what the
+  // rows tick off, so it names files rather than the overlays inside them.
+  browser: {
+    root: null,
+    path: [],
+    entries: [],
+    filter: '',
+    showAll: false,
+    loading: false,
+    error: '',
+    needsPermission: false,
+    loaded: new Set(),
+  },
 
   isVisible(node) {
     return !state.hideUnmatched || node.keep;
@@ -118,6 +141,7 @@ function refresh({ panels = true, keepCamera = true } = {}) {
 
 function refreshPanels() {
   recomputeActiveOverlays();
+  renderBrowserPanel();
   renderTree(state, $('tree'), actions);
   renderOverlays(state, $('overlays'), actions);
   renderNets(state, $('nets'), actions);
@@ -190,7 +214,19 @@ const actions = {
 
   setOverlayStandardize(overlay, mode) {
     overlay.standardize = mode;
-    if (mode !== 'off') recomputeStats(overlay, state.model);
+    if (overlay.stdMode !== 'off' && !overlay.stats) recomputeStats(overlay, state.model);
+    refreshPanels();
+    invalidate();
+  },
+
+  setStandardizeAll(mode) {
+    state.standardizeAll = mode;
+    for (const overlay of state.overlays.values()) {
+      overlay.standardizeAll = mode;
+      // Stats survive being switched off, so flipping this back and forth
+      // costs one pass over the model rather than one per flip.
+      if (overlay.stdMode !== 'off' && !overlay.stats) recomputeStats(overlay, state.model);
+    }
     refreshPanels();
     invalidate();
   },
@@ -305,8 +341,9 @@ function setCollapseAtKind(kind) {
   for (const node of state.model.all) node.collapsed = node.depth >= depth && node.children.length > 0;
 }
 
-function loadLayoutText(text, { keepCamera = false } = {}) {
+function loadLayoutText(text, { keepCamera = false, name = '' } = {}) {
   state.layoutText = text;
+  state.layoutName = name;
   state.model = parseLayout(text);
   // The user's own panel toggles outlive the re-parse; a net the file no
   // longer declares just drops its stale entry.
@@ -323,7 +360,7 @@ function loadLayoutText(text, { keepCamera = false } = {}) {
   if (state.model.all.length > AUTO_COLLAPSE_ABOVE) setCollapseAtKind('rack');
   rebindOverlays();
   refresh({ keepCamera });
-  renderWarnings($('left').firstElementChild, state.warnings, jumpToLine);
+  renderWarnings($('structure'), state.warnings, jumpToLine);
   syncEditor();
 }
 
@@ -337,7 +374,7 @@ function loadResultsText(files, { replace = false } = {}) {
   for (const w of warnings) state.warnings.push(w);
   rebindOverlays();
   refresh();
-  renderWarnings($('left').firstElementChild, state.warnings, jumpToLine);
+  renderWarnings($('structure'), state.warnings, jumpToLine);
 }
 
 /** Rebuild bound overlays against the current model, keeping display settings. */
@@ -360,7 +397,9 @@ function rebindOverlays() {
         max: old.autoDomain ? bound.max : old.max,
       });
     }
-    if (bound.standardize !== 'off') recomputeStats(bound, state.model);
+    // A metric loaded while "standardize all" is on is standardized too.
+    bound.standardizeAll = state.standardizeAll;
+    if (bound.stdMode !== 'off') recomputeStats(bound, state.model);
     next.set(name, bound);
   }
   state.overlays = next;
@@ -387,10 +426,10 @@ async function boot() {
   }
 
   try {
-    loadLayoutText(await fetchText(layoutUrl));
+    loadLayoutText(await fetchText(layoutUrl), { name: layoutUrl.split('/').pop() || layoutUrl });
   } catch (err) {
     state.warnings.push(`could not load layout: ${err.message}`);
-    renderWarnings($('left').firstElementChild, state.warnings, jumpToLine);
+    renderWarnings($('structure'), state.warnings, jumpToLine);
     refresh();
     return;
   }
@@ -404,7 +443,7 @@ async function boot() {
     }
   }
   if (texts.length) loadResultsText(texts);
-  else { refresh(); renderWarnings($('left').firstElementChild, state.warnings, jumpToLine); }
+  else { refresh(); renderWarnings($('structure'), state.warnings, jumpToLine); }
 }
 
 // ---------------------------------------------------------------- picking
@@ -415,6 +454,7 @@ async function boot() {
 
 const HANDLE_DB = 'dcviewer';
 const HANDLE_KEY = 'lastPick';
+const DIR_KEY = 'lastDir';
 
 function handleStore(mode) {
   return new Promise((resolve, reject) => {
@@ -428,11 +468,11 @@ function handleStore(mode) {
   });
 }
 
-async function rememberedHandle() {
+async function rememberedHandle(key = HANDLE_KEY) {
   try {
     const store = await handleStore('readonly');
     return await new Promise((resolve) => {
-      const req = store.get(HANDLE_KEY);
+      const req = store.get(key);
       req.onsuccess = () => resolve(req.result || null);
       req.onerror = () => resolve(null);
     });
@@ -441,10 +481,10 @@ async function rememberedHandle() {
   }
 }
 
-async function rememberHandle(handle) {
+async function rememberHandle(handle, key = HANDLE_KEY) {
   try {
     const store = await handleStore('readwrite');
-    store.put(handle, HANDLE_KEY);
+    store.put(handle, key);
   } catch { /* not remembering is not a failure worth reporting */ }
 }
 
@@ -485,11 +525,218 @@ async function ingestFiles(files) {
   const results = [];
   for (const file of files) {
     const text = await file.text();
-    if (isLayoutFile(file.name)) layouts.push(text);
+    if (isLayoutFile(file.name)) layouts.push({ text, name: file.name });
     else results.push({ text, name: file.name });
   }
-  if (layouts.length) loadLayoutText(layouts[layouts.length - 1]);
+  if (layouts.length) {
+    const last = layouts[layouts.length - 1];
+    loadLayoutText(last.text, { name: last.name });
+  }
   if (results.length) loadResultsText(results, { replace: layouts.length > 0 });
+}
+
+// ------------------------------------------------------------- file browser
+// The picker dialog shows a folder and then forgets it. This keeps one open in
+// the panel, so a run's worth of results goes in a file at a time, and a folder
+// that gained a file since it was opened is one ⟳ away rather than another trip
+// through the dialog.
+
+const BROWSE_KEY = 'dcviewer.browse';
+
+function saveBrowseState() {
+  try {
+    localStorage.setItem(BROWSE_KEY, JSON.stringify({
+      path: state.browser.path.slice(1).map((d) => d.name),
+      showAll: state.browser.showAll,
+    }));
+  } catch { /* private window: the folder just does not come back */ }
+}
+
+function loadBrowseState() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(BROWSE_KEY) || '{}');
+    return { path: Array.isArray(saved.path) ? saved.path : [], showAll: !!saved.showAll };
+  } catch {
+    return { path: [], showAll: false };
+  }
+}
+
+/** Which of the browsed files are already in: what the rows tick off. */
+function browserLoaded() {
+  const names = new Set();
+  if (state.layoutName) names.add(state.layoutName);
+  for (const overlay of state.rawOverlays.values()) {
+    for (const source of overlay.sources || []) if (source) names.add(source);
+  }
+  return names;
+}
+
+function renderBrowserPanel() {
+  const host = $('browser');
+  // The panel is rebuilt wholesale, and one of the things it rebuilds is the
+  // name filter -- which is being typed into when it is the reason for the
+  // redraw. Put the caret back where it was.
+  const find = host.querySelector('.browse-filter');
+  const caret = find && document.activeElement === find ? find.selectionStart : null;
+
+  state.browser.loaded = browserLoaded();
+  renderBrowser(state.browser, host, actions);
+
+  if (caret === null) return;
+  const next = host.querySelector('.browse-filter');
+  if (!next) return;
+  next.focus();
+  next.setSelectionRange(caret, caret);
+}
+
+let listToken = 0;
+
+/** List the folder at the end of the path, then fill sizes in behind it. */
+async function listCurrentDir({ probe = true } = {}) {
+  const b = state.browser;
+  const dir = b.path[b.path.length - 1];
+  if (!dir) return;
+  b.loading = true;
+  b.error = '';
+  renderBrowserPanel();
+  const token = ++listToken;
+  try {
+    const entries = await readDir(dir);
+    if (token !== listToken) return;            // a later click won the race
+    b.entries = entries;
+  } catch (err) {
+    if (token !== listToken) return;
+    b.entries = [];
+    b.error = `could not read this folder: ${err.message}`;
+  }
+  b.loading = false;
+  renderBrowserPanel();
+
+  // Sizes are one metadata read per file, so they arrive after the names: a
+  // 300 MB results file is worth seeing before it is clicked, not instead of
+  // the listing.
+  if (!probe) return;
+  const entries = b.entries;
+  if (await probeSizes(entries) && token === listToken && b.entries === entries) renderBrowserPanel();
+}
+
+async function openDirectory(root, { path = [], showAll = null } = {}) {
+  const b = state.browser;
+  b.root = root;
+  b.needsPermission = false;
+  b.filter = '';
+  if (showAll !== null) b.showAll = showAll;
+  b.path = path.length ? await walkPath(root, path) : [root];
+  rememberHandle(root.handle || null, DIR_KEY);
+  saveBrowseState();
+  await listCurrentDir();
+}
+
+const browseActions = {
+  async browseOpen() {
+    const b = state.browser;
+    b.error = '';
+    if (!supportsDirectoryPicker()) { $('dirpicker').click(); return; }
+    try {
+      await openDirectory(await pickDirectory(await rememberedHandle(DIR_KEY)));
+    } catch (err) {
+      if (err && err.name === 'AbortError') return;         // dismissed, not broken
+      b.error = `could not open that folder: ${err.message}`;
+      renderBrowserPanel();
+    }
+  },
+
+  // A handle restored from IndexedDB comes back at 'prompt', and the browser
+  // only grants it under a click, which is what this button is for.
+  async browseGrant() {
+    const b = state.browser;
+    if (await ensureRead(b.root, { prompt: true })) {
+      b.needsPermission = false;
+      const saved = loadBrowseState();
+      await openDirectory(b.root, { path: saved.path });
+    } else {
+      b.error = 'access to that folder was refused.';
+      renderBrowserPanel();
+    }
+  },
+
+  async browseEnter(dir) {
+    state.browser.path.push(dir);
+    state.browser.filter = '';
+    saveBrowseState();
+    await listCurrentDir();
+  },
+
+  async browseUp(index) {
+    state.browser.path = state.browser.path.slice(0, index + 1);
+    state.browser.filter = '';
+    saveBrowseState();
+    await listCurrentDir();
+  },
+
+  browseRefresh() { listCurrentDir(); },
+
+  browseFilter(text) {
+    state.browser.filter = text;
+    renderBrowserPanel();
+  },
+
+  browseShowAll(on) {
+    state.browser.showAll = on;
+    saveBrowseState();
+    renderBrowserPanel();
+  },
+
+  browseClose() {
+    const b = state.browser;
+    b.root = null;
+    b.path = [];
+    b.entries = [];
+    b.filter = '';
+    b.error = '';
+    b.needsPermission = false;
+    rememberHandle(null, DIR_KEY);
+    saveBrowseState();
+    renderBrowserPanel();
+  },
+
+  async browseLoad(entry) {
+    const b = state.browser;
+    b.error = '';
+    let file;
+    try {
+      file = await getFile(entry);
+    } catch (err) {
+      b.error = `could not read ${entry.name}: ${err.message}`;
+      renderBrowserPanel();
+      return;
+    }
+    // Re-reading a results file has to drop what it loaded last time: the
+    // format is append-only, so parsing it twice would count every sample
+    // twice. The layout has no such trouble -- it replaces itself.
+    if (classify(entry.name) === 'results' && b.loaded.has(entry.name)) {
+      actions.removeOverlayGroup(entry.name);
+    }
+    await ingestFiles([file]);
+  },
+};
+
+Object.assign(actions, browseActions);
+
+/**
+ * A folder held open across reloads, when the browser can: the handle is in
+ * IndexedDB, but the permission that came with it is not, so unless it was
+ * granted for good the folder waits behind one click.
+ */
+async function restoreBrowser() {
+  const handle = await rememberedHandle(DIR_KEY);
+  if (!handle || handle.kind !== 'directory') return;
+  const saved = loadBrowseState();
+  const root = { kind: 'dir', name: handle.name, handle };
+  state.browser.root = root;
+  state.browser.showAll = saved.showAll;
+  if (await ensureRead(root)) await openDirectory(root, { path: saved.path });
+  else { state.browser.needsPermission = true; renderBrowserPanel(); }
 }
 
 // -------------------------------------------------------------------- editor
@@ -575,7 +822,7 @@ const applyEditor = debounce(() => {
   if (text === state.layoutText) { renderEditorStatus(); return; }
   // The first content in an empty viewer gets a fit; after that the camera
   // stays put so typing does not yank the view around.
-  loadLayoutText(text, { keepCamera: state.model.all.length > 0 });
+  loadLayoutText(text, { keepCamera: state.model.all.length > 0, name: state.layoutName });
 }, 250);
 
 function toggleEditor(show = $('editor').hidden) {
@@ -777,6 +1024,11 @@ $('opt-values').addEventListener('change', (e) => { state.showValues = e.target.
 $('btn-fit').addEventListener('click', () => { renderer.fit(); invalidate(); });
 $('btn-load').addEventListener('click', () => pickFiles());
 $('filepicker').addEventListener('change', (e) => ingestFiles([...e.target.files]));
+$('dirpicker').addEventListener('change', (e) => {
+  const files = [...e.target.files];
+  e.target.value = '';                    // so the same folder can be re-chosen
+  if (files.length) openDirectory(treeFromFiles(files), { path: [] });
+});
 $('link-opacity').addEventListener('input', (e) => {
   state.linkOpacity = Number(e.target.value) / 100;
   invalidate();
@@ -878,11 +1130,16 @@ window.addEventListener('dragenter', (e) => {
 });
 window.addEventListener('dragover', (e) => e.preventDefault());
 window.addEventListener('dragleave', () => { if (--dragDepth <= 0) { dragDepth = 0; $('drop').hidden = true; } });
-window.addEventListener('drop', (e) => {
+window.addEventListener('drop', async (e) => {
   e.preventDefault();
   dragDepth = 0;
   $('drop').hidden = true;
-  if (e.dataTransfer.files.length) ingestFiles([...e.dataTransfer.files]);
+  // A dropped folder carries no files of its own: where the browser hands over
+  // a handle for it, it opens in the file browser rather than doing nothing.
+  const dropped = [...e.dataTransfer.files];
+  const dir = await directoryFromDataTransfer(e.dataTransfer);
+  if (dir) { openDirectory(dir, { path: [] }); return; }
+  if (dropped.length) ingestFiles(dropped);
 });
 
 // ------------------------------------------------------------------ tooltip
@@ -929,6 +1186,7 @@ function debounce(fn, ms) {
 }
 
 boot();
+restoreBrowser();
 requestAnimationFrame(frame);
 
 // The fallback banner in index.html watches for this flag. If the module
