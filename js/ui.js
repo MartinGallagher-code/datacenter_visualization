@@ -14,7 +14,7 @@
 // which is what keeps the tree and the canvas showing the same collapse state.
 
 import { PALETTE_NAMES, categoricalColor, colorFor, ramp } from './palette.js';
-import { AGGREGATIONS, formatValue, overlayValue } from './results.js';
+import { AGGREGATIONS, formatValue, isStandardized, overlayValue, unitFor } from './results.js';
 import { countDescendants, linkSummary } from './render.js';
 
 const el = (tag, cls, text) => {
@@ -222,6 +222,24 @@ function overlayCard(state, overlay, actions) {
   grid.append(agg);
 
   if (overlay.numeric) {
+    grid.append(el('label', null, 'standardize'));
+    const std = el('select');
+    for (const [key, label] of [
+      ['off', 'off — raw range'],
+      ['colour', 'colour by z-score'],
+      ['values', 'values as z-score'],
+    ]) {
+      const opt = el('option', null, label);
+      opt.value = key;
+      if (key === (overlay.standardize || 'off')) opt.selected = true;
+      std.append(opt);
+    }
+    std.title = 'Colour by how far each value sits from this metric\'s mean, in '
+      + 'standard deviations, instead of across the smallest and largest value seen. '
+      + '"values as z-score" also replaces the printed number with that distance.';
+    std.addEventListener('change', () => actions.setOverlayStandardize(overlay, std.value));
+    grid.append(std);
+
     grid.append(el('label', null, 'palette'));
     const pal = el('select');
     for (const name of PALETTE_NAMES) {
@@ -233,27 +251,41 @@ function overlayCard(state, overlay, actions) {
     pal.addEventListener('change', () => actions.setOverlayField(overlay, 'palette', pal.value));
     grid.append(pal);
 
-    grid.append(el('label', null, 'range'));
-    const range = el('div', 'rangerow');
-    const lo = el('input');
-    const hi = el('input');
-    lo.value = trimNum(overlay.min);
-    hi.value = trimNum(overlay.max);
-    for (const [input, field] of [[lo, 'min'], [hi, 'max']]) {
-      input.addEventListener('change', () => {
-        const v = Number(input.value);
-        if (Number.isFinite(v)) {
-          overlay.autoDomain = false;
-          actions.setOverlayField(overlay, field, v);
-        }
+    if (isStandardized(overlay)) {
+      grid.append(el('label', null, 'spread'));
+      const range = el('div', 'rangerow');
+      const z = el('input');
+      z.value = trimNum(overlay.zRange);
+      z.title = 'Standard deviations at each end of the ramp';
+      z.addEventListener('change', () => {
+        const v = Number(z.value);
+        if (Number.isFinite(v) && v > 0) actions.setOverlayField(overlay, 'zRange', v);
       });
-      range.append(input);
+      range.append(z, el('span', 'muted', 'σ'));
+      grid.append(range);
+    } else {
+      grid.append(el('label', null, 'range'));
+      const range = el('div', 'rangerow');
+      const lo = el('input');
+      const hi = el('input');
+      lo.value = trimNum(overlay.min);
+      hi.value = trimNum(overlay.max);
+      for (const [input, field] of [[lo, 'min'], [hi, 'max']]) {
+        input.addEventListener('change', () => {
+          const v = Number(input.value);
+          if (Number.isFinite(v)) {
+            overlay.autoDomain = false;
+            actions.setOverlayField(overlay, field, v);
+          }
+        });
+        range.append(input);
+      }
+      const auto = el('button', null, 'auto');
+      auto.title = 'Rescale to the data currently loaded';
+      auto.addEventListener('click', () => actions.autoDomain(overlay));
+      range.append(auto);
+      grid.append(range);
     }
-    const auto = el('button', null, 'auto');
-    auto.title = 'Rescale to the data currently loaded';
-    auto.addEventListener('click', () => actions.autoDomain(overlay));
-    range.append(auto);
-    grid.append(range);
   }
   body.append(grid);
 
@@ -268,8 +300,12 @@ function overlayCard(state, overlay, actions) {
     body.append(legend);
 
     const scale = el('div', 'legend-scale');
-    scale.append(el('span', null, `${trimNum(overlay.min)}${overlay.unit}`));
-    scale.append(el('span', null, `${trimNum(overlay.max)}${overlay.unit}`));
+    const std = isStandardized(overlay);
+    const lo = std ? `-${trimNum(overlay.zRange)}σ` : `${trimNum(overlay.min)}${overlay.unit}`;
+    const hi = std ? `+${trimNum(overlay.zRange)}σ` : `${trimNum(overlay.max)}${overlay.unit}`;
+    scale.append(el('span', null, lo));
+    if (std) scale.append(el('span', null, 'mean'));
+    scale.append(el('span', null, hi));
     body.append(scale);
   }
 
@@ -287,6 +323,11 @@ function overlayCard(state, overlay, actions) {
 
   const stats = el('div', 'overlay-stats');
   stats.append(el('span', null, `${overlay.sampleCount} samples`));
+  if (isStandardized(overlay) && overlay.stats) {
+    stats.append(document.createTextNode(' · '));
+    stats.append(el('span', null,
+      `mean ${formatNum(overlay.stats.mean)}${overlay.unit} ± ${formatNum(overlay.stats.sd)} over ${overlay.stats.n}`));
+  }
   if (overlay.hasFlows) {
     stats.append(document.createTextNode(' · '));
     stats.append(el('span', null, `${overlay.flowsByEl.size} hosts with flows`));
@@ -304,6 +345,9 @@ function overlayCard(state, overlay, actions) {
 }
 
 const trimNum = (v) => (Number.isFinite(v) ? String(Math.round(v * 1000) / 1000) : '');
+// Short, readable figure for the mean/sd note; the overlay's own decimals
+// setting is about its values, not about describing their distribution.
+const formatNum = (v) => (Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 1 ? v.toFixed(2) : v.toFixed(3));
 
 // ---------------------------------------------------------------- networks
 
@@ -448,7 +492,7 @@ export function renderInspector(state, host, actions) {
     dot.style.background = colorFor(overlay, reading) || '#444';
     row.append(dot);
     row.append(el('span', null, overlay.label));
-    const value = `${formatValue(overlay, reading.value)}${overlay.unit}`;
+    const value = `${formatValue(overlay, reading.value)}${unitFor(overlay)}`;
     const note = reading.samples > 1 ? ` (${overlay.agg} of ${reading.samples})` : '';
     row.append(el('span', 'val', value + note));
     readings.append(row);
@@ -497,7 +541,7 @@ function renderFlows(state, host, node) {
       const name = el('span', 'flowpeer', `→ ${flow.peerEl ? flow.peerEl.name : flow.peer}`);
       if (!flow.peerEl) name.title = `${flow.peer} is not an element in this layout`;
       row.append(name);
-      row.append(el('span', 'val', `${formatValue(overlay, flow.value)}${overlay.unit}`));
+      row.append(el('span', 'val', `${formatValue(overlay, flow.value)}${unitFor(overlay)}`));
       box.append(row);
     }
     if (sorted.length > FLOWS_SHOWN) {

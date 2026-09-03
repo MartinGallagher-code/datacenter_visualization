@@ -71,8 +71,23 @@ export function categoricalColor(value) {
 export function colorFor(overlay, reading) {
   if (!reading) return null;
   if (!reading.numeric) return categoricalColor(reading.value);
-  const span = overlay.max - overlay.min;
-  let t = span === 0 ? 0.5 : (reading.value - overlay.min) / span;
+
+  // Standardised: the ramp spans -zRange..+zRange standard deviations, so the
+  // same colour means the same thing on every metric, whatever its units.
+  // (z is computed here rather than imported, to keep this module dependency
+  // free; overlay.stats is what results.js measured.)
+  let lo = overlay.min;
+  let hi = overlay.max;
+  let value = reading.value;
+  if (overlay.standardize && overlay.standardize !== 'off') {
+    const st = overlay.stats;
+    value = st && st.sd ? (reading.value - st.mean) / st.sd : 0;
+    hi = overlay.zRange || 3;
+    lo = -hi;
+  }
+
+  const span = hi - lo;
+  let t = span === 0 ? 0.5 : (value - lo) / span;
   if (overlay.invert) t = 1 - t;
   return ramp(overlay.palette, t);
 }

@@ -17,6 +17,7 @@ import { parseLayout } from './parse.js';
 import { Renderer, countDescendants } from './render.js';
 import {
   bindOverlay, clearOverlayCache, formatValue, overlayValue, parseResults, recomputeDomain,
+  recomputeStats, unitFor,
 } from './results.js';
 import { fillWarnings, renderInspector, renderNets, renderOverlays, renderTree, renderWarnings } from './ui.js';
 import { attachHints, renderReference } from './hints.js';
@@ -167,6 +168,7 @@ const actions = {
   setOverlayEnabled(overlay, enabled) {
     overlay.enabled = enabled;
     if (enabled && overlay.autoDomain) recomputeDomain(overlay, state.model);
+    if (enabled && overlay.standardize !== 'off') recomputeStats(overlay, state.model);
     // Its flow layer goes with it: the "draw measured flows" box lives in the
     // overlay's body, which an unticked overlay hides, so leaving it set would
     // keep drawing curves with no visible control to stop them.
@@ -179,6 +181,16 @@ const actions = {
     overlay.agg = agg;
     clearOverlayCache(overlay);
     if (overlay.autoDomain) recomputeDomain(overlay, state.model);
+    // The population is the per-element values, so a different aggregation is
+    // a different distribution: the mean and spread have to be measured again.
+    if (overlay.standardize !== 'off') recomputeStats(overlay, state.model);
+    refreshPanels();
+    invalidate();
+  },
+
+  setOverlayStandardize(overlay, mode) {
+    overlay.standardize = mode;
+    if (mode !== 'off') recomputeStats(overlay, state.model);
     refreshPanels();
     invalidate();
   },
@@ -342,10 +354,13 @@ function rebindOverlays() {
         palette: old.palette,
         invert: old.invert,
         autoDomain: old.autoDomain,
+        standardize: old.standardize,
+        zRange: old.zRange,
         min: old.autoDomain ? bound.min : old.min,
         max: old.autoDomain ? bound.max : old.max,
       });
     }
+    if (bound.standardize !== 'off') recomputeStats(bound, state.model);
     next.set(name, bound);
   }
   state.overlays = next;
@@ -879,7 +894,7 @@ function showTooltip(node, x, y) {
   if (node.children.length) lines.push(`${countDescendants(node)} inside${node.collapsed ? ' — collapsed' : ''}`);
   for (const overlay of state.activeOverlays) {
     const reading = overlayValue(overlay, node);
-    if (reading) lines.push(`${overlay.label}: ${formatValue(overlay, reading.value)}${overlay.unit}`);
+    if (reading) lines.push(`${overlay.label}: ${formatValue(overlay, reading.value)}${unitFor(overlay)}`);
   }
   tip.textContent = lines.join('\n');
   tip.hidden = false;

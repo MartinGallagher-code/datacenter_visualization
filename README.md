@@ -185,6 +185,31 @@ burnin      DH1/A/R01/u05   PASS
 !test temp_c  unit=C  higher=bad  min=18 max=78  short=TMP  label="Inlet temp"
 ```
 
+### Standardizing a metric
+
+An overlay's colours normally span the smallest and largest value present, so
+the same colour means different things on different metrics, and a floor where
+everything is fine still paints something red. **standardize** on the overlay
+card colours by the **z-score** instead — how far each value sits from that
+metric's own mean, in standard deviations:
+
+| Setting | Values shown | Colour from |
+|---|---|---|
+| `off` | the metric's own values | the min…max range (as before) |
+| `colour by z-score` | the metric's own values | z, across ±σ |
+| `values as z-score` | the z-score, in σ | z, across ±σ |
+
+Use the first when the numbers matter and the colours should say "unusual for
+this metric"; the second when comparing metrics in different units side by
+side, where +2σ on temperature and +2σ on latency should look alike.
+
+The mean and spread are measured over **one aggregated value per measured
+element** — the devices being compared, not the raw sample rows, which repeat
+per run — so changing the aggregation re-measures them. The overlay card shows
+what they came out as (`mean 40.5C ± 8.73 over 480`), the ramp ends default to
+±3σ and are adjustable, and a metric with no spread at all reads 0σ everywhere
+rather than dividing by zero.
+
 (`higher=bad|good` picks the green↔red ramp direction; `palette=` chooses any
 ramp: viridis, magma, plasma, turbo, health, cool, ember, gray, rdbu;
 `agg=` presets the aggregation; `decimals=` fixes formatting.)
