@@ -26,11 +26,31 @@
 // as individual samples and reduced at draw time by the aggregation the user
 // picks in the UI.
 
+/**
+ * Smallest and largest of an array, in one pass.
+ *
+ * NOT Math.min(...v): a spread passes every element as an argument, and past
+ * roughly a hundred thousand of them the engine throws "Maximum call stack
+ * size exceeded". The root element holds every sample in the file, so that
+ * ceiling was reached by an ordinary few-megabyte results file -- which read
+ * as "the file will not load".
+ */
+export function extent(v) {
+  let lo = Infinity;
+  let hi = -Infinity;
+  for (let i = 0; i < v.length; i++) {
+    const n = v[i];
+    if (n < lo) lo = n;
+    if (n > hi) hi = n;
+  }
+  return [lo, hi];
+}
+
 export const AGGREGATIONS = {
   mean:     { label: 'mean',            fn: (v) => v.reduce((a, b) => a + b, 0) / v.length },
   median:   { label: 'median',          fn: (v) => quantile(v, 0.5) },
-  min:      { label: 'min',             fn: (v) => Math.min(...v) },
-  max:      { label: 'max',             fn: (v) => Math.max(...v) },
+  min:      { label: 'min',             fn: (v) => extent(v)[0] },
+  max:      { label: 'max',             fn: (v) => extent(v)[1] },
   sum:      { label: 'sum',             fn: (v) => v.reduce((a, b) => a + b, 0) },
   count:    { label: 'count',           fn: (v) => v.length },
   last:     { label: 'last',            fn: (v) => v[v.length - 1] },
@@ -40,7 +60,7 @@ export const AGGREGATIONS = {
   p95:      { label: 'p95',             fn: (v) => quantile(v, 0.95) },
   p05:      { label: 'p05',             fn: (v) => quantile(v, 0.05) },
   stdev:    { label: 'std deviation',   fn: stdev },
-  range:    { label: 'max - min',       fn: (v) => Math.max(...v) - Math.min(...v) },
+  range:    { label: 'max - min',       fn: (v) => { const [lo, hi] = extent(v); return hi - lo; } },
 };
 
 export const DEFAULT_AGG = 'mean';
@@ -360,7 +380,7 @@ export function bindOverlay(overlay, model) {
   const numeric = numericCount >= textCount;
   const own = numericByEl.get(model.root ? model.root.key : '') || [];
   const domain = numeric && own.length
-    ? [Math.min(...own), Math.max(...own)]
+    ? extent(own)
     : [0, 1];
 
   return {
@@ -450,7 +470,7 @@ export function recomputeDomain(overlay, model, kind = 'node') {
     if (v && v.numeric) values.push(v.value);
   }
   if (!values.length) return false;
-  overlay.dataDomain = [Math.min(...values), Math.max(...values)];
+  overlay.dataDomain = extent(values);
   if (overlay.autoDomain) {
     overlay.min = overlay.dataDomain[0];
     overlay.max = overlay.dataDomain[1];

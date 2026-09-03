@@ -168,6 +168,13 @@ burnin      DH1/A/R01/u05   PASS
   or just a hostname if node ids are hostnames). Matching is case-insensitive.
 - Values may be numbers or words (`PASS`/`WARN`/`FAIL` get traffic-light
   colors; other words get stable categorical colors).
+- **How big can a results file be?** There is no limit in the viewer. A file
+  is read as one string, so the hard wall is the browser's maximum string
+  length — about 512 MB, past which `file.text()` throws. Measured on a
+  laptop-class browser: 5 MB (142k samples) loads in under a second, 25 MB in
+  ~3 s, 100 MB (2.8M samples) in ~12 s, 300 MB (8.5M samples) in ~34 s. Past
+  that, split the run across several files and load them together — they merge
+  exactly as appending would, and the panel groups them by file.
 - The **same test + target may repeat freely** (many runs, many instances).
   All samples are kept, and the UI reduces them with the aggregation you pick:
   mean, median, min, max, sum, count, first, last, harmonic mean, geometric

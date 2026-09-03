@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url';
 import { expand, subst } from '../js/expand.js';
 import { compileSelector } from '../js/select.js';
 import { parseLayout } from '../js/parse.js';
-import { parseResults, bindOverlay, overlayValue, AGGREGATIONS } from '../js/results.js';
+import { parseResults, bindOverlay, overlayValue, AGGREGATIONS, extent } from '../js/results.js';
 import { layout } from '../js/layout.js';
 import { linkSummary, sharesLineage } from '../js/render.js';
 import { compileQuery, applyFilter } from '../js/filter.js';
@@ -341,6 +341,33 @@ ok(missing[0].includes('target'), 'missing target is reported');
 // Sniffing must not steal files that merely mention a brace.
 const braced = parseResults('# {not json}\ntemp_c\tDH1/A/R01/u05\t61.2\n');
 eq(braced.get('temp_c').samples.length, 1, 'comment starting with { stays text');
+
+// ------------------------------------------------------------ large results
+// A results file is one sample per line, so an ordinary few-MB file carries
+// hundreds of thousands of samples -- and the root element holds every one of
+// them. Math.min(...v) passes each as an argument and dies at roughly a
+// hundred thousand with "Maximum call stack size exceeded", which read as the
+// file simply refusing to load. Nothing here may spread a sample array.
+{
+  const many = [];
+  for (let i = 0; i < 400000; i++) many.push((i * 7919) % 100000);
+  eq(extent(many)[0], 0, 'extent finds the minimum of 400k values');
+  ok(extent(many)[1] > 99000, 'and the maximum');
+  eq(AGGREGATIONS.min.fn(many), extent(many)[0], 'the min aggregation survives the same array');
+  eq(AGGREGATIONS.max.fn(many), extent(many)[1], 'so does max');
+  eq(AGGREGATIONS.range.fn(many), extent(many)[1] - extent(many)[0], 'and range');
+
+  // End to end: a results file with more samples than the spread limit binds
+  // and reads, rather than throwing on the way in.
+  const lines = [];
+  for (let i = 0; i < 150000; i++) lines.push(`bulk\tDH1/A/R01/u05\t${i % 500}`);
+  const bulk = parseResults(`${lines.join('\n')}\n`);
+  eq(bulk.get('bulk').samples.length, 150000, '150k samples parse');
+  const bound = bindOverlay(bulk.get('bulk'), small);
+  eq([bound.min, bound.max], [0, 499], 'and the domain comes out of them');
+  ok(overlayValue(bound, small.resolve('DH1/A/R01/u05')).samples === 150000,
+     'with every sample on the element');
+}
 
 // ----------------------------------------------------------- overlay source
 // Overlays remember the file they came from, so the panel can group them:

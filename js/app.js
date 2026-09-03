@@ -320,7 +320,9 @@ function loadResultsText(files, { replace = false } = {}) {
   if (replace) state.rawOverlays = new Map();
   const warnings = [];
   for (const file of files) parseResults(file.text, state.rawOverlays, warnings, file.name || '');
-  state.warnings.push(...warnings);
+  // Not push(...warnings): a broken generator can produce one warning per line,
+  // and spreading that many arguments overflows the stack.
+  for (const w of warnings) state.warnings.push(w);
   rebindOverlays();
   refresh();
   renderWarnings($('left').firstElementChild, state.warnings, jumpToLine);
