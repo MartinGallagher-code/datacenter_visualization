@@ -400,6 +400,14 @@ export function bindOverlay(overlay, model) {
     // Display state, all user-adjustable from the overlay panel.
     enabled: false,
     drawFlows: false,   // paint the measured pairs as their own edge layer
+    // Standardising asks "how unusual is this, for this metric" instead of
+    // "where does it sit between the smallest and largest value seen".
+    //   'off'    raw values, coloured across min..max
+    //   'colour' raw values kept, coloured by z-score
+    //   'values' the z-score itself becomes the number shown
+    standardize: 'off',
+    zRange: 3,          // sigma at the ends of the ramp
+    stats: null,        // { mean, sd, n } over the measured elements
     agg: AGGREGATIONS[meta.agg] ? meta.agg : DEFAULT_AGG,
     // `higher=bad` / `higher=good` pick the green-to-red ramp and its direction;
     // an explicit palette= always wins.
@@ -478,7 +486,45 @@ export function recomputeDomain(overlay, model, kind = 'node') {
   return true;
 }
 
+/**
+ * Mean and standard deviation of what is actually on screen: one aggregated
+ * value per measured element, so the population is the devices being compared
+ * rather than the raw sample rows, which repeat per run.
+ */
+export function recomputeStats(overlay, model, kind = 'node') {
+  const values = [];
+  for (const el of model.all) {
+    if (kind && el.kind !== kind) continue;
+    const v = overlayValue(overlay, el);
+    if (v && v.numeric) values.push(v.value);
+  }
+  if (!values.length) { overlay.stats = null; return false; }
+  let sum = 0;
+  for (const v of values) sum += v;
+  const mean = sum / values.length;
+  let sq = 0;
+  for (const v of values) sq += (v - mean) * (v - mean);
+  overlay.stats = { mean, sd: Math.sqrt(sq / values.length), n: values.length };
+  return true;
+}
+
+/** How many standard deviations a value sits from the mean. */
+export function zScore(overlay, value) {
+  const s = overlay.stats;
+  if (!s || !s.sd) return 0;      // no spread at all: everything is average
+  return (value - s.mean) / s.sd;
+}
+
+export const isStandardized = (overlay) => overlay.standardize && overlay.standardize !== 'off';
+
+/** The unit to print beside a value -- sigma once the value IS a z-score. */
+export const unitFor = (overlay) => (overlay.standardize === 'values' ? 'σ' : overlay.unit);
+
 export function formatValue(overlay, value) {
+  if (overlay.standardize === 'values' && typeof value === 'number') {
+    const z = zScore(overlay, value);
+    return `${z >= 0 ? '+' : ''}${z.toFixed(2)}`;
+  }
   if (value === null || value === undefined) return '';
   if (typeof value !== 'number') return String(value);
   let decimals = overlay.decimals;

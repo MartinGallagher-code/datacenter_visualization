@@ -18,7 +18,10 @@ import { fileURLToPath } from 'node:url';
 import { expand, subst } from '../js/expand.js';
 import { compileSelector } from '../js/select.js';
 import { parseLayout } from '../js/parse.js';
-import { parseResults, bindOverlay, overlayValue, AGGREGATIONS, extent } from '../js/results.js';
+import {
+  parseResults, bindOverlay, overlayValue, AGGREGATIONS, extent,
+  recomputeStats, zScore, formatValue, unitFor,
+} from '../js/results.js';
 import { layout } from '../js/layout.js';
 import { linkSummary, sharesLineage } from '../js/render.js';
 import { compileQuery, applyFilter } from '../js/filter.js';
@@ -341,6 +344,59 @@ ok(missing[0].includes('target'), 'missing target is reported');
 // Sniffing must not steal files that merely mention a brace.
 const braced = parseResults('# {not json}\ntemp_c\tDH1/A/R01/u05\t61.2\n');
 eq(braced.get('temp_c').samples.length, 1, 'comment starting with { stays text');
+
+// ------------------------------------------------------------ standardizing
+// z = (value - mean) / sd over the measured elements, so a colour means the
+// same thing whatever a metric's units or range happen to be.
+{
+  // Four hosts at 10, 20, 30, 40: mean 25, population sd 11.180.
+  const raw = parseResults(
+    'zt\tDH1/A/R01/u01\t10\nzt\tDH1/A/R01/u02\t20\n'
+    + 'zt\tDH1/A/R01/u03\t30\nzt\tDH1/A/R01/u04\t40\n');
+  const ov = bindOverlay(raw.get('zt'), small);
+  eq(ov.standardize, 'off', 'standardizing is off until asked for');
+  eq(ov.stats, null, 'and nothing is measured until then');
+
+  recomputeStats(ov, small);
+  eq(ov.stats.n, 4, 'the population is the measured elements');
+  eq(ov.stats.mean, 25, 'mean');
+  ok(Math.abs(ov.stats.sd - Math.sqrt(125)) < 1e-9, 'population standard deviation');
+
+  ok(Math.abs(zScore(ov, 25)) < 1e-9, 'the mean is zero sigma');
+  ok(Math.abs(zScore(ov, 40) - 15 / Math.sqrt(125)) < 1e-9, 'the top host is +1.34 sigma');
+  eq(zScore(ov, 10), -zScore(ov, 40), 'and the bottom is its mirror');
+
+  // A metric with no spread cannot divide: everything is average, not NaN.
+  const flat = bindOverlay(parseResults('f\tDH1/A/R01/u01\t7\nf\tDH1/A/R01/u02\t7\n').get('f'), small);
+  recomputeStats(flat, small);
+  eq(flat.stats.sd, 0, 'no spread');
+  eq(zScore(flat, 7), 0, 'and z is 0 rather than a division by zero');
+
+  // "values as z-score" replaces the printed number and its unit; the two
+  // colour modes leave the number alone.
+  ov.unit = 'C';
+  ov.standardize = 'values';
+  eq(formatValue(ov, 40), '+1.34', 'the value printed becomes the z-score');
+  eq(formatValue(ov, 10), '-1.34', 'signed both ways');
+  eq(unitFor(ov), 'σ', 'and it is labelled in sigma');
+  ov.standardize = 'colour';
+  eq(formatValue(ov, 40), '40', 'colouring by z leaves the value alone');
+  eq(unitFor(ov), 'C', 'and its unit alone');
+
+  // Colour comes from z against +/- zRange, so the mean sits mid-ramp and a
+  // value one sd out lands the same fraction along on any metric.
+  ov.palette = 'viridis';
+  ov.invert = false;
+  ov.zRange = 2;
+  const mid = colorFor(ov, { numeric: true, value: 25 });
+  eq(mid, ramp('viridis', 0.5), 'the mean is the middle of the ramp');
+  const hot = colorFor(ov, { numeric: true, value: 25 + Math.sqrt(125) });
+  eq(hot, ramp('viridis', 0.75), '+1 sigma is three quarters along with zRange 2');
+  ov.standardize = 'off';
+  ov.min = 0; ov.max = 100;
+  eq(colorFor(ov, { numeric: true, value: 25 }), ramp('viridis', 0.25),
+     'and switching off returns to the raw min..max mapping');
+}
 
 // ------------------------------------------------------------ large results
 // A results file is one sample per line, so an ordinary few-MB file carries
