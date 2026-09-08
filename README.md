@@ -568,6 +568,12 @@ netmesh run --for 60 && dcimport results.tsv --tidy reports/
   clicked, and clicking a results file that is already loaded re-reads it —
   replacing its overlays rather than counting every sample twice, since the
   format is append-only.
+- **Restart** — empties the viewer: no floor plan, no overlays, no filter, no
+  selection, and a blank canvas. **Remove all** in the Overlays panel only ever
+  cleared the overlays and left the floor plan drawn; this clears the lot. What
+  survives is the workspace rather than its contents — panel widths and folds,
+  and the folder held open in Files, so the next thing to load is one click
+  away.
 - **The load report** — every load says what each file did, in a chip at the
   right of the top bar (`✓ 3`, or `⚠ 1` when something did not go as asked).
   Click it for the report; a load with a problem opens it by itself. It sits

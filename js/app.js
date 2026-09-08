@@ -375,6 +375,35 @@ const actions = {
     refreshPanels();
     invalidate();
   },
+
+  /**
+   * Back to an empty viewer: no floor plan, no overlays, nothing drawn. The
+   * canvas is blank because the model is empty, not because the drawing was
+   * skipped -- "Remove all" only ever cleared the overlays, and left the floor
+   * plan sitting there.
+   *
+   * What survives is the workspace rather than its contents: panel widths and
+   * folds, and the folder held open in Files, so the next thing to load is
+   * still one click away.
+   */
+  restart() {
+    state.rawOverlays.clear();
+    state.overlays.clear();
+    state.activeOverlays = [];
+    state.groupsOff.clear();
+    state.netOverrides.clear();
+    state.warnings = [];
+    state.notices = [];
+    state.noticesOpen = false;
+    state.selected = null;
+    state.isolateLinks = false;
+    state.standardizeAll = 'off';
+    $('filter').value = '';
+    $('opt-hide').checked = false;
+    state.hideUnmatched = false;
+    loadLayoutText('', { keepCamera: false });
+    showWarnings();
+  },
 };
 
 // -------------------------------------------------------------------- loading
@@ -403,8 +432,12 @@ function loadLayoutText(text, { keepCamera = false, name = '' } = {}) {
   }
   state.selected = null;
   state.warnings = [...state.model.warnings];
-  $('title').textContent = state.model.title;
-  document.title = `${state.model.title} — Layout Viewer`;
+  // An empty model has the parser's placeholder title, which is not a name
+  // for anything -- an emptied viewer reads as the viewer, as it does before
+  // the first file arrives.
+  const named = state.model.all.length ? state.model.title : 'Datacenter Layout Viewer';
+  $('title').textContent = named;
+  document.title = state.model.all.length ? `${named} — Layout Viewer` : named;
 
   if (state.model.all.length > AUTO_COLLAPSE_ABOVE) setCollapseAtKind('rack');
   rebindOverlays();
@@ -1168,6 +1201,7 @@ $('opt-values').addEventListener('change', (e) => { state.showValues = e.target.
 $('btn-fit').addEventListener('click', () => { renderer.fit(); invalidate(); });
 $('btn-load').addEventListener('click', () => pickFiles());
 $('notices-btn').addEventListener('click', () => actions.toggleNotices());
+$('btn-restart').addEventListener('click', () => actions.restart());
 $('filepicker').addEventListener('change', (e) => ingestFiles([...e.target.files]));
 $('dirpicker').addEventListener('change', (e) => {
   const files = [...e.target.files];
