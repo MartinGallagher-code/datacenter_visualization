@@ -212,6 +212,17 @@ raw. `off` there means "no override", not "force every metric raw". A metric
 loaded while it is on is standardized too. The ramp's spread stays per metric,
 since a shared one would have to overwrite what each card holds.
 
+**one scale** — beside it, and on by default once anything is standardized —
+is what makes two metrics actually comparable by eye. Spanning ±σ is not
+enough on its own: a per-metric `palette=`, a per-metric spread, or a
+`higher=good` inversion each paint the same z-score green on one metric and
+red on the next. Ticked, every standardized metric is drawn from one palette,
+one spread and no inversion, so **the same z-score is the same colour
+everywhere**; each card still shows the palette and spread it would use on its
+own, greyed. The default ramp is `rdbu`, diverging, because a z-score is
+signed and the mean belongs in the middle. Untick it to go back to per-metric
+colours.
+
 The mean and spread are measured over **one aggregated value per measured
 element** — the devices being compared, not the raw sample rows, which repeat
 per run — so changing the aggregation re-measures them. The overlay card shows
@@ -557,6 +568,18 @@ netmesh run --for 60 && dcimport results.tsv --tidy reports/
   clicked, and clicking a results file that is already loaded re-reads it —
   replacing its overlays rather than counting every sample twice, since the
   format is append-only.
+- **The load report** — every load says what each file did, in a chip at the
+  right of the top bar (`✓ 3`, or `⚠ 1` when something did not go as asked).
+  Click it for the report; a load with a problem opens it by itself. It sits
+  in the top bar rather than a panel because a panel collapses, and the one
+  thing saying a file did not arrive must not be collapsible. It names the
+  quiet outcomes in particular: a file with no data lines in it, a file whose
+  lines are not in `test target value` form, **two layouts at once** (a viewer
+  holds one floor plan — it says which won and which were ignored), and a
+  second results file whose tests were all loaded already (its samples *are*
+  in, appended, but they stay filed under the first file that carried the
+  test — which reads exactly like the second file having failed). Warnings
+  inside a file name that file, so `line 5:` is never ambiguous between two.
 - **Panels** — either side panel collapses to a slim rail (the `‹` / `›` in
   its heading, and the rail brings it back) and resizes by dragging the edge
   beside the canvas; double-click that edge to reset a width. Every section

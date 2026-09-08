@@ -174,7 +174,11 @@ body.resizing { cursor: col-resize; user-select: none; }
 .allstd select { flex: 1; min-width: 0; font-size: 11px; padding: 2px 5px; }
 /* A card's own setting while "standardize all" is overriding it: still there,
    still editable, visibly not what is being drawn. */
-select.overridden { opacity: 0.55; border-style: dashed; }
+select.overridden, input.overridden { opacity: 0.55; border-style: dashed; }
+.zscale { gap: 5px; }
+.zscale .chk { white-space: nowrap; }
+.zscale select { flex: 1; min-width: 0; }
+.zscale .zspread { width: 38px; font-size: 11px; padding: 2px 4px; text-align: right; }
 
 #canvaswrap { display: flex; flex-direction: column; flex: 1; min-width: 0; }
 #viewwrap { position: relative; flex: 1; min-height: 0; }
@@ -405,6 +409,53 @@ select.overridden { opacity: 0.55; border-style: dashed; }
 }
 
 .dropzone[hidden] { display: none; }
+
+/* ---------------------------------------------------------------- notices */
+/* The load report. It hangs off the top bar rather than living in a panel,
+   because a panel that collapses can hide the one thing saying a file did
+   not arrive. */
+
+.notice-chip {
+  font-family: var(--mono); font-size: 11px;
+  padding: 3px 8px;
+  color: #4dd4ac; border-color: #2b5c4b;
+}
+.notice-chip.warn { color: #e0c06a; border-color: #4a3a12; background: #241d0e; }
+.notice-chip[hidden] { display: none; }
+
+.notices {
+  position: absolute; top: 46px; right: 12px; z-index: 8;
+  width: min(560px, calc(100vw - 24px));
+  max-height: 60vh; overflow: auto;
+  padding: 8px 10px 10px;
+  background: #12171fF2;
+  border: 1px solid var(--line); border-radius: 0 0 7px 7px;
+  border-top: none;
+  box-shadow: 0 8px 24px #0008;
+}
+.notices[hidden] { display: none; }
+.notice-head {
+  display: flex; align-items: center;
+  margin-bottom: 7px;
+  font-size: 10.5px; letter-spacing: 0.09em; text-transform: uppercase;
+  color: var(--ink-dim); font-weight: 600;
+}
+.notice-x {
+  margin-left: auto;
+  padding: 0 5px;
+  background: none; border: none;
+  color: var(--ink-dim); font-size: 14px; line-height: 1; cursor: pointer;
+}
+.notice-x:hover { color: var(--ink); }
+
+.notice { margin-bottom: 7px; font-size: 11.5px; line-height: 1.5; }
+.notice:last-child { margin-bottom: 0; }
+.notice-text { padding-left: 13px; text-indent: -13px; }
+.notice.ok   .notice-text::before { content: '✓ '; color: #4dd4ac; }
+.notice.note .notice-text::before { content: '· '; color: var(--accent); }
+.notice.warn .notice-text::before { content: '⚠ '; color: var(--warn); }
+.notice.warn .notice-text { color: #e0c06a; }
+.notice-detail .warnings { max-height: 96px; }
 
 /* ----------------------------------------------------------------- editor */
 

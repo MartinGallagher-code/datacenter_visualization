@@ -411,6 +411,10 @@ export function bindOverlay(overlay, model) {
     // metric back on the setting it was given.
     standardizeAll: 'off',
     zRange: 3,          // sigma at the ends of the ramp
+    // The panel's shared z scale, mirrored on every overlay: { palette,
+    // zRange } while one scale covers every standardised metric, null while
+    // each keeps its own. Only ever consulted when standardising.
+    zShared: null,
     stats: null,        // { mean, sd, n } over the measured elements
     agg: AGGREGATIONS[meta.agg] ? meta.agg : DEFAULT_AGG,
     // `higher=bad` / `higher=good` pick the green-to-red ramp and its direction;
@@ -537,6 +541,12 @@ export const isStandardized = (overlay) => overlay.stdMode && overlay.stdMode !=
 
 /** The unit to print beside a value -- sigma once the value IS a z-score. */
 export const unitFor = (overlay) => (overlay.stdMode === 'values' ? 'σ' : overlay.unit);
+
+// What a standardised overlay is actually drawn with: the shared z scale
+// where the panel is sharing one, this metric's own settings otherwise.
+export const zRangeOf = (o) => ((isStandardized(o) && o.zShared ? o.zShared.zRange : o.zRange) || 3);
+export const paletteOf = (o) => (isStandardized(o) && o.zShared ? o.zShared.palette : o.palette);
+export const invertedOf = (o) => (isStandardized(o) && o.zShared ? false : o.invert);
 
 export function formatValue(overlay, value) {
   if (overlay.stdMode === 'values' && typeof value === 'number') {

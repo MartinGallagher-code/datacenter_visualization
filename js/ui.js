@@ -14,7 +14,9 @@
 // which is what keeps the tree and the canvas showing the same collapse state.
 
 import { PALETTE_NAMES, categoricalColor, colorFor, ramp } from './palette.js';
-import { AGGREGATIONS, formatValue, isStandardized, overlayValue, unitFor } from './results.js';
+import {
+  AGGREGATIONS, formatValue, invertedOf, isStandardized, overlayValue, paletteOf, unitFor, zRangeOf,
+} from './results.js';
 import { countDescendants, linkSummary } from './render.js';
 
 const el = (tag, cls, text) => {
@@ -147,6 +149,12 @@ export function renderOverlays(state, host, actions) {
     pick.addEventListener('change', () => actions.setStandardizeAll(pick.value));
     row.append(pick);
     host.append(row);
+
+    // Spanning +/-sigma is not enough to make two metrics comparable by eye:
+    // a per-metric palette or a `higher=good` inversion still paints the same
+    // z-score green on one and red on the next. One scale fixes that, and is
+    // the whole reason to standardise more than one metric at once.
+    if (overlays.some((o) => isStandardized(o))) host.append(zScaleRow(state, actions));
   }
 
   // Grouped by the file they came from: one results file can carry twenty-odd
@@ -175,6 +183,45 @@ export function renderOverlays(state, host, actions) {
     if (grouped && state.groupsOff.has(source)) continue;
     for (const overlay of list) host.append(overlayCard(state, overlay, actions));
   }
+}
+
+function zScaleRow(state, actions) {
+  const row = el('div', 'allstd zscale');
+
+  const share = el('label', 'chk');
+  const box = el('input');
+  box.type = 'checkbox';
+  box.checked = !!state.zShared;
+  box.addEventListener('change', () => actions.setZShared(box.checked));
+  share.append(box, el('span', null, 'one scale'));
+  share.title = 'Colour every standardised metric from the same scale, so the same z-score is '
+    + 'the same colour on all of them. This overrides each metric\'s own palette, spread and '
+    + '`higher=good` direction — which is what made +2σ green on one metric and red on the next.';
+  row.append(share);
+
+  const pal = el('select');
+  for (const name of PALETTE_NAMES) {
+    const opt = el('option', null, name);
+    opt.value = name;
+    if (name === state.zPalette) opt.selected = true;
+    pal.append(opt);
+  }
+  pal.disabled = !state.zShared;
+  pal.title = 'The one palette every standardised metric is drawn with. A diverging ramp '
+    + '(rdbu) reads best: a z-score is signed, and the mean belongs in the middle.';
+  pal.addEventListener('change', () => actions.setZScale('zPalette', pal.value));
+  row.append(pal);
+
+  const spread = el('input', 'zspread');
+  spread.value = trimNum(state.zSpread);
+  spread.disabled = !state.zShared;
+  spread.title = 'Standard deviations at each end of the shared ramp';
+  spread.addEventListener('change', () => {
+    const v = Number(spread.value);
+    if (Number.isFinite(v) && v > 0) actions.setZScale('zSpread', v);
+  });
+  row.append(spread, el('span', 'muted', 'σ'));
+  return row;
 }
 
 function groupHeader(state, source, list, actions) {
@@ -270,13 +317,21 @@ function overlayCard(state, overlay, actions) {
     std.addEventListener('change', () => actions.setOverlayStandardize(overlay, std.value));
     grid.append(std);
 
+    // The shared z scale overrides this the way "standardize all" overrides
+    // the setting above it: still shown, still editable, visibly not what is
+    // being drawn.
+    const onShared = isStandardized(overlay) && !!overlay.zShared;
     grid.append(el('label', null, 'palette'));
-    const pal = el('select');
+    const pal = el('select', onShared ? 'overridden' : null);
     for (const name of PALETTE_NAMES) {
       const opt = el('option', null, name);
       opt.value = name;
       if (name === overlay.palette) opt.selected = true;
       pal.append(opt);
+    }
+    if (onShared) {
+      pal.title = `Overridden by the shared z scale (${overlay.zShared.palette}). This is what `
+        + 'this metric goes back to when "one scale" is unticked.';
     }
     pal.addEventListener('change', () => actions.setOverlayField(overlay, 'palette', pal.value));
     grid.append(pal);
@@ -284,9 +339,12 @@ function overlayCard(state, overlay, actions) {
     if (isStandardized(overlay)) {
       grid.append(el('label', null, 'spread'));
       const range = el('div', 'rangerow');
-      const z = el('input');
+      const z = el('input', onShared ? 'overridden' : null);
       z.value = trimNum(overlay.zRange);
-      z.title = 'Standard deviations at each end of the ramp';
+      z.title = onShared
+        ? `Overridden by the shared z scale (±${trimNum(overlay.zShared.zRange)}σ). This is what `
+          + 'this metric goes back to when "one scale" is unticked.'
+        : 'Standard deviations at each end of the ramp';
       z.addEventListener('change', () => {
         const v = Number(z.value);
         if (Number.isFinite(v) && v > 0) actions.setOverlayField(overlay, 'zRange', v);
@@ -324,15 +382,15 @@ function overlayCard(state, overlay, actions) {
     const stops = [];
     for (let i = 0; i <= 8; i++) {
       const t = i / 8;
-      stops.push(`${ramp(overlay.palette, overlay.invert ? 1 - t : t)} ${t * 100}%`);
+      stops.push(`${ramp(paletteOf(overlay), invertedOf(overlay) ? 1 - t : t)} ${t * 100}%`);
     }
     legend.style.background = `linear-gradient(90deg, ${stops.join(',')})`;
     body.append(legend);
 
     const scale = el('div', 'legend-scale');
     const std = isStandardized(overlay);
-    const lo = std ? `-${trimNum(overlay.zRange)}σ` : `${trimNum(overlay.min)}${overlay.unit}`;
-    const hi = std ? `+${trimNum(overlay.zRange)}σ` : `${trimNum(overlay.max)}${overlay.unit}`;
+    const lo = std ? `-${trimNum(zRangeOf(overlay))}σ` : `${trimNum(overlay.min)}${overlay.unit}`;
+    const hi = std ? `+${trimNum(zRangeOf(overlay))}σ` : `${trimNum(overlay.max)}${overlay.unit}`;
     scale.append(el('span', null, lo));
     if (std) scale.append(el('span', null, 'mean'));
     scale.append(el('span', null, hi));
@@ -585,6 +643,47 @@ function renderFlows(state, host, node) {
 // opens the editor there. Results warnings say "results line N" -- a line of
 // a different file -- so only a leading "line N:" counts as jumpable.
 const LAYOUT_LINE = /^line (\d+):/;
+
+// ---------------------------------------------------------------- notices
+// The load report. Warnings live in the Structure block, which is inside a
+// panel that collapses and a section that folds -- so a file that failed
+// could still fail silently. This chip sits in the top bar, where nothing
+// hides it, and opens the report on a click.
+
+export function renderNotices(state, host, button, actions, onJump) {
+  const notices = state.notices || [];
+  const bad = notices.filter((n) => n.level === 'warn').length;
+
+  button.hidden = !notices.length;
+  button.className = `notice-chip${bad ? ' warn' : ''}`;
+  button.textContent = bad ? `⚠ ${bad}` : `✓ ${notices.length}`;
+  button.title = bad
+    ? `${bad} of the last ${notices.length} loads had something to say — click for the report`
+    : 'Last load: click for the report';
+
+  host.hidden = !state.noticesOpen || !notices.length;
+  host.textContent = '';
+  if (host.hidden) return;
+
+  const head = el('div', 'notice-head');
+  head.append(el('span', null, 'Last load'));
+  const close = el('button', 'notice-x', '×');
+  close.title = 'Close the report';
+  close.addEventListener('click', () => actions.toggleNotices(false));
+  head.append(close);
+  host.append(head);
+
+  for (const notice of notices) {
+    const row = el('div', `notice ${notice.level}`);
+    row.append(el('div', 'notice-text', notice.text));
+    if (notice.lines && notice.lines.length) {
+      const detail = el('div', 'notice-detail');
+      fillWarnings(detail, notice.lines, onJump);
+      row.append(detail);
+    }
+    host.append(row);
+  }
+}
 
 export function fillWarnings(box, warnings, onJump) {
   box.textContent = '';

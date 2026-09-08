@@ -19,7 +19,12 @@ import {
   bindOverlay, clearOverlayCache, formatValue, overlayValue, parseResults, recomputeDomain,
   recomputeStats, unitFor,
 } from './results.js';
-import { fillWarnings, renderInspector, renderNets, renderOverlays, renderTree, renderWarnings } from './ui.js';
+import {
+  fillWarnings, renderInspector, renderNets, renderNotices, renderOverlays, renderTree, renderWarnings,
+} from './ui.js';
+import {
+  droppedLayoutsNotice, layoutNotice, plural, prefixed, resultsFileNotice,
+} from './report.js';
 import { attachHints, renderReference } from './hints.js';
 import {
   classify, directoryFromDataTransfer, ensureRead, getFile, pickDirectory, probeSizes,
@@ -42,6 +47,12 @@ const state = {
   // setting without overwriting it, so turning it back off restores whatever
   // each metric was set to individually.
   standardizeAll: 'off',
+  // The shared z scale. Standardising puts every metric on the same numbers;
+  // this puts them on the same colours too, which needs one palette, one
+  // spread, and no per-metric `higher=good` inversion.
+  zShared: true,
+  zPalette: 'rdbu',       // diverging: a signed distance from the mean
+  zSpread: 3,
   activeOverlays: [],
   showValues: true,
   hideUnmatched: false,
@@ -53,6 +64,12 @@ const state = {
   linkOpacity: 0.45,
   maxLinksDrawn: 60000,
   warnings: [],
+  // What the last load actually did, one entry per file. The warnings list
+  // says what was wrong with a file's contents; this says whether the file
+  // arrived at all, which is the question a viewer that quietly drops one
+  // leaves you unable to answer.
+  notices: [],
+  noticesOpen: false,
   layoutName: '',           // the file the current floor plan came from, if any
 
   // The file browser: a folder held open in the panel. `loaded` is what the
@@ -114,6 +131,14 @@ let needsDraw = true;
 const invalidate = () => { needsDraw = true; };
 
 // ------------------------------------------------------------------ pipeline
+
+const sharedZScale = () => (state.zShared ? { palette: state.zPalette, zRange: state.zSpread } : null);
+
+/** Mirror the panel's shared z scale onto every overlay, or take it away. */
+function applyZScale() {
+  const shared = sharedZScale();
+  for (const overlay of state.overlays.values()) overlay.zShared = shared;
+}
 
 function recomputeActiveOverlays() {
   state.activeOverlays = [...state.overlays.values()].filter((o) => o.enabled);
@@ -217,6 +242,25 @@ const actions = {
     if (overlay.stdMode !== 'off' && !overlay.stats) recomputeStats(overlay, state.model);
     refreshPanels();
     invalidate();
+  },
+
+  setZShared(on) {
+    state.zShared = on;
+    applyZScale();
+    refreshPanels();
+    invalidate();
+  },
+
+  setZScale(field, value) {
+    state[field] = value;
+    applyZScale();
+    refreshPanels();
+    invalidate();
+  },
+
+  toggleNotices(open = !state.noticesOpen) {
+    state.noticesOpen = open;
+    renderNotices(state, $('notices'), $('notices-btn'), actions, jumpToLine);
   },
 
   setStandardizeAll(mode) {
@@ -360,22 +404,72 @@ function loadLayoutText(text, { keepCamera = false, name = '' } = {}) {
   if (state.model.all.length > AUTO_COLLAPSE_ABOVE) setCollapseAtKind('rack');
   rebindOverlays();
   refresh({ keepCamera });
-  renderWarnings($('structure'), state.warnings, jumpToLine);
+  showWarnings();
   syncEditor();
 }
 
+const countSamples = (overlays) => {
+  let n = 0;
+  for (const o of overlays.values()) n += o.samples.length;
+  return n;
+};
+
 /** @param files [{ text, name }] -- the name groups the overlays in the panel. */
 function loadResultsText(files, { replace = false } = {}) {
+  if (replace && state.rawOverlays.size) {
+    note('note', `replaced the ${plural(state.rawOverlays.size, 'metric')} loaded before: `
+      + 'a layout arrived with these results, and a new floor plan starts clean');
+  }
   if (replace) state.rawOverlays = new Map();
-  const warnings = [];
-  for (const file of files) parseResults(file.text, state.rawOverlays, warnings, file.name || '');
-  // Not push(...warnings): a broken generator can produce one warning per line,
-  // and spreading that many arguments overflows the stack.
-  for (const w of warnings) state.warnings.push(w);
+
+  // One file at a time, so the report can say what each of them did. Loading
+  // them in one pass would leave "the second file did nothing" indistinguishable
+  // from "the second file merged into the first".
+  for (const file of files) {
+    const before = new Set(state.rawOverlays.keys());
+    const beforeSamples = countSamples(state.rawOverlays);
+
+    const warnings = [];
+    parseResults(file.text, state.rawOverlays, warnings, file.name || '');
+
+    const fresh = [];
+    const merged = [];
+    for (const [name, overlay] of state.rawOverlays) {
+      if (!(overlay.sources || []).includes(file.name || '')) continue;
+      (before.has(name) ? merged : fresh).push(name);
+    }
+    push(resultsFileNotice(file.name, {
+      fresh,
+      merged,
+      samples: countSamples(state.rawOverlays) - beforeSamples,
+      warnings,
+      firstSource: merged.length ? firstSourceOf(merged[0]) : '',
+    }));
+    // Not push(...warnings): a broken generator can produce one warning per
+    // line, and spreading that many arguments overflows the stack.
+    for (const w of warnings) state.warnings.push(prefixed(file.name, w));
+  }
+
   rebindOverlays();
   refresh();
-  renderWarnings($('structure'), state.warnings, jumpToLine);
+  showWarnings();
 }
+
+function showWarnings() {
+  // A load with a problem opens the report itself. Anything less and a
+  // dropped file is still something you have to go looking for.
+  if (state.notices.some((n) => n.level === 'warn')) state.noticesOpen = true;
+  renderWarnings($('structure'), state.warnings, jumpToLine);
+  renderNotices(state, $('notices'), $('notices-btn'), actions, jumpToLine);
+}
+
+const note = (level, text, lines) => state.notices.push({ level, text, lines: lines || [] });
+const push = (notice) => state.notices.push(notice);
+
+const firstSourceOf = (test) => {
+  const overlay = state.rawOverlays.get(test);
+  return (overlay && overlay.sources && overlay.sources[0]) || '';
+};
 
 /** Rebuild bound overlays against the current model, keeping display settings. */
 function rebindOverlays() {
@@ -397,8 +491,10 @@ function rebindOverlays() {
         max: old.autoDomain ? bound.max : old.max,
       });
     }
-    // A metric loaded while "standardize all" is on is standardized too.
+    // A metric loaded while "standardize all" is on is standardized too, and
+    // joins the shared colour scale on the same terms.
     bound.standardizeAll = state.standardizeAll;
+    bound.zShared = sharedZScale();
     if (bound.stdMode !== 'off') recomputeStats(bound, state.model);
     next.set(name, bound);
   }
@@ -429,7 +525,7 @@ async function boot() {
     loadLayoutText(await fetchText(layoutUrl), { name: layoutUrl.split('/').pop() || layoutUrl });
   } catch (err) {
     state.warnings.push(`could not load layout: ${err.message}`);
-    renderWarnings($('structure'), state.warnings, jumpToLine);
+    showWarnings();
     refresh();
     return;
   }
@@ -443,7 +539,7 @@ async function boot() {
     }
   }
   if (texts.length) loadResultsText(texts);
-  else { refresh(); renderWarnings($('structure'), state.warnings, jumpToLine); }
+  else { refresh(); showWarnings(); }
 }
 
 // ---------------------------------------------------------------- picking
@@ -521,18 +617,35 @@ async function pickFiles() {
 const isLayoutFile = (name) => /\.(dc|layout)$/i.test(name);
 
 async function ingestFiles(files) {
+  state.notices = [];               // the report covers this load, not the last
   const layouts = [];
   const results = [];
   for (const file of files) {
-    const text = await file.text();
+    let text;
+    try {
+      text = await file.text();
+    } catch (err) {
+      note('warn', `${file.name}: could not be read — ${err.message}`);
+      continue;
+    }
     if (isLayoutFile(file.name)) layouts.push({ text, name: file.name });
     else results.push({ text, name: file.name });
   }
+
   if (layouts.length) {
     const last = layouts[layouts.length - 1];
+    // A viewer holds one floor plan, so handing it two silently used the last
+    // and dropped the rest. It still uses the last; it no longer says nothing.
+    if (layouts.length > 1) push(droppedLayoutsNotice(layouts.map((l) => l.name)));
     loadLayoutText(last.text, { name: last.name });
+    push(layoutNotice(last.name, state.model.all.length, state.model.warnings));
   }
+
   if (results.length) loadResultsText(results, { replace: layouts.length > 0 });
+  else if (layouts.length) showWarnings();
+  else if (!state.notices.length) note('warn', 'nothing was loaded: no files arrived');
+
+  if (!results.length) showWarnings();
 }
 
 // ------------------------------------------------------------- file browser
@@ -1023,6 +1136,7 @@ $('opt-hide').addEventListener('change', (e) => { state.hideUnmatched = e.target
 $('opt-values').addEventListener('change', (e) => { state.showValues = e.target.checked; invalidate(); });
 $('btn-fit').addEventListener('click', () => { renderer.fit(); invalidate(); });
 $('btn-load').addEventListener('click', () => pickFiles());
+$('notices-btn').addEventListener('click', () => actions.toggleNotices());
 $('filepicker').addEventListener('change', (e) => ingestFiles([...e.target.files]));
 $('dirpicker').addEventListener('change', (e) => {
   const files = [...e.target.files];

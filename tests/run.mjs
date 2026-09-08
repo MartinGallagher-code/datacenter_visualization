@@ -20,7 +20,7 @@ import { compileSelector } from '../js/select.js';
 import { parseLayout } from '../js/parse.js';
 import {
   parseResults, bindOverlay, overlayValue, AGGREGATIONS, extent,
-  recomputeStats, zScore, formatValue, unitFor,
+  recomputeStats, zScore, formatValue, unitFor, zRangeOf, paletteOf, invertedOf,
 } from '../js/results.js';
 import { layout } from '../js/layout.js';
 import { linkSummary, sharesLineage } from '../js/render.js';
@@ -28,6 +28,9 @@ import { compileQuery, applyFilter } from '../js/filter.js';
 import { ramp, categoricalColor, colorFor, contrastInk } from '../js/palette.js';
 import { suggestionsFor } from '../js/hints.js';
 import { classify, formatSize, matchesFilter, sortEntries, treeFromFiles } from '../js/browse.js';
+import {
+  droppedLayoutsNotice, layoutNotice, prefixed, resultsFileNotice,
+} from '../js/report.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 let failures = 0;
@@ -423,6 +426,59 @@ eq(braced.get('temp_c').samples.length, 1, 'comment starting with { stays text')
   ov.standardize = 'values';
   ov.standardizeAll = 'off';
   eq(ov.stdMode, 'values', 'switching the override off does not force a metric raw');
+}
+
+// ------------------------------------------------------- the shared z scale
+// Standardising puts two metrics on the same numbers. It does not, on its
+// own, put them on the same colours: a per-metric palette, a per-metric
+// spread, or a `higher=bad`/`higher=good` inversion each paint the same
+// z-score differently on each metric. The shared scale is what fixes that.
+{
+  const rows = (test, vals) => vals.map((v, i) => `${test}\tDH1/A/R01/u0${i + 1}\t${v}`).join('\n') + '\n';
+  // Two metrics with different units, different spreads, and opposite senses:
+  // temperature where higher is bad, throughput where higher is good.
+  const temp = bindOverlay(parseResults(rows('temp', [10, 20, 30, 40])).get('temp'), small);
+  const gbps = bindOverlay(parseResults(rows('gbps', [80, 85, 90, 95])).get('gbps'), small);
+  temp.palette = 'health'; temp.invert = false; temp.zRange = 3;
+  gbps.palette = 'health'; gbps.invert = true;  gbps.zRange = 2;   // higher=good
+  for (const o of [temp, gbps]) { o.standardizeAll = 'colour'; recomputeStats(o, small); }
+
+  // The top host of each is +1.34 sigma. Unshared, they come out different
+  // colours -- which is the bug: one metric's best host and another's worst
+  // read the same, and its own +2 sigma reads as its opposite.
+  const topTemp = () => colorFor(temp, { numeric: true, value: 40 });
+  const topGbps = () => colorFor(gbps, { numeric: true, value: 95 });
+  ok(topTemp() !== topGbps(), 'unshared, the same z-score is two different colours');
+
+  const shared = { palette: 'rdbu', zRange: 3 };
+  temp.zShared = shared;
+  gbps.zShared = shared;
+  eq(topTemp(), topGbps(), 'shared, the same z-score is the same colour on both');
+  eq(colorFor(temp, { numeric: true, value: 25 }), colorFor(gbps, { numeric: true, value: 87.5 }),
+     'and so is the mean of each');
+  eq(topTemp(), ramp('rdbu', 0.5 + 1.34164078649987 / 6), 'from the shared palette and spread');
+
+  // The shared scale reaches the legend too, or the card would advertise a
+  // ramp the map is not drawn with.
+  eq(paletteOf(temp), 'rdbu', 'the legend uses the shared palette');
+  eq(invertedOf(gbps), false, 'and drops the higher=good inversion that broke the match');
+  eq(zRangeOf(gbps), 3, 'and the shared spread, not the metric\'s own 2');
+
+  // Unticking it hands every metric back exactly what it had.
+  temp.zShared = null;
+  gbps.zShared = null;
+  eq(paletteOf(gbps), 'health', 'unshared, the metric has its own palette back');
+  eq(invertedOf(gbps), true, 'its own direction');
+  eq(zRangeOf(gbps), 2, 'and its own spread');
+
+  // It is a standardising concern only: a raw metric is never touched by it.
+  gbps.standardizeAll = 'off';
+  gbps.standardize = 'off';
+  gbps.zShared = shared;
+  eq(paletteOf(gbps), 'health', 'a metric that is not standardised keeps its palette');
+  eq(colorFor(gbps, { numeric: true, value: 95 }),
+     ramp('health', 1 - (95 - gbps.min) / (gbps.max - gbps.min)),
+     'and its raw min..max mapping, inversion and all');
 }
 
 // ------------------------------------------------------------ large results
@@ -961,6 +1017,61 @@ ok(!matchesFilter('mxrun.tsv', 'mx.*'), 'and that dot has to be there: it is not
   const flat = treeFromFiles([{ name: 'a.tsv', size: 1 }, { name: 'b.dc', size: 2 }]);
   eq(flat.name, '', 'no relative paths means an unnamed root');
   eq([...flat.children.keys()], ['a.tsv', 'b.dc'], 'with both files directly inside');
+}
+
+// ------------------------------------------------------------- load report
+// Every way a file can arrive and do nothing has to say so. These are the
+// silent ones: the viewer used to load two files and mention neither.
+{
+  const none = { fresh: [], merged: [], samples: 0, warnings: [] };
+  const empty = resultsFileNotice('empty.tsv', none);
+  eq(empty.level, 'warn', 'a file with no data lines is a warning, not a shrug');
+  ok(empty.text.includes('nothing loaded'), 'and says nothing loaded');
+  ok(empty.text.includes('empty, or all comments'), 'with the reason it can be');
+
+  const wrong = resultsFileNotice('wrong.csv',
+    { ...none, warnings: ['results line 1: expected "test target value", got "host,temp"'] });
+  eq(wrong.level, 'warn', 'a file in the wrong format is a warning');
+  ok(wrong.text.includes('1 line could not be read'), 'counting the lines, singular');
+  ok(wrong.lines[0].startsWith('wrong.csv — '), 'and its detail names the file');
+
+  // The case that reads as a failed load but is not one: an append-only
+  // second run carries the same test names, so its samples land under the
+  // first file and its own name never appears in the panel.
+  const again = resultsFileNotice('tuesday.tsv',
+    { fresh: [], merged: ['temp', 'rh'], samples: 240, warnings: [], firstSource: 'monday.tsv' });
+  eq(again.level, 'note', 'an append-only second run is a note, not a warning');
+  ok(again.text.includes('2 metrics already loaded'), 'says what it added to');
+  ok(again.text.includes('240 samples'), 'and that the samples did arrive');
+  ok(again.text.includes('under monday.tsv'), 'and where to look for them');
+
+  const clean = resultsFileNotice('monday.tsv',
+    { fresh: ['temp', 'rh'], merged: [], samples: 240, warnings: [] });
+  eq(clean.level, 'ok', 'a clean load is ok');
+  eq(clean.text, 'monday.tsv: 2 new metrics, 240 samples', 'and says what it brought');
+
+  const mixed = resultsFileNotice('mixed.tsv',
+    { fresh: ['a'], merged: ['b'], samples: 10, warnings: ['results line 9: bad'] });
+  eq(mixed.level, 'warn', 'a file that partly loaded still warns');
+  ok(mixed.text.includes('1 new metric + 1 metric already loaded'), 'reporting both halves');
+  ok(mixed.text.includes('1 line skipped'), 'and what it dropped');
+
+  // Detail lines are capped: one broken generator can warn once per line.
+  const many = resultsFileNotice('flood.tsv',
+    { ...none, warnings: Array.from({ length: 500 }, (_, i) => `results line ${i + 1}: bad`) });
+  eq(many.lines.length, 21, 'at most twenty detail lines, plus the tally');
+  ok(many.lines[20].includes('480 more'), 'and the tally counts the rest');
+
+  eq(prefixed('', 'results line 1: bad'), 'results line 1: bad', 'pasted text has no file to name');
+
+  // A viewer holds one floor plan; handing it two used to drop one in silence.
+  const two = droppedLayoutsNotice(['a.dc', 'b.dc', 'c.dc']);
+  eq(two.level, 'warn', 'dropping a layout is a warning');
+  ok(two.text.includes('c.dc is the one on screen'), 'naming the one that won');
+  ok(two.text.includes('Ignored: a.dc, b.dc'), 'and the ones that did not');
+
+  eq(layoutNotice('floor.dc', 1240, []).text, 'floor.dc: 1,240 elements', 'a layout reports its size');
+  eq(layoutNotice('floor.dc', 5, ['line 2: x']).level, 'warn', 'a layout with warnings warns');
 }
 
 console.log(failures ? `${failures}/${count} tests FAILED` : `all ${count} tests passed`);
