@@ -101,8 +101,11 @@ const state = {
     return top;
   },
 
+  // Both of these take a *test* name, which two files can share now that a
+  // file's overlays are its own. "temp_c>70" means any loaded temp_c.
   hasOverlay(name) {
-    return state.overlays.has(name);
+    for (const overlay of state.overlays.values()) if (overlay.name === name) return true;
+    return false;
   },
 
   // Every measured flow on an element, across loaded overlays. A flow is a
@@ -116,11 +119,15 @@ const state = {
     return out;
   },
 
-  readingOf(name, node, directOnly = false) {
-    const overlay = state.overlays.get(name);
-    if (!overlay) return null;
-    if (directOnly && !overlay.direct.has(node.key)) return null;
-    return overlayValue(overlay, node);
+  readingsOf(name, node, directOnly = false) {
+    const out = [];
+    for (const overlay of state.overlays.values()) {
+      if (overlay.name !== name) continue;
+      if (directOnly && !overlay.direct.has(node.key)) continue;
+      const reading = overlayValue(overlay, node);
+      if (reading) out.push(reading);
+    }
+    return out;
   },
 };
 
@@ -340,14 +347,12 @@ const actions = {
     refreshPanels();
   },
 
-  // Everything one results file contributed, dropped together. A test that
-  // several files fed is grouped under the first, so that is the group that
-  // owns it here too.
+  /** Everything one results file contributed, dropped together. */
   removeOverlayGroup(source) {
     for (const overlay of [...state.overlays.values()]) {
-      if (((overlay.sources && overlay.sources[0]) || '') !== source) continue;
-      state.rawOverlays.delete(overlay.name);
-      state.overlays.delete(overlay.name);
+      if ((overlay.source || '') !== source) continue;
+      state.rawOverlays.delete(overlay.key);
+      state.overlays.delete(overlay.key);
     }
     state.groupsOff.delete(source);
     refreshPanels();
@@ -422,32 +427,32 @@ function loadResultsText(files, { replace = false } = {}) {
   }
   if (replace) state.rawOverlays = new Map();
 
-  // One file at a time, so the report can say what each of them did. Loading
-  // them in one pass would leave "the second file did nothing" indistinguishable
-  // from "the second file merged into the first".
+  // One file at a time, so the report can say what each of them did.
   for (const file of files) {
-    const before = new Set(state.rawOverlays.keys());
-    const beforeSamples = countSamples(state.rawOverlays);
+    const name = file.name || '';
+    // A file's overlays are that file's. Loading it again replaces what it
+    // brought last time rather than appending to it -- the format is
+    // append-only, so a second read of the same file would otherwise count
+    // every sample twice.
+    const replaced = dropSource(name);
 
+    const beforeSamples = countSamples(state.rawOverlays);
     const warnings = [];
-    parseResults(file.text, state.rawOverlays, warnings, file.name || '');
+    parseResults(file.text, state.rawOverlays, warnings, name);
 
     const fresh = [];
-    const merged = [];
-    for (const [name, overlay] of state.rawOverlays) {
-      if (!(overlay.sources || []).includes(file.name || '')) continue;
-      (before.has(name) ? merged : fresh).push(name);
+    for (const overlay of state.rawOverlays.values()) {
+      if ((overlay.source || '') === name) fresh.push(overlay.name);
     }
-    push(resultsFileNotice(file.name, {
+    push(resultsFileNotice(name, {
       fresh,
-      merged,
+      reloaded: replaced,
       samples: countSamples(state.rawOverlays) - beforeSamples,
       warnings,
-      firstSource: merged.length ? firstSourceOf(merged[0]) : '',
     }));
     // Not push(...warnings): a broken generator can produce one warning per
     // line, and spreading that many arguments overflows the stack.
-    for (const w of warnings) state.warnings.push(prefixed(file.name, w));
+    for (const w of warnings) state.warnings.push(prefixed(name, w));
   }
 
   rebindOverlays();
@@ -466,18 +471,25 @@ function showWarnings() {
 const note = (level, text, lines) => state.notices.push({ level, text, lines: lines || [] });
 const push = (notice) => state.notices.push(notice);
 
-const firstSourceOf = (test) => {
-  const overlay = state.rawOverlays.get(test);
-  return (overlay && overlay.sources && overlay.sources[0]) || '';
-};
+/** Forget everything one file contributed. Returns how many overlays went. */
+function dropSource(name) {
+  if (!name) return 0;
+  let gone = 0;
+  for (const [key, overlay] of [...state.rawOverlays]) {
+    if ((overlay.source || '') !== name) continue;
+    state.rawOverlays.delete(key);
+    gone++;
+  }
+  return gone;
+}
 
 /** Rebuild bound overlays against the current model, keeping display settings. */
 function rebindOverlays() {
   const previous = state.overlays;
   const next = new Map();
-  for (const [name, raw] of state.rawOverlays) {
+  for (const [key, raw] of state.rawOverlays) {
     const bound = bindOverlay(raw, state.model);
-    const old = previous.get(name);
+    const old = previous.get(key);
     if (old) {
       Object.assign(bound, {
         enabled: old.enabled,
@@ -496,7 +508,7 @@ function rebindOverlays() {
     bound.standardizeAll = state.standardizeAll;
     bound.zShared = sharedZScale();
     if (bound.stdMode !== 'off') recomputeStats(bound, state.model);
-    next.set(name, bound);
+    next.set(key, bound);
   }
   state.overlays = next;
   recomputeActiveOverlays();
@@ -679,7 +691,7 @@ function browserLoaded() {
   const names = new Set();
   if (state.layoutName) names.add(state.layoutName);
   for (const overlay of state.rawOverlays.values()) {
-    for (const source of overlay.sources || []) if (source) names.add(source);
+    if (overlay.source) names.add(overlay.source);
   }
   return names;
 }
@@ -824,12 +836,8 @@ const browseActions = {
       renderBrowserPanel();
       return;
     }
-    // Re-reading a results file has to drop what it loaded last time: the
-    // format is append-only, so parsing it twice would count every sample
-    // twice. The layout has no such trouble -- it replaces itself.
-    if (classify(entry.name) === 'results' && b.loaded.has(entry.name)) {
-      actions.removeOverlayGroup(entry.name);
-    }
+    // Re-reading is safe on its own: a results file replaces the overlays it
+    // brought last time (loadResultsText), and a layout replaces itself.
     await ingestFiles([file]);
   },
 };

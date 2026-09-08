@@ -159,10 +159,11 @@ export function renderOverlays(state, host, actions) {
 
   // Grouped by the file they came from: one results file can carry twenty-odd
   // overlays, and two files loaded together are otherwise indistinguishable.
-  // A test fed by several files is filed under the first that carried it.
+  // Every overlay belongs to exactly one file, including two files that
+  // happen to carry a test of the same name -- those are two overlays.
   const groups = new Map();
   for (const overlay of overlays) {
-    const key = (overlay.sources && overlay.sources[0]) || '';
+    const key = overlay.source || '';
     const bucket = groups.get(key);
     if (bucket) bucket.push(overlay);
     else groups.set(key, [overlay]);

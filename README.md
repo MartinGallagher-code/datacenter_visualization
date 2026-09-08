@@ -575,11 +575,10 @@ netmesh run --for 60 && dcimport results.tsv --tidy reports/
   thing saying a file did not arrive must not be collapsible. It names the
   quiet outcomes in particular: a file with no data lines in it, a file whose
   lines are not in `test target value` form, **two layouts at once** (a viewer
-  holds one floor plan — it says which won and which were ignored), and a
-  second results file whose tests were all loaded already (its samples *are*
-  in, appended, but they stay filed under the first file that carried the
-  test — which reads exactly like the second file having failed). Warnings
-  inside a file name that file, so `line 5:` is never ambiguous between two.
+  holds one floor plan — it says which won and which were ignored), and a file
+  re-read over itself (it replaces what it brought before, rather than
+  counting its samples twice). Warnings inside a file name that file, so
+  `line 5:` is never ambiguous between two.
 - **Panels** — either side panel collapses to a slim rail (the `‹` / `›` in
   its heading, and the rail brings it back) and resizes by dragging the edge
   beside the canvas; double-click that edge to reset a width. Every section
@@ -599,7 +598,8 @@ netmesh run --for 60 && dcimport results.tsv --tidy reports/
   tags and attributes; `+gpu` tags (globs too: `+stor*`, `+gp?`);
   `kind:rack`; `model=r76*` (`?` matches exactly one character);
   `net:storage`; result queries like `temp_c>70`, `burnin=FAIL`,
-  `has:iperf_gbps`; `!` negates, `|` ors, space ands. Matches keep their
+  `has:iperf_gbps` (a test name can be loaded from more than one file, and the
+  element matches when any of them reads over the threshold); `!` negates, `|` ors, space ands. Matches keep their
   ancestors visible; "hide non-matching" prunes everything else, otherwise
   non-matches are dimmed.
 - **Overlays** — check any number of tests. With N enabled, every element is
@@ -617,8 +617,13 @@ netmesh run --for 60 && dcimport results.tsv --tidy reports/
   the group's overlays and how many are shown, and its **×** removes that
   file's overlays alone. **sort A–Z** orders the metrics alphabetically within
   each file; unticked they keep the order the file wrote them in, which the
-  exports choose deliberately (mx and iperf write theirs in reading order). A test fed by several files (the append-only
-  workflow) is filed under the first that carried it.
+  exports choose deliberately (mx and iperf write theirs in reading order).
+  **Files never combine**: every overlay belongs to exactly one file, so two
+  files that both carry a test called `temp_c` are two overlays with two sets
+  of samples, two domains and two cards — one under each file's group. To
+  accumulate a metric over time, concatenate the runs into *one* file, which
+  is what the append-only format is for. Loading the same file again re-reads
+  it, replacing what it brought before rather than counting its samples twice.
 - **Networks** — toggle each named fabric, or **Show all** / **Hide all** them
   at once; opacity slider for dense views.
 - **Measured flows** — `mx export --peers` and `iperf_orchestrator` write one

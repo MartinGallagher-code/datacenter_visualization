@@ -20,7 +20,7 @@ import { compileSelector } from '../js/select.js';
 import { parseLayout } from '../js/parse.js';
 import {
   parseResults, bindOverlay, overlayValue, AGGREGATIONS, extent,
-  recomputeStats, zScore, formatValue, unitFor, zRangeOf, paletteOf, invertedOf,
+  recomputeStats, zScore, formatValue, unitFor, zRangeOf, paletteOf, invertedOf, overlayKey,
 } from '../js/results.js';
 import { layout } from '../js/layout.js';
 import { linkSummary, sharesLineage } from '../js/render.js';
@@ -509,25 +509,43 @@ eq(braced.get('temp_c').samples.length, 1, 'comment starting with { stays text')
 }
 
 // ----------------------------------------------------------- overlay source
-// Overlays remember the file they came from, so the panel can group them:
-// one results file can carry twenty-odd, and two loaded together are
-// otherwise indistinguishable.
+// Overlays belong to the file they came from, one file each. Two files that
+// carry the same test name are two overlays with two sets of samples -- never
+// one merged overlay, which would answer a question nobody asked.
 {
   const into = new Map();
   parseResults('temp_c\tDH1/A/R01/u05\t61\n', into, [], 'nightly.tsv');
   parseResults('temp_c\tDH1/A/R01/u06\t62\niops\tDH1/A/R01/u05\t900\n', into, [], 'fio.tsv');
-  eq(into.get('temp_c').sources, ['nightly.tsv', 'fio.tsv'],
-     'a test fed by two files records both, in order');
-  eq(into.get('iops').sources, ['fio.tsv'], 'and one fed by a single file records it');
-  eq(into.get('temp_c').samples.length, 2, 'the samples still merge across files');
+
+  eq([...into.keys()].length, 3, 'two files sharing a test name make three overlays, not two');
+  const nightly = into.get(overlayKey('nightly.tsv', 'temp_c'));
+  const fio = into.get(overlayKey('fio.tsv', 'temp_c'));
+  eq(nightly.source, 'nightly.tsv', 'each knows its own file');
+  eq(fio.source, 'fio.tsv', 'and so does the other');
+  eq(nightly.name, 'temp_c', 'both keep the test name for their label');
+  eq(fio.name, 'temp_c', 'both of them');
+  eq(nightly.samples.length, 1, 'the samples do not merge across files');
+  eq(fio.samples.length, 1, 'either way');
+  eq(into.get(overlayKey('fio.tsv', 'iops')).source, 'fio.tsv', 'a test in one file records it');
   eq(into.source, '', 'the parse leaves no source marker behind');
 
-  // Binding carries the sources through to the panel.
-  eq(bindOverlay(into.get('iops'), small).sources, ['fio.tsv'], 'sources survive binding');
+  // Concatenating runs into ONE file is still how a metric accumulates: that
+  // is one file, and one overlay.
+  const one = new Map();
+  parseResults('temp_c\tDH1/A/R01/u05\t61\ntemp_c\tDH1/A/R01/u06\t62\n', one, [], 'all.tsv');
+  eq([...one.keys()].length, 1, 'one file carrying two runs is one overlay');
+  eq(one.get(overlayKey('all.tsv', 'temp_c')).samples.length, 2, 'holding both samples');
+
+  // Binding carries the file through to the panel, which groups by it.
+  const bound = bindOverlay(into.get(overlayKey('fio.tsv', 'iops')), small);
+  eq(bound.source, 'fio.tsv', 'the file survives binding');
+  eq(bound.key, overlayKey('fio.tsv', 'iops'), 'and so does the key the panel maps by');
+
   // A file that is not named still parses; the panel treats it as one group.
   const anon = new Map();
   parseResults('t\ta\t1\n', anon);
-  eq(anon.get('t').sources, [], 'an unnamed load records no source');
+  eq(anon.get('t').source, '', 'an unnamed load records no source');
+  eq(anon.get('t').key, 't', 'and is keyed by the test name alone');
 }
 
 // -------------------------------------------------------------- flow data
@@ -563,7 +581,7 @@ eq(braced.get('temp_c').samples.length, 1, 'comment starting with { stays text')
   const overlays = new Map([['mx_peer_pps', peers]]);
   const ctx = {
     hasOverlay: (n) => overlays.has(n),
-    readingOf: () => null,
+    readingsOf: () => [],
     flowsOf: (el) => {
       const out2 = [];
       for (const ov of overlays.values()) {
@@ -613,13 +631,19 @@ eq(braced.get('temp_c').samples.length, 1, 'comment starting with { stays text')
 
 // ------------------------------------------------------------------- filter
 const overlays = new Map([['temp_c', temp], ['burnin', burnin]]);
+// A test name can name more than one overlay now: two files each carrying
+// `temp_c` stay separate, and `temp_c>70` means any of them reads over 70.
 const ctx = {
-  hasOverlay: (n) => overlays.has(n),
-  readingOf: (n, el, direct) => {
-    const o = overlays.get(n);
-    if (!o) return null;
-    if (direct && !o.direct.has(el.key)) return null;
-    return overlayValue(o, el);
+  hasOverlay: (n) => [...overlays.values()].some((o) => o.name === n),
+  readingsOf: (n, el, direct) => {
+    const out = [];
+    for (const o of overlays.values()) {
+      if (o.name !== n) continue;
+      if (direct && !o.direct.has(el.key)) continue;
+      const reading = overlayValue(o, el);
+      if (reading) out.push(reading);
+    }
+    return out;
   },
 };
 const hits = (q) => applyFilter(small, compileQuery(q, ctx));
@@ -1023,7 +1047,7 @@ ok(!matchesFilter('mxrun.tsv', 'mx.*'), 'and that dot has to be there: it is not
 // Every way a file can arrive and do nothing has to say so. These are the
 // silent ones: the viewer used to load two files and mention neither.
 {
-  const none = { fresh: [], merged: [], samples: 0, warnings: [] };
+  const none = { fresh: [], samples: 0, warnings: [] };
   const empty = resultsFileNotice('empty.tsv', none);
   eq(empty.level, 'warn', 'a file with no data lines is a warning, not a shrug');
   ok(empty.text.includes('nothing loaded'), 'and says nothing loaded');
@@ -1035,26 +1059,28 @@ ok(!matchesFilter('mxrun.tsv', 'mx.*'), 'and that dot has to be there: it is not
   ok(wrong.text.includes('1 line could not be read'), 'counting the lines, singular');
   ok(wrong.lines[0].startsWith('wrong.csv — '), 'and its detail names the file');
 
-  // The case that reads as a failed load but is not one: an append-only
-  // second run carries the same test names, so its samples land under the
-  // first file and its own name never appears in the panel.
-  const again = resultsFileNotice('tuesday.tsv',
-    { fresh: [], merged: ['temp', 'rh'], samples: 240, warnings: [], firstSource: 'monday.tsv' });
-  eq(again.level, 'note', 'an append-only second run is a note, not a warning');
-  ok(again.text.includes('2 metrics already loaded'), 'says what it added to');
-  ok(again.text.includes('240 samples'), 'and that the samples did arrive');
-  ok(again.text.includes('under monday.tsv'), 'and where to look for them');
-
-  const clean = resultsFileNotice('monday.tsv',
-    { fresh: ['temp', 'rh'], merged: [], samples: 240, warnings: [] });
+  const clean = resultsFileNotice('monday.tsv', { fresh: ['temp', 'rh'], samples: 240, warnings: [] });
   eq(clean.level, 'ok', 'a clean load is ok');
-  eq(clean.text, 'monday.tsv: 2 new metrics, 240 samples', 'and says what it brought');
+  eq(clean.text, 'monday.tsv: 2 metrics, 240 samples', 'and says what it brought');
 
-  const mixed = resultsFileNotice('mixed.tsv',
-    { fresh: ['a'], merged: ['b'], samples: 10, warnings: ['results line 9: bad'] });
-  eq(mixed.level, 'warn', 'a file that partly loaded still warns');
-  ok(mixed.text.includes('1 new metric + 1 metric already loaded'), 'reporting both halves');
-  ok(mixed.text.includes('1 line skipped'), 'and what it dropped');
+  // A second file carrying the same test names is its own load now, reported
+  // as such -- it does not merge into the first, so there is nothing to
+  // explain away.
+  const second = resultsFileNotice('tuesday.tsv', { fresh: ['temp', 'rh'], samples: 240, warnings: [] });
+  eq(second.level, 'ok', 'a second file with the same test names is an ordinary load');
+  eq(second.text, 'tuesday.tsv: 2 metrics, 240 samples', 'reported under its own name');
+
+  // Re-reading one file replaces what it brought before rather than counting
+  // its samples twice, which is worth saying out loud.
+  const again = resultsFileNotice('monday.tsv', { fresh: ['temp', 'rh'], reloaded: 2, samples: 240, warnings: [] });
+  eq(again.level, 'note', 'a re-read is a note');
+  ok(again.text.includes('re-read, replacing the 2 metrics it loaded before'), 'saying what it replaced');
+
+  const partial = resultsFileNotice('mixed.tsv',
+    { fresh: ['a'], samples: 10, warnings: ['results line 9: bad'] });
+  eq(partial.level, 'warn', 'a file that partly loaded still warns');
+  ok(partial.text.includes('1 metric, 10 samples'), 'reporting what did land');
+  ok(partial.text.includes('1 line skipped'), 'and what it dropped');
 
   // Detail lines are capped: one broken generator can warn once per line.
   const many = resultsFileNotice('flood.tsv',

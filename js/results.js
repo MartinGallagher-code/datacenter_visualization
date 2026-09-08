@@ -318,16 +318,24 @@ function jsonMeta(meta) {
 
 const truncate = (line) => (line.length > 60 ? `${line.slice(0, 57)}…` : line);
 
+/**
+ * Overlays are keyed by file *and* test, never by test alone. Two files that
+ * carry the same test name are two overlays: one per file, each with its own
+ * samples, its own domain and its own card. Concatenating runs into one file
+ * is still how you accumulate a metric over time -- that is one file, and one
+ * overlay. Handing over two files is two things to compare, and combining
+ * them would silently answer a question nobody asked.
+ */
+export const overlayKey = (source, name) => (source ? `${source}\u0000${name}` : name);
+
 function ensureOverlay(map, name) {
-  let overlay = map.get(name);
+  const source = map.source || '';
+  const key = overlayKey(source, name);
+  let overlay = map.get(key);
   if (!overlay) {
-    overlay = { name, samples: [], meta: {}, sources: [] };
-    map.set(name, overlay);
+    overlay = { key, name, source, samples: [], meta: {} };
+    map.set(key, overlay);
   }
-  // The same test can arrive from several files -- that is the append-only
-  // workflow working -- so every contributing file is recorded, in order.
-  const source = map.source;
-  if (source && !overlay.sources.includes(source)) overlay.sources.push(source);
   return overlay;
 }
 
@@ -392,7 +400,8 @@ export function bindOverlay(overlay, model) {
     numericByEl,
     textByEl,
     direct,
-    sources: overlay.sources || [],
+    key: overlay.key || overlay.name,
+    source: overlay.source || '',
     flowsByEl,
     hasFlows: flowsByEl.size > 0,
     sampleCount: overlay.samples.length,

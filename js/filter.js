@@ -72,7 +72,7 @@ function compileAtom(atom, ctx) {
   if (atom.startsWith('^')) return tagMatcher(lower.slice(1), true);
   if (lower.startsWith('has:')) {
     const test = atom.slice(4);
-    return (el) => ctx.readingOf(test, el, true) !== null;
+    return (el) => ctx.readingsOf(test, el, true).length > 0;
   }
   if (lower.startsWith('kind:')) {
     const re = globToRegExp(atom.slice(5));
@@ -102,11 +102,11 @@ function compileAtom(atom, ctx) {
       return (el) => {
         // Direct readings only: a container inherits its children's samples for
         // display, but "temp_c>70" should select the measured servers, not the room.
-        const reading = ctx.readingOf(key, el, true);
-        if (!reading) return false;
-        return numeric && reading.numeric
+        // Two files can each carry a test of this name, and they stay separate;
+        // the element matches when any of them reads over the threshold.
+        return ctx.readingsOf(key, el, true).some((reading) => (numeric && reading.numeric
           ? op(reading.value, num)
-          : op(String(reading.value).toLowerCase(), rawValue.toLowerCase());
+          : op(String(reading.value).toLowerCase(), rawValue.toLowerCase())));
       };
     }
 

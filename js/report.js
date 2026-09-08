@@ -31,17 +31,15 @@ function detail(name, warnings) {
 }
 
 /**
- * What one results file did. The two quiet outcomes are the ones worth
- * spelling out: a file with nothing in it, and a file whose tests were all
- * loaded already -- the append-only workflow's own shape, which files the
- * samples under the *first* file that carried the test, and so reads in the
- * panel exactly like the second file having failed to load.
+ * What one results file did. Every file's overlays are its own -- two files
+ * that carry the same test name are two overlays, never one -- so the case
+ * worth spelling out is the quiet one: a file that produced nothing at all.
  */
-export function resultsFileNotice(name, { fresh, merged, samples, warnings, firstSource }) {
+export function resultsFileNotice(name, { fresh, reloaded = 0, samples, warnings }) {
   const label = name || 'pasted results';
   const lines = detail(name, warnings);
 
-  if (!fresh.length && !merged.length) {
+  if (!fresh.length) {
     return {
       level: 'warn',
       text: warnings.length
@@ -51,22 +49,16 @@ export function resultsFileNotice(name, { fresh, merged, samples, warnings, firs
     };
   }
 
-  const parts = [];
-  if (fresh.length) parts.push(plural(fresh.length, 'new metric'));
-  if (merged.length) parts.push(`${plural(merged.length, 'metric')} already loaded`);
-  const summary = `${label}: ${parts.join(' + ')}, ${plural(samples, 'sample')}`;
+  const summary = `${label}: ${plural(fresh.length, 'metric')}, ${plural(samples, 'sample')}`;
+  const notes = [];
+  // Loading the same file twice replaces it rather than counting it twice,
+  // which is worth saying: nothing was added the second time.
+  if (reloaded) notes.push(`re-read, replacing the ${plural(reloaded, 'metric')} it loaded before`);
+  if (warnings.length) notes.push(`${plural(warnings.length, 'line')} skipped`);
 
-  if (merged.length && !fresh.length) {
-    return {
-      level: 'note',
-      text: `${summary} — appended to what was already there, so they stay listed under `
-        + `${firstSource || 'the earlier file'} rather than appearing as their own file`,
-      lines,
-    };
-  }
   return {
-    level: warnings.length ? 'warn' : 'ok',
-    text: warnings.length ? `${summary} (${plural(warnings.length, 'line')} skipped)` : summary,
+    level: warnings.length ? 'warn' : reloaded ? 'note' : 'ok',
+    text: notes.length ? `${summary} — ${notes.join(', ')}` : summary,
     lines,
   };
 }
