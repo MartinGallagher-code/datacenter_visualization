@@ -696,16 +696,39 @@ function browserLoaded() {
   return names;
 }
 
+const browsePathKey = () => state.browser.path.map((d) => d.name).join('\u0000');
+let lastBrowsePath = null;
+let lastBrowseScroll = 0;
+
 function renderBrowserPanel() {
   const host = $('browser');
-  // The panel is rebuilt wholesale, and one of the things it rebuilds is the
-  // name filter -- which is being typed into when it is the reason for the
-  // redraw. Put the caret back where it was.
+  // The panel is rebuilt wholesale, and two things it rebuilds are being used
+  // at the moment it is rebuilt: the name filter being typed into, and the
+  // listing whose row was just clicked. Both survive the redraw -- clicking a
+  // file to load it must not throw the list back to the top and lose the file
+  // you clicked. Scroll is only carried across within one folder; walking
+  // into another starts at its top, which is where its listing begins.
   const find = host.querySelector('.browse-filter');
   const caret = find && document.activeElement === find ? find.selectionStart : null;
 
+  // Held in a variable rather than read back off the DOM each time: a re-read
+  // renders "Reading…" with no list at all in between, and a position taken
+  // from that render would be no position.
+  const here = browsePathKey();
+  if (here !== lastBrowsePath) lastBrowseScroll = 0;
+  const list = host.querySelector('.browse-list');
+  if (list) lastBrowseScroll = list.scrollTop;
+  lastBrowsePath = here;
+
   state.browser.loaded = browserLoaded();
   renderBrowser(state.browser, host, actions);
+
+  if (lastBrowseScroll) {
+    const nextList = host.querySelector('.browse-list');
+    // A shorter listing clamps this itself, so a filter that hides rows needs
+    // no special handling.
+    if (nextList) nextList.scrollTop = lastBrowseScroll;
+  }
 
   if (caret === null) return;
   const next = host.querySelector('.browse-filter');
