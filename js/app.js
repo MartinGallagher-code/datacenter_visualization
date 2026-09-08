@@ -1168,13 +1168,29 @@ let dragging = false;
 let dragMoved = false;
 let last = { x: 0, y: 0 };
 
+// Left button only. A right-press used to start a pan like any other, so
+// right-dragging moved the floor plan -- and worse, the native context menu
+// swallows the pointerup that would have ended it, leaving the view following
+// a mouse with no button held. Right-click belongs to the browser's menu, and
+// does nothing here.
 canvas.addEventListener('pointerdown', (e) => {
+  if (e.button !== 0) return;
   dragging = true;
   dragMoved = false;
   last = { x: e.clientX, y: e.clientY };
   canvas.setPointerCapture(e.pointerId);
   canvas.classList.add('dragging');
 });
+
+// Capture can be lost without a pointerup -- a context menu, a window switch,
+// a touch cancelled by a scroll gesture. Ending the drag here is what stops
+// the view from following the pointer afterwards.
+for (const kind of ['pointercancel', 'lostpointercapture']) {
+  canvas.addEventListener(kind, () => {
+    dragging = false;
+    canvas.classList.remove('dragging');
+  });
+}
 
 canvas.addEventListener('pointermove', (e) => {
   const rect = canvas.getBoundingClientRect();
@@ -1196,6 +1212,7 @@ canvas.addEventListener('pointermove', (e) => {
 });
 
 canvas.addEventListener('pointerup', (e) => {
+  if (e.button !== 0) return;
   dragging = false;
   canvas.classList.remove('dragging');
   if (dragMoved) return;
