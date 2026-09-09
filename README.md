@@ -158,6 +158,12 @@ commas or spaces. It is **append-only by design**: to add results from a new
 test run, append lines. `cat run47.tsv >> results.tsv` is a fully supported
 workflow.
 
+Converting data from somewhere else into this format — by hand or by handing
+the job to an AI — is written up in
+[docs/converting-data-to-overlays.md](docs/converting-data-to-overlays.md):
+the target-resolution rules, what each `!test` key does, and the mistakes that
+produce a file which loads cleanly and paints nothing.
+
 ```
 temp_c      DH1/A/R01/u05   61.2    run=nightly-01
 iperf_gbps  DH1/A/R01/u05   94.7
@@ -668,6 +674,7 @@ examples/hostnames-results.tsv  results addressed by flat name
 examples/mx/              every layout construct, painted by a real mx run
 tools/dcadd               results appender (python3, stdlib only)
 tools/dcimport            netmesh output -> overlay samples
+docs/                     the results-format guide for converting data in
 tests/fixtures/           real tool output, as the contract the suite checks
 tests/run.mjs             headless test suite (node tests/run.mjs)
 LICENSE                   GNU General Public License v3
