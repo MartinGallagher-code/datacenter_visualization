@@ -173,8 +173,9 @@ at the top.
 
 **Quoting.** Fields split on runs of spaces, so a value containing a space must
 be quoted: `label="Inlet temp"`. Written bare, `label=Inlet temp` sets the label
-to `Inlet` and silently discards `temp`. Single quotes work too. This is the
-single most common mistake in hand-written files.
+to `Inlet` and drops `temp` — the viewer warns about the dropped token, but the
+label is still wrong. Single quotes work too. This is the single most common
+mistake in hand-written files.
 
 ---
 

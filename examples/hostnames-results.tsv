@@ -1,5 +1,5 @@
 # Results addressed by flat hostname (see hostnames.dc).
-!test	temp_c	unit=C	higher=bad	short=TMP	label=Inlet temp
+!test	temp_c	unit=C	higher=bad	short=TMP	label="Inlet temp"
 
 temp_c	wr01r01u01	28.9
 temp_c	wr01r01u02	31.2

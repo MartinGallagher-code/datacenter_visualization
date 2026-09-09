@@ -370,6 +370,20 @@ eq(braced.get('temp_c').samples.length, 1, 'comment starting with { stays text')
   ok(Math.abs(zScore(ov, 40) - 15 / Math.sqrt(125)) < 1e-9, 'the top host is +1.34 sigma');
   eq(zScore(ov, 10), -zScore(ov, 40), 'and the bottom is its mirror');
 
+  // The population is what was measured, whatever kind it is. Samples that
+  // land on racks used to measure nothing -- recomputeStats assumed `node` --
+  // and a null stats paints every element the middle of the ramp.
+  const rackly = bindOverlay(parseResults(
+    'rk\tDH1/A/R01\t10\nrk\tDH1/A/R02\t20\nrk\tDH1/A/R03\t30\n').get('rk'), small);
+  ok(recomputeStats(rackly, small), 'a metric measured on racks has a population');
+  eq(rackly.stats.n, 3, 'the three measured racks, and only those');
+  eq(rackly.stats.mean, 20, 'their mean');
+
+  // A container that inherits its children's samples is not one of them: only
+  // elements with a reading of their own count, or every row and room would
+  // join the population its children already form.
+  eq(ov.stats.n, 4, 'inherited container readings stay out of the population');
+
   // A metric with no spread cannot divide: everything is average, not NaN.
   const flat = bindOverlay(parseResults('f\tDH1/A/R01/u01\t7\nf\tDH1/A/R01/u02\t7\n').get('f'), small);
   recomputeStats(flat, small);
@@ -1076,11 +1090,17 @@ ok(!matchesFilter('mxrun.tsv', 'mx.*'), 'and that dot has to be there: it is not
   eq(again.level, 'note', 'a re-read is a note');
   ok(again.text.includes('re-read, replacing the 2 metrics it loaded before'), 'saying what it replaced');
 
+  // A file emptied since it was last read takes its old metrics with it: the
+  // re-read replaces, so there is nothing left, and that has to be said.
+  const emptied = resultsFileNotice('monday.tsv', { fresh: [], reloaded: 2, samples: 0, warnings: [] });
+  eq(emptied.level, 'warn', 'a re-read that loads nothing is a warning');
+  ok(emptied.text.includes('the 2 metrics it loaded before are gone'), 'and names what went with it');
+
   const partial = resultsFileNotice('mixed.tsv',
     { fresh: ['a'], samples: 10, warnings: ['results line 9: bad'] });
   eq(partial.level, 'warn', 'a file that partly loaded still warns');
   ok(partial.text.includes('1 metric, 10 samples'), 'reporting what did land');
-  ok(partial.text.includes('1 line skipped'), 'and what it dropped');
+  ok(partial.text.includes('1 warning'), 'and that something on the way in was not understood');
 
   // Detail lines are capped: one broken generator can warn once per line.
   const many = resultsFileNotice('flood.tsv',

@@ -224,11 +224,15 @@ const actions = {
   setOverlayEnabled(overlay, enabled) {
     overlay.enabled = enabled;
     if (enabled && overlay.autoDomain) recomputeDomain(overlay, state.model);
-    if (enabled && overlay.standardize !== 'off') recomputeStats(overlay, state.model);
+    // stdMode, not standardize: a metric standardized only by the panel-wide
+    // switch is still standardized, and was arriving with no stats at all.
+    if (enabled && overlay.stdMode !== 'off') recomputeStats(overlay, state.model);
     // Its flow layer goes with it: the "draw measured flows" box lives in the
     // overlay's body, which an unticked overlay hides, so leaving it set would
-    // keep drawing curves with no visible control to stop them.
-    else overlay.drawFlows = false;
+    // keep drawing curves with no visible control to stop them. (This used to
+    // hang off the `else` above, so whether a flow layer survived being
+    // re-ticked depended on whether the metric happened to be standardized.)
+    if (!enabled) overlay.drawFlows = false;
     refreshPanels();
     invalidate();
   },
@@ -239,7 +243,7 @@ const actions = {
     if (overlay.autoDomain) recomputeDomain(overlay, state.model);
     // The population is the per-element values, so a different aggregation is
     // a different distribution: the mean and spread have to be measured again.
-    if (overlay.standardize !== 'off') recomputeStats(overlay, state.model);
+    if (overlay.stdMode !== 'off') recomputeStats(overlay, state.model);
     refreshPanels();
     invalidate();
   },
@@ -372,6 +376,7 @@ const actions = {
   removeAllOverlays() {
     state.rawOverlays.clear();
     state.overlays.clear();
+    state.groupsOff.clear();   // no file left to be collapsed
     refreshPanels();
     invalidate();
   },
@@ -566,9 +571,15 @@ async function boot() {
     return;
   }
 
+  // A URL load is a load: it reports like one. Without this the report knew
+  // about ?results= but never about the ?layout= beside it, so a layout with
+  // warnings arrived with nothing in the chip to say so.
+  const layoutName = layoutUrl.split('/').pop() || layoutUrl;
   try {
-    loadLayoutText(await fetchText(layoutUrl), { name: layoutUrl.split('/').pop() || layoutUrl });
+    loadLayoutText(await fetchText(layoutUrl), { name: layoutName });
+    push(layoutNotice(layoutName, state.model.all.length, state.model.warnings));
   } catch (err) {
+    note('warn', `${layoutName}: could not be fetched -- ${err.message}`);
     state.warnings.push(`could not load layout: ${err.message}`);
     showWarnings();
     refresh();
@@ -577,9 +588,11 @@ async function boot() {
 
   const texts = [];
   for (const url of resultUrls) {
+    const name = url.split('/').pop() || url;
     try {
-      texts.push({ text: await fetchText(url), name: url.split('/').pop() || url });
+      texts.push({ text: await fetchText(url), name });
     } catch (err) {
+      note('warn', `${name}: could not be fetched -- ${err.message}`);
       state.warnings.push(`could not load results: ${err.message}`);
     }
   }

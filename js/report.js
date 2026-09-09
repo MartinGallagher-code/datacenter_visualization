@@ -40,13 +40,14 @@ export function resultsFileNotice(name, { fresh, reloaded = 0, samples, warnings
   const lines = detail(name, warnings);
 
   if (!fresh.length) {
-    return {
-      level: 'warn',
-      text: warnings.length
-        ? `${label}: nothing loaded — ${plural(warnings.length, 'line')} could not be read`
-        : `${label}: nothing loaded — no data lines in it (empty, or all comments)`,
-      lines,
-    };
+    const why = warnings.length
+      ? `${plural(warnings.length, 'line')} could not be read`
+      : 'no data lines in it (empty, or all comments)';
+    // A re-read replaces what the file brought before, so a file that has
+    // since been emptied takes its old metrics with it. Silently losing them
+    // would be the same class of surprise this report exists to end.
+    const lost = reloaded ? ` — and the ${plural(reloaded, 'metric')} it loaded before are gone with it` : '';
+    return { level: 'warn', text: `${label}: nothing loaded — ${why}${lost}`, lines };
   }
 
   const summary = `${label}: ${plural(fresh.length, 'metric')}, ${plural(samples, 'sample')}`;
@@ -54,7 +55,10 @@ export function resultsFileNotice(name, { fresh, reloaded = 0, samples, warnings
   // Loading the same file twice replaces it rather than counting it twice,
   // which is worth saying: nothing was added the second time.
   if (reloaded) notes.push(`re-read, replacing the ${plural(reloaded, 'metric')} it loaded before`);
-  if (warnings.length) notes.push(`${plural(warnings.length, 'line')} skipped`);
+  // "warnings", not "lines skipped": a warning can be a line that could not be
+  // read at all, or a token on a line that loaded fine, and calling the second
+  // one a skipped line sends you looking for missing data that is right there.
+  if (warnings.length) notes.push(plural(warnings.length, 'warning'));
 
   return {
     level: warnings.length ? 'warn' : reloaded ? 'note' : 'ok',

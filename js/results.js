@@ -124,14 +124,24 @@ function splitFields(line) {
   return out;
 }
 
-function parseMetaTokens(tokens) {
+/**
+ * `key=value` tokens. Anything else is reported through `onBare` rather than
+ * dropped in silence: a value with a space in it splits into a token that
+ * looks like this, so `label=Inlet temp` used to set the label to "Inlet" and
+ * throw "temp" away without a word.
+ */
+function parseMetaTokens(tokens, onBare) {
   const meta = {};
+  let kept = 0;
   for (const tok of tokens) {
     const at = tok.indexOf('=');
-    if (at > 0) meta[tok.slice(0, at).toLowerCase()] = tok.slice(at + 1);
+    if (at > 0) { meta[tok.slice(0, at).toLowerCase()] = tok.slice(at + 1); kept++; }
+    else if (onBare) onBare(tok);
   }
-  return meta;
+  return kept ? meta : null;
 }
+
+const quoteList = (items) => items.map((t) => `"${t}"`).join(', ');
 
 /**
  * Parse one or more results files into overlay definitions.
@@ -171,11 +181,24 @@ function parseTextResults(text, into, warnings) {
     if (line.startsWith('!')) {
       const tokens = splitFields(line.slice(1));
       const directive = (tokens.shift() || '').toLowerCase();
-      if (directive !== 'test') return;
+      // A mistyped directive used to vanish, taking every setting on the line
+      // with it -- and looking exactly like a metric that ignored its metadata.
+      if (directive !== 'test') {
+        warnings.push(`results line ${i + 1}: unknown directive "!${directive}" -- only !test is understood`);
+        return;
+      }
       const name = tokens.shift();
-      if (!name) return;
+      if (!name) {
+        warnings.push(`results line ${i + 1}: !test needs the name of the test it describes`);
+        return;
+      }
       const overlay = ensureOverlay(into, name);
-      Object.assign(overlay.meta, parseMetaTokens(tokens));
+      const bare = [];
+      Object.assign(overlay.meta, parseMetaTokens(tokens, (t) => bare.push(t)) || {});
+      if (bare.length) {
+        warnings.push(`results line ${i + 1}: ignored ${quoteList(bare)} on !test ${name} -- `
+          + 'a value containing a space has to be quoted, as label="Inlet temp"');
+      }
       return;
     }
 
@@ -187,11 +210,20 @@ function parseTextResults(text, into, warnings) {
     const [name, target, rawValue, ...extra] = fields;
     const overlay = ensureOverlay(into, name);
     const num = Number(rawValue);
+    const bare = [];
+    const meta = extra.length ? parseMetaTokens(extra, (t) => bare.push(t)) : null;
+    // Fields split on commas too, so a thousands separator makes "1,234" two
+    // fields and the value silently becomes 1. Whatever the cause, a token
+    // that is not key=value was not understood, and saying so beats guessing.
+    if (bare.length) {
+      warnings.push(`results line ${i + 1}: ignored ${quoteList(bare)} after the value -- `
+        + 'extra fields are key=value, and a value with a space or a comma in it must be quoted');
+    }
     overlay.samples.push({
       target,
       value: Number.isFinite(num) && rawValue.trim() !== '' ? num : rawValue,
       numeric: Number.isFinite(num) && rawValue.trim() !== '',
-      meta: extra.length ? parseMetaTokens(extra) : null,
+      meta,
     });
   });
   return into;
@@ -522,10 +554,15 @@ export function recomputeDomain(overlay, model, kind = 'node') {
  * value per measured element, so the population is the devices being compared
  * rather than the raw sample rows, which repeat per run.
  */
-export function recomputeStats(overlay, model, kind = 'node') {
+export function recomputeStats(overlay, model) {
   const values = [];
   for (const el of model.all) {
-    if (kind && el.kind !== kind) continue;
+    // The population is whatever was actually measured, found through the
+    // overlay's own direct set rather than by assuming the measured thing is
+    // a `node`. A layout whose samples land on racks used to measure nothing
+    // at all, leaving stats null -- and a null stats paints every element the
+    // exact middle of the ramp, which looks like an answer.
+    if (!overlay.direct.has(el.key)) continue;
     const v = overlayValue(overlay, el);
     if (v && v.numeric) values.push(v.value);
   }
