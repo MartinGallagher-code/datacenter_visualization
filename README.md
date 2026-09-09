@@ -142,8 +142,10 @@ link storage +storage,role=server scope=row mode=mesh  # full mesh within a row
   reported as warnings rather than left as a silently empty fabric.
 - Declared nets **start visible** on a modest floor (up to 20,000 cables in
   total), so wiring something draws something. Past that they start unticked —
-  a hyperscale floor's first render should be the floor. `show=false` on a
-  `net` line starts it hidden either way; `show=true` forces it on.
+  a hyperscale floor's first render should be the floor. `show=` on a `net`
+  line (or `on=`) settles it either way, and takes any spelling of yes or no —
+  `yes` `y` `on` `1` `true`, `no` `n` `off` `0` `false`. Anything else warns
+  and leaves the decision to the size rule.
 
 Networks toggle on and off in the UI, and modest fabrics start on (see
 above). Fabrics that run over the same pair of endpoints draw slightly

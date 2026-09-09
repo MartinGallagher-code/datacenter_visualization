@@ -1057,6 +1057,41 @@ ok(!matchesFilter('mxrun.tsv', 'mx.*'), 'and that dot has to be there: it is not
   eq([...flat.children.keys()], ['a.tsv', 'b.dc'], 'with both files directly inside');
 }
 
+// ------------------------------------------------------- yes, no, and rubbish
+// `=== 'true'` used to be the whole vocabulary for a flag, so every other
+// spelling of yes meant no -- `show=yes` hid the net it asked to show.
+{
+  const floor = ['dc D', '  room R', '    rack r1 u=4', '      node tor at=4 role=tor',
+                 '      node u[01..02] role=server'].join('\n');
+  const netOf = (flag) => {
+    const m = parseLayout(`${floor}\nnet data ${flag}\nlink data role=server role=tor scope=rack`);
+    return [...m.nets.values()][0].enabled;
+  };
+  for (const yes of ['show=true', 'show=yes', 'show=y', 'show=on', 'show=1', 'on=yes']) {
+    eq(netOf(yes), true, `${yes} shows the net`);
+  }
+  for (const no of ['show=false', 'show=no', 'show=n', 'show=off', 'show=0', 'on=no']) {
+    eq(netOf(no), false, `${no} hides it`);
+  }
+  const odd = parseLayout(`${floor}\nnet data show=maybe\nlink data role=server role=tor scope=rack`);
+  ok(odd.warnings.some((w) => w.includes('neither yes nor no')),
+     'and a value that is neither says so rather than quietly meaning no');
+
+  // The same for an overlay's invert=, and a min/max that is not a number at
+  // all: NaN used to reach the ramp, where it paints everything one grey.
+  const bound = (meta) => bindOverlay(parseResults(
+    `!test t ${meta}\nt\tD/R/r1/u01\t10\nt\tD/R/r1/u02\t20\n`).get('t'),
+    parseLayout(floor));
+  eq(bound('invert=yes').invert, true, 'invert=yes inverts');
+  eq(bound('invert=1').invert, true, 'so does invert=1');
+  eq(bound('invert=no').invert, false, 'invert=no does not');
+  eq(bound('min=abc').min, 10, 'a min that is not a number leaves the data domain alone');
+  eq(bound('min=abc').autoDomain, true, 'and does not count as having set one');
+  eq(bound('decimals=abc').decimals, null, 'nor does a decimals that is not a number');
+  eq(bound('min=0 max=100').min, 0, 'a real min still overrides');
+  eq(bound('min=0 max=100').autoDomain, false, 'and does count');
+}
+
 // ------------------------------------------------------------- load report
 // Every way a file can arrive and do nothing has to say so. These are the
 // silent ones: the viewer used to load two files and mention neither.

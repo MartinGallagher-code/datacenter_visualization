@@ -33,7 +33,10 @@ import csv
 import os
 import sys
 
-BAD_CHARS = set(" \t\n\r")
+# A field is separated by a tab, a comma, OR a run of spaces, so a comma
+# inside one splits it in half when the viewer reads the file back: a target
+# "a,b" becomes target "a" with value "b", and a value "1,234" becomes 1.
+BAD_CHARS = set(" \t\n\r,")
 
 VERSION_NOTICE = """dcadd (Datacenter Layout Viewer) 1.0
 Copyright (C) 2026 Martin J. Gallagher
@@ -47,7 +50,8 @@ def clean(field, what):
     if not text:
         sys.exit(f"dcadd: empty {what}")
     if any(c in BAD_CHARS for c in text):
-        sys.exit(f"dcadd: {what} may not contain whitespace: {text!r}")
+        sys.exit(f"dcadd: {what} may not contain whitespace or a comma "
+                 f"-- both separate fields: {text!r}")
     return text
 
 

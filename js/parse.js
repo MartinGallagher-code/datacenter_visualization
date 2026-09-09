@@ -438,7 +438,18 @@ export function parseLayout(text) {
   const linkRules = [];
   const elementNodes = [];
 
-  // Pull `net` / `link` / `title` directives out of the tree wherever they appear.
+  // Every spelling of yes and no a person actually writes. Returns null for
+// anything else, so the caller can say so instead of guessing.
+const YES = new Set(['true', 'yes', 'y', 'on', '1']);
+const NO = new Set(['false', 'no', 'n', 'off', '0']);
+const truthy = (value) => {
+  const v = String(value).trim().toLowerCase();
+  if (YES.has(v)) return true;
+  if (NO.has(v)) return false;
+  return null;
+};
+
+// Pull `net` / `link` / `title` directives out of the tree wherever they appear.
   const sift = (node, into) => {
     for (const child of node.children) {
       if (child.kind === 'net') {
@@ -446,13 +457,24 @@ export function parseLayout(text) {
         // show=/on= decides visibility outright; without it the call is made
         // after the links are built (null = decide by size, below).
         const explicit = child.attrs.show ?? child.attrs.on;
+        // `=== 'true'` was the whole vocabulary, so `show=yes`, `show=1` and
+        // `show=on` all meant *hidden* -- the exact opposite of what they say.
+        // Anything unrecognised now says so rather than quietly meaning no.
+        let enabled = null;
+        if (explicit !== undefined) {
+          enabled = truthy(explicit);
+          if (enabled === null) {
+            model.warnings.push(`line ${child.line}: net "${name}": `
+              + `show=${explicit} is neither yes nor no -- deciding by size instead`);
+          }
+        }
         model.nets.set(name, {
           name,
           label: child.attrs.label || name,
           color: child.attrs.color || DEFAULT_NET_COLORS[model.nets.size % DEFAULT_NET_COLORS.length],
           style: child.attrs.style || 'solid',
           width: parseFloat(child.attrs.width || '1') || 1,
-          enabled: explicit === undefined ? null : explicit === 'true',
+          enabled,
         });
       } else if (child.kind === 'link') {
         const positional = [];

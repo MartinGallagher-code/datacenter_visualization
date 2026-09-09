@@ -65,6 +65,19 @@ export const AGGREGATIONS = {
 
 export const DEFAULT_AGG = 'mean';
 
+// Every spelling of yes and no a person actually writes. `=== 'true'` was the
+// whole vocabulary, so `invert=yes` and `invert=1` meant *not inverted*.
+// (parse.js keeps its own copy for `show=`; both are leaf modules.)
+const YES = new Set(['true', 'yes', 'y', 'on', '1']);
+const flagged = (value) => value !== undefined && YES.has(String(value).trim().toLowerCase());
+
+/** A meta number that is not a number is not an override. */
+const metaNumber = (value, fallback) => {
+  if (value === undefined) return fallback;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+};
+
 function quantile(values, q) {
   const s = [...values].sort((a, b) => a - b);
   const pos = (s.length - 1) * q;
@@ -461,12 +474,14 @@ export function bindOverlay(overlay, model) {
     // `higher=bad` / `higher=good` pick the green-to-red ramp and its direction;
     // an explicit palette= always wins.
     palette: meta.palette || (meta.higher ? 'health' : 'viridis'),
-    invert: meta.invert === 'true' || meta.higher === 'good',
-    min: meta.min !== undefined ? Number(meta.min) : domain[0],
-    max: meta.max !== undefined ? Number(meta.max) : domain[1],
-    autoDomain: meta.min === undefined && meta.max === undefined,
+    invert: flagged(meta.invert) || meta.higher === 'good',
+    // A min= or max= that does not read as a number used to reach the ramp as
+    // NaN, and a NaN domain paints every element the same fallback grey.
+    min: metaNumber(meta.min, domain[0]),
+    max: metaNumber(meta.max, domain[1]),
+    autoDomain: !Number.isFinite(Number(meta.min)) && !Number.isFinite(Number(meta.max)),
     dataDomain: domain,
-    decimals: meta.decimals !== undefined ? Number(meta.decimals) : null,
+    decimals: metaNumber(meta.decimals, null),
     cache: new Map(),
   };
 

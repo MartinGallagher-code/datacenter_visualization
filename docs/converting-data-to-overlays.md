@@ -166,8 +166,8 @@ at the top.
 | `short` | printed on each element on the map | **3–4 characters.** It shares the element with the value. |
 | `higher` | `bad` or `good` | Sets the green↔red ramp and its direction. Set this whenever the metric has a good end. |
 | `palette` | `viridis` `magma` `plasma` `turbo` `health` `cool` `ember` `gray` `rdbu` | Overrides `higher`'s choice. `rdbu` is diverging — use it with a symmetric range around a neutral midpoint. |
-| `min`, `max` | fix the colour range | Set both, or neither. Omit them and the range follows the data, which is usually what you want. |
-| `invert` | `true` | Flips the ramp. `higher=good` already does this. |
+| `min`, `max` | fix the colour range | Set both, or neither. Omit them and the range follows the data, which is usually what you want. A value that is not a number is ignored rather than applied. |
+| `invert` | `yes` / `no` | Flips the ramp; `higher=good` already does this. Any spelling of yes works (`yes` `y` `on` `1` `true`). |
 | `agg` | the default aggregation | One of the list in §5. |
 | `decimals` | fixed decimal places | `0` for counts and packet rates. Omit and it is chosen from the range. |
 
