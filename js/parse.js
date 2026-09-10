@@ -131,6 +131,53 @@ function buildSyntaxTree(text, warnings) {
 
 // --------------------------------------------------------------- materialize
 
+/**
+ * The numeric attributes, and what each will accept. A value outside its
+ * range, or one that is not a number at all, used to be coerced in silence:
+ * `u=abc` left the rack with no U grid, `at=0` and `at=-3` both became U1,
+ * and `u=1e9` became 1, because parseInt stops at the `e`.
+ */
+// The numeric attributes, each with the range it means anything over. A rack
+// of 1000U is already absurd; the ceiling is there to catch a typo, not to
+// ration anyone.
+export const NUMBERS = { u: [1, 1000], at: [1, 1000], size: [1, 1000], cols: [1, 1000] };
+// A net's line width is the one number that may be fractional.
+const NET_NUMBERS = { width: [0.1, 100] };
+
+/**
+ * One reading of a number attribute, so the check and the use cannot drift
+ * apart. It was parseInt before, which stops at the first character it does
+ * not like: `u=1e9` read as 1, and a validator agreeing with `Number` would
+ * have called that fine. Out of range means the fallback, which is what the
+ * warning promises.
+ */
+export function numAttr(raw, fallback, [least, most]) {
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < least || n > most) return fallback;
+  return n;
+}
+
+export function intAttr(raw, fallback, range = [1, 1000]) {
+  const n = numAttr(raw, null, range);
+  return n === null ? fallback : Math.trunc(n);
+}
+
+function checkNumbers(attrs, what, model, line, table = NUMBERS, whole = true) {
+  for (const [key, [least, most]] of Object.entries(table)) {
+    const raw = attrs[key];
+    if (raw === undefined) continue;
+    const n = Number(raw);
+    if (raw === '' || !Number.isFinite(n)) {
+      model.warnings.push(`line ${line}: ${what}: ${key}=${raw} is not a number -- ignored`);
+    } else if (n < least || n > most) {
+      model.warnings.push(`line ${line}: ${what}: ${key}=${raw} is outside ${least}..${most} -- ignored`);
+    } else if (whole && !Number.isInteger(n)) {
+      model.warnings.push(`line ${line}: ${what}: ${key}=${raw} is not a whole number -- `
+        + `using ${Math.trunc(n)}`);
+    }
+  }
+}
+
 // A row lays out along x unless it says y; every other spelling used to mean
 // x without a word, so `dir=vertical` read as horizontal.
 function checkDir(attrs, id, model, line) {
@@ -142,6 +189,7 @@ function checkDir(attrs, id, model, line) {
 
 function makeElement(kind, id, parent, attrs, tags, model, line) {
   checkDir(attrs, id, model, line);
+  checkNumbers(attrs, `"${id}"`, model, line);
   let key = parent ? `${parent.key}/${id}` : id;
   if (model.byKey.has(key)) {
     let n = 2;
@@ -324,10 +372,10 @@ function materialize(syn, parent, model) {
     // the rack upward regardless of the order the lines are written in.
     if (parent && parent.kind === 'rack') {
       const used = parent.uUsed || (parent.uUsed = new Set());
-      const size = Math.max(1, parseInt(attrs.u ?? attrs.size ?? '1', 10) || 1);
+      const size = intAttr(attrs.u ?? attrs.size, 1, NUMBERS.size);
       let at;
       if (attrs.at !== undefined) {
-        at = Math.max(1, parseInt(attrs.at, 10) || 1);
+        at = intAttr(attrs.at, 1, NUMBERS.at);
       } else {
         at = 1;
         outer: for (;; at++) {
@@ -343,7 +391,7 @@ function materialize(syn, parent, model) {
       // at= copied from a taller rack's example. Warn on the node's own line,
       // which is the one to edit, and once per line however many racks the
       // enclosing range expanded to.
-      const rackU = parseInt(parent.attrs.u ?? '0', 10) || 0;
+      const rackU = intAttr(parent.attrs.u, 0, NUMBERS.u);
       if (rackU && at + size - 1 > rackU) {
         const seen = model.overflowWarned || (model.overflowWarned = new Set());
         if (!seen.has(syn.line)) {
@@ -358,7 +406,9 @@ function materialize(syn, parent, model) {
     for (const child of syn.children) materialize(child, el, model);
 
     if (el.kind === 'rack') {
-      const declared = parseInt(el.attrs.u ?? '0', 10) || 0;
+      // A u= that cannot be used falls back to 0, meaning "no declared
+      // height" -- a negative one used to draw a rack of negative height.
+      const declared = intAttr(el.attrs.u, 0, NUMBERS.u);
       let used = 0;
       for (const c of el.children) used = Math.max(used, (c.uAt || 1) + (c.uSize || 1) - 1);
       el.uHeight = declared || Math.max(used, 42);
@@ -522,12 +572,13 @@ const truthy = (value) => {
           model.warnings.push(`line ${child.line}: net "${name}": `
             + `style=${style} is neither solid nor dashed -- drawn solid`);
         }
+        checkNumbers(child.attrs, `net "${name}"`, model, child.line, NET_NUMBERS, false);
         model.nets.set(name, {
           name,
           label: child.attrs.label || name,
           color: child.attrs.color || DEFAULT_NET_COLORS[model.nets.size % DEFAULT_NET_COLORS.length],
           style: child.attrs.style || 'solid',
-          width: parseFloat(child.attrs.width || '1') || 1,
+          width: numAttr(child.attrs.width, 1, NET_NUMBERS.width),
           enabled,
         });
       } else if (child.kind === 'link') {

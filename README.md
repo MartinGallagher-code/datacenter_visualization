@@ -115,6 +115,10 @@ without appearing in the name — see `examples/hostnames.dc`.
   above the rack's declared `u=` height is reported as a warning — `at=42`
   only fits a rack at least 42 U tall.
 - `cols=2` / `dir=x|y` shape generic containers.
+- The numbers are checked: `u`, `at`, `size` and `cols` must be whole and
+  between 1 and 1000, and a net's `width` between 0.1 and 100. Anything else
+  is reported and ignored rather than quietly coerced — `u=1e9` used to read
+  as 1 and `u=-5` drew a rack of negative height.
 
 ### Networks
 

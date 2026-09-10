@@ -10,6 +10,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 // Geometry. Turns the element tree into absolute world-space boxes.
+
+import { NUMBERS, intAttr } from './parse.js';
 //
 // Layout is recomputed whenever collapse state or the visibility predicate
 // changes, and is cheap enough (one pass, no measurement of text) to redo on
@@ -122,8 +124,10 @@ function measure(el, isVisible) {
 }
 
 function gridColumns(el, count) {
-  const declared = parseInt(el.attrsEff.cols ?? '', 10);
-  if (Number.isFinite(declared) && declared > 0) return declared;
+  // Read cols the way the parser checked it, so a value it warned about and
+  // called ignored really is ignored here.
+  const declared = intAttr(el.attrsEff.cols, 0, NUMBERS.cols);
+  if (declared > 0) return declared;
   if (el.attrsEff.dir === 'y') return 1;
   if (el.attrsEff.dir === 'x') return count;
   // Rows stack vertically inside a room; everything else tends toward a square.

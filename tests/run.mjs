@@ -1261,5 +1261,89 @@ ok(!matchesFilter('mxrun.tsv', 'mx.*'), 'and that dot has to be there: it is not
   eq(layoutNotice('floor.dc', 5, ['line 2: x']).level, 'warn', 'a layout with warnings warns');
 }
 
+// --------------------------------------------- numbers that were not numbers
+// Every numeric attribute used to be read with parseInt or parseFloat and a
+// silent fallback, so junk became a plausible-looking floor plan: u=abc lost
+// the rack's U grid, u=-5 drew it with negative height, u=1e9 read as 1 (
+// parseInt stops at the "e"), and at=0 quietly became U1. The reader and the
+// check are now the same function, which is what keeps u=1e9 honest -- a
+// checker agreeing with Number() would have passed a value parseInt read as 1.
+{
+  const boxOf = (attr) => {
+    const m = parseLayout(['dc D', '  room R', `    rack r1 ${attr}`,
+                           '      node n at=1'].join('\n'));
+    layout(m.root);
+    return { h: m.byKey.get('D/R/r1').box.h, w: m.warnings };
+  };
+
+  eq(boxOf('u=10').w, [], 'a whole number in range says nothing');
+  eq(boxOf('u=10').h, 73, 'and is the height that gets drawn');
+
+  const dflt = boxOf('u=42').h;   // the height of a rack that declares nothing
+  for (const [attr, phrase] of [['u=abc', 'is not a number'],
+                                ['u=-5', 'is outside 1..1000'],
+                                ['u=0', 'is outside 1..1000'],
+                                ['u=1e9', 'is outside 1..1000'],
+                                ['u=1001', 'is outside 1..1000']]) {
+    const got = boxOf(attr);
+    eq(got.w.length, 1, `${attr} is reported`);
+    ok(got.w[0].includes(phrase) && got.w[0].includes('ignored'),
+       `${attr}: ${phrase}, and the warning says ignored`);
+    eq(got.h, dflt, `${attr} really is ignored, not half-applied`);
+  }
+  eq(boxOf('u=1000').h, 5023, 'the top of the range is still a rack you can draw');
+
+  const frac = boxOf('u=42.5');
+  ok(frac.w[0].includes('not a whole number') && frac.w[0].includes('using 42'),
+     'a fraction is rounded down, and says which way it went');
+
+  // at= picks the U a node sits on. Zero and negatives used to land on U1.
+  const atWarn = (attr) => parseLayout(
+    ['dc D', '  rack r1 u=10', `    node n ${attr}`].join('\n')).warnings;
+  eq(atWarn('at=1'), [], 'the bottom U is a legal place to sit');
+  ok(atWarn('at=0')[0].includes('outside 1..1000'), 'U0 does not exist');
+  ok(atWarn('at=-3')[0].includes('outside 1..1000'), 'nor does a negative U');
+  ok(atWarn('at=abc')[0].includes('is not a number'), 'nor does a word');
+
+  // cols= is read in layout.js, a different file from the check. Reading it
+  // there with parseInt made the warning a lie: cols=1e9 said "ignored" and
+  // laid the room out in one column.
+  const roomOf = (attr) => {
+    const m = parseLayout(['dc D', `  room R ${attr}`, '    rack r[1..6] u=4'].join('\n'));
+    layout(m.root);
+    return { w: m.byKey.get('D/R').box.w, warnings: m.warnings };
+  };
+  eq(roomOf('cols=3').warnings, [], 'three columns is three columns');
+  const free = roomOf('').w;
+  for (const attr of ['cols=abc', 'cols=0', 'cols=1e9']) {
+    eq(roomOf(attr).warnings.length, 1, `${attr} is reported`);
+    eq(roomOf(attr).w, free, `${attr} lays out as if it had not been written`);
+  }
+
+  // A net's width is the one number allowed a fraction, so it must not be
+  // told it is not whole.
+  const netOf = (attr) => {
+    const m = parseLayout(['dc D', '  room R', `net n ${attr}`].join('\n'));
+    return { width: m.nets.get('n').width, warnings: m.warnings };
+  };
+  eq(netOf('width=0.5'), { width: 0.5, warnings: [] }, 'half a pixel wide is a fine net');
+  eq(netOf('width=2').warnings, [], 'so is two');
+  eq(netOf('').width, 1, 'and a net that says nothing is one');
+  for (const attr of ['width=abc', 'width=0', 'width=1e9', 'width=']) {
+    const got = netOf(attr);
+    eq(got.warnings.length, 1, `${attr} is reported`);
+    ok(got.warnings[0].startsWith('line 3: net "n":'), `${attr} names the net it is on`);
+    eq(got.width, 1, `${attr} draws at the default width`);
+  }
+
+  // Every layout the repo ships stays quiet. A check that fires on the house
+  // style is a check people learn to scroll past.
+  for (const file of ['examples/small.dc', 'examples/mega.dc', 'examples/hostnames.dc',
+                      'examples/three-rows.dc', 'examples/mx/floor.dc', 'examples/iperf/floor.dc']) {
+    eq(parseLayout(readFileSync(join(root, file), 'utf8')).warnings, [],
+       `${file} has no number it cannot read`);
+  }
+}
+
 console.log(failures ? `${failures}/${count} tests FAILED` : `all ${count} tests passed`);
 process.exit(failures ? 1 : 0);
