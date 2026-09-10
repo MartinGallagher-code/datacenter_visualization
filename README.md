@@ -121,9 +121,10 @@ without appearing in the name — see `examples/hostnames.dc`.
   unplaced children auto-fill the lowest free run of slots. A node that lands
   above the rack's declared `u=` height is reported as a warning — `at=42`
   only fits a rack at least 42 U tall.
-- `cols=2` / `dir=x|y` shape generic containers.
+- `cols=2` / `dir=x|y` / `gap=` shape generic containers — `gap=0` packs
+  children with no gutter, and omitting it keeps the per-kind default.
 - The numbers are checked: `u`, `at`, `size` and `cols` must be whole and
-  between 1 and 1000, and a net's `width` between 0.1 and 100. Anything else
+  between 1 and 1000 (`gap` from 0), and a net's `width` between 0.1 and 100. Anything else
   is reported and ignored rather than quietly coerced — `u=1e9` used to read
   as 1 and `u=-5` drew a rack of negative height.
 
@@ -157,6 +158,8 @@ link storage +storage,role=server scope=row mode=mesh  # full mesh within a row
 - `mode=` is `star` (A×B, default with two selectors), `mesh` (default with
   one), `chain`, `ring`, or `pair` (A[i] to B[i]; with one selector,
   consecutive matches pair off — 1st–2nd, 3rd–4th, …).
+- `bidir=`, `label=` and `cap=` finish the rule: wire the reverse direction
+  too, name the rule in the panel, and stop after that many cables.
 - A rule that wires nothing says so: a selector that matched no elements (the
   shape a typo makes) and a rule whose matches produced no cables are both
   reported as warnings rather than left as a silently empty fabric.

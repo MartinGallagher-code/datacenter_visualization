@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url';
 
 import { expand, subst } from '../js/expand.js';
 import { compileSelector } from '../js/select.js';
-import { parseLayout, isColor } from '../js/parse.js';
+import { parseLayout, isColor, LINK_OPTS, NUMBERS } from '../js/parse.js';
 import {
   parseResults, bindOverlay, overlayValue, AGGREGATIONS, extent,
   recomputeStats, zScore, formatValue, unitFor, zRangeOf, paletteOf, invertedOf, overlayKey,
@@ -1700,6 +1700,90 @@ ok(!matchesFilter('mxrun.tsv', 'mx.*'), 'and that dot has to be there: it is not
   eq(readNumber('0', null), 0, 'but zero is a number a person can mean');
   eq(readNumber('-4.5', null), -4.5, 'and so is a negative one');
   eq(readNumber('1e999', null), null, 'infinity is not a scale end');
+}
+
+// ------------------------------------------- the × that removed nothing
+// Overlays are keyed by file and test, since two files may carry the same
+// test. removeOverlay deleted by overlay.name, which is only the label -- so
+// the × on a metric card did nothing at all, silently, while the × on its
+// file's header (which deletes by key) worked. Both go through one function
+// now, and it takes the overlay rather than a key, so a caller cannot pick
+// the wrong field again.
+{
+  const plan = parseLayout(['dc D', '  rack r1 u=4', '    node n1 at=1'].join('\n'));
+  const into = new Map();
+  parseResults('!test a\na n1 1\n!test b\nb n1 2\n', into, [], 'r.tsv');
+  eq(into.size, 2, 'two metrics from one file');
+  const bound = new Map();
+  for (const [key, raw] of into) bound.set(key, bindOverlay(raw, plan));
+
+  // What removeOverlay does, against what it used to do.
+  const one = bound.get(overlayKey('r.tsv', 'a'));
+  ok(one.key !== one.name, 'a bound overlay is keyed by more than its name');
+  eq(bound.has(one.name), false, 'so deleting by name would find nothing');
+  bound.delete(one.key);
+  eq([...bound.keys()], [overlayKey('r.tsv', 'b')], 'and deleting by key removes exactly one');
+}
+
+// ------------------------------------------- ?results= had the same collision
+// The Files panel was taught that a file is known by its path. The URL
+// loader still called every file by its last path segment, so
+// ?results=runs/monday/results.tsv,runs/tuesday/results.tsv named both
+// results.tsv and the second replaced the first.
+{
+  // urlLabel lives in app.js, which needs a DOM; the property it has to hold
+  // is that two URLs differing anywhere in their path give different names.
+  const label = (url) => decodeURIComponent(new URL(url, 'http://x/').pathname).replace(/^\//, '');
+  eq(label('runs/monday/results.tsv'), 'runs/monday/results.tsv', 'the path is the name');
+  ok(label('runs/monday/results.tsv') !== label('runs/tuesday/results.tsv'),
+     'two runs of the same file are two names');
+  eq(label('http://elsewhere/x/r.tsv'), 'x/r.tsv', 'an absolute URL keeps its path');
+  ok(label('a/r.tsv') !== 'r.tsv', 'and the last segment alone is not it');
+}
+
+// ------------------------------------------- gap=, which did nothing
+// `gap` sat in the parser's NON_INHERITED list beside cols and dir -- the
+// list that says "this is a layout key" -- and layout.js never read it. A
+// person writing gap=0 got an attribute stored and no change on screen.
+{
+  const roomH = (attr) => {
+    const m = parseLayout(['dc D', `  room R${attr}`, '    rack r[1..3] u=4'].join('\n'));
+    layout(m.root);
+    return { h: m.byKey.get('D/R').box.h, warnings: m.warnings };
+  };
+  const dflt = roomH('').h;
+  ok(roomH(' gap=40').h > dflt, 'a bigger gap makes the room taller');
+  ok(roomH(' gap=0').h < dflt, 'and zero packs it tighter -- zero is a real answer');
+  eq(roomH(' gap=40').warnings, [], 'a gap in range says nothing');
+  ok(roomH(' gap=abc').warnings[0].includes('is not a number'), 'junk is reported');
+  ok(roomH(' gap=-1').warnings[0].includes('outside 0..1000'), 'and so is a negative gap');
+  eq(roomH(' gap=abc').h, dflt, 'and neither changes the spacing');
+  eq(roomH(' gap=0').warnings, [], 'zero is not mistaken for absent');
+}
+
+// ------------------------------------------- what the editor knows
+// The completions teach the syntax, so a key the parser takes and the editor
+// never offers is a feature nobody finds. cap=, bidir= and label= on a link
+// rule had all three worked and never been suggested. These assertions are
+// the guard: the lists are in two files and will drift again otherwise.
+{
+  const offered = (text) => new Set((suggestionsFor(text, text.length) || { options: [] })
+    .options.map((o) => o.text));
+
+  const linkOpts = offered('net data\nlink data +a +b ');
+  for (const key of LINK_OPTS) {
+    ok(linkOpts.has(`${key}=`), `the editor offers ${key}= on a link rule`);
+  }
+
+  const elementKeys = offered('dc D\n  room R\n    rack r1 ');
+  // `size` is the old spelling of `u` and is deliberately not taught twice.
+  for (const key of Object.keys(NUMBERS)) {
+    if (key === 'size') continue;
+    ok(elementKeys.has(`${key}=`), `the editor offers ${key}= on an element`);
+  }
+  for (const key of ['name', 'id', 'dir', 'color']) {
+    ok(elementKeys.has(`${key}=`), `the editor offers ${key}=`);
+  }
 }
 
 console.log(failures ? `${failures}/${count} tests FAILED` : `all ${count} tests passed`);

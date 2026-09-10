@@ -36,6 +36,8 @@ const ELEMENT_KEYS = [
   ['at=', 'pin to a U-slot: at=42'],
   ['cols=', 'grid columns for a container'],
   ['dir=', 'layout direction: x or y'],
+  ['gap=', 'space between children; 0 packs them'],
+  ['color=', 'fill colour: #4fa3ff, teal, rgb(1,2,3)'],
 ];
 
 const NET_KEYS = [
@@ -46,9 +48,15 @@ const NET_KEYS = [
   ['show=', 'true/false: start visible or unticked'],
 ];
 
+// Every option a link rule takes. The parser's own LINK_OPTS is the list;
+// three of them were missing here, so cap=, bidir= and label= existed,
+// worked, and were never once offered by the editor that teaches the syntax.
 const LINK_KEYS = [
   ['scope=', 'group matches per rack/row/room/… before wiring'],
   ['mode=', 'star, mesh, chain, ring or pair'],
+  ['bidir=', 'yes/no: also wire the reverse direction'],
+  ['label=', 'name this rule in the panel'],
+  ['cap=', 'stop after this many cables'],
 ];
 
 const MODES = ['star', 'mesh', 'chain', 'ring', 'pair'];

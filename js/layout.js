@@ -70,7 +70,10 @@ function measure(el, isVisible) {
 
   const pad = padOf(el.kind);
   const label = labelOf(el.kind);
-  const gap = pick(GAP, el.kind);
+  // `gap` sat in the parser's list of layout keys, beside cols and dir, and
+  // nothing read it: writing one stored an attribute and changed no spacing.
+  // Zero is a real answer here -- rows packed with no gutter at all.
+  const gap = intAttr(el.attrsEff.gap, pick(GAP, el.kind), NUMBERS.gap);
 
   if (el.kind === 'rack') {
     // Children sit in fixed U slots; the rack's height is its declared capacity.

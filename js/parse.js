@@ -33,7 +33,7 @@
 import { expand, subst } from './expand.js';
 import { compileSelector } from './select.js';
 
-const LINK_OPTS = new Set(['scope', 'mode', 'bidir', 'label', 'cap']);
+export const LINK_OPTS = new Set(['scope', 'mode', 'bidir', 'label', 'cap']);
 // Attributes that describe *this* element only and must not cascade to children.
 const NON_INHERITED = new Set(['id', 'name', 'at', 'u', 'cols', 'dir', 'gap', 'label', 'size']);
 
@@ -140,7 +140,9 @@ function buildSyntaxTree(text, warnings) {
 // The numeric attributes, each with the range it means anything over. A rack
 // of 1000U is already absurd; the ceiling is there to catch a typo, not to
 // ration anyone.
-export const NUMBERS = { u: [1, 1000], at: [1, 1000], size: [1, 1000], cols: [1, 1000] };
+export const NUMBERS = {
+  u: [1, 1000], at: [1, 1000], size: [1, 1000], cols: [1, 1000], gap: [0, 1000],
+};
 // A net's line width is the one number that may be fractional.
 const NET_NUMBERS = { width: [0.1, 100] };
 

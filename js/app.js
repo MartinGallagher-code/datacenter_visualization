@@ -334,8 +334,7 @@ const actions = {
   // Removal drops the overlay and its loaded samples entirely; re-loading the
   // results file is the way back, which is cheap since files are append-only.
   removeOverlay(overlay) {
-    state.rawOverlays.delete(overlay.name);
-    state.overlays.delete(overlay.name);
+    forgetOverlay(overlay);
     refreshPanels();
     invalidate();
   },
@@ -355,8 +354,7 @@ const actions = {
   removeOverlayGroup(source) {
     for (const overlay of [...state.overlays.values()]) {
       if ((overlay.source || '') !== source) continue;
-      state.rawOverlays.delete(overlay.key);
-      state.overlays.delete(overlay.key);
+      forgetOverlay(overlay);
     }
     state.groupsOff.delete(source);
     refreshPanels();
@@ -509,6 +507,23 @@ function showWarnings() {
 const note = (level, text, lines) => state.notices.push({ level, text, lines: lines || [] });
 const push = (notice) => state.notices.push(notice);
 
+/**
+ * Drop one overlay from both maps. `key` is what they are keyed by -- file
+ * and test, since two files may carry the same test -- and `name` is only a
+ * label. Removing by name deleted nothing at all, so the × on a metric card
+ * did nothing while the × on its file's header worked. One function, so the
+ * two removal paths cannot disagree again.
+ */
+function forgetOverlay(overlay) {
+  const key = overlay.key || overlay.name;
+  state.rawOverlays.delete(key);
+  state.overlays.delete(key);
+  // Nothing of that file left to be collapsed.
+  const source = overlay.source || '';
+  const others = [...state.overlays.values()].some((o) => (o.source || '') === source);
+  if (!others) state.groupsOff.delete(source);
+}
+
 /** Forget everything one file contributed. Returns how many overlays went. */
 function dropSource(name) {
   if (!name) return 0;
@@ -561,6 +576,22 @@ async function fetchText(url) {
 // Nothing loads on its own: the viewer starts empty, and layouts arrive from
 // the ?layout=/?results= URL parameters, the Load files… button, drag and
 // drop, or the built-in editor.
+/**
+ * What a fetched file is called. The last path segment was not enough:
+ * `?results=runs/monday/results.tsv,runs/tuesday/results.tsv` named both of
+ * them `results.tsv`, and the second then replaced the first -- the same way
+ * two folders of results used to collide in the Files panel. The path is what
+ * tells two runs apart; the origin is the same for all of them.
+ */
+function urlLabel(url) {
+  try {
+    const u = new URL(url, location.href);
+    return decodeURIComponent(u.pathname).replace(/^\//, '') || url;
+  } catch {
+    return url;
+  }
+}
+
 async function boot() {
   const params = new URLSearchParams(location.search);
   const layoutUrl = params.get('layout');
@@ -574,7 +605,7 @@ async function boot() {
   // A URL load is a load: it reports like one. Without this the report knew
   // about ?results= but never about the ?layout= beside it, so a layout with
   // warnings arrived with nothing in the chip to say so.
-  const layoutName = layoutUrl.split('/').pop() || layoutUrl;
+  const layoutName = urlLabel(layoutUrl);
   try {
     loadLayoutText(await fetchText(layoutUrl), { name: layoutName });
     push(layoutNotice(layoutName, state.model.all.length, state.model.warnings));
@@ -588,7 +619,7 @@ async function boot() {
 
   const texts = [];
   for (const url of resultUrls) {
-    const name = url.split('/').pop() || url;
+    const name = urlLabel(url);
     try {
       texts.push({ text: await fetchText(url), name });
     } catch (err) {
