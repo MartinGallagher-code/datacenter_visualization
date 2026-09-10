@@ -597,7 +597,11 @@ netmesh run --for 60 && dcimport results.tsv --tidy reports/
   tree but has to be chosen again each session. Nothing is read until it is
   clicked, and clicking a results file that is already loaded re-reads it —
   replacing its overlays rather than counting every sample twice, since the
-  format is append-only.
+  format is append-only. A file is known by its path below the open folder, so
+  `monday/results.tsv` and `tuesday/results.tsv` are two files and stay two
+  sets of overlays; where a load genuinely cannot tell two files apart (two
+  named the same, dropped together, with no path between them) they are
+  numbered and the report says so.
 - **Restart** — empties the viewer: no floor plan, no overlays, no filter, no
   selection, and a blank canvas. **Remove all** in the Overlays panel only ever
   cleared the overlays and left the floor plan drawn; this clears the lot. What

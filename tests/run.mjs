@@ -22,14 +22,16 @@ import { parseLayout, isColor } from '../js/parse.js';
 import {
   parseResults, bindOverlay, overlayValue, AGGREGATIONS, extent,
   recomputeStats, zScore, formatValue, unitFor, zRangeOf, paletteOf, invertedOf, overlayKey,
-  valueWithUnit, NO_VALUE,
+  valueWithUnit, NO_VALUE, recomputeDomain, readNumber,
 } from '../js/results.js';
 import { layout } from '../js/layout.js';
 import { linkSummary, sharesLineage } from '../js/render.js';
 import { compileQuery, applyFilter } from '../js/filter.js';
 import { ramp, categoricalColor, colorFor, contrastInk } from '../js/palette.js';
 import { suggestionsFor } from '../js/hints.js';
-import { classify, formatSize, matchesFilter, sortEntries, treeFromFiles } from '../js/browse.js';
+import {
+  classify, formatSize, matchesFilter, pathLabel, sortEntries, treeFromFiles,
+} from '../js/browse.js';
 import {
   droppedLayoutsNotice, layoutNotice, prefixed, resultsFileNotice,
 } from '../js/report.js';
@@ -1612,6 +1614,92 @@ ok(!matchesFilter('mxrun.tsv', 'mx.*'), 'and that dot has to be there: it is not
   eq(hits('serv').length, 2, 'and it is the two servers, not nothing');
   eq(hits('gp?'), ['b1'], 'a tag glob still works');
   eq(hits('D/R/*').length, 4, 'and so does a path glob, which only the glob branch has');
+}
+
+// ------------------------------------------- two files, one name
+// Overlays are grouped by the name of the file they came from, and loading a
+// file again replaces what it brought last time -- which is right for a
+// re-read and wrong for a different file that happens to share a name. Two
+// folders of results both hold `results.tsv`, and opening the second threw
+// the first away with no warning at all, against the one rule the overlays
+// have: a file's readings are that file's, and files never combine.
+{
+  eq(pathLabel([{ name: 'runs' }], 'results.tsv'), 'results.tsv',
+     'a file in the open folder is called what it is called');
+  eq(pathLabel([{ name: 'runs' }, { name: 'monday' }], 'results.tsv'), 'monday/results.tsv',
+     'one in a subfolder carries the folder that tells it apart');
+  eq(pathLabel([{ name: 'runs' }, { name: 'a' }, { name: 'b' }], 'r.tsv'), 'a/b/r.tsv',
+     'however deep it sits');
+  ok(pathLabel([{ name: 'runs' }, { name: 'monday' }], 'r.tsv')
+     !== pathLabel([{ name: 'runs' }, { name: 'tuesday' }], 'r.tsv'),
+     'and two runs of the same file are two different names');
+
+  // Keyed by those labels, the two files stay two overlays.
+  const plan = parseLayout(['dc D', '  rack r1 u=4', '    node n1 at=1', '    node n2 at=2'].join('\n'));
+  const into = new Map();
+  parseResults('!test m unit=C\nm n1 10\n', into, [], 'monday/results.tsv');
+  parseResults('!test m unit=C\nm n2 20\n', into, [], 'tuesday/results.tsv');
+  eq(into.size, 2, 'the same test from two paths is two overlays');
+  const monday = bindOverlay(into.get(overlayKey('monday/results.tsv', 'm')), plan);
+  const tuesday = bindOverlay(into.get(overlayKey('tuesday/results.tsv', 'm')), plan);
+  eq(overlayValue(monday, plan.byKey.get('D/r1/n1')).value, 10, "monday keeps monday's reading");
+  eq(overlayValue(tuesday, plan.byKey.get('D/r1/n2')).value, 20, 'and tuesday its own');
+  eq(overlayValue(monday, plan.byKey.get('D/r1/n2')), null, 'neither has borrowed the other');
+}
+
+// ------------------------------------------- a domain that ignored the aggregation
+// recomputeStats was taught to find its population through the overlay's own
+// direct set rather than assuming a measurement lands on a `node`.
+// recomputeDomain was not, so a layout measured at the rack matched nothing
+// and kept the domain bindOverlay had built from the raw samples. Aggregation
+// compresses: ten samples per rack spanning 15..90 average out to 45..60, and
+// painting those four racks across a 15..90 ramp puts every one of them in
+// the middle fifth of it -- washed out, and looking like it worked.
+{
+  const measured = (target) => {
+    const plan = parseLayout(['dc D', '  room R', '    rack r[1..4] u=4',
+                              '      node n[1..2] at={i}'].join('\n'));
+    const rows = [];
+    for (let r = 1; r <= 4; r++) {
+      for (let s = 0; s < 10; s++) rows.push(`m ${target(r)} ${40 + r * 5 + (s % 2 ? -30 : 30)}`);
+    }
+    const map = parseResults(`!test m unit=C\n${rows.join('\n')}\n`, new Map(), [], 'f');
+    const o = bindOverlay(map.get(overlayKey('f', 'm')), plan);
+    const raw = [o.min, o.max];
+    const changed = recomputeDomain(o, plan);
+    return { raw, changed, domain: [o.min, o.max] };
+  };
+
+  const onRacks = measured((r) => `r${r}`);
+  eq(onRacks.raw, [15, 90], 'bindOverlay starts from the extent of the raw samples');
+  eq(onRacks.changed, true, 'a rack-measured layout has a population to measure');
+  eq(onRacks.domain, [45, 60], 'and the ramp spans what the racks actually read');
+
+  const onNodes = measured((r) => `r${r}/n1`);
+  eq(onNodes.domain, [45, 60], 'a node-measured layout is unchanged by the fix');
+
+  // The shipped example is measured at the node, so its domains must not move.
+  const small = parseLayout(readFileSync(join(root, 'examples/small.dc'), 'utf8'));
+  const shipped = parseResults(readFileSync(join(root, 'examples/small-results.tsv'), 'utf8'),
+                               new Map(), [], 'small-results.tsv');
+  const temp = bindOverlay(shipped.get(overlayKey('small-results.tsv', 'temp_c')), small);
+  recomputeDomain(temp, small);
+  eq([temp.min, temp.max], [24, 72], 'examples/small-results.tsv still spans 24..72');
+}
+
+// ------------------------------------------- a box that lied about the scale
+// The panel read its own inputs with Number(input.value), and Number('') is
+// 0 -- so emptying the min box pinned the bottom of the colour scale to zero
+// instead of leaving it alone, exactly what a trailing `max=` did in a file.
+// Junk was worse than ignored: it stayed in the box while the scale kept
+// something else, so the box no longer described the picture.
+{
+  eq(readNumber('', null), null, 'an empty box holds no number');
+  eq(readNumber('   ', null), null, 'nor does a box of spaces');
+  eq(readNumber('abc', null), null, 'nor one with a word in it');
+  eq(readNumber('0', null), 0, 'but zero is a number a person can mean');
+  eq(readNumber('-4.5', null), -4.5, 'and so is a negative one');
+  eq(readNumber('1e999', null), null, 'infinity is not a scale end');
 }
 
 console.log(failures ? `${failures}/${count} tests FAILED` : `all ${count} tests passed`);

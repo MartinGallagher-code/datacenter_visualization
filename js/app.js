@@ -27,8 +27,8 @@ import {
 } from './report.js';
 import { attachHints, renderReference } from './hints.js';
 import {
-  classify, directoryFromDataTransfer, ensureRead, getFile, pickDirectory, probeSizes,
-  readDir, renderBrowser, supportsDirectoryPicker, treeFromFiles, walkPath,
+  classify, directoryFromDataTransfer, ensureRead, getFile, pathLabel, pickDirectory,
+  probeSizes, readDir, renderBrowser, supportsDirectoryPicker, treeFromFiles, walkPath,
 } from './browse.js';
 
 const $ = (id) => document.getElementById(id);
@@ -669,25 +669,60 @@ async function pickFiles() {
   }
   if (!handles.length) return;
   rememberHandle(handles[0]);
-  ingestFiles(await Promise.all(handles.map((h) => h.getFile())));
+  ingestFiles(asItems(await Promise.all(handles.map((h) => h.getFile()))));
 }
 
 const isLayoutFile = (name) => /\.(dc|layout)$/i.test(name);
 
-async function ingestFiles(files) {
+/**
+ * What a file is called once it is loaded. Overlays are grouped under it, and
+ * re-reading a file replaces what it brought last time -- so two different
+ * files must never share one, or the second silently throws the first away.
+ * A folder drop carries a path; the file picker and a plain drop do not, and
+ * there the name is genuinely all there is to go on.
+ */
+const labelOf = (file) => file.webkitRelativePath || file.name;
+
+const asItems = (files) => [...files].map((file) => ({ file, label: labelOf(file) }));
+
+/**
+ * Two files in one batch that would answer to the same name. Nothing can tell
+ * them apart, so rather than let the second delete the first, they are
+ * numbered and the report says it happened.
+ */
+function uniqueLabels(items) {
+  const seen = new Map();
+  const clashed = [];
+  for (const item of items) {
+    const n = (seen.get(item.label) || 0) + 1;
+    seen.set(item.label, n);
+    if (n > 1) {
+      clashed.push(item.label);
+      item.label = `${item.label} (${n})`;
+    }
+  }
+  return [...new Set(clashed)];
+}
+
+async function ingestFiles(items) {
   state.notices = [];               // the report covers this load, not the last
   const layouts = [];
   const results = [];
-  for (const file of files) {
+  const clashed = uniqueLabels(items);
+  for (const { file, label } of items) {
     let text;
     try {
       text = await file.text();
     } catch (err) {
-      note('warn', `${file.name}: could not be read — ${err.message}`);
+      note('warn', `${label}: could not be read — ${err.message}`);
       continue;
     }
-    if (isLayoutFile(file.name)) layouts.push({ text, name: file.name });
-    else results.push({ text, name: file.name });
+    if (isLayoutFile(file.name)) layouts.push({ text, name: label });
+    else results.push({ text, name: label });
+  }
+  if (clashed.length) {
+    note('note', `${plural(clashed.length, 'name')} arrived twice in this load `
+      + `(${clashed.join(', ')}) — numbered, so neither replaces the other`);
   }
 
   if (layouts.length) {
@@ -907,7 +942,9 @@ const browseActions = {
     }
     // Re-reading is safe on its own: a results file replaces the overlays it
     // brought last time (loadResultsText), and a layout replaces itself.
-    await ingestFiles([file]);
+    // The path below the open folder, not the bare name: two runs both
+    // called results.tsv are two files, and must stay two overlays.
+    await ingestFiles([{ file, label: pathLabel(b.path, entry.name) }]);
   },
 };
 
@@ -1215,7 +1252,7 @@ $('btn-fit').addEventListener('click', () => { renderer.fit(); invalidate(); });
 $('btn-load').addEventListener('click', () => pickFiles());
 $('notices-btn').addEventListener('click', () => actions.toggleNotices());
 $('btn-restart').addEventListener('click', () => actions.restart());
-$('filepicker').addEventListener('change', (e) => ingestFiles([...e.target.files]));
+$('filepicker').addEventListener('change', (e) => ingestFiles(asItems(e.target.files)));
 $('dirpicker').addEventListener('change', (e) => {
   const files = [...e.target.files];
   e.target.value = '';                    // so the same folder can be re-chosen
@@ -1348,7 +1385,7 @@ window.addEventListener('drop', async (e) => {
   const dropped = [...e.dataTransfer.files];
   const dir = await directoryFromDataTransfer(e.dataTransfer);
   if (dir) { openDirectory(dir, { path: [] }); return; }
-  if (dropped.length) ingestFiles(dropped);
+  if (dropped.length) ingestFiles(asItems(dropped));
 });
 
 // ------------------------------------------------------------------ tooltip

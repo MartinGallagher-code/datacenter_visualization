@@ -79,7 +79,7 @@ const flagged = (value) => value !== undefined && YES.has(String(value).trim().t
  * the overlay does not do. `Number('')` is 0, which is how a trailing `max=`
  * used to set the top of the scale to zero and reverse the whole ramp.
  */
-const metaNumber = (value, fallback, spec = NUM_ANY) => {
+export const metaNumber = (value, fallback, spec = NUM_ANY) => {
   if (value === undefined || String(value).trim() === '') return fallback;
   const n = Number(value);
   if (!Number.isFinite(n) || n < spec.least || n > spec.most) return fallback;
@@ -673,11 +673,22 @@ function worstOrMode(values) {
   return best;
 }
 
-/** Recompute the auto domain from the values actually present at a given kind. */
-export function recomputeDomain(overlay, model, kind = 'node') {
+/**
+ * Recompute the auto domain from the values actually on screen: one
+ * aggregated value per measured element.
+ *
+ * The population is the overlay's own direct set, not everything of kind
+ * 'node' -- the same fix recomputeStats needed, and the same reason. A layout
+ * measured at the rack matched nothing here, so the domain stayed the extent
+ * of the raw samples from bindOverlay: four racks whose means run 45..60 were
+ * painted across a 15..90 ramp, landing in the middle fifth of it, all but
+ * the same colour. Aggregation compresses, and a scale that ignores that
+ * washes the picture out while looking like it worked.
+ */
+export function recomputeDomain(overlay, model) {
   const values = [];
   for (const el of model.all) {
-    if (kind && el.kind !== kind) continue;
+    if (!overlay.direct.has(el.key)) continue;
     const v = overlayValue(overlay, el);
     if (v && v.numeric) values.push(v.value);
   }
@@ -741,6 +752,15 @@ export const invertedOf = (o) => (isStandardized(o) && o.zShared ? false : o.inv
  * they used to reach the canvas as the words "NaN" and "Infinity".
  */
 export const NO_VALUE = '\u2014';
+
+/**
+ * A number typed into a box, or the fallback when the box does not hold one.
+ * The panel had its own `Number(input.value)`, and Number('') is 0 -- so
+ * emptying the min box set the bottom of the scale to zero rather than
+ * leaving it alone, the same mistake a trailing `max=` used to make in a
+ * file. One reader for both doors.
+ */
+export const readNumber = metaNumber;
 
 export function formatValue(overlay, value) {
   if (typeof value === 'number' && !Number.isFinite(value)) return NO_VALUE;

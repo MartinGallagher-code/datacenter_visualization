@@ -68,6 +68,16 @@ export function matchesFilter(name, needle) {
 const dirNode = (name) => ({ kind: 'dir', name, children: new Map() });
 
 /**
+ * What a file in the open folder is called, for every purpose outside this
+ * module: its path below the folder that was opened. Overlays are grouped by
+ * the name of the file they came from, and two runs' worth of results are
+ * both called `results.tsv` -- keyed by that alone, opening the second threw
+ * the first away in silence. The opened folder's own name is left off; it is
+ * the same on every row and says nothing.
+ */
+export const pathLabel = (path, name) => [...path.slice(1).map((d) => d.name), name].join('/');
+
+/**
  * The <input webkitdirectory> fallback: a flat FileList carrying paths becomes
  * the same tree the File System Access API is browsed as. The chosen folder's
  * own name leads every path, so it is stripped back off to become the root.
@@ -302,7 +312,7 @@ function row(entry, b, a) {
   }
 
   const kind = classify(entry.name);
-  const loaded = b.loaded.has(entry.name);
+  const loaded = b.loaded.has(pathLabel(b.path, entry.name));
   const node = el('button', `browse-row ${kind}${loaded ? ' loaded' : ''}`);
   node.append(el('span', 'browse-icon', kind === 'layout' ? '▤' : kind === 'results' ? '▦' : '·'));
   node.append(el('span', 'browse-name', entry.name));

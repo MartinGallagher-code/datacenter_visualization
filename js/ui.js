@@ -15,7 +15,8 @@
 
 import { PALETTE_NAMES, categoricalColor, colorFor, ramp } from './palette.js';
 import {
-  AGGREGATIONS, invertedOf, isStandardized, overlayValue, paletteOf, valueWithUnit, zRangeOf,
+  AGGREGATIONS, invertedOf, isStandardized, overlayValue, paletteOf, readNumber, valueWithUnit,
+  zRangeOf,
 } from './results.js';
 import { countDescendants, linkSummary } from './render.js';
 
@@ -218,8 +219,11 @@ function zScaleRow(state, actions) {
   spread.disabled = !state.zShared;
   spread.title = 'Standard deviations at each end of the shared ramp';
   spread.addEventListener('change', () => {
-    const v = Number(spread.value);
-    if (Number.isFinite(v) && v > 0) actions.setZScale('zSpread', v);
+    const v = readNumber(spread.value, null);
+    // A box that keeps what was typed while the scale keeps something else is
+    // a box that lies about the picture. Put back what is actually in force.
+    if (v === null || v <= 0) { spread.value = trimNum(state.zSpread); return; }
+    actions.setZScale('zSpread', v);
   });
   row.append(spread, el('span', 'muted', 'σ'));
   return row;
@@ -347,8 +351,9 @@ function overlayCard(state, overlay, actions) {
           + 'this metric goes back to when "one scale" is unticked.'
         : 'Standard deviations at each end of the ramp';
       z.addEventListener('change', () => {
-        const v = Number(z.value);
-        if (Number.isFinite(v) && v > 0) actions.setOverlayField(overlay, 'zRange', v);
+        const v = readNumber(z.value, null);
+        if (v === null || v <= 0) { z.value = trimNum(overlay.zRange); return; }
+        actions.setOverlayField(overlay, 'zRange', v);
       });
       range.append(z, el('span', 'muted', 'σ'));
       grid.append(range);
@@ -361,11 +366,13 @@ function overlayCard(state, overlay, actions) {
       hi.value = trimNum(overlay.max);
       for (const [input, field] of [[lo, 'min'], [hi, 'max']]) {
         input.addEventListener('change', () => {
-          const v = Number(input.value);
-          if (Number.isFinite(v)) {
-            overlay.autoDomain = false;
-            actions.setOverlayField(overlay, field, v);
-          }
+          // Emptying the box used to read as zero, because Number('') is 0:
+          // clearing `min` pinned the bottom of the scale to zero instead of
+          // leaving it where it was, and nothing on screen said so.
+          const v = readNumber(input.value, null);
+          if (v === null) { input.value = trimNum(overlay[field]); return; }
+          overlay.autoDomain = false;
+          actions.setOverlayField(overlay, field, v);
         });
         range.append(input);
       }
