@@ -166,30 +166,72 @@ function checkNumbers(attrs, what, model, line, table = NUMBERS, whole = true) {
   for (const [key, [least, most]] of Object.entries(table)) {
     const raw = attrs[key];
     if (raw === undefined) continue;
+    const at = `line ${line}: ${what}: ${key}=${raw}`;
+    const tag = `num\u0000${line}\u0000${key}\u0000${raw}`;
     const n = Number(raw);
     if (raw === '' || !Number.isFinite(n)) {
-      model.warnings.push(`line ${line}: ${what}: ${key}=${raw} is not a number -- ignored`);
+      warnOnce(model, tag, `${at} is not a number -- ignored`);
     } else if (n < least || n > most) {
-      model.warnings.push(`line ${line}: ${what}: ${key}=${raw} is outside ${least}..${most} -- ignored`);
+      warnOnce(model, tag, `${at} is outside ${least}..${most} -- ignored`);
     } else if (whole && !Number.isInteger(n)) {
-      model.warnings.push(`line ${line}: ${what}: ${key}=${raw} is not a whole number -- `
-        + `using ${Math.trunc(n)}`);
+      warnOnce(model, tag, `${at} is not a whole number -- using ${Math.trunc(n)}`);
     }
   }
 }
 
+// Canvas ignores a colour it cannot parse and keeps the one set before it, so
+// `color=blu` drew the element in the *previous* element's colour and `#fff1`
+// in the previous net's. On a floor plan coloured by measurement that is a
+// wrong answer, not a cosmetic slip, and nothing on screen says so.
+const HEX_COLOR = /^#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
+const FN_COLOR = /^[a-z][a-z-]*\(.*\)$/i;
+const NAMED_COLORS = new Set((
+  'aliceblue antiquewhite aqua aquamarine azure beige bisque black blanchedalmond blue '
+  + 'blueviolet brown burlywood cadetblue chartreuse chocolate coral cornflowerblue cornsilk '
+  + 'crimson cyan darkblue darkcyan darkgoldenrod darkgray darkgreen darkgrey darkkhaki '
+  + 'darkmagenta darkolivegreen darkorange darkorchid darkred darksalmon darkseagreen '
+  + 'darkslateblue darkslategray darkslategrey darkturquoise darkviolet deeppink deepskyblue '
+  + 'dimgray dimgrey dodgerblue firebrick floralwhite forestgreen fuchsia gainsboro ghostwhite '
+  + 'gold goldenrod gray green greenyellow grey honeydew hotpink indianred indigo ivory khaki '
+  + 'lavender lavenderblush lawngreen lemonchiffon lightblue lightcoral lightcyan '
+  + 'lightgoldenrodyellow lightgray lightgreen lightgrey lightpink lightsalmon lightseagreen '
+  + 'lightskyblue lightslategray lightslategrey lightsteelblue lightyellow lime limegreen linen '
+  + 'magenta maroon mediumaquamarine mediumblue mediumorchid mediumpurple mediumseagreen '
+  + 'mediumslateblue mediumspringgreen mediumturquoise mediumvioletred midnightblue mintcream '
+  + 'mistyrose moccasin navajowhite navy oldlace olive olivedrab orange orangered orchid '
+  + 'palegoldenrod palegreen paleturquoise palevioletred papayawhip peachpuff peru pink plum '
+  + 'powderblue purple rebeccapurple red rosybrown royalblue saddlebrown salmon sandybrown '
+  + 'seagreen seashell sienna silver skyblue slateblue slategray slategrey snow springgreen '
+  + 'steelblue tan teal thistle tomato turquoise violet wheat white whitesmoke yellow '
+  + 'yellowgreen transparent currentcolor '
+  // The CSS system colours. Nobody paints a rack in them, but they are real
+  // and refusing a colour that works would be the same fault in reverse.
+  + 'canvas canvastext buttonface buttontext linktext visitedtext activetext field fieldtext '
+  + 'graytext highlight mark marktext selecteditem'
+).split(' '));
+
+export const isColor = (value) => HEX_COLOR.test(value) || FN_COLOR.test(value)
+  || NAMED_COLORS.has(String(value).toLowerCase());
+
+function checkColor(attrs, what, model, line) {
+  const raw = attrs.color;
+  if (raw === undefined || isColor(raw)) return;
+  warnOnce(model, `color\u0000${line}\u0000${raw}`,
+    `line ${line}: ${what}: color=${raw} is not a colour the browser reads -- ignored`);
+  delete attrs.color;
+}
+
 // A row lays out along x unless it says y; every other spelling used to mean
 // x without a word, so `dir=vertical` read as horizontal.
-function checkDir(attrs, id, model, line) {
+function checkDir(attrs, what, model, line) {
   const dir = attrs.dir;
   if (dir !== undefined && dir !== 'x' && dir !== 'y') {
-    model.warnings.push(`line ${line}: "${id}": dir=${dir} is neither x nor y -- laid out along x`);
+    warnOnce(model, `dir\u0000${line}\u0000${dir}`,
+      `line ${line}: ${what}: dir=${dir} is neither x nor y -- laid out along x`);
   }
 }
 
 function makeElement(kind, id, parent, attrs, tags, model, line) {
-  checkDir(attrs, id, model, line);
-  checkNumbers(attrs, `"${id}"`, model, line);
   let key = parent ? `${parent.key}/${id}` : id;
   if (model.byKey.has(key)) {
     let n = 2;
@@ -293,19 +335,27 @@ const PLACEHOLDER = /\{[^{}]*\}/;
  * line, with the names that WERE available, since the answer is almost
  * always one of them.
  */
-const warnedPlaceholders = new WeakMap();
+const warnedOnce = new WeakMap();
+
+/**
+ * A warning about something *written* belongs to the line, not to each
+ * element the line produced. materialize runs again under every parent and
+ * once per expanded id, so `rack R[01..40] u=abc` inside four rows is one
+ * mistake and 160 warnings -- enough to push every other warning out of the
+ * load report, which caps its detail lines.
+ */
+function warnOnce(model, key, message) {
+  let seen = warnedOnce.get(model);
+  if (!seen) warnedOnce.set(model, (seen = new Set()));
+  if (seen.has(key)) return;
+  seen.add(key);
+  model.warnings.push(message);
+}
 
 function noteUnresolved(text, what, ctx, model, line) {
   if (!PLACEHOLDER.test(text)) return;
-  // Once per line, not once per element: materialize runs again under every
-  // parent, and a rack of twenty would otherwise say the same thing twenty
-  // times -- or, worse, fill the whole warning list with one mistake.
-  let seen = warnedPlaceholders.get(model);
-  if (!seen) warnedPlaceholders.set(model, (seen = new Set()));
-  const key = `${line}\u0000${text}`;
-  if (seen.has(key)) return;
-  seen.add(key);
-  model.warnings.push(`line ${line}: ${what} "${text}": no such placeholder here -- `
+  warnOnce(model, `ph\u0000${line}\u0000${text}`,
+    `line ${line}: ${what} "${text}": no such placeholder here -- `
     + `this line can use ${Object.keys(ctx).sort().map((k) => `{${k}}`).join(' ')}`);
 }
 
@@ -371,6 +421,13 @@ function materialize(syn, parent, model) {
       })
       : syn.tags;
     const id = attrs.id || rawId;
+
+    // What was written, not what it expanded to: the warnings below name the
+    // spec so a range of forty racks reads as the one line that needs editing.
+    const wrote = `"${syn.idSpec ?? syn.kind}"`;
+    checkDir(attrs, wrote, model, syn.line);
+    checkNumbers(attrs, wrote, model, syn.line);
+    checkColor(attrs, wrote, model, syn.line);
 
     const el = makeElement(syn.kind, id, parent, attrs, tags, model, syn.line);
 
@@ -580,6 +637,7 @@ const truthy = (value) => {
             + `style=${style} is neither solid nor dashed -- drawn solid`);
         }
         checkNumbers(child.attrs, `net "${name}"`, model, child.line, NET_NUMBERS, false);
+        checkColor(child.attrs, `net "${name}"`, model, child.line);
         model.nets.set(name, {
           name,
           label: child.attrs.label || name,

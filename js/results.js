@@ -190,22 +190,22 @@ const TEST_KEYS = {
   palette: PALETTE_NAMES,
 };
 
-function checkNumberMeta(key, value, spec, name, line, warnings) {
-  const where = `results line ${line}: !test ${name}: ${key}=${value}`;
+function checkNumberMeta(key, value, spec, name, where, warnings) {
+  const at = `${where}: !test ${name}: ${key}=${value}`;
   const n = Number(value);
   if (String(value).trim() === '' || !Number.isFinite(n)) {
-    warnings.push(`${where} is not a number -- ignored`);
+    warnings.push(`${at} is not a number -- ignored`);
   } else if (n < spec.least || n > spec.most) {
-    warnings.push(`${where} is outside ${spec.least}..${spec.most} -- ignored`);
+    warnings.push(`${at} is outside ${spec.least}..${spec.most} -- ignored`);
   } else if (spec.whole && !Number.isInteger(n)) {
-    warnings.push(`${where} is not a whole number -- using ${Math.trunc(n)}`);
+    warnings.push(`${at} is not a whole number -- using ${Math.trunc(n)}`);
   }
 }
 
-function checkTestMeta(meta, name, line, warnings) {
+function checkTestMeta(meta, name, where, warnings) {
   for (const [key, value] of Object.entries(meta)) {
     if (!(key in TEST_KEYS)) {
-      warnings.push(`results line ${line}: !test ${name}: unknown key "${key}" -- `
+      warnings.push(`${where}: !test ${name}: unknown key "${key}" -- `
         + `known keys are ${Object.keys(TEST_KEYS).join(', ')}`);
       continue;
     }
@@ -213,11 +213,11 @@ function checkTestMeta(meta, name, line, warnings) {
     if (!allowed) continue;
     if (Array.isArray(allowed)) {
       if (!allowed.includes(String(value).toLowerCase())) {
-        warnings.push(`results line ${line}: !test ${name}: ${key}=${value} is not one of `
+        warnings.push(`${where}: !test ${name}: ${key}=${value} is not one of `
           + `${allowed.join(', ')} -- ignored`);
       }
     } else {
-      checkNumberMeta(key, value, allowed, name, line, warnings);
+      checkNumberMeta(key, value, allowed, name, where, warnings);
     }
   }
 }
@@ -229,15 +229,15 @@ function checkTestMeta(meta, name, line, warnings) {
  * like an answer; a scale that runs downhill reads backwards, and `invert` is
  * the way to ask for that on purpose.
  */
-function checkDomainMeta(meta, name, line, warnings) {
+function checkDomainMeta(meta, name, where, warnings) {
   const lo = metaNumber(meta.min, null);
   const hi = metaNumber(meta.max, null);
   if (lo === null || hi === null) return;
   if (lo === hi) {
-    warnings.push(`results line ${line}: !test ${name}: min=${meta.min} and max=${meta.max} are `
+    warnings.push(`${where}: !test ${name}: min=${meta.min} and max=${meta.max} are `
       + 'the same -- a scale with no width paints every value the middle of the ramp');
   } else if (lo > hi) {
-    warnings.push(`results line ${line}: !test ${name}: min=${meta.min} is above max=${meta.max} -- `
+    warnings.push(`${where}: !test ${name}: min=${meta.min} is above max=${meta.max} -- `
       + 'the colour scale runs backwards; invert=yes is the way to flip it');
   }
 }
@@ -294,10 +294,10 @@ function parseTextResults(text, into, warnings) {
       const overlay = ensureOverlay(into, name);
       const bare = [];
       const declared = parseMetaTokens(tokens, (t) => bare.push(t)) || {};
-      checkTestMeta(declared, name, i + 1, warnings);
+      checkTestMeta(declared, name, `results line ${i + 1}`, warnings);
       Object.assign(overlay.meta, declared);
       if (declared.min !== undefined || declared.max !== undefined) {
-        checkDomainMeta(overlay.meta, name, i + 1, warnings);
+        checkDomainMeta(overlay.meta, name, `results line ${i + 1}`, warnings);
       }
       if (bare.length) {
         warnings.push(`results line ${i + 1}: ignored ${quoteList(bare)} on !test ${name} -- `
@@ -368,7 +368,9 @@ function parseNdjsonResults(text, into, warnings) {
       warnings.push(`results line ${i + 1}: not valid JSON: "${truncate(line)}"`);
       return;
     }
-    ingestJsonEntry(entry, into, warnings, `line ${i + 1}`);
+    // The same phrasing the parse failure two lines up uses, and the same
+    // the text reader uses: one file reported its lines two ways.
+    ingestJsonEntry(entry, into, warnings, `results line ${i + 1}`);
   });
   return into;
 }
@@ -385,7 +387,9 @@ function ingestJsonDoc(doc, into, warnings, where) {
   // { tests: { name: {unit: …} } } declares metadata for several tests at once.
   if (doc.tests && typeof doc.tests === 'object' && !Array.isArray(doc.tests)) {
     for (const [name, meta] of Object.entries(doc.tests)) {
-      if (meta && typeof meta === 'object') applyJsonMeta(into, name, meta);
+      if (meta && typeof meta === 'object') {
+        applyJsonMeta(into, name, meta, EMPTY_SKIP, warnings, `${where}.tests.${name}`);
+      }
     }
   }
   if (Array.isArray(doc.samples)) {
@@ -406,7 +410,7 @@ function ingestJsonEntry(entry, into, warnings, where) {
   // {"!test": "temp_c", unit: "C", …} is the JSON spelling of a `!test` line.
   const declared = entry['!test'];
   if (declared !== undefined) {
-    applyJsonMeta(into, String(declared), entry, new Set(['!test']));
+    applyJsonMeta(into, String(declared), entry, SKIP_TEST_KEY, warnings, where);
     return;
   }
   const name = entry.test;
@@ -432,11 +436,35 @@ function ingestJsonEntry(entry, into, warnings, where) {
   });
 }
 
-function applyJsonMeta(into, name, source, skip = new Set()) {
+/**
+ * Metadata declared in JSON, checked exactly as a `!test` line is. It was
+ * not, and NDJSON is the shape the docs tell tools to generate -- so the
+ * format most likely to carry a machine's typo was the one format that
+ * accepted anything: `"pallete"`, `"higher": "high"` and `"decimals": -1`
+ * all landed without a word.
+ */
+function applyJsonMeta(into, name, source, skip, warnings, where) {
   const overlay = ensureOverlay(into, name);
+  const declared = {};
+  const dropped = [];
   for (const [key, value] of Object.entries(source)) {
-    if (skip.has(key) || value === null || typeof value === 'object') continue;
-    overlay.meta[key.toLowerCase()] = String(value);
+    if (skip.has(key)) continue;
+    // A key whose value is a structure has no reading as metadata, and
+    // skipping it in silence looked exactly like a setting that worked.
+    if (value === null || typeof value === 'object') {
+      dropped.push(key);
+      continue;
+    }
+    declared[key.toLowerCase()] = String(value);
+  }
+  if (dropped.length) {
+    warnings.push(`${where}: !test ${name}: ignored ${quoteList(dropped)} -- `
+      + 'a metadata value has to be a number or a string');
+  }
+  checkTestMeta(declared, name, where, warnings);
+  Object.assign(overlay.meta, declared);
+  if (declared.min !== undefined || declared.max !== undefined) {
+    checkDomainMeta(overlay.meta, name, where, warnings);
   }
 }
 
@@ -451,6 +479,9 @@ function jsonMeta(meta) {
   }
   return any ? out : null;
 }
+
+const EMPTY_SKIP = new Set();
+const SKIP_TEST_KEY = new Set(['!test']);
 
 const truncate = (line) => (line.length > 60 ? `${line.slice(0, 57)}…` : line);
 

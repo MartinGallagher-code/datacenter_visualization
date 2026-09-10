@@ -89,6 +89,10 @@ like `chassis`, which nests silently.)
 A spec that expands to nothing (`r[,]`) is reported: it would otherwise take
 the line and everything indented under it away without a trace.
 
+A mistake in a line's attributes is reported once for the line, naming what
+was written (`"R[01..40]"`) rather than once for each of the forty racks it
+became.
+
 Segments are how numbering with holes stays on one line: racks 1–4 and 7–10
 around a gap are `rack R[1..4,7..10]`, with the children written once instead
 of once per block — see `examples/three-rows.dc`, which also pins sparse
@@ -140,6 +144,11 @@ link storage +storage,role=server scope=row mode=mesh  # full mesh within a row
 - Selectors: `+tag`, `^tag` (non-inherited), `kind=rack`, `attr=value`,
   bare glob against id/path/ancestors, `!` negation, `|` alternatives,
   `,` for AND.
+- `color=` takes any CSS colour — hex (`#4fa3ff`, `#fff`), a name (`teal`),
+  or a function (`rgb(1,2,3)`, quoted if it contains a space). One the browser
+  cannot read is reported and dropped: the canvas ignores a colour it cannot
+  parse and silently keeps the last one, which would paint the net in the
+  previous net's colour.
 - **Globs work in every part of a selector**, tags included: `*` stands for
   any run of characters and `?` for exactly one. `model=r76*` takes r760 and
   r7625 alike, `model=r762?` only the five-character one, `u1?` the slots
@@ -622,7 +631,9 @@ netmesh run --for 60 && dcimport results.tsv --tidy reports/
   Collapse racks/rows/rooms buttons. Collapsed containers show their
   aggregate results computed from all raw samples inside them.
 - **Filter** — the top bar matches anything: bare words search ids, names,
-  tags and attributes; `+gpu` tags (globs too: `+stor*`, `+gp?`);
+  tags and attributes, and a bare glob (`*serv*`, `r76?`) searches exactly the
+  same fields, plus the full path so `DH1/A/*` is a query; `+gpu` tags (globs
+  too: `+stor*`, `+gp?`);
   `kind:rack`; `model=r76*` (`?` matches exactly one character);
   `net:storage`; result queries like `temp_c>70`, `burnin=FAIL`,
   `has:iperf_gbps` (a test name can be loaded from more than one file, and the

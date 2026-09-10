@@ -171,6 +171,10 @@ at the top.
 | `agg` | the default aggregation | One of the list in §5. |
 | `decimals` | fixed decimal places, a whole number 0–10 | `0` for counts and packet rates. Omit and it is chosen from the range. |
 
+**The viewer checks this table, in JSON as well as in text.** A `{"!test": …}`
+object and a `tests: {…}` block go through the same checks a `!test` line
+does, and report against the line or the path they were written at.
+
 **The viewer checks this table.** A key that is not in it, and an enumerated
 value outside its list, are both reported rather than ignored — so a
 `pallete=turbo` or a `higher=high` shows up in the load report instead of

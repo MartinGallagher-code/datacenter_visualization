@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url';
 
 import { expand, subst } from '../js/expand.js';
 import { compileSelector } from '../js/select.js';
-import { parseLayout } from '../js/parse.js';
+import { parseLayout, isColor } from '../js/parse.js';
 import {
   parseResults, bindOverlay, overlayValue, AGGREGATIONS, extent,
   recomputeStats, zScore, formatValue, unitFor, zRangeOf, paletteOf, invertedOf, overlayKey,
@@ -1476,6 +1476,142 @@ ok(!matchesFilter('mxrun.tsv', 'mx.*'), 'and that dot has to be there: it is not
   ok(vanished.warnings.some((w) => w.includes('the lines under it')),
      'and warns that the lines below went with it');
   eq(vanished.byKey.size, 2, 'the rack and its node really are gone');
+}
+
+// ------------------------------------------- metadata written as JSON
+// NDJSON is the shape the docs tell tools to generate, and it was the one
+// shape that accepted anything: applyJsonMeta wrote straight into the
+// overlay, so "pallete", "higher": "high" and "decimals": -1 all landed
+// without a word while their text spellings were reported.
+{
+  const warnOf = (text) => {
+    const w = [];
+    parseResults(text, new Map(), w, 'f');
+    return w;
+  };
+  const nd = (obj) => `${JSON.stringify(obj)}\n{"test":"m","target":"n1","value":1}\n`;
+
+  eq(warnOf(nd({ '!test': 'm', unit: 'C', higher: 'bad', decimals: 1 })), [],
+     'a !test object with only known keys says nothing');
+  ok(warnOf(nd({ '!test': 'm', pallete: 'turbo' }))[0].includes('unknown key "pallete"'),
+     'a misspelt key in JSON is reported like a misspelt key in text');
+  ok(warnOf(nd({ '!test': 'm', higher: 'high' }))[0].includes('not one of bad, good'),
+     'so is a value outside its vocabulary');
+  ok(warnOf(nd({ '!test': 'm', decimals: -1 }))[0].includes('outside 0..10'),
+     'and a number outside its range');
+  ok(warnOf(nd({ '!test': 'm', min: 30, max: 10 }))[0].includes('is above max=10'),
+     'and a colour scale that runs backwards');
+  ok(warnOf(nd({ '!test': 'm', label: { en: 'Temp' } }))[0].includes('has to be a number or a string'),
+     'a value that is a structure has no reading as metadata, and is not dropped in silence');
+
+  // The whole-document form declares metadata too, and names where it was.
+  const doc = warnOf(JSON.stringify({
+    tests: { m: { decimals: -1, agg: 'avg' } },
+    samples: [{ test: 'm', target: 'n1', value: 1 }],
+  }));
+  eq(doc.length, 2, 'both mistakes in a tests{} block are reported');
+  ok(doc.every((w) => w.startsWith('results.tests.m:')), 'and each says which test it was on');
+
+  // One file reported its own lines two ways: "results line 2" for JSON that
+  // would not parse, plain "line 2" for everything after it.
+  const mixed = warnOf('{"!test":"m","pallete":"x"}\nnot json\n');
+  ok(mixed.every((w) => w.startsWith('results line ')), 'every line of a file is numbered the same way');
+
+  // The NDJSON the repo ships stays quiet.
+  const shipped = [];
+  parseResults(readFileSync(join(root, 'tests/fixtures/mx-export/results.ndjson'), 'utf8'),
+               new Map(), shipped, 'results.ndjson');
+  eq(shipped, [], 'tests/fixtures/mx-export/results.ndjson parses without a word');
+}
+
+// ------------------------------------------- one mistake, one warning
+// A warning about something written belongs to the line, not to each element
+// the line produced. materialize runs again under every parent and once per
+// expanded id, so one typo in `rack R[01..40]` inside four rows was 160
+// warnings -- more than the load report shows in total, so the mistake that
+// mattered got pushed off the end by the one that had already been made.
+{
+  const wide = parseLayout(['dc D', '  room R', '    row A..D',
+                            '      rack R[01..40] u=abc dir=vertical color=blu'].join('\n'));
+  eq(wide.warnings.length, 3, 'three mistakes on one line are three warnings, not 480');
+  ok(wide.warnings.every((w) => w.includes('"R[01..40]"')),
+     'and each names what was written rather than one rack it became');
+  eq(wide.byKey.size, 1 + 1 + 4 + 160, 'every rack is still there');
+
+  // Substituted attributes differ per element, so they are deduped by value:
+  // a real per-element mistake is still reported per distinct value.
+  const perValue = parseLayout(['dc D', '  rack r[1..3] u=x{i}'].join('\n'));
+  eq(perValue.warnings.length, 3, 'three different bad values are three warnings');
+}
+
+// ------------------------------------------- colours the canvas cannot read
+// Assigning an unparseable colour to a canvas context is ignored and the
+// previous one stays, so `color=blu` painted the element in whatever colour
+// the element before it used, and a bad net colour drew that net in the
+// previous net's. Nothing on screen said so.
+{
+  for (const good of ['#4fa3ff', '#fff', '#ffff', '#aabbccdd', 'red', 'rebeccapurple',
+                      'transparent', 'rgb(1,2,3)', 'rgba(1,2,3,.5)', 'hsl(20 100% 50%)',
+                      'oklch(0.5 0.1 30)', 'RED', '#4FA3FF']) {
+    ok(isColor(good), `${good} is a colour`);
+  }
+  for (const bad of ['blu', '#gggggg', '#ff', '#fffff', '', 'reddish', '4fa3ff']) {
+    ok(!isColor(bad), `${bad} is not`);
+  }
+
+  const netColor = (value) => {
+    const m = parseLayout(['dc D', '  room R', `net n color=${value}`].join('\n'));
+    return { color: m.nets.get('n').color, warnings: m.warnings };
+  };
+  eq(netColor('#4fa3ff').warnings, [], 'a good net colour says nothing');
+  eq(netColor('#4fa3ff').color, '#4fa3ff', 'and is used');
+  const badNet = netColor('blu');
+  eq(badNet.warnings.length, 1, 'a bad one is reported');
+  ok(badNet.warnings[0].includes('not a colour the browser reads'), 'in those words');
+  ok(badNet.color !== 'blu', 'and the net falls back to a colour that draws');
+
+  // An element keeps no colour it cannot be drawn in, so nothing downstream
+  // can hand the canvas a value it will quietly ignore.
+  const badEl = parseLayout(['dc D', '  rack r1 u=4 color=blu'].join('\n'));
+  eq(badEl.warnings.length, 1, 'an element colour is checked the same way');
+  eq(badEl.byKey.get('D/r1').attrsEff.color, undefined, 'and the bad value does not reach the canvas');
+  const goodEl = parseLayout(['dc D', '  rack r1 u=4 color=#102030'].join('\n'));
+  eq(goodEl.warnings, [], 'a good element colour says nothing');
+  eq(goodEl.byKey.get('D/r1').attrsEff.color, '#102030', 'and survives');
+
+  // Shorthand hex read as a plain 24-bit number: #fff came out 0x000fff, a
+  // near-black blue, so the ink picked for it was white on white.
+  eq(contrastInk('#fff'), contrastInk('#ffffff'), 'shorthand hex picks the same ink as the long form');
+  eq(contrastInk('#000'), contrastInk('#000000'), 'at the dark end too');
+  eq(contrastInk('#ffff'), contrastInk('#ffffff'), 'and #rgba drops its alpha');
+
+  // Every layout the repo ships stays quiet under the colour check.
+  for (const file of ['examples/small.dc', 'examples/mega.dc', 'examples/hostnames.dc',
+                      'examples/three-rows.dc', 'examples/mx/floor.dc', 'examples/iperf/floor.dc']) {
+    eq(parseLayout(readFileSync(join(root, file), 'utf8')).warnings, [],
+       `${file} has no colour it cannot draw`);
+  }
+}
+
+// ------------------------------------------- a wildcard that found less
+// The plain and the glob branch of a bare filter term kept their own field
+// lists, and the glob's was missing attributes: `serv` found two servers and
+// `*serv*` found none. Adding a wildcard is meant to widen a search.
+{
+  const plan = parseLayout(['dc D', '  room R', '    rack r1 u=10 model=r760',
+                            '      node a1 at=1 role=tor +switch',
+                            '      node b1 at=2 role=server-x +gpu',
+                            '      node c1 at=3 role=server'].join('\n'));
+  const ctx = { hasOverlay: () => false, readingsOf: () => [], flowsOf: () => [] };
+  const hits = (q) => {
+    const fn = compileQuery(q, ctx);
+    return plan.all.filter((e) => (fn ? fn(e) : true)).map((e) => e.id);
+  };
+  eq(hits('r760'), hits('r76*'), 'a glob over an attribute value finds what the substring finds');
+  eq(hits('serv'), hits('*serv*'), 'in either direction');
+  eq(hits('serv').length, 2, 'and it is the two servers, not nothing');
+  eq(hits('gp?'), ['b1'], 'a tag glob still works');
+  eq(hits('D/R/*').length, 4, 'and so does a path glob, which only the glob branch has');
 }
 
 console.log(failures ? `${failures}/${count} tests FAILED` : `all ${count} tests passed`);
