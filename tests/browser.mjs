@@ -36,6 +36,22 @@ let failures = 0;
 let count = 0;
 let current = '';
 
+// `--strict` makes a missing browser a failure instead of a skip. CI passes
+// it: the whole point of this suite is lost if a broken Playwright install
+// turns it into a green run that tested nothing, and that failure would look
+// exactly like success.
+const STRICT = process.argv.includes('--strict');
+
+function unavailable(why) {
+  if (STRICT) {
+    console.error(`  FAIL  browser tests: ${why} -- and --strict says they must run`);
+    console.log('1/1 browser tests FAILED');
+    process.exit(1);
+  }
+  console.log(`  browser tests: skipped (${why})`);
+  process.exit(0);
+}
+
 function ok(cond, name) {
   count++;
   if (!cond) {
@@ -113,17 +129,13 @@ function serve() {
 // ------------------------------------------------------------------ the harness
 
 const chromium = await loadChromium();
-if (!chromium) {
-  console.log('  browser tests: skipped (no playwright installed)');
-  process.exit(0);
-}
+if (!chromium) unavailable('no playwright installed');
 
 let browser;
 try {
   browser = await chromium.launch();
 } catch (err) {
-  console.log(`  browser tests: skipped (chromium would not launch -- ${err.message.split('\n')[0]})`);
-  process.exit(0);
+  unavailable(`chromium would not launch -- ${err.message.split('\n')[0]}`);
 }
 
 const { server, port } = await serve();

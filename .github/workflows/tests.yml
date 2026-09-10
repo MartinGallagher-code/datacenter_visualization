@@ -1,0 +1,59 @@
+# Datacenter Layout Viewer — test workflow
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Two jobs rather than one, so a red mark says which layer broke: the modules
+# (tests/run.mjs) or the page (tests/browser.mjs). They are independent and
+# run in parallel.
+#
+# Both suites are passed --strict. Each of them skips sections whose tools are
+# missing so they still run on a machine without python3 or Playwright, and a
+# skip is exactly what CI must not accept: a green run that quietly tested
+# nothing looks identical to a green run that tested everything.
+
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  modules:
+    name: module tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      # tools/dcadd and tools/dcimport are python3, stdlib only, and ~70 of
+      # the assertions run them against the fixtures under tests/fixtures/.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: node tests/run.mjs --strict
+
+  browser:
+    name: browser tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      # The viewer has no dependencies and this does not give it any:
+      # Playwright goes on the runner, never into the repo, and
+      # tests/browser.mjs looks for it in the global root. Pinned, because an
+      # unpinned browser is a test suite that changes underneath you.
+      - name: Install Playwright and Chromium
+        run: |
+          npm install -g playwright@1.56.1
+          playwright install --with-deps chromium
+      - run: node tests/browser.mjs --strict
