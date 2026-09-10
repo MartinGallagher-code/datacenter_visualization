@@ -323,6 +323,13 @@ function materialize(syn, parent, model) {
     model.warnings.push(`line ${syn.line}: ${err.message}`);
     return;
   }
+  // A spec that expands to nothing takes the whole declaration with it, along
+  // with everything indented under it -- `rack r[,]` used to leave no trace.
+  if (!ids.length) {
+    model.warnings.push(`line ${syn.line}: ${syn.kind} "${syn.idSpec}" expands to no ids -- `
+      + 'nothing was created for this line or the lines under it');
+    return;
+  }
 
   const attrEntries = Object.entries(syn.attrs);
 

@@ -15,7 +15,7 @@
 
 import { PALETTE_NAMES, categoricalColor, colorFor, ramp } from './palette.js';
 import {
-  AGGREGATIONS, formatValue, invertedOf, isStandardized, overlayValue, paletteOf, unitFor, zRangeOf,
+  AGGREGATIONS, invertedOf, isStandardized, overlayValue, paletteOf, valueWithUnit, zRangeOf,
 } from './results.js';
 import { countDescendants, linkSummary } from './render.js';
 
@@ -581,7 +581,7 @@ export function renderInspector(state, host, actions) {
     dot.style.background = colorFor(overlay, reading) || '#444';
     row.append(dot);
     row.append(el('span', null, overlay.label));
-    const value = `${formatValue(overlay, reading.value)}${unitFor(overlay)}`;
+    const value = valueWithUnit(overlay, reading.value);
     const note = reading.samples > 1 ? ` (${overlay.agg} of ${reading.samples})` : '';
     row.append(el('span', 'val', value + note));
     readings.append(row);
@@ -630,7 +630,7 @@ function renderFlows(state, host, node) {
       const name = el('span', 'flowpeer', `→ ${flow.peerEl ? flow.peerEl.name : flow.peer}`);
       if (!flow.peerEl) name.title = `${flow.peer} is not an element in this layout`;
       row.append(name);
-      row.append(el('span', 'val', `${formatValue(overlay, flow.value)}${unitFor(overlay)}`));
+      row.append(el('span', 'val', valueWithUnit(overlay, flow.value)));
       box.append(row);
     }
     if (sorted.length > FLOWS_SHOWN) {

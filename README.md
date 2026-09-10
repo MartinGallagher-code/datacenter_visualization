@@ -81,10 +81,13 @@ like `chassis`, which nests silently.)
 |---|---|
 | `R[01..20]` | `R01 R02 … R20` (zero-padding kept) |
 | `u[1..40x2]` | `u1 u3 … u39` (step) |
-| `A..H` | `A B … H` (letters; bare or bracketed) |
+| `A..H` | `A B … H` (letters; bare or bracketed — both ends must be the same alphabet, so `A..z` is refused rather than expanded through the punctuation between `Z` and `a`) |
 | `[web\|db\|cache]` | `web db cache` (alternatives) |
 | `r[1..2]-[a\|b]` | `r1-a r1-b r2-a r2-b` (cartesian) |
 | `R[1..4,7..10]` | `R1 … R4 R7 … R10` (comma-separated segments) |
+
+A spec that expands to nothing (`r[,]`) is reported: it would otherwise take
+the line and everything indented under it away without a trace.
 
 Segments are how numbering with holes stays on one line: racks 1–4 and 7–10
 around a gap are `rack R[1..4,7..10]`, with the children written once instead
@@ -248,7 +251,9 @@ rather than dividing by zero.
 
 (`higher=bad|good` picks the green↔red ramp direction; `palette=` chooses any
 ramp: viridis, magma, plasma, turbo, health, cool, ember, gray, rdbu;
-`agg=` presets the aggregation; `decimals=` fixes formatting.)
+`agg=` presets the aggregation; `decimals=` fixes formatting, 0 to 10 places.
+`min=`/`max=` must be numbers with `min` below `max`; anything else is
+reported in the load report and ignored rather than quietly applied.)
 
 Fields split on tabs, commas or runs of spaces — except inside quotes, so a
 value that needs a space is written `label="Inlet temp"` (single quotes work

@@ -73,11 +73,17 @@ export const DEFAULT_AGG = 'mean';
 const YES = new Set(['true', 'yes', 'y', 'on', '1']);
 const flagged = (value) => value !== undefined && YES.has(String(value).trim().toLowerCase());
 
-/** A meta number that is not a number is not an override. */
-const metaNumber = (value, fallback) => {
-  if (value === undefined) return fallback;
+/**
+ * A meta number that is not a number is not an override -- and the check
+ * below calls this same function, so the warning cannot promise something
+ * the overlay does not do. `Number('')` is 0, which is how a trailing `max=`
+ * used to set the top of the scale to zero and reverse the whole ramp.
+ */
+const metaNumber = (value, fallback, spec = NUM_ANY) => {
+  if (value === undefined || String(value).trim() === '') return fallback;
   const n = Number(value);
-  return Number.isFinite(n) ? n : fallback;
+  if (!Number.isFinite(n) || n < spec.least || n > spec.most) return fallback;
+  return spec.whole ? Math.trunc(n) : n;
 };
 
 function quantile(values, q) {
@@ -165,13 +171,36 @@ const quoteList = (items) => items.map((t) => `"${t}"`).join(', ');
  * solid. Both now say so: a setting that does nothing is worse than no
  * setting, because it looks like one that worked.
  */
+const num = (least, most, whole = false) => ({ least, most, whole });
+const NUM_ANY = num(-Infinity, Infinity);
+
 const TEST_KEYS = {
-  unit: null, label: null, short: null, min: null, max: null, decimals: null,
+  unit: null,
+  label: null,
+  short: null,
+  min: NUM_ANY,
+  max: NUM_ANY,
+  // Ten is already more digits than a floor plan can show. The ceiling is not
+  // taste: toFixed throws outside 0..100, so decimals=-1 used to take the
+  // whole draw down with a RangeError the moment a value label was painted.
+  decimals: num(0, 10, true),
   higher: ['bad', 'good'],
   invert: ['true', 'yes', 'y', 'on', '1', 'false', 'no', 'n', 'off', '0'],
   agg: Object.keys(AGGREGATIONS),
   palette: PALETTE_NAMES,
 };
+
+function checkNumberMeta(key, value, spec, name, line, warnings) {
+  const where = `results line ${line}: !test ${name}: ${key}=${value}`;
+  const n = Number(value);
+  if (String(value).trim() === '' || !Number.isFinite(n)) {
+    warnings.push(`${where} is not a number -- ignored`);
+  } else if (n < spec.least || n > spec.most) {
+    warnings.push(`${where} is outside ${spec.least}..${spec.most} -- ignored`);
+  } else if (spec.whole && !Number.isInteger(n)) {
+    warnings.push(`${where} is not a whole number -- using ${Math.trunc(n)}`);
+  }
+}
 
 function checkTestMeta(meta, name, line, warnings) {
   for (const [key, value] of Object.entries(meta)) {
@@ -181,10 +210,35 @@ function checkTestMeta(meta, name, line, warnings) {
       continue;
     }
     const allowed = TEST_KEYS[key];
-    if (allowed && !allowed.includes(String(value).toLowerCase())) {
-      warnings.push(`results line ${line}: !test ${name}: ${key}=${value} is not one of `
-        + `${allowed.join(', ')} -- ignored`);
+    if (!allowed) continue;
+    if (Array.isArray(allowed)) {
+      if (!allowed.includes(String(value).toLowerCase())) {
+        warnings.push(`results line ${line}: !test ${name}: ${key}=${value} is not one of `
+          + `${allowed.join(', ')} -- ignored`);
+      }
+    } else {
+      checkNumberMeta(key, value, allowed, name, line, warnings);
     }
+  }
+}
+
+/**
+ * min and max are judged together, and they can arrive on separate lines, so
+ * this reads the metric's accumulated metadata rather than one line's worth.
+ * A scale of no width paints every value the middle of the ramp, which looks
+ * like an answer; a scale that runs downhill reads backwards, and `invert` is
+ * the way to ask for that on purpose.
+ */
+function checkDomainMeta(meta, name, line, warnings) {
+  const lo = metaNumber(meta.min, null);
+  const hi = metaNumber(meta.max, null);
+  if (lo === null || hi === null) return;
+  if (lo === hi) {
+    warnings.push(`results line ${line}: !test ${name}: min=${meta.min} and max=${meta.max} are `
+      + 'the same -- a scale with no width paints every value the middle of the ramp');
+  } else if (lo > hi) {
+    warnings.push(`results line ${line}: !test ${name}: min=${meta.min} is above max=${meta.max} -- `
+      + 'the colour scale runs backwards; invert=yes is the way to flip it');
   }
 }
 
@@ -242,6 +296,9 @@ function parseTextResults(text, into, warnings) {
       const declared = parseMetaTokens(tokens, (t) => bare.push(t)) || {};
       checkTestMeta(declared, name, i + 1, warnings);
       Object.assign(overlay.meta, declared);
+      if (declared.min !== undefined || declared.max !== undefined) {
+        checkDomainMeta(overlay.meta, name, i + 1, warnings);
+      }
       if (bare.length) {
         warnings.push(`results line ${i + 1}: ignored ${quoteList(bare)} on !test ${name} -- `
           + 'a value containing a space has to be quoted, as label="Inlet temp"');
@@ -469,6 +526,8 @@ export function bindOverlay(overlay, model) {
   const domain = numeric && own.length
     ? extent(own)
     : [0, 1];
+  const declaredLo = metaNumber(meta.min, null);
+  const declaredHi = metaNumber(meta.max, null);
 
   const bound = {
     name: overlay.name,
@@ -511,11 +570,13 @@ export function bindOverlay(overlay, model) {
     invert: flagged(meta.invert) || meta.higher === 'good',
     // A min= or max= that does not read as a number used to reach the ramp as
     // NaN, and a NaN domain paints every element the same fallback grey.
-    min: metaNumber(meta.min, domain[0]),
-    max: metaNumber(meta.max, domain[1]),
-    autoDomain: !Number.isFinite(Number(meta.min)) && !Number.isFinite(Number(meta.max)),
+    min: declaredLo ?? domain[0],
+    max: declaredHi ?? domain[1],
+    // Read through metaNumber like the values themselves, or a min= the
+    // reader threw away still counted as a declared domain.
+    autoDomain: declaredLo === null && declaredHi === null,
     dataDomain: domain,
-    decimals: metaNumber(meta.decimals, null),
+    decimals: metaNumber(meta.decimals, null, TEST_KEYS.decimals),
     cache: new Map(),
   };
 
@@ -643,9 +704,18 @@ export const zRangeOf = (o) => ((isStandardized(o) && o.zShared ? o.zShared.zRan
 export const paletteOf = (o) => (isStandardized(o) && o.zShared ? o.zShared.palette : o.palette);
 export const invertedOf = (o) => (isStandardized(o) && o.zShared ? false : o.invert);
 
+/**
+ * What a floor plan shows where a number cannot be printed. `geomean` over a
+ * zero and `harmonic` over values that cancel are genuinely undefined, and
+ * they used to reach the canvas as the words "NaN" and "Infinity".
+ */
+export const NO_VALUE = '\u2014';
+
 export function formatValue(overlay, value) {
+  if (typeof value === 'number' && !Number.isFinite(value)) return NO_VALUE;
   if (overlay.stdMode === 'values' && typeof value === 'number') {
     const z = zScore(overlay, value);
+    if (!Number.isFinite(z)) return NO_VALUE;
     return `${z >= 0 ? '+' : ''}${z.toFixed(2)}`;
   }
   if (value === null || value === undefined) return '';
@@ -655,8 +725,22 @@ export function formatValue(overlay, value) {
     const span = Math.abs(overlay.max - overlay.min) || Math.abs(value) || 1;
     decimals = span >= 100 ? 0 : span >= 10 ? 1 : span >= 1 ? 2 : 3;
   }
-  const out = value.toFixed(decimals);
+  // The metadata is checked on the way in, so this only catches an overlay
+  // assembled in code -- but toFixed throws outside 0..100, and a label that
+  // throws takes the whole draw with it. Nothing printed is worth that.
+  const places = Math.min(10, Math.max(0, Math.trunc(decimals) || 0));
+  const out = value.toFixed(places);
   return out.replace(/\.0+$/, '').replace(/(\.\d*?)0+$/, '$1');
+}
+
+/**
+ * A reading as it is written beside an element. The unit belongs to the
+ * number, so where there is no number there is no unit either -- "\u2014C" is
+ * not a temperature.
+ */
+export function valueWithUnit(overlay, value) {
+  const text = formatValue(overlay, value);
+  return text === NO_VALUE || text === '' ? text : `${text}${unitFor(overlay)}`;
 }
 
 export function clearOverlayCache(overlay) {

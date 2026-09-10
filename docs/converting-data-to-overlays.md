@@ -166,15 +166,21 @@ at the top.
 | `short` | printed on each element on the map | **3–4 characters.** It shares the element with the value. |
 | `higher` | `bad` or `good` | Sets the green↔red ramp and its direction. Set this whenever the metric has a good end. |
 | `palette` | `viridis` `magma` `plasma` `turbo` `health` `cool` `ember` `gray` `rdbu` | Overrides `higher`'s choice. `rdbu` is diverging — use it with a symmetric range around a neutral midpoint. |
-| `min`, `max` | fix the colour range | Set both, or neither. Omit them and the range follows the data, which is usually what you want. A value that is not a number is ignored rather than applied. |
+| `min`, `max` | fix the colour range | Set both, or neither, and set `min` below `max`. Omit them and the range follows the data, which is usually what you want. |
 | `invert` | `yes` / `no` | Flips the ramp; `higher=good` already does this. Any spelling of yes works (`yes` `y` `on` `1` `true`). |
 | `agg` | the default aggregation | One of the list in §5. |
-| `decimals` | fixed decimal places | `0` for counts and packet rates. Omit and it is chosen from the range. |
+| `decimals` | fixed decimal places, a whole number 0–10 | `0` for counts and packet rates. Omit and it is chosen from the range. |
 
 **The viewer checks this table.** A key that is not in it, and an enumerated
 value outside its list, are both reported rather than ignored — so a
 `pallete=turbo` or a `higher=high` shows up in the load report instead of
 quietly doing nothing.
+
+The numeric keys are checked the same way, and the empty ones matter most:
+write `max=` with nothing after it and it used to read as zero, turning the
+whole colour scale upside down. Now `min=`, `max=abc` and `decimals=99` are
+each reported and ignored, and `min=80 max=20` is reported as a scale that
+runs backwards — `invert=yes` is how to flip one on purpose.
 
 **Quoting.** Fields split on runs of spaces, so a value containing a space must
 be quoted: `label="Inlet temp"`. Written bare, `label=Inlet temp` sets the label

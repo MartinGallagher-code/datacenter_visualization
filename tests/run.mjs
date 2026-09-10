@@ -22,6 +22,7 @@ import { parseLayout } from '../js/parse.js';
 import {
   parseResults, bindOverlay, overlayValue, AGGREGATIONS, extent,
   recomputeStats, zScore, formatValue, unitFor, zRangeOf, paletteOf, invertedOf, overlayKey,
+  valueWithUnit, NO_VALUE,
 } from '../js/results.js';
 import { layout } from '../js/layout.js';
 import { linkSummary, sharesLineage } from '../js/render.js';
@@ -1343,6 +1344,138 @@ ok(!matchesFilter('mxrun.tsv', 'mx.*'), 'and that dot has to be there: it is not
     eq(parseLayout(readFileSync(join(root, file), 'utf8')).warnings, [],
        `${file} has no number it cannot read`);
   }
+}
+
+// ------------------------------------------- numbers on a !test line
+// The enumerated !test keys were checked; the numeric ones were not, and
+// they were read with a different expression from the one that used them.
+// decimals=-1 reached toFixed, which throws outside 0..100 -- so one bad
+// character in a data file took down every value label on the floor plan.
+// A trailing `max=` was quieter and worse: Number('') is 0, so the top of
+// the colour scale became zero and the whole ramp read backwards.
+{
+  const plan = parseLayout(['dc D', '  rack r1 u=4', '    node n1 at=1',
+                            '    node n2 at=2', '    node n3 at=3'].join('\n'));
+  const bind = (metaLine) => {
+    const w = [];
+    const map = parseResults([metaLine, 'm n1 10.123', 'm n2 20', 'm n3 30'].join('\n') + '\n',
+                             new Map(), w, 'f');
+    return { o: bindOverlay(map.get(overlayKey('f', 'm')), plan), w };
+  };
+  const shown = (metaLine) => {
+    const { o } = bind(metaLine);
+    return formatValue(o, overlayValue(o, plan.byKey.get('D/r1/n1')).value);
+  };
+
+  eq(bind('!test m decimals=3').w, [], 'a whole number of decimals in range says nothing');
+  eq(shown('!test m decimals=3'), '10.123', 'and is the number of places used');
+
+  for (const bad of ['decimals=-1', 'decimals=200']) {
+    const { o, w } = bind(`!test m ${bad}`);
+    ok(w.length === 1 && w[0].includes('is outside 0..10'), `${bad} is reported`);
+    eq(o.decimals, null, `${bad} leaves the automatic choice in place`);
+    let threw = null;
+    try { formatValue(o, 10.123); } catch (err) { threw = err; }
+    eq(threw, null, `${bad} does not throw out of formatValue`);
+  }
+  ok(bind('!test m decimals=abc').w[0].includes('is not a number'), 'decimals=abc is reported');
+  ok(bind('!test m decimals=2.7').w[0].includes('not a whole number'), 'decimals=2.7 is reported');
+  eq(shown('!test m decimals=2.7'), '10.12', 'and rounds down, as it says');
+
+  // Even an overlay assembled in code cannot make a label throw.
+  eq(formatValue({ decimals: -1, min: 0, max: 1 }, 1.5), '2',
+     'a hand-built overlay is clamped to the nearest legal place count');
+  eq(formatValue({ decimals: 1e9, min: 0, max: 1 }, 1.5), '1.5', 'at the other end too');
+
+  // min= and max= with nothing after them
+  for (const bad of ['min=', 'max=', 'min=abc', 'max=1e999']) {
+    const { o, w } = bind(`!test m ${bad}`);
+    ok(w.length === 1 && w[0].includes('is not a number'), `${bad} is reported`);
+    eq(o.autoDomain, true, `${bad} does not count as a declared domain`);
+    eq([o.min, o.max], [10.123, 30], `${bad} leaves the domain the data's own`);
+  }
+  const good = bind('!test m min=0 max=100');
+  eq(good.w, [], 'a real domain says nothing');
+  eq([good.o.min, good.o.max, good.o.autoDomain], [0, 100, false], 'and is the domain used');
+
+  // min and max are judged as a pair, and they may arrive on separate lines.
+  ok(bind('!test m min=30 max=10').w.some((x) => x.includes('is above max=10')),
+     'a scale that runs downhill is reported');
+  ok(bind('!test m min=30 max=10').w.some((x) => x.includes('invert=yes')),
+     'and points at the setting that flips a scale on purpose');
+  ok(bind('!test m min=5 max=5').w.some((x) => x.includes('no width')),
+     'a scale with no width is reported');
+  const split = [];
+  parseResults('!test m min=30\n!test m max=10\nm n1 1\n', new Map(), split, 'f');
+  ok(split.some((x) => x.includes('is above max=10')),
+     'min and max still pair up when written on different lines');
+  const oneSided = [];
+  parseResults('!test m min=30\nm n1 1\n', new Map(), oneSided, 'f');
+  eq(oneSided, [], 'a min with no max is not half of anything');
+
+  // Every !test line the repo ships stays quiet under the numeric checks too.
+  for (const file of ['examples/small-results.tsv', 'examples/hostnames-results.tsv',
+                      'examples/mx/mx-results.tsv', 'examples/iperf/results.tsv']) {
+    const w = [];
+    parseResults(readFileSync(join(root, file), 'utf8'), new Map(), w, file);
+    eq(w, [], `${file} has no number it cannot read`);
+  }
+}
+
+// ------------------------------------------- aggregations that do not apply
+// geomean over a zero and harmonic over values that cancel are undefined,
+// and they reached the canvas as the words "NaN" and "Infinity" printed
+// beside an element -- in the same grey that means "never measured".
+{
+  const plan = parseLayout(['dc D', '  rack r1 u=4', '    node n1 at=1', '    node n2 at=2'].join('\n'));
+  const agg = (name, values) => {
+    const lines = [`!test m unit=C agg=${name}`, ...values.map((v) => `m n1 ${v}`), 'm n2 5'];
+    const map = parseResults(`${lines.join('\n')}\n`, new Map(), [], 'f');
+    const o = bindOverlay(map.get(overlayKey('f', 'm')), plan);
+    return valueWithUnit(o, overlayValue(o, plan.byKey.get('D/r1/n1')).value);
+  };
+  eq(agg('geomean', [1, 2, 4]), '2C', 'a geometric mean that exists is printed with its unit');
+  eq(agg('geomean', [0, 2, 4]), NO_VALUE, 'one that does not is not printed as NaN');
+  eq(agg('geomean', [-1, 2, 4]), NO_VALUE, 'nor over a negative');
+  eq(agg('harmonic', [-1, 1]), NO_VALUE, 'nor a harmonic mean of values that cancel');
+  eq(agg('harmonic', [1, 2, 4]), '1.71C', 'the ordinary case is untouched');
+  eq(agg('mean', [1, 2]), '1.5C', 'as is every other aggregation');
+
+  // The unit belongs to the number: there is no such reading as "—C".
+  ok(!agg('geomean', [0, 2]).includes('C'), 'no unit is printed where no number is');
+}
+
+// ------------------------------------------- ranges that expanded to nonsense
+{
+  // Padding is applied to the digits. Padding the absolute value dropped the
+  // sign, so [-05..-01] came out as five positive ids counting downward.
+  eq(expand('[-05..-01]'), ['-05', '-04', '-03', '-02', '-01'], 'a padded negative range keeps its sign');
+  eq(expand('[-3..-1]'), ['-3', '-2', '-1'], 'an unpadded one always did');
+  eq(expand('[01..05]'), ['01', '02', '03', '04', '05'], 'and padding still pads');
+  eq(expand('[001..003]'), ['001', '002', '003'], 'to whatever width the low end sets');
+
+  // A letter range walked the character codes, so [A..z] passed through
+  // [ \ ] ^ _ ` -- ids named after punctuation, one of them a bracket.
+  eq(expand('[A..D]'), ['A', 'B', 'C', 'D'], 'a letter range inside one alphabet is fine');
+  eq(expand('[a..e]'), ['a', 'b', 'c', 'd', 'e'], 'in either case');
+  for (const bad of ['[A..z]', '[a..C]', '[0..z]']) {
+    let msg = '';
+    try { expand(bad); } catch (err) { msg = err.message; }
+    ok(msg.includes('not both'), `${bad} is refused rather than expanded through punctuation`);
+  }
+  // The parser turns that refusal into a warning on the line that caused it.
+  const crossed = parseLayout(['dc D', '  room R', '    rack r[A..z]'].join('\n'));
+  eq(crossed.warnings.length, 1, 'and the layout reports it once');
+  ok(crossed.warnings[0].startsWith('line 3:'), 'against the line it is on');
+
+  // A spec that expands to nothing took its whole subtree with it in silence.
+  const vanished = parseLayout(['dc D', '  room R', '    rack r[,] u=4',
+                                '      node n at=1'].join('\n'));
+  ok(vanished.warnings.some((w) => w.includes('expands to no ids')),
+     'a declaration that creates nothing says so');
+  ok(vanished.warnings.some((w) => w.includes('the lines under it')),
+     'and warns that the lines below went with it');
+  eq(vanished.byKey.size, 2, 'the rack and its node really are gone');
 }
 
 console.log(failures ? `${failures}/${count} tests FAILED` : `all ${count} tests passed`);

@@ -16,8 +16,8 @@ import { layout } from './layout.js';
 import { parseLayout } from './parse.js';
 import { Renderer, countDescendants } from './render.js';
 import {
-  bindOverlay, clearOverlayCache, formatValue, overlayValue, parseResults, recomputeDomain,
-  recomputeStats, unitFor,
+  bindOverlay, clearOverlayCache, overlayValue, parseResults, recomputeDomain,
+  recomputeStats, valueWithUnit,
 } from './results.js';
 import {
   fillWarnings, renderInspector, renderNets, renderNotices, renderOverlays, renderTree, renderWarnings,
@@ -1360,7 +1360,7 @@ function showTooltip(node, x, y) {
   if (node.children.length) lines.push(`${countDescendants(node)} inside${node.collapsed ? ' — collapsed' : ''}`);
   for (const overlay of state.activeOverlays) {
     const reading = overlayValue(overlay, node);
-    if (reading) lines.push(`${overlay.label}: ${formatValue(overlay, reading.value)}${unitFor(overlay)}`);
+    if (reading) lines.push(`${overlay.label}: ${valueWithUnit(overlay, reading.value)}`);
   }
   tip.textContent = lines.join('\n');
   tip.hidden = false;
