@@ -1786,5 +1786,99 @@ ok(!matchesFilter('mxrun.tsv', 'mx.*'), 'and that dot has to be there: it is not
   }
 }
 
+// ------------------------------------------- a target that named forty things
+// Short targets are how a results file is normally written, and short names
+// repeat: a floor of forty racks has forty u01s. The resolver picked the
+// first and said nothing, so one rack coloured and thirty-nine stayed grey
+// -- which reads as "not measured" rather than "you did not say which".
+{
+  const plan = parseLayout(['dc D', '  room R', '    rack r[1..3] u=4',
+                            '      node u01 at=1', '      node tor at=4'].join('\n'));
+
+  eq(plan.resolveWhere('D/R/r2/u01').count, 1, 'a full path names one element');
+  eq(plan.resolveWhere('r2/u01').count, 1, 'and so does a suffix that only fits one');
+  eq(plan.resolveWhere('u01').count, 3, 'a bare name that repeats reports how many it fits');
+  eq(plan.resolveWhere('u01').el.key, 'D/R/r1/u01', 'and still resolves to the first');
+  eq(plan.resolveWhere('nope').count, 0, 'a target that fits nothing fits nothing');
+  eq(plan.resolveWhere('nope').el, null, 'and resolves to nothing');
+  ok(plan.resolve('u01') === plan.resolveWhere('u01').el, 'resolve and resolveWhere agree');
+
+  const map = parseResults('!test t unit=C\nt u01 50\nt r2/u01 60\nt ghost 70\n', new Map(), [], 'f');
+  const o = bindOverlay(map.get(overlayKey('f', 't')), plan);
+  eq(o.unresolved, ['ghost'], 'a target matching nothing is still reported');
+  eq(o.ambiguous.length, 1, 'and one matching several is reported too');
+  eq(o.ambiguous[0], { target: 'u01', count: 3, chosen: 'D/R/r1/u01' },
+     'naming the target, how many it fits, and which one got the reading');
+
+  // A layout with no repeats says nothing, which is what makes it worth having.
+  const unique = parseLayout(['dc D', '  rack r1 u=4', '    node a at=1', '    node b at=2'].join('\n'));
+  const clean = bindOverlay(
+    parseResults('t a 1\nt b 2\n', new Map(), [], 'f').get(overlayKey('f', 't')), unique);
+  eq(clean.ambiguous, [], 'unique targets are not ambiguous');
+
+  // The shipped example is written with full paths and must stay quiet.
+  const small = parseLayout(readFileSync(join(root, 'examples/small.dc'), 'utf8'));
+  const shipped = parseResults(readFileSync(join(root, 'examples/small-results.tsv'), 'utf8'),
+                               new Map(), [], 'small-results.tsv');
+  for (const raw of shipped.values()) {
+    eq(bindOverlay(raw, small).ambiguous, [], `examples/small-results.tsv ${raw.name} is unambiguous`);
+  }
+}
+
+// ------------------------------------------- dcadd could not write a label
+// The format is written for `label="Inlet temp"`, the shipped examples use
+// it, the conversion guide tells people to write it -- and the tool for
+// writing these files refused any value with a space in it, so --meta could
+// not set the one field that almost always needs one. dcimport had learnt to
+// quote a year earlier; dcadd had not.
+if (python.error) {
+  console.log('  dcadd: skipped (no python3)');
+} else {
+  const dcadd = (args) => {
+    const run = spawnSync('python3', [join(root, 'tools/dcadd'), '/dev/null', ...args, '-n'],
+      { encoding: 'utf8' });
+    return { code: run.status, out: (run.stdout || '').trim(), err: (run.stderr || '').trim() };
+  };
+  const reads = (line) => {
+    const w = [];
+    const map = parseResults(`${line}\n`, new Map(), w, 'f');
+    return { overlay: [...map.values()][0], warnings: w };
+  };
+
+  const meta = dcadd(['--meta', 'temp_c', 'unit=C', 'label=Inlet temp']);
+  eq(meta.code, 0, 'a metadata label with a space is written, not refused');
+  eq(meta.out, '!test\ttemp_c\tunit=C\tlabel="Inlet temp"', 'quoted on the way out');
+  eq(reads(meta.out).overlay.meta.label, 'Inlet temp', 'and read back whole');
+  eq(reads(meta.out).warnings, [], 'with nothing to report');
+
+  const extra = dcadd(['temp_c', 'u01', '61.2', 'peer=rack a']);
+  eq(extra.code, 0, 'so is an extra field with a space');
+  eq(reads(extra.out).overlay.samples[0].meta.peer, 'rack a', 'and it survives the round trip');
+
+  // No escape in the format, so the quote used is the one the value lacks.
+  const dq = dcadd(['temp_c', 'u01', '1', 'note=say"hi"']);
+  eq(dq.code, 0, 'a value holding a double quote is writable');
+  eq(reads(dq.out).overlay.samples[0].meta.note, 'say"hi"', 'through the other quote character');
+  const sq = dcadd(['temp_c', 'u01', '1', "note=it's here"]);
+  eq(reads(sq.out).overlay.samples[0].meta.note, "it's here", 'and the same in reverse');
+  const both = dcadd(['temp_c', 'u01', '1', 'note=a "b" c\'d']);
+  eq(both.code, 1, 'a value needing both quotes cannot be written');
+  ok(both.err.includes('no escape'), 'and says why rather than writing something wrong');
+
+  // Still refuses what really cannot be written, and what is not key=value.
+  ok(dcadd(['temp_c', 'a b', '1']).code === 1, 'a target with a space is still refused');
+  ok(dcadd(['temp_c', 'u01', '1', 'bareword']).code === 1, 'an extra field must be key=value');
+  ok(dcadd(['--meta', 'temp_c', 'label=']).code === 1, 'and an empty value is not a setting');
+
+  // A stdin line that is not "target value" used to vanish. Comma-separated
+  // input is every line of it: split() breaks on whitespace only.
+  const fed = spawnSync('python3', [join(root, 'tools/dcadd'), '/dev/null', '--stdin', 'temp_c', '-n'],
+    { encoding: 'utf8', input: 'u01 61.2\nu02,62.3\n\n# note\nu03\n' });
+  eq((fed.stdout || '').trim(), 'temp_c\tu01\t61.2', 'the readable line is written');
+  ok((fed.stderr || '').includes('skipped 2'), 'and the two unreadable ones are reported');
+  ok((fed.stderr || '').includes("'u02,62.3'"), 'by content, so the cause is visible');
+  ok(!(fed.stderr || '').includes('# note'), 'blank lines and comments are not "skipped"');
+}
+
 console.log(failures ? `${failures}/${count} tests FAILED` : `all ${count} tests passed`);
 process.exit(failures ? 1 : 0);

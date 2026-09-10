@@ -96,6 +96,13 @@ about the naming, rather than guessing silently. A file whose targets do not
 resolve loads with zero effect and reports "N unmatched targets" on the card —
 correct-looking, and useless.
 
+**Short targets repeat.** A floor of forty racks has forty `u01`s, and a bare
+`u01` resolves to whichever one the layout built first — every reading landing
+on one rack while the other thirty-nine look unmeasured. The card reports "N
+ambiguous targets" and names them, but the fix belongs in the file: write
+enough of the path to be unique (`R01/u01`, or the full `DH1/A/R01/u01`).
+Hostnames are usually unique on their own; slot and role names are not.
+
 ---
 
 ## 4. The value: number or verdict

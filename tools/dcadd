@@ -55,6 +55,43 @@ def clean(field, what):
     return text
 
 
+def quoted(value):
+    """A field value, quoted when it needs to be.
+
+    The reader takes either quote character and has no escape, so the one
+    used is the one the value does not contain. A value carrying both cannot
+    be written at all, and saying so beats writing something that reads back
+    as something else. A bare quote needs the same treatment as a space: an
+    unquoted `say"hi"` reads back as `sayhi`.
+    """
+    if not any(c in BAD_CHARS for c in value) and '"' not in value and "'" not in value:
+        return value
+    if '"' not in value:
+        return f'"{value}"'
+    if "'" not in value:
+        return f"'{value}'"
+    sys.exit(f"dcadd: a value holding a separator and both quote characters "
+             f"cannot be written -- the format has no escape: {value!r}")
+
+
+def keyvalue(pair, what):
+    """`key=value`, with the value quoted if it carries a separator.
+
+    Refusing a space here was the old behaviour, and it left `--meta` unable
+    to set the one field that almost always needs one: the reader is written
+    for `label="Inlet temp"`, the shipped examples use it, the guide tells
+    people to write it, and the tool for writing these files could not.
+    """
+    text = str(pair).strip()
+    key, sep, value = text.partition("=")
+    if not sep:
+        sys.exit(f"dcadd: {what} must be key=value, got {text!r}")
+    value = value.strip()
+    if not value:
+        sys.exit(f"dcadd: {what} {clean(key, what + ' name')!r} has no value")
+    return f"{clean(key, what + ' name')}={quoted(value)}"
+
+
 def append(path, lines):
     if not lines:
         return 0
@@ -76,7 +113,7 @@ def append(path, lines):
 
 def sample_line(test, target, value, extras):
     fields = [clean(test, "test name"), clean(target, "target"), clean(value, "value")]
-    fields.extend(clean(e, "extra field") for e in extras)
+    fields.extend(keyvalue(e, "extra field") for e in extras)
     return "\t".join(fields)
 
 
@@ -111,10 +148,7 @@ def main():
 
     if args.meta:
         test = clean(args.meta[0], "test name")
-        pairs = [clean(p, "metadata field") for p in args.meta[1:]]
-        for p in pairs:
-            if "=" not in p:
-                sys.exit(f"dcadd: metadata must be key=value, got {p!r}")
+        pairs = [keyvalue(p, "metadata field") for p in args.meta[1:]]
         lines.append("\t".join(["!test", test, *pairs]))
 
     if args.rest:
@@ -124,12 +158,26 @@ def main():
         lines.append(sample_line(test, target, value, extras))
 
     if args.stdin:
-        for raw in sys.stdin:
-            parts = raw.split("#", 1)[0].split()
+        skipped = []
+        for lineno, raw in enumerate(sys.stdin, 1):
+            body = raw.split("#", 1)[0]
+            parts = body.split()
+            if not body.strip():
+                continue
+            # A line that is not "target value" is a line whose reading is
+            # gone. Dropping it in silence made comma-separated input look
+            # like an empty file: split() breaks on whitespace, so "u01,61.2"
+            # is one token, and every row of it vanished without a word.
             if len(parts) < 2:
+                skipped.append((lineno, body.strip()))
                 continue
             target, value, *extras = parts
             lines.append(sample_line(args.stdin, target, value, extras))
+        if skipped:
+            shown = ", ".join(f"line {n}: {t!r}" for n, t in skipped[:5])
+            more = f" and {len(skipped) - 5} more" if len(skipped) > 5 else ""
+            print(f"dcadd: skipped {len(skipped)} stdin line(s) that are not "
+                  f"'target value [key=value ...]' -- {shown}{more}", file=sys.stderr)
 
     if args.merge:
         for path in args.merge:

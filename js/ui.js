@@ -428,6 +428,16 @@ function overlayCard(state, overlay, actions) {
     stats.append(document.createTextNode(' · '));
     stats.append(el('span', null, `${overlay.flowsByEl.size} hosts with flows`));
   }
+  if (overlay.ambiguous && overlay.ambiguous.length) {
+    stats.append(document.createTextNode(' · '));
+    const n = overlay.ambiguous.length;
+    const many = el('span', 'bad', `${n} ambiguous target${n === 1 ? '' : 's'}`);
+    many.title = `Each of these names more than one element. The reading went to the\n`
+      + `first; write more of the path (rack/u01) to say which.\n\n`
+      + overlay.ambiguous.slice(0, 40)
+        .map((a) => `${a.target} — ${a.count} matches, used ${a.chosen}`).join('\n');
+    stats.append(many);
+  }
   if (overlay.unresolved.length) {
     stats.append(document.createTextNode(' · '));
     const bad = el('span', 'bad', `${overlay.unresolved.length} unmatched target${overlay.unresolved.length === 1 ? '' : 's'}`);
@@ -443,7 +453,12 @@ function overlayCard(state, overlay, actions) {
 const trimNum = (v) => (Number.isFinite(v) ? String(Math.round(v * 1000) / 1000) : '');
 // Short, readable figure for the mean/sd note; the overlay's own decimals
 // setting is about its values, not about describing their distribution.
-const formatNum = (v) => (Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 1 ? v.toFixed(2) : v.toFixed(3));
+// Guarded like trimNum above it: an aggregation that does not apply (a
+// geometric mean over a zero) makes the mean non-finite, and toFixed on
+// that prints the word NaN into the panel.
+const formatNum = (v) => (Number.isFinite(v)
+  ? (Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 1 ? v.toFixed(2) : v.toFixed(3))
+  : '—');
 
 // ---------------------------------------------------------------- networks
 

@@ -197,6 +197,10 @@ burnin      DH1/A/R01/u05   PASS
 
 - Targets are element paths, but any **unique suffix** works (`A/R01/u05`,
   or just a hostname if node ids are hostnames). Matching is case-insensitive.
+  A target that fits several elements goes to the first and the metric's card
+  says so — *N ambiguous targets*, naming each one and where its reading went.
+  Slot and role names repeat across racks (forty racks, forty `u01`s), so
+  write enough of the path to be unique when they do.
 - Values may be numbers or words (`PASS`/`WARN`/`FAIL` get traffic-light
   colors; other words get stable categorical colors).
 - **How big can a results file be?** There is no limit in the viewer. A file
@@ -280,8 +284,14 @@ tools/dcadd results.tsv temp_c DH1/A/R01/u05 61.2 run=nightly   # one sample
 my_test | dcadd results.tsv --stdin temp_c                      # target value per line
 dcadd results.tsv --merge run1.tsv run2.tsv                     # concat other files
 dcadd results.tsv --csv fio.csv --test iops --target host --value write_iops
-dcadd results.tsv --meta temp_c unit=C higher=bad min=15 max=95
+dcadd results.tsv --meta temp_c unit=C higher=bad min=15 max=95 'label=Inlet temp'
 ```
+
+A metadata or `key=value` field whose value carries a space or a comma is
+quoted on the way out, so `label=Inlet temp` writes `label="Inlet temp"` and
+reads back whole. The format has no escape, so the quote used is the one the
+value does not contain; a value holding both is refused rather than written
+as something that reads back differently.
 
 ### JSON results
 

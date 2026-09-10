@@ -518,6 +518,7 @@ export function bindOverlay(overlay, model) {
   const numericByEl = new Map();
   const textByEl = new Map();
   const unresolved = new Set();
+  const ambiguous = new Map();   // target -> { count, chosen }
   let numericCount = 0;
   let textCount = 0;
 
@@ -534,8 +535,16 @@ export function bindOverlay(overlay, model) {
   const flowsByEl = new Map();
 
   for (const sample of overlay.samples) {
-    const el = model.resolve(sample.target);
+    // resolveWhere rather than resolve: a target that names several elements
+    // still goes to the first, and this is the only place that can say so.
+    const where = model.resolveWhere
+      ? model.resolveWhere(sample.target)
+      : { el: model.resolve(sample.target), count: 1 };
+    const el = where.el;
     if (!el) { unresolved.add(sample.target); continue; }
+    if (where.count > 1 && !ambiguous.has(sample.target)) {
+      ambiguous.set(sample.target, { count: where.count, chosen: el.key });
+    }
     const map = sample.numeric ? numericByEl : textByEl;
     if (sample.numeric) numericCount++; else textCount++;
     direct.add(el.key);
@@ -575,6 +584,9 @@ export function bindOverlay(overlay, model) {
     hasFlows: flowsByEl.size > 0,
     sampleCount: overlay.samples.length,
     unresolved: [...unresolved],
+    // Targets that named more than one element. The reading went to the
+    // first; the others look unmeasured, and only this says otherwise.
+    ambiguous: [...ambiguous].map(([target, at]) => ({ target, ...at })),
     // Display state, all user-adjustable from the overlay panel.
     enabled: false,
     drawFlows: false,   // paint the measured pairs as their own edge layer

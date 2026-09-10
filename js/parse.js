@@ -725,13 +725,17 @@ function makeResolver(model) {
   let byLowerName = null;
   let suffixIndex = null;
 
+  let nameCounts = null;
+
   const build = () => {
     byLowerKey = new Map();
     byLowerName = new Map();
+    nameCounts = new Map();
     suffixIndex = new Map();
     for (const el of model.all) {
       byLowerKey.set(el.key.toLowerCase(), el);
       const n = el.name.toLowerCase();
+      nameCounts.set(n, (nameCounts.get(n) || 0) + 1);
       if (!byLowerName.has(n)) byLowerName.set(n, el);
       const parts = el.key.toLowerCase().split('/');
       for (let i = 1; i < parts.length; i++) {
@@ -744,19 +748,44 @@ function makeResolver(model) {
   };
 
   const cache = new Map();
-  return (target) => {
-    if (!target) return null;
+
+  /**
+   * The element a target names, and how many it could have named.
+   *
+   * A short target is the normal way to write a results file, and short
+   * names repeat: a floor of forty racks has forty `u01`s and forty `tor`s.
+   * When one matches several the first still wins -- there is nothing better
+   * to do -- but `count` says so, and the caller reports it. Silently
+   * attributing every reading to whichever element happened to be built
+   * first paints one rack and leaves the other thirty-nine grey, which
+   * reads as "not measured" rather than "you did not say which".
+   */
+  const resolveWhere = (target) => {
+    if (!target) return { el: null, count: 0 };
     if (!byLowerKey) build();
     const t = String(target).trim().toLowerCase();
-    if (cache.has(t)) return cache.get(t);
+    const hit = cache.get(t);
+    if (hit) return hit;
     let el = byLowerKey.get(t) || null;
+    let count = el ? 1 : 0;      // a full path names exactly one element
     if (!el) {
       const suffix = suffixIndex.get(t);
-      if (suffix && suffix.length === 1) el = suffix[0];
-      else if (byLowerName.has(t)) el = byLowerName.get(t);
-      else if (suffix && suffix.length) el = suffix[0];   // ambiguous: first wins
+      if (suffix && suffix.length === 1) {
+        [el] = suffix;
+        count = 1;
+      } else if (byLowerName.has(t)) {
+        el = byLowerName.get(t);
+        count = nameCounts.get(t) || 1;
+      } else if (suffix && suffix.length) {
+        [el] = suffix;
+        count = suffix.length;
+      }
     }
-    cache.set(t, el);
-    return el;
+    const found = { el, count };
+    cache.set(t, found);
+    return found;
   };
+
+  model.resolveWhere = resolveWhere;
+  return (target) => resolveWhere(target).el;
 }
