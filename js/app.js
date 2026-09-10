@@ -1394,8 +1394,18 @@ canvas.addEventListener('pointerleave', () => {
 });
 
 window.addEventListener('keydown', (e) => {
-  if (e.target.matches('input, select, textarea')) {
-    if (e.key === 'Escape') e.target.blur();
+  // Every shortcut here is a bare key, so a chord belongs to the browser.
+  // Taking them too meant one keypress did two things: Ctrl+F opened Find
+  // *and* refit the camera, Ctrl+0 reset the page zoom *and* refit, Ctrl+-
+  // zoomed the page out *and* zoomed the floor plan out under it. Shift is
+  // not a chord here -- `+` is Shift+= on most keyboards.
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  // A keydown dispatched at the window has no element to ask, and calling
+  // .matches on it threw before any shortcut was reached.
+  const target = e.target;
+  if (target && typeof target.matches === 'function'
+      && target.matches('input, select, textarea')) {
+    if (e.key === 'Escape') target.blur();
     return;
   }
   const cx = canvas.clientWidth / 2;
@@ -1446,7 +1456,11 @@ function showTooltip(node, x, y) {
   tip.hidden = false;
   const w = tip.offsetWidth;
   const h = tip.offsetHeight;
-  tip.style.left = `${Math.min(x + 14, canvas.clientWidth - w - 6)}px`;
+  // Clamped at both ends, as the vertical one beside it already was. Keeping
+  // the tooltip inside the right edge can push its left past zero once the
+  // canvas is narrower than the tooltip, and the name -- the part worth
+  // reading -- is what goes off the side.
+  tip.style.left = `${Math.max(4, Math.min(x + 14, canvas.clientWidth - w - 6))}px`;
   tip.style.top = `${Math.max(4, Math.min(y + 16, canvas.clientHeight - h - 24))}px`;
 }
 

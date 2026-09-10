@@ -85,6 +85,9 @@ link storage +storage,role=server scope=row mode=mesh
 link edge    +edge,role=server           scope=pod  mode=ring
 link edge    +edge,role=server,!+dmz     scope=cage mode=chain
 
-# pair lines up two lists one-to-one instead of crossing them: spine 1 takes
-# the first ToR, spine 2 the second.
-link uplink  role=spine role=tor  mode=pair
+# mode=pair lines two lists up one-to-one instead of crossing them, and is
+# demonstrated in examples/mx/floor.dc, where the two halls hold the same
+# eight switches and every one has a partner. It is deliberately NOT used
+# here: there are two spines and eight ToRs, so pairing them would wire two
+# cables and leave six racks with no uplink at all. The viewer says so when
+# a pair rule's two sides are different lengths.

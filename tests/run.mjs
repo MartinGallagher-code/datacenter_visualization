@@ -2100,5 +2100,49 @@ if (python.error) {
   eq(cutBy('plain', 3), 'pla', 'ordinary text cuts exactly as before');
 }
 
+// ------------------------------------------- pair, between lists that do not pair
+// mode=pair takes the first match of each selector, then the second. When
+// the two sides are different lengths it stops at the shorter one and the
+// surplus went without a word -- and the existing "wired nothing" warning
+// only fires when a rule wires nothing at all, so a rule that wired two of
+// eight looked like a rule that worked.
+{
+  const wire = (servers, tors, rule) => {
+    const rows = ['dc D', '  room R', '    rack r[1..2] u=20'];
+    for (let i = 1; i <= tors; i++) rows.push(`      node t${i} at=${20 - i} role=tor`);
+    for (let i = 1; i <= servers; i++) rows.push(`      node s${i} at=${i} role=server`);
+    rows.push('net n color=#4fa3ff', rule);
+    const m = parseLayout(rows.join('\n'));
+    return { links: m.links.length, warnings: m.warnings };
+  };
+  const PAIR = 'link n role=server role=tor scope=rack mode=pair';
+
+  const even = wire(3, 3, PAIR);
+  eq(even.warnings, [], 'two sides of the same length pair cleanly');
+  eq(even.links, 6, 'and every one of them is wired');
+
+  const lopsided = wire(3, 1, PAIR);
+  eq(lopsided.links, 2, 'a shorter side stops the pairing there');
+  eq(lopsided.warnings.length, 1, 'and that is reported');
+  ok(lopsided.warnings[0].includes('4 elements'), 'counting the surplus across every scope group');
+  ok(lopsided.warnings[0].includes('mode=star'), 'and naming the mode that would wire them all');
+  ok(wire(5, 2, PAIR).warnings[0].includes('6 elements'), 'the count is the total, not the per-group one');
+
+  // One selector is a different thing: five matches cannot be paired, and
+  // the odd one out is inherent rather than a mistake.
+  const odd = parseLayout('rack A\n  node n[1..5] role=server\nnet x\nlink x role=server mode=pair\n');
+  eq(odd.warnings, [], 'an odd count on one selector is not a mistake to report');
+  eq(odd.links.length, 2, 'and pairs what it can');
+
+  // examples/mx/floor.dc pairs eight switches in one hall with eight in the
+  // other; examples/iperf/floor.dc used to pair two spines with eight ToRs,
+  // on a net its own star rule had already wired, leaving six racks with no
+  // uplink and two duplicate cables to show for it.
+  const iperf = parseLayout(readFileSync(join(root, 'examples/iperf/floor.dc'), 'utf8'));
+  eq(iperf.warnings, [], 'examples/iperf/floor.dc wires every rack it declares');
+  eq(iperf.links.filter((l) => l.net === 'uplink').length, 16,
+     'every one of the eight ToRs reaches both spines');
+}
+
 console.log(failures ? `${failures}/${count} tests FAILED` : `all ${count} tests passed`);
 process.exit(failures ? 1 : 0);

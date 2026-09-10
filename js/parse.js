@@ -518,6 +518,7 @@ function buildLinks(rules, model) {
     // it meant no cap at all; cap=1e6 read as 1 and wired a single cable.
     const cap = intAttr(rule.cap, DEFAULT_CAP, LINK_NUMBERS.cap);
     let made = 0;
+    let unpaired = 0;
     let matchedA = 0;
     let matchedB = 0;
     const matchA = compileSelector(rule.selA);
@@ -566,11 +567,19 @@ function buildLinks(rules, model) {
         if (mode === 'ring' && A.length > 2) emit(A[A.length - 1], A[0]);
       } else if (mode === 'pair') {
         if (matchB) {
+          // Pairing stops at the shorter side, and the surplus used to go
+          // without a word: three servers and one ToR wired one cable and
+          // ignored two, which reads as a rule that worked.
           for (let i = 0; i < Math.min(A.length, B.length); i++) emit(A[i], B[i]);
+          unpaired += Math.abs(A.length - B.length);
         } else {
           // One selector pairs consecutive matches off (1-2, 3-4, ...); joining
           // A[i] to B[i] with B === A would pair every element with itself,
           // which emit drops -- a rule that could never wire anything.
+          // An odd count leaves one over, and that is inherent rather than a
+          // mistake: five things cannot be paired. Only two selectors of
+          // different lengths are worth reporting -- there the rule asked for
+          // a correspondence between sets that do not correspond.
           for (let i = 0; i + 1 < A.length; i += 2) emit(A[i], A[i + 1]);
         }
       } else {
@@ -579,6 +588,16 @@ function buildLinks(rules, model) {
     }
 
     if (made >= cap) model.warnings.push(`${at(rule)}net "${rule.net}": link rule hit the cap of ${cap}`);
+
+    // Counted across every scope group and said once: with scope=rack this is
+    // the same mistake forty times over, not forty mistakes.
+    if (unpaired) {
+      model.warnings.push(`${at(rule)}net "${rule.net}": mode=pair takes the first match of `
+        + `each selector, then the second, and so on -- the two sides are different `
+        + `lengths, so ${unpaired} element${unpaired === 1 ? '' : 's'} had nothing to pair `
+        + `with and ${unpaired === 1 ? 'was' : 'were'} left unwired. `
+        + 'mode=star wires every one of them to every element on the other side.');
+    }
 
     // A mistyped selector matches nothing and the rule silently wires nothing,
     // which reads as "no cables" rather than "typo" -- so say which it was.

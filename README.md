@@ -157,7 +157,12 @@ link storage +storage,role=server scope=row mode=mesh  # full mesh within a row
 - `scope=` groups matches per rack/row/room/… before wiring.
 - `mode=` is `star` (A×B, default with two selectors), `mesh` (default with
   one), `chain`, `ring`, or `pair` (A[i] to B[i]; with one selector,
-  consecutive matches pair off — 1st–2nd, 3rd–4th, …).
+  consecutive matches pair off — 1st–2nd, 3rd–4th, …). `pair` between two
+  selectors of different lengths stops at the shorter one and reports how
+  many were left unwired — two spines paired with eight ToRs is two cables
+  and six racks with no uplink, which `mode=star` is almost always what was
+  meant. With one selector an odd count leaves one over, which is inherent
+  and says nothing.
 - `cap=` stops a rule after that many cables, which is how a selector that
   turns out to match half the floor is kept from wiring all of it. A cap that
   is not a whole number between 1 and 100,000,000 is reported and ignored, and
