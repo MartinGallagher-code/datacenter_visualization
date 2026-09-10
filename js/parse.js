@@ -131,7 +131,17 @@ function buildSyntaxTree(text, warnings) {
 
 // --------------------------------------------------------------- materialize
 
+// A row lays out along x unless it says y; every other spelling used to mean
+// x without a word, so `dir=vertical` read as horizontal.
+function checkDir(attrs, id, model, line) {
+  const dir = attrs.dir;
+  if (dir !== undefined && dir !== 'x' && dir !== 'y') {
+    model.warnings.push(`line ${line}: "${id}": dir=${dir} is neither x nor y -- laid out along x`);
+  }
+}
+
 function makeElement(kind, id, parent, attrs, tags, model, line) {
+  checkDir(attrs, id, model, line);
   let key = parent ? `${parent.key}/${id}` : id;
   if (model.byKey.has(key)) {
     let n = 2;
@@ -467,6 +477,12 @@ const truthy = (value) => {
             model.warnings.push(`line ${child.line}: net "${name}": `
               + `show=${explicit} is neither yes nor no -- deciding by size instead`);
           }
+        }
+        // Only solid and dashed are drawn; anything else silently drew solid.
+        const style = child.attrs.style;
+        if (style !== undefined && style !== 'solid' && style !== 'dashed') {
+          model.warnings.push(`line ${child.line}: net "${name}": `
+            + `style=${style} is neither solid nor dashed -- drawn solid`);
         }
         model.nets.set(name, {
           name,

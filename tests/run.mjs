@@ -1092,6 +1092,42 @@ ok(!matchesFilter('mxrun.tsv', 'mx.*'), 'and that dot has to be there: it is not
   eq(bound('min=0 max=100').autoDomain, false, 'and does count');
 }
 
+// --------------------------------------------- settings that do nothing
+// An enumerated value outside its vocabulary used to mean the default,
+// silently: higher=high read as higher=bad, style=dotted drew solid,
+// dir=vertical laid out horizontally, and a misspelt !test key vanished.
+// A setting that does nothing is worse than no setting: it looks like one
+// that worked.
+{
+  const testWarn = (line) => {
+    const w = [];
+    parseResults(`${line}\n`, new Map(), w, 'f');
+    return w[0] || '';
+  };
+  eq(testWarn('!test m unit=C higher=bad agg=p95 palette=turbo'), '', 'a valid !test line says nothing');
+  ok(testWarn('!test m higher=high').includes('not one of bad, good'), 'higher= outside its two words');
+  ok(testWarn('!test m palette=rainbow').includes('not one of'), 'a palette that does not exist');
+  ok(testWarn('!test m agg=avg').includes('not one of'), 'an aggregation that does not exist');
+  ok(testWarn('!test m pallete=turbo').includes('unknown key "pallete"'), 'a misspelt key');
+  eq(testWarn('!test m invert=yes'), '', 'every accepted spelling of a flag stays quiet');
+
+  const layoutWarn = (src) => (parseLayout(src).warnings[0] || '');
+  eq(layoutWarn('dc D\n  row A dir=y\n'), '', 'dir=y is one of the two');
+  ok(layoutWarn('dc D\n  row A dir=vertical\n').includes('neither x nor y'), 'dir= outside them');
+  eq(layoutWarn('dc D\n  room R\nnet n style=dashed'), '', 'style=dashed is one of the two');
+  ok(layoutWarn('dc D\n  room R\nnet n style=dotted').includes('neither solid nor dashed'),
+     'style= outside them');
+
+  // Every !test line the repo ships stays quiet, which is what makes the
+  // check safe to have: it fires on mistakes, not on the house style.
+  for (const file of ['examples/small-results.tsv', 'examples/hostnames-results.tsv',
+                      'examples/mx/mx-results.tsv', 'examples/iperf/results.tsv']) {
+    const w = [];
+    parseResults(readFileSync(join(root, file), 'utf8'), new Map(), w, file);
+    eq(w, [], `${file} parses without a word`);
+  }
+}
+
 // ------------------------------------------------------------- load report
 // Every way a file can arrive and do nothing has to say so. These are the
 // silent ones: the viewer used to load two files and mention neither.

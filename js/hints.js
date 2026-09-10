@@ -53,6 +53,7 @@ const LINK_KEYS = [
 
 const MODES = ['star', 'mesh', 'chain', 'ring', 'pair'];
 const STYLES = ['solid', 'dashed'];
+const YES_NO = ['yes', 'no', 'true', 'false'];
 const DIRS = ['x', 'y'];
 
 const IDENT = /^[a-z_][\w-]*$/i;
@@ -142,7 +143,7 @@ export function suggestionsFor(text, caret) {
 
     if (kind === 'net') {
       if (key) {
-        options = valueOptions(key, { style: STYLES, show: ['true', 'false'] }, h);
+        options = valueOptions(key, { style: STYLES, show: YES_NO }, h);
       } else {
         options = [];
         if (idPosition) {

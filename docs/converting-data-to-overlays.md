@@ -171,6 +171,11 @@ at the top.
 | `agg` | the default aggregation | One of the list in §5. |
 | `decimals` | fixed decimal places | `0` for counts and packet rates. Omit and it is chosen from the range. |
 
+**The viewer checks this table.** A key that is not in it, and an enumerated
+value outside its list, are both reported rather than ignored — so a
+`pallete=turbo` or a `higher=high` shows up in the load report instead of
+quietly doing nothing.
+
 **Quoting.** Fields split on runs of spaces, so a value containing a space must
 be quoted: `label="Inlet temp"`. Written bare, `label=Inlet temp` sets the label
 to `Inlet` and drops `temp` — the viewer warns about the dropped token, but the

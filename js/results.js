@@ -26,6 +26,8 @@
 // as individual samples and reduced at draw time by the aggregation the user
 // picks in the UI.
 
+import { PALETTE_NAMES } from './palette.js';
+
 /**
  * Smallest and largest of an array, in one pass.
  *
@@ -157,6 +159,36 @@ function parseMetaTokens(tokens, onBare) {
 const quoteList = (items) => items.map((t) => `"${t}"`).join(', ');
 
 /**
+ * What a `!test` line may say. A key outside this set is a typo that used to
+ * be dropped in silence, and an enumerated value outside its list silently
+ * meant the default -- `higher=high` read as `higher=bad`, `style=dotted` drew
+ * solid. Both now say so: a setting that does nothing is worse than no
+ * setting, because it looks like one that worked.
+ */
+const TEST_KEYS = {
+  unit: null, label: null, short: null, min: null, max: null, decimals: null,
+  higher: ['bad', 'good'],
+  invert: ['true', 'yes', 'y', 'on', '1', 'false', 'no', 'n', 'off', '0'],
+  agg: Object.keys(AGGREGATIONS),
+  palette: PALETTE_NAMES,
+};
+
+function checkTestMeta(meta, name, line, warnings) {
+  for (const [key, value] of Object.entries(meta)) {
+    if (!(key in TEST_KEYS)) {
+      warnings.push(`results line ${line}: !test ${name}: unknown key "${key}" -- `
+        + `known keys are ${Object.keys(TEST_KEYS).join(', ')}`);
+      continue;
+    }
+    const allowed = TEST_KEYS[key];
+    if (allowed && !allowed.includes(String(value).toLowerCase())) {
+      warnings.push(`results line ${line}: !test ${name}: ${key}=${value} is not one of `
+        + `${allowed.join(', ')} -- ignored`);
+    }
+  }
+}
+
+/**
  * Parse one or more results files into overlay definitions.
  * Returns a Map of test name -> overlay { name, samples: [{target, value, meta}], meta }.
  *
@@ -207,7 +239,9 @@ function parseTextResults(text, into, warnings) {
       }
       const overlay = ensureOverlay(into, name);
       const bare = [];
-      Object.assign(overlay.meta, parseMetaTokens(tokens, (t) => bare.push(t)) || {});
+      const declared = parseMetaTokens(tokens, (t) => bare.push(t)) || {};
+      checkTestMeta(declared, name, i + 1, warnings);
+      Object.assign(overlay.meta, declared);
       if (bare.length) {
         warnings.push(`results line ${i + 1}: ignored ${quoteList(bare)} on !test ${name} -- `
           + 'a value containing a space has to be quoted, as label="Inlet temp"');
