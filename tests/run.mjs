@@ -40,12 +40,28 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 let failures = 0;
 let count = 0;
 
+// Sections that need a tool the machine may not have are skipped, so the
+// suite still runs somewhere without python3. `--strict` turns each skip
+// into a failure, which is what CI passes: a run that goes green because it
+// quietly tested nothing is worse than no run at all.
+const STRICT = process.argv.includes('--strict');
+
 function ok(cond, name) {
   count++;
   if (!cond) {
     failures++;
     console.error(`  FAIL  ${name}`);
   }
+}
+
+function skip(what, why) {
+  if (!STRICT) {
+    console.log(`  ${what}: skipped (${why})`);
+    return;
+  }
+  count++;
+  failures++;
+  console.error(`  FAIL  ${what}: ${why} -- and --strict says every section must run`);
 }
 const eq = (a, b, name) => ok(JSON.stringify(a) === JSON.stringify(b), `${name}  (${JSON.stringify(a)} != ${JSON.stringify(b)})`);
 
@@ -720,7 +736,7 @@ ok(contrastInk('#ffffff') !== contrastInk('#000000'), 'contrast ink flips');
 // empty overlay.
 const python = spawnSync('python3', ['--version'], { encoding: 'utf8' });
 if (python.error) {
-  console.log('  dcimport: skipped (no python3)');
+  skip('dcimport', 'no python3');
 } else {
   const fixtures = join(root, 'tests/fixtures');
   const dcimport = (args) => {
@@ -1841,7 +1857,7 @@ ok(!matchesFilter('mxrun.tsv', 'mx.*'), 'and that dot has to be there: it is not
 // not set the one field that almost always needs one. dcimport had learnt to
 // quote a year earlier; dcadd had not.
 if (python.error) {
-  console.log('  dcadd: skipped (no python3)');
+  skip('dcadd', 'no python3');
 } else {
   const dcadd = (args) => {
     const run = spawnSync('python3', [join(root, 'tools/dcadd'), '/dev/null', ...args, '-n'],

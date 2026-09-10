@@ -717,6 +717,23 @@ netmesh run --for 60 && dcimport results.tsv --tidy reports/
   wash and outline (a dot where they are too small to outline), so the far
   end of a hairline is visible without tracing it.
 
+## Tests
+
+```sh
+node tests/run.mjs        # 782 assertions over the modules
+node tests/browser.mjs    # 37 more, driving the page in Chromium
+```
+
+Both skip what they cannot run — `tests/run.mjs` needs python3 for the
+`dcadd`/`dcimport` sections, `tests/browser.mjs` needs Playwright — so either
+runs anywhere. **`--strict` turns every skip into a failure**, which is what CI
+passes: a green run that quietly tested nothing is indistinguishable from a
+green run that tested everything, and that is the one result a test suite must
+never give.
+
+GitHub Actions runs both on every push and pull request, as two jobs, so a red
+mark says which layer broke.
+
 ## Repository layout
 
 ```
@@ -739,6 +756,7 @@ tests/browser.mjs         the same for the page itself (node tests/browser.mjs) 
                           tests cannot reach. Skips with a message where
                           Playwright is not installed; the viewer still has no
                           dependencies.
+.github/workflows/        both suites on every push and pull request
 LICENSE                   GNU General Public License v3
 ```
 
