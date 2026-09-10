@@ -252,14 +252,18 @@ export class Renderer {
     const ctx = this.ctx;
     if (maxWidth <= 0) return '';
     if (ctx.measureText(text).width <= maxWidth) return text;
+    // Cut by code point, not by UTF-16 index. slice() through a surrogate
+    // pair leaves half a character, which draws as a replacement box -- and
+    // the array is only built on the minority of labels that need cutting.
+    const chars = [...text];
     let lo = 0;
-    let hi = text.length;
+    let hi = chars.length;
     while (lo < hi) {
       const mid = (lo + hi + 1) >> 1;
-      if (ctx.measureText(`${text.slice(0, mid)}…`).width <= maxWidth) lo = mid;
+      if (ctx.measureText(`${chars.slice(0, mid).join('')}…`).width <= maxWidth) lo = mid;
       else hi = mid - 1;
     }
-    return lo > 0 ? `${text.slice(0, lo)}…` : '';
+    return lo > 0 ? `${chars.slice(0, lo).join('')}…` : '';
   }
 
   drawLeafName(el, b, sw, sh) {

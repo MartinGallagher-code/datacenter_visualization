@@ -11,23 +11,30 @@
 
 // Headless test suite: node tests/run.mjs
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { expand, subst } from '../js/expand.js';
 import { compileSelector } from '../js/select.js';
-import { parseLayout } from '../js/parse.js';
+import { parseLayout, isColor, LINK_OPTS, NUMBERS } from '../js/parse.js';
 import {
   parseResults, bindOverlay, overlayValue, AGGREGATIONS, extent,
-  recomputeStats, zScore, formatValue, unitFor,
+  recomputeStats, zScore, formatValue, unitFor, zRangeOf, paletteOf, invertedOf, overlayKey,
+  valueWithUnit, NO_VALUE, recomputeDomain, readNumber, clearOverlayCache,
 } from '../js/results.js';
 import { layout } from '../js/layout.js';
 import { linkSummary, sharesLineage } from '../js/render.js';
 import { compileQuery, applyFilter } from '../js/filter.js';
 import { ramp, categoricalColor, colorFor, contrastInk } from '../js/palette.js';
 import { suggestionsFor } from '../js/hints.js';
-import { classify, formatSize, matchesFilter, sortEntries, treeFromFiles } from '../js/browse.js';
+import {
+  classify, formatSize, matchesFilter, pathLabel, sortEntries, treeFromFiles,
+} from '../js/browse.js';
+import {
+  droppedLayoutsNotice, layoutNotice, prefixed, resultsFileNotice,
+} from '../js/report.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 let failures = 0;
@@ -367,6 +374,20 @@ eq(braced.get('temp_c').samples.length, 1, 'comment starting with { stays text')
   ok(Math.abs(zScore(ov, 40) - 15 / Math.sqrt(125)) < 1e-9, 'the top host is +1.34 sigma');
   eq(zScore(ov, 10), -zScore(ov, 40), 'and the bottom is its mirror');
 
+  // The population is what was measured, whatever kind it is. Samples that
+  // land on racks used to measure nothing -- recomputeStats assumed `node` --
+  // and a null stats paints every element the middle of the ramp.
+  const rackly = bindOverlay(parseResults(
+    'rk\tDH1/A/R01\t10\nrk\tDH1/A/R02\t20\nrk\tDH1/A/R03\t30\n').get('rk'), small);
+  ok(recomputeStats(rackly, small), 'a metric measured on racks has a population');
+  eq(rackly.stats.n, 3, 'the three measured racks, and only those');
+  eq(rackly.stats.mean, 20, 'their mean');
+
+  // A container that inherits its children's samples is not one of them: only
+  // elements with a reading of their own count, or every row and room would
+  // join the population its children already form.
+  eq(ov.stats.n, 4, 'inherited container readings stay out of the population');
+
   // A metric with no spread cannot divide: everything is average, not NaN.
   const flat = bindOverlay(parseResults('f\tDH1/A/R01/u01\t7\nf\tDH1/A/R01/u02\t7\n').get('f'), small);
   recomputeStats(flat, small);
@@ -425,6 +446,59 @@ eq(braced.get('temp_c').samples.length, 1, 'comment starting with { stays text')
   eq(ov.stdMode, 'values', 'switching the override off does not force a metric raw');
 }
 
+// ------------------------------------------------------- the shared z scale
+// Standardising puts two metrics on the same numbers. It does not, on its
+// own, put them on the same colours: a per-metric palette, a per-metric
+// spread, or a `higher=bad`/`higher=good` inversion each paint the same
+// z-score differently on each metric. The shared scale is what fixes that.
+{
+  const rows = (test, vals) => vals.map((v, i) => `${test}\tDH1/A/R01/u0${i + 1}\t${v}`).join('\n') + '\n';
+  // Two metrics with different units, different spreads, and opposite senses:
+  // temperature where higher is bad, throughput where higher is good.
+  const temp = bindOverlay(parseResults(rows('temp', [10, 20, 30, 40])).get('temp'), small);
+  const gbps = bindOverlay(parseResults(rows('gbps', [80, 85, 90, 95])).get('gbps'), small);
+  temp.palette = 'health'; temp.invert = false; temp.zRange = 3;
+  gbps.palette = 'health'; gbps.invert = true;  gbps.zRange = 2;   // higher=good
+  for (const o of [temp, gbps]) { o.standardizeAll = 'colour'; recomputeStats(o, small); }
+
+  // The top host of each is +1.34 sigma. Unshared, they come out different
+  // colours -- which is the bug: one metric's best host and another's worst
+  // read the same, and its own +2 sigma reads as its opposite.
+  const topTemp = () => colorFor(temp, { numeric: true, value: 40 });
+  const topGbps = () => colorFor(gbps, { numeric: true, value: 95 });
+  ok(topTemp() !== topGbps(), 'unshared, the same z-score is two different colours');
+
+  const shared = { palette: 'rdbu', zRange: 3 };
+  temp.zShared = shared;
+  gbps.zShared = shared;
+  eq(topTemp(), topGbps(), 'shared, the same z-score is the same colour on both');
+  eq(colorFor(temp, { numeric: true, value: 25 }), colorFor(gbps, { numeric: true, value: 87.5 }),
+     'and so is the mean of each');
+  eq(topTemp(), ramp('rdbu', 0.5 + 1.34164078649987 / 6), 'from the shared palette and spread');
+
+  // The shared scale reaches the legend too, or the card would advertise a
+  // ramp the map is not drawn with.
+  eq(paletteOf(temp), 'rdbu', 'the legend uses the shared palette');
+  eq(invertedOf(gbps), false, 'and drops the higher=good inversion that broke the match');
+  eq(zRangeOf(gbps), 3, 'and the shared spread, not the metric\'s own 2');
+
+  // Unticking it hands every metric back exactly what it had.
+  temp.zShared = null;
+  gbps.zShared = null;
+  eq(paletteOf(gbps), 'health', 'unshared, the metric has its own palette back');
+  eq(invertedOf(gbps), true, 'its own direction');
+  eq(zRangeOf(gbps), 2, 'and its own spread');
+
+  // It is a standardising concern only: a raw metric is never touched by it.
+  gbps.standardizeAll = 'off';
+  gbps.standardize = 'off';
+  gbps.zShared = shared;
+  eq(paletteOf(gbps), 'health', 'a metric that is not standardised keeps its palette');
+  eq(colorFor(gbps, { numeric: true, value: 95 }),
+     ramp('health', 1 - (95 - gbps.min) / (gbps.max - gbps.min)),
+     'and its raw min..max mapping, inversion and all');
+}
+
 // ------------------------------------------------------------ large results
 // A results file is one sample per line, so an ordinary few-MB file carries
 // hundreds of thousands of samples -- and the root element holds every one of
@@ -453,25 +527,43 @@ eq(braced.get('temp_c').samples.length, 1, 'comment starting with { stays text')
 }
 
 // ----------------------------------------------------------- overlay source
-// Overlays remember the file they came from, so the panel can group them:
-// one results file can carry twenty-odd, and two loaded together are
-// otherwise indistinguishable.
+// Overlays belong to the file they came from, one file each. Two files that
+// carry the same test name are two overlays with two sets of samples -- never
+// one merged overlay, which would answer a question nobody asked.
 {
   const into = new Map();
   parseResults('temp_c\tDH1/A/R01/u05\t61\n', into, [], 'nightly.tsv');
   parseResults('temp_c\tDH1/A/R01/u06\t62\niops\tDH1/A/R01/u05\t900\n', into, [], 'fio.tsv');
-  eq(into.get('temp_c').sources, ['nightly.tsv', 'fio.tsv'],
-     'a test fed by two files records both, in order');
-  eq(into.get('iops').sources, ['fio.tsv'], 'and one fed by a single file records it');
-  eq(into.get('temp_c').samples.length, 2, 'the samples still merge across files');
+
+  eq([...into.keys()].length, 3, 'two files sharing a test name make three overlays, not two');
+  const nightly = into.get(overlayKey('nightly.tsv', 'temp_c'));
+  const fio = into.get(overlayKey('fio.tsv', 'temp_c'));
+  eq(nightly.source, 'nightly.tsv', 'each knows its own file');
+  eq(fio.source, 'fio.tsv', 'and so does the other');
+  eq(nightly.name, 'temp_c', 'both keep the test name for their label');
+  eq(fio.name, 'temp_c', 'both of them');
+  eq(nightly.samples.length, 1, 'the samples do not merge across files');
+  eq(fio.samples.length, 1, 'either way');
+  eq(into.get(overlayKey('fio.tsv', 'iops')).source, 'fio.tsv', 'a test in one file records it');
   eq(into.source, '', 'the parse leaves no source marker behind');
 
-  // Binding carries the sources through to the panel.
-  eq(bindOverlay(into.get('iops'), small).sources, ['fio.tsv'], 'sources survive binding');
+  // Concatenating runs into ONE file is still how a metric accumulates: that
+  // is one file, and one overlay.
+  const one = new Map();
+  parseResults('temp_c\tDH1/A/R01/u05\t61\ntemp_c\tDH1/A/R01/u06\t62\n', one, [], 'all.tsv');
+  eq([...one.keys()].length, 1, 'one file carrying two runs is one overlay');
+  eq(one.get(overlayKey('all.tsv', 'temp_c')).samples.length, 2, 'holding both samples');
+
+  // Binding carries the file through to the panel, which groups by it.
+  const bound = bindOverlay(into.get(overlayKey('fio.tsv', 'iops')), small);
+  eq(bound.source, 'fio.tsv', 'the file survives binding');
+  eq(bound.key, overlayKey('fio.tsv', 'iops'), 'and so does the key the panel maps by');
+
   // A file that is not named still parses; the panel treats it as one group.
   const anon = new Map();
   parseResults('t\ta\t1\n', anon);
-  eq(anon.get('t').sources, [], 'an unnamed load records no source');
+  eq(anon.get('t').source, '', 'an unnamed load records no source');
+  eq(anon.get('t').key, 't', 'and is keyed by the test name alone');
 }
 
 // -------------------------------------------------------------- flow data
@@ -507,7 +599,7 @@ eq(braced.get('temp_c').samples.length, 1, 'comment starting with { stays text')
   const overlays = new Map([['mx_peer_pps', peers]]);
   const ctx = {
     hasOverlay: (n) => overlays.has(n),
-    readingOf: () => null,
+    readingsOf: () => [],
     flowsOf: (el) => {
       const out2 = [];
       for (const ov of overlays.values()) {
@@ -557,13 +649,19 @@ eq(braced.get('temp_c').samples.length, 1, 'comment starting with { stays text')
 
 // ------------------------------------------------------------------- filter
 const overlays = new Map([['temp_c', temp], ['burnin', burnin]]);
+// A test name can name more than one overlay now: two files each carrying
+// `temp_c` stay separate, and `temp_c>70` means any of them reads over 70.
 const ctx = {
-  hasOverlay: (n) => overlays.has(n),
-  readingOf: (n, el, direct) => {
-    const o = overlays.get(n);
-    if (!o) return null;
-    if (direct && !o.direct.has(el.key)) return null;
-    return overlayValue(o, el);
+  hasOverlay: (n) => [...overlays.values()].some((o) => o.name === n),
+  readingsOf: (n, el, direct) => {
+    const out = [];
+    for (const o of overlays.values()) {
+      if (o.name !== n) continue;
+      if (direct && !o.direct.has(el.key)) continue;
+      const reading = overlayValue(o, el);
+      if (reading) out.push(reading);
+    }
+    return out;
   },
 };
 const hits = (q) => applyFilter(small, compileQuery(q, ctx));
@@ -725,6 +823,40 @@ if (python.error) {
   const mixed = parseResults(native + nm.out);
   ok(mixed.has('iperf_mbps_out') && mixed.has('rtt_p50'),
      'export-overlay and dcimport overlays coexist in one results file');
+
+  // A field separated by a comma is as split as one separated by a space, so
+  // a host named "a,b" wrote a line reading back as target "a" with the text
+  // value "b" -- the whitespace half of the rule was enforced, the comma half
+  // was not. A peer's name is data from someone else's report rather than
+  // something typed here, so that one is quoted through instead of refused.
+  {
+    const header = readFileSync(join(fixtures, 'netmesh-reports/wr01r01u01.csv'), 'utf8')
+      .split('\n')[0];
+    const dir = mkdtempSync(join(tmpdir(), 'dcimport-'));
+    const report = (host, peer) => {
+      writeFileSync(join(dir, 'x.csv'), `${header}\n1787941142,${host},tx,${peer},udp,64,50,`
+        + '101,100,0.990,72,261,256,384,381,59,9000,confirmed,,,,\n');
+      return dcimport(['--tidy', dir]);
+    };
+
+    const commaHost = report('"a,b"', 'wr01r01u02');
+    ok(commaHost.code !== 0 && commaHost.err.includes('comma'),
+       'a host name carrying a comma is refused, as a space already was');
+
+    for (const [label, peer] of [['a space', '"peer two"'], ['a comma', '"a,b"']]) {
+      const run = report('goodhost', peer);
+      eq(run.code, 0, `a peer carrying ${label} still imports`);
+      const back = parseResults(run.out, new Map(), [], 'imported.tsv');
+      const sample = [...back.values()][0].samples[0];
+      eq(sample.target, 'goodhost', `and the target survives it (${label})`);
+      eq(sample.value, 256, `so does the value (${label})`);
+      eq(sample.meta.peer, peer.replace(/"/g, ''), `and the peer's own name (${label})`);
+    }
+    const clean = [];
+    parseResults(report('goodhost', '"peer two"').out, new Map(), clean, 'imported.tsv');
+    eq(clean, [], 'the quoted line reads back without a word of complaint');
+    rmSync(dir, { recursive: true, force: true });
+  }
 
   // A file that is not a netmesh report fails loudly -- and the mx and iperf
   // reports this tool deliberately no longer reads say where they belong.
@@ -961,6 +1093,1055 @@ ok(!matchesFilter('mxrun.tsv', 'mx.*'), 'and that dot has to be there: it is not
   const flat = treeFromFiles([{ name: 'a.tsv', size: 1 }, { name: 'b.dc', size: 2 }]);
   eq(flat.name, '', 'no relative paths means an unnamed root');
   eq([...flat.children.keys()], ['a.tsv', 'b.dc'], 'with both files directly inside');
+}
+
+// ------------------------------------------------------- yes, no, and rubbish
+// `=== 'true'` used to be the whole vocabulary for a flag, so every other
+// spelling of yes meant no -- `show=yes` hid the net it asked to show.
+{
+  const floor = ['dc D', '  room R', '    rack r1 u=4', '      node tor at=4 role=tor',
+                 '      node u[01..02] role=server'].join('\n');
+  const netOf = (flag) => {
+    const m = parseLayout(`${floor}\nnet data ${flag}\nlink data role=server role=tor scope=rack`);
+    return [...m.nets.values()][0].enabled;
+  };
+  for (const yes of ['show=true', 'show=yes', 'show=y', 'show=on', 'show=1', 'on=yes']) {
+    eq(netOf(yes), true, `${yes} shows the net`);
+  }
+  for (const no of ['show=false', 'show=no', 'show=n', 'show=off', 'show=0', 'on=no']) {
+    eq(netOf(no), false, `${no} hides it`);
+  }
+  const odd = parseLayout(`${floor}\nnet data show=maybe\nlink data role=server role=tor scope=rack`);
+  ok(odd.warnings.some((w) => w.includes('neither yes nor no')),
+     'and a value that is neither says so rather than quietly meaning no');
+
+  // The same for an overlay's invert=, and a min/max that is not a number at
+  // all: NaN used to reach the ramp, where it paints everything one grey.
+  const bound = (meta) => bindOverlay(parseResults(
+    `!test t ${meta}\nt\tD/R/r1/u01\t10\nt\tD/R/r1/u02\t20\n`).get('t'),
+    parseLayout(floor));
+  eq(bound('invert=yes').invert, true, 'invert=yes inverts');
+  eq(bound('invert=1').invert, true, 'so does invert=1');
+  eq(bound('invert=no').invert, false, 'invert=no does not');
+  eq(bound('min=abc').min, 10, 'a min that is not a number leaves the data domain alone');
+  eq(bound('min=abc').autoDomain, true, 'and does not count as having set one');
+  eq(bound('decimals=abc').decimals, null, 'nor does a decimals that is not a number');
+  eq(bound('min=0 max=100').min, 0, 'a real min still overrides');
+  eq(bound('min=0 max=100').autoDomain, false, 'and does count');
+}
+
+// ------------------------------------------------ placeholders that resolve
+// A `{placeholder}` naming something not in scope used to reach the floor
+// plan as literal text -- an element actually called `p{i}`, repeated under
+// every parent, or a server named `{rak}u15`.
+{
+  const warnsOf = (src) => parseLayout(src).warnings.filter((w) => w.includes('placeholder'));
+
+  // The forms the README documents all resolve, and say nothing.
+  eq(warnsOf(['dc D', '  room wr12', '    rack r06 u=42',
+              '      node [7..9] id=u{id} at={id} name={room}{rack}u{id} +row-{i}'].join('\n')),
+     [], 'every documented placeholder resolves');
+
+  const typo = warnsOf(['dc D', '  room wr12', '    rack r06 u=42',
+                        '      node [1..20] name={rak}'].join('\n'));
+  eq(typo.length, 1, 'a misspelt placeholder is reported once, not once per element');
+  ok(typo[0].includes('{rack}'), 'and the message lists the names that would have worked');
+
+  // {id} and {i} belong to an attribute: the id spec is substituted before
+  // the ids exist, so a placeholder there can never resolve.
+  const inSpec = warnsOf(['dc D', '  rack r[1..2] u=4', '    node p{i} at=1'].join('\n'));
+  eq(inSpec.length, 1, 'a placeholder in an id spec is reported once across every parent');
+  ok(inSpec[0].startsWith('line 3: id '), 'and names the id as where it sits');
+
+  eq(warnsOf(['dc D', '  rack r[1..2] u=42', '    node [1..2] name={rak} +t{nope}'].join('\n')).length,
+     2, 'two different mistakes on one line are two warnings');
+
+  // Every layout the repo ships stays quiet, which is what makes the check
+  // worth having: it has to fire on mistakes and not on the house style.
+  for (const file of ['examples/small.dc', 'examples/mega.dc', 'examples/hostnames.dc',
+                      'examples/three-rows.dc', 'examples/mx/floor.dc', 'examples/iperf/floor.dc']) {
+    eq(parseLayout(readFileSync(join(root, file), 'utf8')).warnings, [],
+       `${file} parses without a word`);
+  }
+}
+
+// --------------------------------------------- settings that do nothing
+// An enumerated value outside its vocabulary used to mean the default,
+// silently: higher=high read as higher=bad, style=dotted drew solid,
+// dir=vertical laid out horizontally, and a misspelt !test key vanished.
+// A setting that does nothing is worse than no setting: it looks like one
+// that worked.
+{
+  const testWarn = (line) => {
+    const w = [];
+    parseResults(`${line}\n`, new Map(), w, 'f');
+    return w[0] || '';
+  };
+  eq(testWarn('!test m unit=C higher=bad agg=p95 palette=turbo'), '', 'a valid !test line says nothing');
+  ok(testWarn('!test m higher=high').includes('not one of bad, good'), 'higher= outside its two words');
+  ok(testWarn('!test m palette=rainbow').includes('not one of'), 'a palette that does not exist');
+  ok(testWarn('!test m agg=avg').includes('not one of'), 'an aggregation that does not exist');
+  ok(testWarn('!test m pallete=turbo').includes('unknown key "pallete"'), 'a misspelt key');
+  eq(testWarn('!test m invert=yes'), '', 'every accepted spelling of a flag stays quiet');
+
+  const layoutWarn = (src) => (parseLayout(src).warnings[0] || '');
+  eq(layoutWarn('dc D\n  row A dir=y\n'), '', 'dir=y is one of the two');
+  ok(layoutWarn('dc D\n  row A dir=vertical\n').includes('neither x nor y'), 'dir= outside them');
+  eq(layoutWarn('dc D\n  room R\nnet n style=dashed'), '', 'style=dashed is one of the two');
+  ok(layoutWarn('dc D\n  room R\nnet n style=dotted').includes('neither solid nor dashed'),
+     'style= outside them');
+
+  // Every !test line the repo ships stays quiet, which is what makes the
+  // check safe to have: it fires on mistakes, not on the house style.
+  for (const file of ['examples/small-results.tsv', 'examples/hostnames-results.tsv',
+                      'examples/mx/mx-results.tsv', 'examples/iperf/results.tsv']) {
+    const w = [];
+    parseResults(readFileSync(join(root, file), 'utf8'), new Map(), w, file);
+    eq(w, [], `${file} parses without a word`);
+  }
+}
+
+// ------------------------------------------------------------- load report
+// Every way a file can arrive and do nothing has to say so. These are the
+// silent ones: the viewer used to load two files and mention neither.
+{
+  const none = { fresh: [], samples: 0, warnings: [] };
+  const empty = resultsFileNotice('empty.tsv', none);
+  eq(empty.level, 'warn', 'a file with no data lines is a warning, not a shrug');
+  ok(empty.text.includes('nothing loaded'), 'and says nothing loaded');
+  ok(empty.text.includes('empty, or all comments'), 'with the reason it can be');
+
+  const wrong = resultsFileNotice('wrong.csv',
+    { ...none, warnings: ['results line 1: expected "test target value", got "host,temp"'] });
+  eq(wrong.level, 'warn', 'a file in the wrong format is a warning');
+  ok(wrong.text.includes('1 line could not be read'), 'counting the lines, singular');
+  ok(wrong.lines[0].startsWith('wrong.csv — '), 'and its detail names the file');
+
+  const clean = resultsFileNotice('monday.tsv', { fresh: ['temp', 'rh'], samples: 240, warnings: [] });
+  eq(clean.level, 'ok', 'a clean load is ok');
+  eq(clean.text, 'monday.tsv: 2 metrics, 240 samples', 'and says what it brought');
+
+  // A second file carrying the same test names is its own load now, reported
+  // as such -- it does not merge into the first, so there is nothing to
+  // explain away.
+  const second = resultsFileNotice('tuesday.tsv', { fresh: ['temp', 'rh'], samples: 240, warnings: [] });
+  eq(second.level, 'ok', 'a second file with the same test names is an ordinary load');
+  eq(second.text, 'tuesday.tsv: 2 metrics, 240 samples', 'reported under its own name');
+
+  // Re-reading one file replaces what it brought before rather than counting
+  // its samples twice, which is worth saying out loud.
+  const again = resultsFileNotice('monday.tsv', { fresh: ['temp', 'rh'], reloaded: 2, samples: 240, warnings: [] });
+  eq(again.level, 'note', 'a re-read is a note');
+  ok(again.text.includes('re-read, replacing the 2 metrics it loaded before'), 'saying what it replaced');
+
+  // A file emptied since it was last read takes its old metrics with it: the
+  // re-read replaces, so there is nothing left, and that has to be said.
+  const emptied = resultsFileNotice('monday.tsv', { fresh: [], reloaded: 2, samples: 0, warnings: [] });
+  eq(emptied.level, 'warn', 'a re-read that loads nothing is a warning');
+  ok(emptied.text.includes('the 2 metrics it loaded before are gone'), 'and names what went with it');
+
+  const partial = resultsFileNotice('mixed.tsv',
+    { fresh: ['a'], samples: 10, warnings: ['results line 9: bad'] });
+  eq(partial.level, 'warn', 'a file that partly loaded still warns');
+  ok(partial.text.includes('1 metric, 10 samples'), 'reporting what did land');
+  ok(partial.text.includes('1 warning'), 'and that something on the way in was not understood');
+
+  // Detail lines are capped: one broken generator can warn once per line.
+  const many = resultsFileNotice('flood.tsv',
+    { ...none, warnings: Array.from({ length: 500 }, (_, i) => `results line ${i + 1}: bad`) });
+  eq(many.lines.length, 21, 'at most twenty detail lines, plus the tally');
+  ok(many.lines[20].includes('480 more'), 'and the tally counts the rest');
+
+  eq(prefixed('', 'results line 1: bad'), 'results line 1: bad', 'pasted text has no file to name');
+
+  // A viewer holds one floor plan; handing it two used to drop one in silence.
+  const two = droppedLayoutsNotice(['a.dc', 'b.dc', 'c.dc']);
+  eq(two.level, 'warn', 'dropping a layout is a warning');
+  ok(two.text.includes('c.dc is the one on screen'), 'naming the one that won');
+  ok(two.text.includes('Ignored: a.dc, b.dc'), 'and the ones that did not');
+
+  eq(layoutNotice('floor.dc', 1240, []).text, 'floor.dc: 1,240 elements', 'a layout reports its size');
+  eq(layoutNotice('floor.dc', 5, ['line 2: x']).level, 'warn', 'a layout with warnings warns');
+}
+
+// --------------------------------------------- numbers that were not numbers
+// Every numeric attribute used to be read with parseInt or parseFloat and a
+// silent fallback, so junk became a plausible-looking floor plan: u=abc lost
+// the rack's U grid, u=-5 drew it with negative height, u=1e9 read as 1 (
+// parseInt stops at the "e"), and at=0 quietly became U1. The reader and the
+// check are now the same function, which is what keeps u=1e9 honest -- a
+// checker agreeing with Number() would have passed a value parseInt read as 1.
+{
+  const boxOf = (attr) => {
+    const m = parseLayout(['dc D', '  room R', `    rack r1 ${attr}`,
+                           '      node n at=1'].join('\n'));
+    layout(m.root);
+    return { h: m.byKey.get('D/R/r1').box.h, w: m.warnings };
+  };
+
+  eq(boxOf('u=10').w, [], 'a whole number in range says nothing');
+  eq(boxOf('u=10').h, 73, 'and is the height that gets drawn');
+
+  const dflt = boxOf('u=42').h;   // the height of a rack that declares nothing
+  for (const [attr, phrase] of [['u=abc', 'is not a number'],
+                                ['u=-5', 'is outside 1..1000'],
+                                ['u=0', 'is outside 1..1000'],
+                                ['u=1e9', 'is outside 1..1000'],
+                                ['u=1001', 'is outside 1..1000']]) {
+    const got = boxOf(attr);
+    eq(got.w.length, 1, `${attr} is reported`);
+    ok(got.w[0].includes(phrase) && got.w[0].includes('ignored'),
+       `${attr}: ${phrase}, and the warning says ignored`);
+    eq(got.h, dflt, `${attr} really is ignored, not half-applied`);
+  }
+  eq(boxOf('u=1000').h, 5023, 'the top of the range is still a rack you can draw');
+
+  const frac = boxOf('u=42.5');
+  ok(frac.w[0].includes('not a whole number') && frac.w[0].includes('using 42'),
+     'a fraction is rounded down, and says which way it went');
+
+  // at= picks the U a node sits on. Zero and negatives used to land on U1.
+  const atWarn = (attr) => parseLayout(
+    ['dc D', '  rack r1 u=10', `    node n ${attr}`].join('\n')).warnings;
+  eq(atWarn('at=1'), [], 'the bottom U is a legal place to sit');
+  ok(atWarn('at=0')[0].includes('outside 1..1000'), 'U0 does not exist');
+  ok(atWarn('at=-3')[0].includes('outside 1..1000'), 'nor does a negative U');
+  ok(atWarn('at=abc')[0].includes('is not a number'), 'nor does a word');
+
+  // cols= is read in layout.js, a different file from the check. Reading it
+  // there with parseInt made the warning a lie: cols=1e9 said "ignored" and
+  // laid the room out in one column.
+  const roomOf = (attr) => {
+    const m = parseLayout(['dc D', `  room R ${attr}`, '    rack r[1..6] u=4'].join('\n'));
+    layout(m.root);
+    return { w: m.byKey.get('D/R').box.w, warnings: m.warnings };
+  };
+  eq(roomOf('cols=3').warnings, [], 'three columns is three columns');
+  const free = roomOf('').w;
+  for (const attr of ['cols=abc', 'cols=0', 'cols=1e9']) {
+    eq(roomOf(attr).warnings.length, 1, `${attr} is reported`);
+    eq(roomOf(attr).w, free, `${attr} lays out as if it had not been written`);
+  }
+
+  // A net's width is the one number allowed a fraction, so it must not be
+  // told it is not whole.
+  const netOf = (attr) => {
+    const m = parseLayout(['dc D', '  room R', `net n ${attr}`].join('\n'));
+    return { width: m.nets.get('n').width, warnings: m.warnings };
+  };
+  eq(netOf('width=0.5'), { width: 0.5, warnings: [] }, 'half a pixel wide is a fine net');
+  eq(netOf('width=2').warnings, [], 'so is two');
+  eq(netOf('').width, 1, 'and a net that says nothing is one');
+  for (const attr of ['width=abc', 'width=0', 'width=1e9', 'width=']) {
+    const got = netOf(attr);
+    eq(got.warnings.length, 1, `${attr} is reported`);
+    ok(got.warnings[0].startsWith('line 3: net "n":'), `${attr} names the net it is on`);
+    eq(got.width, 1, `${attr} draws at the default width`);
+  }
+
+  // Every layout the repo ships stays quiet. A check that fires on the house
+  // style is a check people learn to scroll past.
+  for (const file of ['examples/small.dc', 'examples/mega.dc', 'examples/hostnames.dc',
+                      'examples/three-rows.dc', 'examples/mx/floor.dc', 'examples/iperf/floor.dc']) {
+    eq(parseLayout(readFileSync(join(root, file), 'utf8')).warnings, [],
+       `${file} has no number it cannot read`);
+  }
+}
+
+// ------------------------------------------- numbers on a !test line
+// The enumerated !test keys were checked; the numeric ones were not, and
+// they were read with a different expression from the one that used them.
+// decimals=-1 reached toFixed, which throws outside 0..100 -- so one bad
+// character in a data file took down every value label on the floor plan.
+// A trailing `max=` was quieter and worse: Number('') is 0, so the top of
+// the colour scale became zero and the whole ramp read backwards.
+{
+  const plan = parseLayout(['dc D', '  rack r1 u=4', '    node n1 at=1',
+                            '    node n2 at=2', '    node n3 at=3'].join('\n'));
+  const bind = (metaLine) => {
+    const w = [];
+    const map = parseResults([metaLine, 'm n1 10.123', 'm n2 20', 'm n3 30'].join('\n') + '\n',
+                             new Map(), w, 'f');
+    return { o: bindOverlay(map.get(overlayKey('f', 'm')), plan), w };
+  };
+  const shown = (metaLine) => {
+    const { o } = bind(metaLine);
+    return formatValue(o, overlayValue(o, plan.byKey.get('D/r1/n1')).value);
+  };
+
+  eq(bind('!test m decimals=3').w, [], 'a whole number of decimals in range says nothing');
+  eq(shown('!test m decimals=3'), '10.123', 'and is the number of places used');
+
+  for (const bad of ['decimals=-1', 'decimals=200']) {
+    const { o, w } = bind(`!test m ${bad}`);
+    ok(w.length === 1 && w[0].includes('is outside 0..10'), `${bad} is reported`);
+    eq(o.decimals, null, `${bad} leaves the automatic choice in place`);
+    let threw = null;
+    try { formatValue(o, 10.123); } catch (err) { threw = err; }
+    eq(threw, null, `${bad} does not throw out of formatValue`);
+  }
+  ok(bind('!test m decimals=abc').w[0].includes('is not a number'), 'decimals=abc is reported');
+  ok(bind('!test m decimals=2.7').w[0].includes('not a whole number'), 'decimals=2.7 is reported');
+  eq(shown('!test m decimals=2.7'), '10.12', 'and rounds down, as it says');
+
+  // Even an overlay assembled in code cannot make a label throw.
+  eq(formatValue({ decimals: -1, min: 0, max: 1 }, 1.5), '2',
+     'a hand-built overlay is clamped to the nearest legal place count');
+  eq(formatValue({ decimals: 1e9, min: 0, max: 1 }, 1.5), '1.5', 'at the other end too');
+
+  // min= and max= with nothing after them
+  for (const bad of ['min=', 'max=', 'min=abc', 'max=1e999']) {
+    const { o, w } = bind(`!test m ${bad}`);
+    ok(w.length === 1 && w[0].includes('is not a number'), `${bad} is reported`);
+    eq(o.autoDomain, true, `${bad} does not count as a declared domain`);
+    eq([o.min, o.max], [10.123, 30], `${bad} leaves the domain the data's own`);
+  }
+  const good = bind('!test m min=0 max=100');
+  eq(good.w, [], 'a real domain says nothing');
+  eq([good.o.min, good.o.max, good.o.autoDomain], [0, 100, false], 'and is the domain used');
+
+  // min and max are judged as a pair, and they may arrive on separate lines.
+  ok(bind('!test m min=30 max=10').w.some((x) => x.includes('is above max=10')),
+     'a scale that runs downhill is reported');
+  ok(bind('!test m min=30 max=10').w.some((x) => x.includes('invert=yes')),
+     'and points at the setting that flips a scale on purpose');
+  ok(bind('!test m min=5 max=5').w.some((x) => x.includes('no width')),
+     'a scale with no width is reported');
+  const split = [];
+  parseResults('!test m min=30\n!test m max=10\nm n1 1\n', new Map(), split, 'f');
+  ok(split.some((x) => x.includes('is above max=10')),
+     'min and max still pair up when written on different lines');
+  const oneSided = [];
+  parseResults('!test m min=30\nm n1 1\n', new Map(), oneSided, 'f');
+  eq(oneSided, [], 'a min with no max is not half of anything');
+
+  // Every !test line the repo ships stays quiet under the numeric checks too.
+  for (const file of ['examples/small-results.tsv', 'examples/hostnames-results.tsv',
+                      'examples/mx/mx-results.tsv', 'examples/iperf/results.tsv']) {
+    const w = [];
+    parseResults(readFileSync(join(root, file), 'utf8'), new Map(), w, file);
+    eq(w, [], `${file} has no number it cannot read`);
+  }
+}
+
+// ------------------------------------------- aggregations that do not apply
+// geomean over a zero and harmonic over values that cancel are undefined,
+// and they reached the canvas as the words "NaN" and "Infinity" printed
+// beside an element -- in the same grey that means "never measured".
+{
+  const plan = parseLayout(['dc D', '  rack r1 u=4', '    node n1 at=1', '    node n2 at=2'].join('\n'));
+  const agg = (name, values) => {
+    const lines = [`!test m unit=C agg=${name}`, ...values.map((v) => `m n1 ${v}`), 'm n2 5'];
+    const map = parseResults(`${lines.join('\n')}\n`, new Map(), [], 'f');
+    const o = bindOverlay(map.get(overlayKey('f', 'm')), plan);
+    return valueWithUnit(o, overlayValue(o, plan.byKey.get('D/r1/n1')).value);
+  };
+  eq(agg('geomean', [1, 2, 4]), '2C', 'a geometric mean that exists is printed with its unit');
+  eq(agg('geomean', [0, 2, 4]), NO_VALUE, 'one that does not is not printed as NaN');
+  eq(agg('geomean', [-1, 2, 4]), NO_VALUE, 'nor over a negative');
+  eq(agg('harmonic', [-1, 1]), NO_VALUE, 'nor a harmonic mean of values that cancel');
+  eq(agg('harmonic', [1, 2, 4]), '1.71C', 'the ordinary case is untouched');
+  eq(agg('mean', [1, 2]), '1.5C', 'as is every other aggregation');
+
+  // The unit belongs to the number: there is no such reading as "—C".
+  ok(!agg('geomean', [0, 2]).includes('C'), 'no unit is printed where no number is');
+}
+
+// ------------------------------------------- ranges that expanded to nonsense
+{
+  // Padding is applied to the digits. Padding the absolute value dropped the
+  // sign, so [-05..-01] came out as five positive ids counting downward.
+  eq(expand('[-05..-01]'), ['-05', '-04', '-03', '-02', '-01'], 'a padded negative range keeps its sign');
+  eq(expand('[-3..-1]'), ['-3', '-2', '-1'], 'an unpadded one always did');
+  eq(expand('[01..05]'), ['01', '02', '03', '04', '05'], 'and padding still pads');
+  eq(expand('[001..003]'), ['001', '002', '003'], 'to whatever width the low end sets');
+
+  // A letter range walked the character codes, so [A..z] passed through
+  // [ \ ] ^ _ ` -- ids named after punctuation, one of them a bracket.
+  eq(expand('[A..D]'), ['A', 'B', 'C', 'D'], 'a letter range inside one alphabet is fine');
+  eq(expand('[a..e]'), ['a', 'b', 'c', 'd', 'e'], 'in either case');
+  for (const bad of ['[A..z]', '[a..C]', '[0..z]']) {
+    let msg = '';
+    try { expand(bad); } catch (err) { msg = err.message; }
+    ok(msg.includes('not both'), `${bad} is refused rather than expanded through punctuation`);
+  }
+  // The parser turns that refusal into a warning on the line that caused it.
+  const crossed = parseLayout(['dc D', '  room R', '    rack r[A..z]'].join('\n'));
+  eq(crossed.warnings.length, 1, 'and the layout reports it once');
+  ok(crossed.warnings[0].startsWith('line 3:'), 'against the line it is on');
+
+  // A spec that expands to nothing took its whole subtree with it in silence.
+  const vanished = parseLayout(['dc D', '  room R', '    rack r[,] u=4',
+                                '      node n at=1'].join('\n'));
+  ok(vanished.warnings.some((w) => w.includes('expands to no ids')),
+     'a declaration that creates nothing says so');
+  ok(vanished.warnings.some((w) => w.includes('the lines under it')),
+     'and warns that the lines below went with it');
+  eq(vanished.byKey.size, 2, 'the rack and its node really are gone');
+}
+
+// ------------------------------------------- metadata written as JSON
+// NDJSON is the shape the docs tell tools to generate, and it was the one
+// shape that accepted anything: applyJsonMeta wrote straight into the
+// overlay, so "pallete", "higher": "high" and "decimals": -1 all landed
+// without a word while their text spellings were reported.
+{
+  const warnOf = (text) => {
+    const w = [];
+    parseResults(text, new Map(), w, 'f');
+    return w;
+  };
+  const nd = (obj) => `${JSON.stringify(obj)}\n{"test":"m","target":"n1","value":1}\n`;
+
+  eq(warnOf(nd({ '!test': 'm', unit: 'C', higher: 'bad', decimals: 1 })), [],
+     'a !test object with only known keys says nothing');
+  ok(warnOf(nd({ '!test': 'm', pallete: 'turbo' }))[0].includes('unknown key "pallete"'),
+     'a misspelt key in JSON is reported like a misspelt key in text');
+  ok(warnOf(nd({ '!test': 'm', higher: 'high' }))[0].includes('not one of bad, good'),
+     'so is a value outside its vocabulary');
+  ok(warnOf(nd({ '!test': 'm', decimals: -1 }))[0].includes('outside 0..10'),
+     'and a number outside its range');
+  ok(warnOf(nd({ '!test': 'm', min: 30, max: 10 }))[0].includes('is above max=10'),
+     'and a colour scale that runs backwards');
+  ok(warnOf(nd({ '!test': 'm', label: { en: 'Temp' } }))[0].includes('has to be a number or a string'),
+     'a value that is a structure has no reading as metadata, and is not dropped in silence');
+
+  // The whole-document form declares metadata too, and names where it was.
+  const doc = warnOf(JSON.stringify({
+    tests: { m: { decimals: -1, agg: 'avg' } },
+    samples: [{ test: 'm', target: 'n1', value: 1 }],
+  }));
+  eq(doc.length, 2, 'both mistakes in a tests{} block are reported');
+  ok(doc.every((w) => w.startsWith('results.tests.m:')), 'and each says which test it was on');
+
+  // One file reported its own lines two ways: "results line 2" for JSON that
+  // would not parse, plain "line 2" for everything after it.
+  const mixed = warnOf('{"!test":"m","pallete":"x"}\nnot json\n');
+  ok(mixed.every((w) => w.startsWith('results line ')), 'every line of a file is numbered the same way');
+
+  // The NDJSON the repo ships stays quiet.
+  const shipped = [];
+  parseResults(readFileSync(join(root, 'tests/fixtures/mx-export/results.ndjson'), 'utf8'),
+               new Map(), shipped, 'results.ndjson');
+  eq(shipped, [], 'tests/fixtures/mx-export/results.ndjson parses without a word');
+}
+
+// ------------------------------------------- one mistake, one warning
+// A warning about something written belongs to the line, not to each element
+// the line produced. materialize runs again under every parent and once per
+// expanded id, so one typo in `rack R[01..40]` inside four rows was 160
+// warnings -- more than the load report shows in total, so the mistake that
+// mattered got pushed off the end by the one that had already been made.
+{
+  const wide = parseLayout(['dc D', '  room R', '    row A..D',
+                            '      rack R[01..40] u=abc dir=vertical color=blu'].join('\n'));
+  eq(wide.warnings.length, 3, 'three mistakes on one line are three warnings, not 480');
+  ok(wide.warnings.every((w) => w.includes('"R[01..40]"')),
+     'and each names what was written rather than one rack it became');
+  eq(wide.byKey.size, 1 + 1 + 4 + 160, 'every rack is still there');
+
+  // Substituted attributes differ per element, so they are deduped by value:
+  // a real per-element mistake is still reported per distinct value.
+  const perValue = parseLayout(['dc D', '  rack r[1..3] u=x{i}'].join('\n'));
+  eq(perValue.warnings.length, 3, 'three different bad values are three warnings');
+}
+
+// ------------------------------------------- colours the canvas cannot read
+// Assigning an unparseable colour to a canvas context is ignored and the
+// previous one stays, so `color=blu` painted the element in whatever colour
+// the element before it used, and a bad net colour drew that net in the
+// previous net's. Nothing on screen said so.
+{
+  for (const good of ['#4fa3ff', '#fff', '#ffff', '#aabbccdd', 'red', 'rebeccapurple',
+                      'transparent', 'rgb(1,2,3)', 'rgba(1,2,3,.5)', 'hsl(20 100% 50%)',
+                      'oklch(0.5 0.1 30)', 'RED', '#4FA3FF']) {
+    ok(isColor(good), `${good} is a colour`);
+  }
+  for (const bad of ['blu', '#gggggg', '#ff', '#fffff', '', 'reddish', '4fa3ff']) {
+    ok(!isColor(bad), `${bad} is not`);
+  }
+
+  const netColor = (value) => {
+    const m = parseLayout(['dc D', '  room R', `net n color=${value}`].join('\n'));
+    return { color: m.nets.get('n').color, warnings: m.warnings };
+  };
+  eq(netColor('#4fa3ff').warnings, [], 'a good net colour says nothing');
+  eq(netColor('#4fa3ff').color, '#4fa3ff', 'and is used');
+  const badNet = netColor('blu');
+  eq(badNet.warnings.length, 1, 'a bad one is reported');
+  ok(badNet.warnings[0].includes('not a colour the browser reads'), 'in those words');
+  ok(badNet.color !== 'blu', 'and the net falls back to a colour that draws');
+
+  // An element keeps no colour it cannot be drawn in, so nothing downstream
+  // can hand the canvas a value it will quietly ignore.
+  const badEl = parseLayout(['dc D', '  rack r1 u=4 color=blu'].join('\n'));
+  eq(badEl.warnings.length, 1, 'an element colour is checked the same way');
+  eq(badEl.byKey.get('D/r1').attrsEff.color, undefined, 'and the bad value does not reach the canvas');
+  const goodEl = parseLayout(['dc D', '  rack r1 u=4 color=#102030'].join('\n'));
+  eq(goodEl.warnings, [], 'a good element colour says nothing');
+  eq(goodEl.byKey.get('D/r1').attrsEff.color, '#102030', 'and survives');
+
+  // Shorthand hex read as a plain 24-bit number: #fff came out 0x000fff, a
+  // near-black blue, so the ink picked for it was white on white.
+  eq(contrastInk('#fff'), contrastInk('#ffffff'), 'shorthand hex picks the same ink as the long form');
+  eq(contrastInk('#000'), contrastInk('#000000'), 'at the dark end too');
+  eq(contrastInk('#ffff'), contrastInk('#ffffff'), 'and #rgba drops its alpha');
+
+  // Every layout the repo ships stays quiet under the colour check.
+  for (const file of ['examples/small.dc', 'examples/mega.dc', 'examples/hostnames.dc',
+                      'examples/three-rows.dc', 'examples/mx/floor.dc', 'examples/iperf/floor.dc']) {
+    eq(parseLayout(readFileSync(join(root, file), 'utf8')).warnings, [],
+       `${file} has no colour it cannot draw`);
+  }
+}
+
+// ------------------------------------------- a wildcard that found less
+// The plain and the glob branch of a bare filter term kept their own field
+// lists, and the glob's was missing attributes: `serv` found two servers and
+// `*serv*` found none. Adding a wildcard is meant to widen a search.
+{
+  const plan = parseLayout(['dc D', '  room R', '    rack r1 u=10 model=r760',
+                            '      node a1 at=1 role=tor +switch',
+                            '      node b1 at=2 role=server-x +gpu',
+                            '      node c1 at=3 role=server'].join('\n'));
+  const ctx = { hasOverlay: () => false, readingsOf: () => [], flowsOf: () => [] };
+  const hits = (q) => {
+    const fn = compileQuery(q, ctx);
+    return plan.all.filter((e) => (fn ? fn(e) : true)).map((e) => e.id);
+  };
+  eq(hits('r760'), hits('r76*'), 'a glob over an attribute value finds what the substring finds');
+  eq(hits('serv'), hits('*serv*'), 'in either direction');
+  eq(hits('serv').length, 2, 'and it is the two servers, not nothing');
+  eq(hits('gp?'), ['b1'], 'a tag glob still works');
+  eq(hits('D/R/*').length, 4, 'and so does a path glob, which only the glob branch has');
+}
+
+// ------------------------------------------- two files, one name
+// Overlays are grouped by the name of the file they came from, and loading a
+// file again replaces what it brought last time -- which is right for a
+// re-read and wrong for a different file that happens to share a name. Two
+// folders of results both hold `results.tsv`, and opening the second threw
+// the first away with no warning at all, against the one rule the overlays
+// have: a file's readings are that file's, and files never combine.
+{
+  eq(pathLabel([{ name: 'runs' }], 'results.tsv'), 'results.tsv',
+     'a file in the open folder is called what it is called');
+  eq(pathLabel([{ name: 'runs' }, { name: 'monday' }], 'results.tsv'), 'monday/results.tsv',
+     'one in a subfolder carries the folder that tells it apart');
+  eq(pathLabel([{ name: 'runs' }, { name: 'a' }, { name: 'b' }], 'r.tsv'), 'a/b/r.tsv',
+     'however deep it sits');
+  ok(pathLabel([{ name: 'runs' }, { name: 'monday' }], 'r.tsv')
+     !== pathLabel([{ name: 'runs' }, { name: 'tuesday' }], 'r.tsv'),
+     'and two runs of the same file are two different names');
+
+  // Keyed by those labels, the two files stay two overlays.
+  const plan = parseLayout(['dc D', '  rack r1 u=4', '    node n1 at=1', '    node n2 at=2'].join('\n'));
+  const into = new Map();
+  parseResults('!test m unit=C\nm n1 10\n', into, [], 'monday/results.tsv');
+  parseResults('!test m unit=C\nm n2 20\n', into, [], 'tuesday/results.tsv');
+  eq(into.size, 2, 'the same test from two paths is two overlays');
+  const monday = bindOverlay(into.get(overlayKey('monday/results.tsv', 'm')), plan);
+  const tuesday = bindOverlay(into.get(overlayKey('tuesday/results.tsv', 'm')), plan);
+  eq(overlayValue(monday, plan.byKey.get('D/r1/n1')).value, 10, "monday keeps monday's reading");
+  eq(overlayValue(tuesday, plan.byKey.get('D/r1/n2')).value, 20, 'and tuesday its own');
+  eq(overlayValue(monday, plan.byKey.get('D/r1/n2')), null, 'neither has borrowed the other');
+}
+
+// ------------------------------------------- a domain that ignored the aggregation
+// recomputeStats was taught to find its population through the overlay's own
+// direct set rather than assuming a measurement lands on a `node`.
+// recomputeDomain was not, so a layout measured at the rack matched nothing
+// and kept the domain bindOverlay had built from the raw samples. Aggregation
+// compresses: ten samples per rack spanning 15..90 average out to 45..60, and
+// painting those four racks across a 15..90 ramp puts every one of them in
+// the middle fifth of it -- washed out, and looking like it worked.
+{
+  const measured = (target) => {
+    const plan = parseLayout(['dc D', '  room R', '    rack r[1..4] u=4',
+                              '      node n[1..2] at={i}'].join('\n'));
+    const rows = [];
+    for (let r = 1; r <= 4; r++) {
+      for (let s = 0; s < 10; s++) rows.push(`m ${target(r)} ${40 + r * 5 + (s % 2 ? -30 : 30)}`);
+    }
+    const map = parseResults(`!test m unit=C\n${rows.join('\n')}\n`, new Map(), [], 'f');
+    const o = bindOverlay(map.get(overlayKey('f', 'm')), plan);
+    const raw = [o.min, o.max];
+    const changed = recomputeDomain(o, plan);
+    return { raw, changed, domain: [o.min, o.max] };
+  };
+
+  const onRacks = measured((r) => `r${r}`);
+  eq(onRacks.raw, [15, 90], 'bindOverlay starts from the extent of the raw samples');
+  eq(onRacks.changed, true, 'a rack-measured layout has a population to measure');
+  eq(onRacks.domain, [45, 60], 'and the ramp spans what the racks actually read');
+
+  const onNodes = measured((r) => `r${r}/n1`);
+  eq(onNodes.domain, [45, 60], 'a node-measured layout is unchanged by the fix');
+
+  // The shipped example is measured at the node, so its domains must not move.
+  const small = parseLayout(readFileSync(join(root, 'examples/small.dc'), 'utf8'));
+  const shipped = parseResults(readFileSync(join(root, 'examples/small-results.tsv'), 'utf8'),
+                               new Map(), [], 'small-results.tsv');
+  const temp = bindOverlay(shipped.get(overlayKey('small-results.tsv', 'temp_c')), small);
+  recomputeDomain(temp, small);
+  eq([temp.min, temp.max], [24, 72], 'examples/small-results.tsv still spans 24..72');
+}
+
+// ------------------------------------------- a box that lied about the scale
+// The panel read its own inputs with Number(input.value), and Number('') is
+// 0 -- so emptying the min box pinned the bottom of the colour scale to zero
+// instead of leaving it alone, exactly what a trailing `max=` did in a file.
+// Junk was worse than ignored: it stayed in the box while the scale kept
+// something else, so the box no longer described the picture.
+{
+  eq(readNumber('', null), null, 'an empty box holds no number');
+  eq(readNumber('   ', null), null, 'nor does a box of spaces');
+  eq(readNumber('abc', null), null, 'nor one with a word in it');
+  eq(readNumber('0', null), 0, 'but zero is a number a person can mean');
+  eq(readNumber('-4.5', null), -4.5, 'and so is a negative one');
+  eq(readNumber('1e999', null), null, 'infinity is not a scale end');
+}
+
+// ------------------------------------------- the × that removed nothing
+// Overlays are keyed by file and test, since two files may carry the same
+// test. removeOverlay deleted by overlay.name, which is only the label -- so
+// the × on a metric card did nothing at all, silently, while the × on its
+// file's header (which deletes by key) worked. Both go through one function
+// now, and it takes the overlay rather than a key, so a caller cannot pick
+// the wrong field again.
+{
+  const plan = parseLayout(['dc D', '  rack r1 u=4', '    node n1 at=1'].join('\n'));
+  const into = new Map();
+  parseResults('!test a\na n1 1\n!test b\nb n1 2\n', into, [], 'r.tsv');
+  eq(into.size, 2, 'two metrics from one file');
+  const bound = new Map();
+  for (const [key, raw] of into) bound.set(key, bindOverlay(raw, plan));
+
+  // What removeOverlay does, against what it used to do.
+  const one = bound.get(overlayKey('r.tsv', 'a'));
+  ok(one.key !== one.name, 'a bound overlay is keyed by more than its name');
+  eq(bound.has(one.name), false, 'so deleting by name would find nothing');
+  bound.delete(one.key);
+  eq([...bound.keys()], [overlayKey('r.tsv', 'b')], 'and deleting by key removes exactly one');
+}
+
+// ------------------------------------------- ?results= had the same collision
+// The Files panel was taught that a file is known by its path. The URL
+// loader still called every file by its last path segment, so
+// ?results=runs/monday/results.tsv,runs/tuesday/results.tsv named both
+// results.tsv and the second replaced the first.
+{
+  // urlLabel lives in app.js, which needs a DOM; the property it has to hold
+  // is that two URLs differing anywhere in their path give different names.
+  const label = (url) => decodeURIComponent(new URL(url, 'http://x/').pathname).replace(/^\//, '');
+  eq(label('runs/monday/results.tsv'), 'runs/monday/results.tsv', 'the path is the name');
+  ok(label('runs/monday/results.tsv') !== label('runs/tuesday/results.tsv'),
+     'two runs of the same file are two names');
+  eq(label('http://elsewhere/x/r.tsv'), 'x/r.tsv', 'an absolute URL keeps its path');
+  ok(label('a/r.tsv') !== 'r.tsv', 'and the last segment alone is not it');
+}
+
+// ------------------------------------------- gap=, which did nothing
+// `gap` sat in the parser's NON_INHERITED list beside cols and dir -- the
+// list that says "this is a layout key" -- and layout.js never read it. A
+// person writing gap=0 got an attribute stored and no change on screen.
+{
+  const roomH = (attr) => {
+    const m = parseLayout(['dc D', `  room R${attr}`, '    rack r[1..3] u=4'].join('\n'));
+    layout(m.root);
+    return { h: m.byKey.get('D/R').box.h, warnings: m.warnings };
+  };
+  const dflt = roomH('').h;
+  ok(roomH(' gap=40').h > dflt, 'a bigger gap makes the room taller');
+  ok(roomH(' gap=0').h < dflt, 'and zero packs it tighter -- zero is a real answer');
+  eq(roomH(' gap=40').warnings, [], 'a gap in range says nothing');
+  ok(roomH(' gap=abc').warnings[0].includes('is not a number'), 'junk is reported');
+  ok(roomH(' gap=-1').warnings[0].includes('outside 0..1000'), 'and so is a negative gap');
+  eq(roomH(' gap=abc').h, dflt, 'and neither changes the spacing');
+  eq(roomH(' gap=0').warnings, [], 'zero is not mistaken for absent');
+}
+
+// ------------------------------------------- what the editor knows
+// The completions teach the syntax, so a key the parser takes and the editor
+// never offers is a feature nobody finds -- cap= on a link rule worked and
+// was never suggested. The reverse is the same fault: bidir= and label= were
+// suggested while nothing read them. These assertions are the guard, since
+// the lists live in two files and will drift again otherwise.
+{
+  const offered = (text) => new Set((suggestionsFor(text, text.length) || { options: [] })
+    .options.map((o) => o.text));
+
+  const linkOpts = offered('net data\nlink data +a +b ');
+  for (const key of LINK_OPTS) {
+    ok(linkOpts.has(`${key}=`), `the editor offers ${key}= on a link rule`);
+  }
+  // And offers nothing else: teaching an option the parser does not take is
+  // the same fault as missing one, and both have happened -- cap= was never
+  // offered, while bidir= and label= were, after being read by nothing.
+  // This layout declares no elements, so nothing is harvested from it and
+  // the only `key=` completions left are the options and the kind selector.
+  eq([...linkOpts].filter((t) => t.endsWith('=')).sort(),
+     ['kind=', ...[...LINK_OPTS].map((k) => `${k}=`)].sort(),
+     'the editor teaches exactly the options a link rule takes');
+
+  const elementKeys = offered('dc D\n  room R\n    rack r1 ');
+  // `size` is the old spelling of `u` and is deliberately not taught twice.
+  for (const key of Object.keys(NUMBERS)) {
+    if (key === 'size') continue;
+    ok(elementKeys.has(`${key}=`), `the editor offers ${key}= on an element`);
+  }
+  for (const key of ['name', 'id', 'dir', 'color']) {
+    ok(elementKeys.has(`${key}=`), `the editor offers ${key}=`);
+  }
+}
+
+// ------------------------------------------- a target that named forty things
+// Short targets are how a results file is normally written, and short names
+// repeat: a floor of forty racks has forty u01s. The resolver picked the
+// first and said nothing, so one rack coloured and thirty-nine stayed grey
+// -- which reads as "not measured" rather than "you did not say which".
+{
+  const plan = parseLayout(['dc D', '  room R', '    rack r[1..3] u=4',
+                            '      node u01 at=1', '      node tor at=4'].join('\n'));
+
+  eq(plan.resolveWhere('D/R/r2/u01').count, 1, 'a full path names one element');
+  eq(plan.resolveWhere('r2/u01').count, 1, 'and so does a suffix that only fits one');
+  eq(plan.resolveWhere('u01').count, 3, 'a bare name that repeats reports how many it fits');
+  eq(plan.resolveWhere('u01').el.key, 'D/R/r1/u01', 'and still resolves to the first');
+  eq(plan.resolveWhere('nope').count, 0, 'a target that fits nothing fits nothing');
+  eq(plan.resolveWhere('nope').el, null, 'and resolves to nothing');
+  ok(plan.resolve('u01') === plan.resolveWhere('u01').el, 'resolve and resolveWhere agree');
+
+  const map = parseResults('!test t unit=C\nt u01 50\nt r2/u01 60\nt ghost 70\n', new Map(), [], 'f');
+  const o = bindOverlay(map.get(overlayKey('f', 't')), plan);
+  eq(o.unresolved, ['ghost'], 'a target matching nothing is still reported');
+  eq(o.ambiguous.length, 1, 'and one matching several is reported too');
+  eq(o.ambiguous[0], { target: 'u01', count: 3, chosen: 'D/R/r1/u01' },
+     'naming the target, how many it fits, and which one got the reading');
+
+  // A layout with no repeats says nothing, which is what makes it worth having.
+  const unique = parseLayout(['dc D', '  rack r1 u=4', '    node a at=1', '    node b at=2'].join('\n'));
+  const clean = bindOverlay(
+    parseResults('t a 1\nt b 2\n', new Map(), [], 'f').get(overlayKey('f', 't')), unique);
+  eq(clean.ambiguous, [], 'unique targets are not ambiguous');
+
+  // The shipped example is written with full paths and must stay quiet.
+  const small = parseLayout(readFileSync(join(root, 'examples/small.dc'), 'utf8'));
+  const shipped = parseResults(readFileSync(join(root, 'examples/small-results.tsv'), 'utf8'),
+                               new Map(), [], 'small-results.tsv');
+  for (const raw of shipped.values()) {
+    eq(bindOverlay(raw, small).ambiguous, [], `examples/small-results.tsv ${raw.name} is unambiguous`);
+  }
+}
+
+// ------------------------------------------- dcadd could not write a label
+// The format is written for `label="Inlet temp"`, the shipped examples use
+// it, the conversion guide tells people to write it -- and the tool for
+// writing these files refused any value with a space in it, so --meta could
+// not set the one field that almost always needs one. dcimport had learnt to
+// quote a year earlier; dcadd had not.
+if (python.error) {
+  console.log('  dcadd: skipped (no python3)');
+} else {
+  const dcadd = (args) => {
+    const run = spawnSync('python3', [join(root, 'tools/dcadd'), '/dev/null', ...args, '-n'],
+      { encoding: 'utf8' });
+    return { code: run.status, out: (run.stdout || '').trim(), err: (run.stderr || '').trim() };
+  };
+  const reads = (line) => {
+    const w = [];
+    const map = parseResults(`${line}\n`, new Map(), w, 'f');
+    return { overlay: [...map.values()][0], warnings: w };
+  };
+
+  const meta = dcadd(['--meta', 'temp_c', 'unit=C', 'label=Inlet temp']);
+  eq(meta.code, 0, 'a metadata label with a space is written, not refused');
+  eq(meta.out, '!test\ttemp_c\tunit=C\tlabel="Inlet temp"', 'quoted on the way out');
+  eq(reads(meta.out).overlay.meta.label, 'Inlet temp', 'and read back whole');
+  eq(reads(meta.out).warnings, [], 'with nothing to report');
+
+  const extra = dcadd(['temp_c', 'u01', '61.2', 'peer=rack a']);
+  eq(extra.code, 0, 'so is an extra field with a space');
+  eq(reads(extra.out).overlay.samples[0].meta.peer, 'rack a', 'and it survives the round trip');
+
+  // No escape in the format, so the quote used is the one the value lacks.
+  const dq = dcadd(['temp_c', 'u01', '1', 'note=say"hi"']);
+  eq(dq.code, 0, 'a value holding a double quote is writable');
+  eq(reads(dq.out).overlay.samples[0].meta.note, 'say"hi"', 'through the other quote character');
+  const sq = dcadd(['temp_c', 'u01', '1', "note=it's here"]);
+  eq(reads(sq.out).overlay.samples[0].meta.note, "it's here", 'and the same in reverse');
+  const both = dcadd(['temp_c', 'u01', '1', 'note=a "b" c\'d']);
+  eq(both.code, 1, 'a value needing both quotes cannot be written');
+  ok(both.err.includes('no escape'), 'and says why rather than writing something wrong');
+
+  // Still refuses what really cannot be written, and what is not key=value.
+  ok(dcadd(['temp_c', 'a b', '1']).code === 1, 'a target with a space is still refused');
+  ok(dcadd(['temp_c', 'u01', '1', 'bareword']).code === 1, 'an extra field must be key=value');
+  ok(dcadd(['--meta', 'temp_c', 'label=']).code === 1, 'and an empty value is not a setting');
+
+  // A stdin line that is not "target value" used to vanish. Comma-separated
+  // input is every line of it: split() breaks on whitespace only.
+  const fed = spawnSync('python3', [join(root, 'tools/dcadd'), '/dev/null', '--stdin', 'temp_c', '-n'],
+    { encoding: 'utf8', input: 'u01 61.2\nu02,62.3\n\n# note\nu03\n' });
+  eq((fed.stdout || '').trim(), 'temp_c\tu01\t61.2', 'the readable line is written');
+  ok((fed.stderr || '').includes('skipped 2'), 'and the two unreadable ones are reported');
+  ok((fed.stderr || '').includes("'u02,62.3'"), 'by content, so the cause is visible');
+  ok(!(fed.stderr || '').includes('# note'), 'blank lines and comments are not "skipped"');
+}
+
+// ------------------------------------------- stats that outlived their aggregation
+// Standardizing measures the mean and spread of the aggregated values, and
+// the two standardize switches deliberately keep that measurement across an
+// off/on cycle so flipping them is cheap. Changing the aggregation makes it
+// a measurement of something else -- and while standardizing was off, the
+// change did not drop it. The same metric on the same settings then coloured
+// two different ways depending on the order the switches were clicked.
+{
+  const plan = parseLayout(['dc D', '  rack r1 u=6', '    node n1 at=1',
+                            '    node n2 at=2', '    node n3 at=3'].join('\n'));
+  const rows = [];
+  for (const [n, vals] of [[1, [10, 90]], [2, [20, 20]], [3, [30, 30]]]) {
+    for (const v of vals) rows.push(`m n${n} ${v}`);
+  }
+  const fresh = () => bindOverlay(
+    parseResults(`!test m unit=C\n${rows.join('\n')}\n`, new Map(), [], 'f').get(overlayKey('f', 'm')),
+    plan);
+
+  // The app's three actions, as they behave after the fix.
+  const setAgg = (o) => (agg) => {
+    o.agg = agg;
+    clearOverlayCache(o);
+    if (o.stdMode !== 'off') recomputeStats(o, plan);
+    else o.stats = null;
+  };
+  const on = (o) => () => {
+    o.standardize = 'colour';
+    if (o.stdMode !== 'off' && !o.stats) recomputeStats(o, plan);
+  };
+  const zOf = (o) => zScore(o, overlayValue(o, plan.byKey.get('D/r1/n1')).value);
+
+  const direct = fresh();
+  setAgg(direct)('max');
+  on(direct)();
+  const roundabout = fresh();
+  setAgg(roundabout)('mean');
+  on(roundabout)();
+  roundabout.standardize = 'off';
+  setAgg(roundabout)('max');
+  on(roundabout)();
+
+  eq(roundabout.stats.mean, direct.stats.mean, 'the mean belongs to the aggregation in force');
+  eq(zOf(roundabout), zOf(direct), 'so the same settings give the same z either way round');
+  ok(Math.abs(zOf(direct) - 1.4018) < 0.001, 'and it is the z of the maxima, not of the means');
+
+  // Flipping standardizing off and on without touching the aggregation must
+  // still reuse the measurement -- that is what the cache is for.
+  const kept = fresh();
+  on(kept)();
+  const first = kept.stats;
+  kept.standardize = 'off';
+  on(kept)();
+  ok(kept.stats === first, 'an off/on cycle alone still costs nothing');
+}
+
+// ------------------------------------------- a control with nothing to control
+// Verdicts are not averaged: the text path takes the worst, then the most
+// common, and never reads overlay.agg. The card offered all thirteen
+// aggregations anyway, showed "mean" as the setting for a metric of PASS and
+// FAIL, and every one of them produced the same answer.
+{
+  const plan = parseLayout(['dc D', '  rack r1 u=4', '    node n1 at=1'].join('\n'));
+  const o = bindOverlay(
+    parseResults('burnin n1 PASS\nburnin n1 FAIL\nburnin n1 PASS\n', new Map(), [], 'f')
+      .get(overlayKey('f', 'burnin')), plan);
+  eq(o.numeric, false, 'a metric of verdicts is not numeric');
+
+  const seen = new Set();
+  for (const agg of Object.keys(AGGREGATIONS)) {
+    o.agg = agg;
+    clearOverlayCache(o);
+    seen.add(overlayValue(o, plan.byKey.get('D/r1/n1')).value);
+  }
+  eq([...seen], ['FAIL'], 'and no aggregation changes what it reads -- the worst verdict wins');
+}
+
+// ------------------------------------------- a layout's warnings lost their count
+// detail() caps a results file's warnings and adds "… and N more".
+// layoutNotice sliced to the same cap and added nothing, so a layout with a
+// hundred warnings showed twenty and looked like it had twenty.
+{
+  const many = Array.from({ length: 100 }, (_, i) => `line ${i + 1}: x`);
+  const n = layoutNotice('floor.dc', 5, many);
+  eq(n.lines.length, 21, 'twenty detail lines, plus the tally');
+  ok(n.lines[20].includes('80 more'), 'and the tally counts what is not shown');
+  ok(n.text.includes('100 warnings'), 'the summary had the true count all along');
+  eq(layoutNotice('floor.dc', 5, ['line 2: x']).lines, ['line 2: x'],
+     'a short list is still shown whole, with no tally');
+  eq(layoutNotice('floor.dc', 5, []).lines, [], 'and a clean layout has no lines at all');
+}
+
+// ------------------------------------------- a tick that followed you to another floor
+// A net's checkbox has to outlive a re-parse: the editor re-parses on every
+// keystroke and builds fresh net objects, so without a remembered choice the
+// tick snapped back mid-edit. It was remembered by name and nothing else, so
+// it also outlived loading a different file -- untick `mgmt` on one floor
+// plan and the next one's `net mgmt show=yes` arrived hidden, its own
+// instruction overruled by a decision about a document it never met.
+//
+// app.js holds that state, so what is checked here is the rule it now
+// follows: the choice is kept while the layout's name is the same, and
+// dropped when it changes.
+{
+  const overrides = new Map();
+  let layoutName = '';
+  // What loadLayoutText does, in the order it does it.
+  const load = (text, name) => {
+    if (name !== layoutName) overrides.clear();
+    layoutName = name;
+    const model = parseLayout(text);
+    for (const [netName, enabled] of overrides) {
+      const net = model.nets.get(netName);
+      if (net) net.enabled = enabled;
+      else overrides.delete(netName);
+    }
+    return model;
+  };
+  const untick = (model, name) => { model.nets.get(name).enabled = false; overrides.set(name, false); };
+
+  const A = 'dc A\n  rack r1 u=4\n    node n1 at=1\n    node n2 at=2\n'
+    + 'net mgmt color=#888\nnet data color=#4fa3ff\nlink data n1 n2\nlink mgmt n1 n2\n';
+  const B = 'dc B\n  rack r1 u=4\n    node n1 at=1\n    node n2 at=2\n'
+    + 'net data color=#4fa3ff show=yes\nnet mgmt color=#888 show=yes\nlink data n1 n2\nlink mgmt n1 n2\n';
+
+  const a = load(A, 'a.dc');
+  eq(a.nets.get('mgmt').enabled, true, 'a small floor starts with its nets drawn');
+  untick(a, 'mgmt');
+
+  const edited = load(`${A}    node n3 at=3\n`, 'a.dc');
+  eq(edited.nets.get('mgmt').enabled, false, 'editing the same layout keeps the tick as it was');
+  eq(edited.nets.get('data').enabled, true, 'and leaves the others alone');
+
+  const other = load(B, 'b.dc');
+  eq(other.nets.get('mgmt').enabled, true, "another file's show=yes is not overruled");
+  eq(overrides.size, 0, 'and nothing is carried over to be applied later');
+
+  // A net the file no longer declares still drops out, as it always did.
+  const shrunk = load(A, 'a.dc');
+  untick(shrunk, 'mgmt');
+  load('dc A\n  rack r1 u=4\n    node n1 at=1\nnet data color=#4fa3ff\n', 'a.dc');
+  eq(overrides.has('mgmt'), false, 'a stale entry is dropped when its net goes');
+}
+
+// ------------------------------------------- link options that were not options
+// bidir= and label= sat in LINK_OPTS and were read by nothing. Cables here
+// are undirected -- a pair is deduped by a sorted key and drawn as one line,
+// so there is no reverse to wire -- and a per-rule label reached every link
+// object and no part of the UI. Both were accepted in silence, and the
+// editor had been taught to suggest them.
+{
+  const wire = (rule) => {
+    const m = parseLayout(['dc D', '  rack r1 u=10', '    node tor at=10 role=tor',
+                           '    node s[1..3] at={i} role=server',
+                           'net n color=#4fa3ff', rule].join('\n'));
+    return { links: m.links.length, warnings: m.warnings };
+  };
+
+  eq(wire('link n role=server role=tor').warnings, [], 'an ordinary rule says nothing');
+  eq(wire('link n role=server role=tor').links, 3, 'and wires the three servers to the ToR');
+
+  for (const dead of ['bidir=yes', 'label=Uplink', 'scoope=rack']) {
+    const got = wire(`link n role=server role=tor ${dead}`);
+    eq(got.links, 3, `${dead} changes no cable`);
+    eq(got.warnings.length, 1, `and ${dead} is reported`);
+    ok(got.warnings[0].includes(`"${dead}"`), 'naming the token that did nothing');
+    ok(got.warnings[0].includes('scope, mode, cap'), 'and the options that would have worked');
+  }
+
+  // cap was the last parseInt in the codebase, with the u=1e9 failure exactly:
+  // NaN made `made >= cap` false forever, so cap=abc meant no cap at all, and
+  // cap=1e6 read as 1 and wired a single cable.
+  eq(wire('link n role=server role=tor cap=2').links, 2, 'a cap stops the rule');
+  ok(wire('link n role=server role=tor cap=2').warnings[0].includes('hit the cap of 2'),
+     'and says it did');
+  const junk = wire('link n role=server role=tor cap=abc');
+  eq(junk.links, 3, 'a cap that is not a number is no cap');
+  ok(junk.warnings[0].includes('is not a number'), 'and is reported rather than assumed');
+  const wide = wire('link n role=server role=tor cap=1e6');
+  eq(wide.links, 3, 'cap=1e6 is a million, not one');
+  eq(wide.warnings, [], 'and is a perfectly good cap');
+  ok(wire('link n role=server role=tor cap=0').warnings[0].includes('outside 1..100000000'),
+     'a cap of zero is not a cap, it is a typo');
+  eq(wire('link n role=server role=tor cap=0').links, 3, 'and is ignored, not obeyed');
+
+  // Every layout the repo ships stays quiet under the new link checks.
+  for (const file of ['examples/small.dc', 'examples/mega.dc', 'examples/hostnames.dc',
+                      'examples/three-rows.dc', 'examples/mx/floor.dc', 'examples/iperf/floor.dc']) {
+    eq(parseLayout(readFileSync(join(root, file), 'utf8')).warnings, [],
+       `${file} wires without a word`);
+  }
+}
+
+// ------------------------------------------- a label cut in half
+// fitText sliced by UTF-16 index, so a cut that landed inside a surrogate
+// pair left half a character -- which draws as a replacement box. Names come
+// out of somebody's inventory, and emoji turn up in inventories.
+{
+  // The measurement is the canvas's; the cutting is ours, and that is what
+  // is checked here: a prefix of the code points, never of the code units.
+  const cutBy = (text, keep) => [...text].slice(0, keep).join('');
+  const lone = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(^|[^\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
+  const name = 'rack\u{1F525}\u{1F525}alpha';
+  ok(lone.test(name.slice(0, 5)), 'slicing by code unit can leave half a character');
+  for (let keep = 0; keep <= [...name].length; keep++) {
+    ok(!lone.test(cutBy(name, keep)), `cutting to ${keep} code points leaves none`);
+  }
+  eq(cutBy(name, 5), 'rack\u{1F525}', 'and a cut after the first emoji keeps it whole');
+  eq(cutBy('plain', 3), 'pla', 'ordinary text cuts exactly as before');
+}
+
+// ------------------------------------------- pair, between lists that do not pair
+// mode=pair takes the first match of each selector, then the second. When
+// the two sides are different lengths it stops at the shorter one and the
+// surplus went without a word -- and the existing "wired nothing" warning
+// only fires when a rule wires nothing at all, so a rule that wired two of
+// eight looked like a rule that worked.
+{
+  const wire = (servers, tors, rule) => {
+    const rows = ['dc D', '  room R', '    rack r[1..2] u=20'];
+    for (let i = 1; i <= tors; i++) rows.push(`      node t${i} at=${20 - i} role=tor`);
+    for (let i = 1; i <= servers; i++) rows.push(`      node s${i} at=${i} role=server`);
+    rows.push('net n color=#4fa3ff', rule);
+    const m = parseLayout(rows.join('\n'));
+    return { links: m.links.length, warnings: m.warnings };
+  };
+  const PAIR = 'link n role=server role=tor scope=rack mode=pair';
+
+  const even = wire(3, 3, PAIR);
+  eq(even.warnings, [], 'two sides of the same length pair cleanly');
+  eq(even.links, 6, 'and every one of them is wired');
+
+  const lopsided = wire(3, 1, PAIR);
+  eq(lopsided.links, 2, 'a shorter side stops the pairing there');
+  eq(lopsided.warnings.length, 1, 'and that is reported');
+  ok(lopsided.warnings[0].includes('4 elements'), 'counting the surplus across every scope group');
+  ok(lopsided.warnings[0].includes('mode=star'), 'and naming the mode that would wire them all');
+  ok(wire(5, 2, PAIR).warnings[0].includes('6 elements'), 'the count is the total, not the per-group one');
+
+  // One selector is a different thing: five matches cannot be paired, and
+  // the odd one out is inherent rather than a mistake.
+  const odd = parseLayout('rack A\n  node n[1..5] role=server\nnet x\nlink x role=server mode=pair\n');
+  eq(odd.warnings, [], 'an odd count on one selector is not a mistake to report');
+  eq(odd.links.length, 2, 'and pairs what it can');
+
+  // examples/mx/floor.dc pairs eight switches in one hall with eight in the
+  // other; examples/iperf/floor.dc used to pair two spines with eight ToRs,
+  // on a net its own star rule had already wired, leaving six racks with no
+  // uplink and two duplicate cables to show for it.
+  const iperf = parseLayout(readFileSync(join(root, 'examples/iperf/floor.dc'), 'utf8'));
+  eq(iperf.warnings, [], 'examples/iperf/floor.dc wires every rack it declares');
+  eq(iperf.links.filter((l) => l.net === 'uplink').length, 16,
+     'every one of the eight ToRs reaches both spines');
 }
 
 console.log(failures ? `${failures}/${count} tests FAILED` : `all ${count} tests passed`);

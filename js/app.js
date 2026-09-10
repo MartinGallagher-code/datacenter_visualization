@@ -16,14 +16,19 @@ import { layout } from './layout.js';
 import { parseLayout } from './parse.js';
 import { Renderer, countDescendants } from './render.js';
 import {
-  bindOverlay, clearOverlayCache, formatValue, overlayValue, parseResults, recomputeDomain,
-  recomputeStats, unitFor,
+  bindOverlay, clearOverlayCache, overlayValue, parseResults, recomputeDomain,
+  recomputeStats, valueWithUnit,
 } from './results.js';
-import { fillWarnings, renderInspector, renderNets, renderOverlays, renderTree, renderWarnings } from './ui.js';
+import {
+  fillWarnings, renderInspector, renderNets, renderNotices, renderOverlays, renderTree, renderWarnings,
+} from './ui.js';
+import {
+  droppedLayoutsNotice, layoutNotice, plural, prefixed, resultsFileNotice,
+} from './report.js';
 import { attachHints, renderReference } from './hints.js';
 import {
-  classify, directoryFromDataTransfer, ensureRead, getFile, pickDirectory, probeSizes,
-  readDir, renderBrowser, supportsDirectoryPicker, treeFromFiles, walkPath,
+  classify, directoryFromDataTransfer, ensureRead, getFile, pathLabel, pickDirectory,
+  probeSizes, readDir, renderBrowser, supportsDirectoryPicker, treeFromFiles, walkPath,
 } from './browse.js';
 
 const $ = (id) => document.getElementById(id);
@@ -42,6 +47,12 @@ const state = {
   // setting without overwriting it, so turning it back off restores whatever
   // each metric was set to individually.
   standardizeAll: 'off',
+  // The shared z scale. Standardising puts every metric on the same numbers;
+  // this puts them on the same colours too, which needs one palette, one
+  // spread, and no per-metric `higher=good` inversion.
+  zShared: true,
+  zPalette: 'rdbu',       // diverging: a signed distance from the mean
+  zSpread: 3,
   activeOverlays: [],
   showValues: true,
   hideUnmatched: false,
@@ -53,6 +64,12 @@ const state = {
   linkOpacity: 0.45,
   maxLinksDrawn: 60000,
   warnings: [],
+  // What the last load actually did, one entry per file. The warnings list
+  // says what was wrong with a file's contents; this says whether the file
+  // arrived at all, which is the question a viewer that quietly drops one
+  // leaves you unable to answer.
+  notices: [],
+  noticesOpen: false,
   layoutName: '',           // the file the current floor plan came from, if any
 
   // The file browser: a folder held open in the panel. `loaded` is what the
@@ -84,8 +101,11 @@ const state = {
     return top;
   },
 
+  // Both of these take a *test* name, which two files can share now that a
+  // file's overlays are its own. "temp_c>70" means any loaded temp_c.
   hasOverlay(name) {
-    return state.overlays.has(name);
+    for (const overlay of state.overlays.values()) if (overlay.name === name) return true;
+    return false;
   },
 
   // Every measured flow on an element, across loaded overlays. A flow is a
@@ -99,11 +119,15 @@ const state = {
     return out;
   },
 
-  readingOf(name, node, directOnly = false) {
-    const overlay = state.overlays.get(name);
-    if (!overlay) return null;
-    if (directOnly && !overlay.direct.has(node.key)) return null;
-    return overlayValue(overlay, node);
+  readingsOf(name, node, directOnly = false) {
+    const out = [];
+    for (const overlay of state.overlays.values()) {
+      if (overlay.name !== name) continue;
+      if (directOnly && !overlay.direct.has(node.key)) continue;
+      const reading = overlayValue(overlay, node);
+      if (reading) out.push(reading);
+    }
+    return out;
   },
 };
 
@@ -114,6 +138,14 @@ let needsDraw = true;
 const invalidate = () => { needsDraw = true; };
 
 // ------------------------------------------------------------------ pipeline
+
+const sharedZScale = () => (state.zShared ? { palette: state.zPalette, zRange: state.zSpread } : null);
+
+/** Mirror the panel's shared z scale onto every overlay, or take it away. */
+function applyZScale() {
+  const shared = sharedZScale();
+  for (const overlay of state.overlays.values()) overlay.zShared = shared;
+}
 
 function recomputeActiveOverlays() {
   state.activeOverlays = [...state.overlays.values()].filter((o) => o.enabled);
@@ -192,11 +224,15 @@ const actions = {
   setOverlayEnabled(overlay, enabled) {
     overlay.enabled = enabled;
     if (enabled && overlay.autoDomain) recomputeDomain(overlay, state.model);
-    if (enabled && overlay.standardize !== 'off') recomputeStats(overlay, state.model);
+    // stdMode, not standardize: a metric standardized only by the panel-wide
+    // switch is still standardized, and was arriving with no stats at all.
+    if (enabled && overlay.stdMode !== 'off') recomputeStats(overlay, state.model);
     // Its flow layer goes with it: the "draw measured flows" box lives in the
     // overlay's body, which an unticked overlay hides, so leaving it set would
-    // keep drawing curves with no visible control to stop them.
-    else overlay.drawFlows = false;
+    // keep drawing curves with no visible control to stop them. (This used to
+    // hang off the `else` above, so whether a flow layer survived being
+    // re-ticked depended on whether the metric happened to be standardized.)
+    if (!enabled) overlay.drawFlows = false;
     refreshPanels();
     invalidate();
   },
@@ -207,7 +243,13 @@ const actions = {
     if (overlay.autoDomain) recomputeDomain(overlay, state.model);
     // The population is the per-element values, so a different aggregation is
     // a different distribution: the mean and spread have to be measured again.
-    if (overlay.standardize !== 'off') recomputeStats(overlay, state.model);
+    // When standardizing is off they are dropped rather than left alone --
+    // the two switches deliberately keep stats across an off/on cycle, and a
+    // stale set survived that cycle to be reused against different values.
+    // Same metric, same settings, z of 1.4 or 4.5 depending on the order the
+    // two were clicked.
+    if (overlay.stdMode !== 'off') recomputeStats(overlay, state.model);
+    else overlay.stats = null;
     refreshPanels();
     invalidate();
   },
@@ -217,6 +259,25 @@ const actions = {
     if (overlay.stdMode !== 'off' && !overlay.stats) recomputeStats(overlay, state.model);
     refreshPanels();
     invalidate();
+  },
+
+  setZShared(on) {
+    state.zShared = on;
+    applyZScale();
+    refreshPanels();
+    invalidate();
+  },
+
+  setZScale(field, value) {
+    state[field] = value;
+    applyZScale();
+    refreshPanels();
+    invalidate();
+  },
+
+  toggleNotices(open = !state.noticesOpen) {
+    state.noticesOpen = open;
+    renderNotices(state, $('notices'), $('notices-btn'), actions, jumpToLine);
   },
 
   setStandardizeAll(mode) {
@@ -279,8 +340,7 @@ const actions = {
   // Removal drops the overlay and its loaded samples entirely; re-loading the
   // results file is the way back, which is cheap since files are append-only.
   removeOverlay(overlay) {
-    state.rawOverlays.delete(overlay.name);
-    state.overlays.delete(overlay.name);
+    forgetOverlay(overlay);
     refreshPanels();
     invalidate();
   },
@@ -296,14 +356,11 @@ const actions = {
     refreshPanels();
   },
 
-  // Everything one results file contributed, dropped together. A test that
-  // several files fed is grouped under the first, so that is the group that
-  // owns it here too.
+  /** Everything one results file contributed, dropped together. */
   removeOverlayGroup(source) {
     for (const overlay of [...state.overlays.values()]) {
-      if (((overlay.sources && overlay.sources[0]) || '') !== source) continue;
-      state.rawOverlays.delete(overlay.name);
-      state.overlays.delete(overlay.name);
+      if ((overlay.source || '') !== source) continue;
+      forgetOverlay(overlay);
     }
     state.groupsOff.delete(source);
     refreshPanels();
@@ -323,8 +380,38 @@ const actions = {
   removeAllOverlays() {
     state.rawOverlays.clear();
     state.overlays.clear();
+    state.groupsOff.clear();   // no file left to be collapsed
     refreshPanels();
     invalidate();
+  },
+
+  /**
+   * Back to an empty viewer: no floor plan, no overlays, nothing drawn. The
+   * canvas is blank because the model is empty, not because the drawing was
+   * skipped -- "Remove all" only ever cleared the overlays, and left the floor
+   * plan sitting there.
+   *
+   * What survives is the workspace rather than its contents: panel widths and
+   * folds, and the folder held open in Files, so the next thing to load is
+   * still one click away.
+   */
+  restart() {
+    state.rawOverlays.clear();
+    state.overlays.clear();
+    state.activeOverlays = [];
+    state.groupsOff.clear();
+    state.netOverrides.clear();
+    state.warnings = [];
+    state.notices = [];
+    state.noticesOpen = false;
+    state.selected = null;
+    state.isolateLinks = false;
+    state.standardizeAll = 'off';
+    $('filter').value = '';
+    $('opt-hide').checked = false;
+    state.hideUnmatched = false;
+    loadLayoutText('', { keepCamera: false });
+    showWarnings();
   },
 };
 
@@ -342,48 +429,132 @@ function setCollapseAtKind(kind) {
 }
 
 function loadLayoutText(text, { keepCamera = false, name = '' } = {}) {
+  // A net tick belongs to the floor plan it was made on. It has to outlive a
+  // re-parse -- the editor re-parses on every keystroke and builds fresh net
+  // objects -- but not a different file: untick `mgmt` on one layout and the
+  // next one's `net mgmt show=yes` arrived hidden, its own instruction
+  // overruled by a decision about a document it has nothing to do with.
+  if (name !== state.layoutName) state.netOverrides.clear();
   state.layoutText = text;
   state.layoutName = name;
   state.model = parseLayout(text);
   // The user's own panel toggles outlive the re-parse; a net the file no
   // longer declares just drops its stale entry.
-  for (const [name, enabled] of state.netOverrides) {
-    const net = state.model.nets.get(name);
+  for (const [netName, enabled] of state.netOverrides) {
+    const net = state.model.nets.get(netName);
     if (net) net.enabled = enabled;
-    else state.netOverrides.delete(name);
+    else state.netOverrides.delete(netName);
   }
   state.selected = null;
   state.warnings = [...state.model.warnings];
-  $('title').textContent = state.model.title;
-  document.title = `${state.model.title} — Layout Viewer`;
+  // An empty model has the parser's placeholder title, which is not a name
+  // for anything -- an emptied viewer reads as the viewer, as it does before
+  // the first file arrives.
+  const named = state.model.all.length ? state.model.title : 'Datacenter Layout Viewer';
+  $('title').textContent = named;
+  document.title = state.model.all.length ? `${named} — Layout Viewer` : named;
 
   if (state.model.all.length > AUTO_COLLAPSE_ABOVE) setCollapseAtKind('rack');
   rebindOverlays();
   refresh({ keepCamera });
-  renderWarnings($('structure'), state.warnings, jumpToLine);
+  showWarnings();
   syncEditor();
 }
 
+const countSamples = (overlays) => {
+  let n = 0;
+  for (const o of overlays.values()) n += o.samples.length;
+  return n;
+};
+
 /** @param files [{ text, name }] -- the name groups the overlays in the panel. */
 function loadResultsText(files, { replace = false } = {}) {
+  if (replace && state.rawOverlays.size) {
+    note('note', `replaced the ${plural(state.rawOverlays.size, 'metric')} loaded before: `
+      + 'a layout arrived with these results, and a new floor plan starts clean');
+  }
   if (replace) state.rawOverlays = new Map();
-  const warnings = [];
-  for (const file of files) parseResults(file.text, state.rawOverlays, warnings, file.name || '');
-  // Not push(...warnings): a broken generator can produce one warning per line,
-  // and spreading that many arguments overflows the stack.
-  for (const w of warnings) state.warnings.push(w);
+
+  // One file at a time, so the report can say what each of them did.
+  for (const file of files) {
+    const name = file.name || '';
+    // A file's overlays are that file's. Loading it again replaces what it
+    // brought last time rather than appending to it -- the format is
+    // append-only, so a second read of the same file would otherwise count
+    // every sample twice.
+    const replaced = dropSource(name);
+
+    const beforeSamples = countSamples(state.rawOverlays);
+    const warnings = [];
+    parseResults(file.text, state.rawOverlays, warnings, name);
+
+    const fresh = [];
+    for (const overlay of state.rawOverlays.values()) {
+      if ((overlay.source || '') === name) fresh.push(overlay.name);
+    }
+    push(resultsFileNotice(name, {
+      fresh,
+      reloaded: replaced,
+      samples: countSamples(state.rawOverlays) - beforeSamples,
+      warnings,
+    }));
+    // Not push(...warnings): a broken generator can produce one warning per
+    // line, and spreading that many arguments overflows the stack.
+    for (const w of warnings) state.warnings.push(prefixed(name, w));
+  }
+
   rebindOverlays();
   refresh();
+  showWarnings();
+}
+
+function showWarnings() {
+  // A load with a problem opens the report itself. Anything less and a
+  // dropped file is still something you have to go looking for.
+  if (state.notices.some((n) => n.level === 'warn')) state.noticesOpen = true;
   renderWarnings($('structure'), state.warnings, jumpToLine);
+  renderNotices(state, $('notices'), $('notices-btn'), actions, jumpToLine);
+}
+
+const note = (level, text, lines) => state.notices.push({ level, text, lines: lines || [] });
+const push = (notice) => state.notices.push(notice);
+
+/**
+ * Drop one overlay from both maps. `key` is what they are keyed by -- file
+ * and test, since two files may carry the same test -- and `name` is only a
+ * label. Removing by name deleted nothing at all, so the × on a metric card
+ * did nothing while the × on its file's header worked. One function, so the
+ * two removal paths cannot disagree again.
+ */
+function forgetOverlay(overlay) {
+  const key = overlay.key || overlay.name;
+  state.rawOverlays.delete(key);
+  state.overlays.delete(key);
+  // Nothing of that file left to be collapsed.
+  const source = overlay.source || '';
+  const others = [...state.overlays.values()].some((o) => (o.source || '') === source);
+  if (!others) state.groupsOff.delete(source);
+}
+
+/** Forget everything one file contributed. Returns how many overlays went. */
+function dropSource(name) {
+  if (!name) return 0;
+  let gone = 0;
+  for (const [key, overlay] of [...state.rawOverlays]) {
+    if ((overlay.source || '') !== name) continue;
+    state.rawOverlays.delete(key);
+    gone++;
+  }
+  return gone;
 }
 
 /** Rebuild bound overlays against the current model, keeping display settings. */
 function rebindOverlays() {
   const previous = state.overlays;
   const next = new Map();
-  for (const [name, raw] of state.rawOverlays) {
+  for (const [key, raw] of state.rawOverlays) {
     const bound = bindOverlay(raw, state.model);
-    const old = previous.get(name);
+    const old = previous.get(key);
     if (old) {
       Object.assign(bound, {
         enabled: old.enabled,
@@ -397,10 +568,12 @@ function rebindOverlays() {
         max: old.autoDomain ? bound.max : old.max,
       });
     }
-    // A metric loaded while "standardize all" is on is standardized too.
+    // A metric loaded while "standardize all" is on is standardized too, and
+    // joins the shared colour scale on the same terms.
     bound.standardizeAll = state.standardizeAll;
+    bound.zShared = sharedZScale();
     if (bound.stdMode !== 'off') recomputeStats(bound, state.model);
-    next.set(name, bound);
+    next.set(key, bound);
   }
   state.overlays = next;
   recomputeActiveOverlays();
@@ -415,6 +588,22 @@ async function fetchText(url) {
 // Nothing loads on its own: the viewer starts empty, and layouts arrive from
 // the ?layout=/?results= URL parameters, the Load files… button, drag and
 // drop, or the built-in editor.
+/**
+ * What a fetched file is called. The last path segment was not enough:
+ * `?results=runs/monday/results.tsv,runs/tuesday/results.tsv` named both of
+ * them `results.tsv`, and the second then replaced the first -- the same way
+ * two folders of results used to collide in the Files panel. The path is what
+ * tells two runs apart; the origin is the same for all of them.
+ */
+function urlLabel(url) {
+  try {
+    const u = new URL(url, location.href);
+    return decodeURIComponent(u.pathname).replace(/^\//, '') || url;
+  } catch {
+    return url;
+  }
+}
+
 async function boot() {
   const params = new URLSearchParams(location.search);
   const layoutUrl = params.get('layout');
@@ -425,25 +614,33 @@ async function boot() {
     return;
   }
 
+  // A URL load is a load: it reports like one. Without this the report knew
+  // about ?results= but never about the ?layout= beside it, so a layout with
+  // warnings arrived with nothing in the chip to say so.
+  const layoutName = urlLabel(layoutUrl);
   try {
-    loadLayoutText(await fetchText(layoutUrl), { name: layoutUrl.split('/').pop() || layoutUrl });
+    loadLayoutText(await fetchText(layoutUrl), { name: layoutName });
+    push(layoutNotice(layoutName, state.model.all.length, state.model.warnings));
   } catch (err) {
+    note('warn', `${layoutName}: could not be fetched -- ${err.message}`);
     state.warnings.push(`could not load layout: ${err.message}`);
-    renderWarnings($('structure'), state.warnings, jumpToLine);
+    showWarnings();
     refresh();
     return;
   }
 
   const texts = [];
   for (const url of resultUrls) {
+    const name = urlLabel(url);
     try {
-      texts.push({ text: await fetchText(url), name: url.split('/').pop() || url });
+      texts.push({ text: await fetchText(url), name });
     } catch (err) {
+      note('warn', `${name}: could not be fetched -- ${err.message}`);
       state.warnings.push(`could not load results: ${err.message}`);
     }
   }
   if (texts.length) loadResultsText(texts);
-  else { refresh(); renderWarnings($('structure'), state.warnings, jumpToLine); }
+  else { refresh(); showWarnings(); }
 }
 
 // ---------------------------------------------------------------- picking
@@ -515,24 +712,76 @@ async function pickFiles() {
   }
   if (!handles.length) return;
   rememberHandle(handles[0]);
-  ingestFiles(await Promise.all(handles.map((h) => h.getFile())));
+  ingestFiles(asItems(await Promise.all(handles.map((h) => h.getFile()))));
 }
 
 const isLayoutFile = (name) => /\.(dc|layout)$/i.test(name);
 
-async function ingestFiles(files) {
+/**
+ * What a file is called once it is loaded. Overlays are grouped under it, and
+ * re-reading a file replaces what it brought last time -- so two different
+ * files must never share one, or the second silently throws the first away.
+ * A folder drop carries a path; the file picker and a plain drop do not, and
+ * there the name is genuinely all there is to go on.
+ */
+const labelOf = (file) => file.webkitRelativePath || file.name;
+
+const asItems = (files) => [...files].map((file) => ({ file, label: labelOf(file) }));
+
+/**
+ * Two files in one batch that would answer to the same name. Nothing can tell
+ * them apart, so rather than let the second delete the first, they are
+ * numbered and the report says it happened.
+ */
+function uniqueLabels(items) {
+  const seen = new Map();
+  const clashed = [];
+  for (const item of items) {
+    const n = (seen.get(item.label) || 0) + 1;
+    seen.set(item.label, n);
+    if (n > 1) {
+      clashed.push(item.label);
+      item.label = `${item.label} (${n})`;
+    }
+  }
+  return [...new Set(clashed)];
+}
+
+async function ingestFiles(items) {
+  state.notices = [];               // the report covers this load, not the last
   const layouts = [];
   const results = [];
-  for (const file of files) {
-    const text = await file.text();
-    if (isLayoutFile(file.name)) layouts.push({ text, name: file.name });
-    else results.push({ text, name: file.name });
+  const clashed = uniqueLabels(items);
+  for (const { file, label } of items) {
+    let text;
+    try {
+      text = await file.text();
+    } catch (err) {
+      note('warn', `${label}: could not be read — ${err.message}`);
+      continue;
+    }
+    if (isLayoutFile(file.name)) layouts.push({ text, name: label });
+    else results.push({ text, name: label });
   }
+  if (clashed.length) {
+    note('note', `${plural(clashed.length, 'name')} arrived twice in this load `
+      + `(${clashed.join(', ')}) — numbered, so neither replaces the other`);
+  }
+
   if (layouts.length) {
     const last = layouts[layouts.length - 1];
+    // A viewer holds one floor plan, so handing it two silently used the last
+    // and dropped the rest. It still uses the last; it no longer says nothing.
+    if (layouts.length > 1) push(droppedLayoutsNotice(layouts.map((l) => l.name)));
     loadLayoutText(last.text, { name: last.name });
+    push(layoutNotice(last.name, state.model.all.length, state.model.warnings));
   }
+
   if (results.length) loadResultsText(results, { replace: layouts.length > 0 });
+  else if (layouts.length) showWarnings();
+  else if (!state.notices.length) note('warn', 'nothing was loaded: no files arrived');
+
+  if (!results.length) showWarnings();
 }
 
 // ------------------------------------------------------------- file browser
@@ -566,21 +815,44 @@ function browserLoaded() {
   const names = new Set();
   if (state.layoutName) names.add(state.layoutName);
   for (const overlay of state.rawOverlays.values()) {
-    for (const source of overlay.sources || []) if (source) names.add(source);
+    if (overlay.source) names.add(overlay.source);
   }
   return names;
 }
 
+const browsePathKey = () => state.browser.path.map((d) => d.name).join('\u0000');
+let lastBrowsePath = null;
+let lastBrowseScroll = 0;
+
 function renderBrowserPanel() {
   const host = $('browser');
-  // The panel is rebuilt wholesale, and one of the things it rebuilds is the
-  // name filter -- which is being typed into when it is the reason for the
-  // redraw. Put the caret back where it was.
+  // The panel is rebuilt wholesale, and two things it rebuilds are being used
+  // at the moment it is rebuilt: the name filter being typed into, and the
+  // listing whose row was just clicked. Both survive the redraw -- clicking a
+  // file to load it must not throw the list back to the top and lose the file
+  // you clicked. Scroll is only carried across within one folder; walking
+  // into another starts at its top, which is where its listing begins.
   const find = host.querySelector('.browse-filter');
   const caret = find && document.activeElement === find ? find.selectionStart : null;
 
+  // Held in a variable rather than read back off the DOM each time: a re-read
+  // renders "Reading…" with no list at all in between, and a position taken
+  // from that render would be no position.
+  const here = browsePathKey();
+  if (here !== lastBrowsePath) lastBrowseScroll = 0;
+  const list = host.querySelector('.browse-list');
+  if (list) lastBrowseScroll = list.scrollTop;
+  lastBrowsePath = here;
+
   state.browser.loaded = browserLoaded();
   renderBrowser(state.browser, host, actions);
+
+  if (lastBrowseScroll) {
+    const nextList = host.querySelector('.browse-list');
+    // A shorter listing clamps this itself, so a filter that hides rows needs
+    // no special handling.
+    if (nextList) nextList.scrollTop = lastBrowseScroll;
+  }
 
   if (caret === null) return;
   const next = host.querySelector('.browse-filter');
@@ -711,13 +983,11 @@ const browseActions = {
       renderBrowserPanel();
       return;
     }
-    // Re-reading a results file has to drop what it loaded last time: the
-    // format is append-only, so parsing it twice would count every sample
-    // twice. The layout has no such trouble -- it replaces itself.
-    if (classify(entry.name) === 'results' && b.loaded.has(entry.name)) {
-      actions.removeOverlayGroup(entry.name);
-    }
-    await ingestFiles([file]);
+    // Re-reading is safe on its own: a results file replaces the overlays it
+    // brought last time (loadResultsText), and a layout replaces itself.
+    // The path below the open folder, not the bare name: two runs both
+    // called results.tsv are two files, and must stay two overlays.
+    await ingestFiles([{ file, label: pathLabel(b.path, entry.name) }]);
   },
 };
 
@@ -1023,7 +1293,9 @@ $('opt-hide').addEventListener('change', (e) => { state.hideUnmatched = e.target
 $('opt-values').addEventListener('change', (e) => { state.showValues = e.target.checked; invalidate(); });
 $('btn-fit').addEventListener('click', () => { renderer.fit(); invalidate(); });
 $('btn-load').addEventListener('click', () => pickFiles());
-$('filepicker').addEventListener('change', (e) => ingestFiles([...e.target.files]));
+$('notices-btn').addEventListener('click', () => actions.toggleNotices());
+$('btn-restart').addEventListener('click', () => actions.restart());
+$('filepicker').addEventListener('change', (e) => ingestFiles(asItems(e.target.files)));
 $('dirpicker').addEventListener('change', (e) => {
   const files = [...e.target.files];
   e.target.value = '';                    // so the same folder can be re-chosen
@@ -1046,13 +1318,29 @@ let dragging = false;
 let dragMoved = false;
 let last = { x: 0, y: 0 };
 
+// Left button only. A right-press used to start a pan like any other, so
+// right-dragging moved the floor plan -- and worse, the native context menu
+// swallows the pointerup that would have ended it, leaving the view following
+// a mouse with no button held. Right-click belongs to the browser's menu, and
+// does nothing here.
 canvas.addEventListener('pointerdown', (e) => {
+  if (e.button !== 0) return;
   dragging = true;
   dragMoved = false;
   last = { x: e.clientX, y: e.clientY };
   canvas.setPointerCapture(e.pointerId);
   canvas.classList.add('dragging');
 });
+
+// Capture can be lost without a pointerup -- a context menu, a window switch,
+// a touch cancelled by a scroll gesture. Ending the drag here is what stops
+// the view from following the pointer afterwards.
+for (const kind of ['pointercancel', 'lostpointercapture']) {
+  canvas.addEventListener(kind, () => {
+    dragging = false;
+    canvas.classList.remove('dragging');
+  });
+}
 
 canvas.addEventListener('pointermove', (e) => {
   const rect = canvas.getBoundingClientRect();
@@ -1074,6 +1362,7 @@ canvas.addEventListener('pointermove', (e) => {
 });
 
 canvas.addEventListener('pointerup', (e) => {
+  if (e.button !== 0) return;
   dragging = false;
   canvas.classList.remove('dragging');
   if (dragMoved) return;
@@ -1105,8 +1394,18 @@ canvas.addEventListener('pointerleave', () => {
 });
 
 window.addEventListener('keydown', (e) => {
-  if (e.target.matches('input, select, textarea')) {
-    if (e.key === 'Escape') e.target.blur();
+  // Every shortcut here is a bare key, so a chord belongs to the browser.
+  // Taking them too meant one keypress did two things: Ctrl+F opened Find
+  // *and* refit the camera, Ctrl+0 reset the page zoom *and* refit, Ctrl+-
+  // zoomed the page out *and* zoomed the floor plan out under it. Shift is
+  // not a chord here -- `+` is Shift+= on most keyboards.
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  // A keydown dispatched at the window has no element to ask, and calling
+  // .matches on it threw before any shortcut was reached.
+  const target = e.target;
+  if (target && typeof target.matches === 'function'
+      && target.matches('input, select, textarea')) {
+    if (e.key === 'Escape') target.blur();
     return;
   }
   const cx = canvas.clientWidth / 2;
@@ -1139,7 +1438,7 @@ window.addEventListener('drop', async (e) => {
   const dropped = [...e.dataTransfer.files];
   const dir = await directoryFromDataTransfer(e.dataTransfer);
   if (dir) { openDirectory(dir, { path: [] }); return; }
-  if (dropped.length) ingestFiles(dropped);
+  if (dropped.length) ingestFiles(asItems(dropped));
 });
 
 // ------------------------------------------------------------------ tooltip
@@ -1151,13 +1450,17 @@ function showTooltip(node, x, y) {
   if (node.children.length) lines.push(`${countDescendants(node)} inside${node.collapsed ? ' — collapsed' : ''}`);
   for (const overlay of state.activeOverlays) {
     const reading = overlayValue(overlay, node);
-    if (reading) lines.push(`${overlay.label}: ${formatValue(overlay, reading.value)}${unitFor(overlay)}`);
+    if (reading) lines.push(`${overlay.label}: ${valueWithUnit(overlay, reading.value)}`);
   }
   tip.textContent = lines.join('\n');
   tip.hidden = false;
   const w = tip.offsetWidth;
   const h = tip.offsetHeight;
-  tip.style.left = `${Math.min(x + 14, canvas.clientWidth - w - 6)}px`;
+  // Clamped at both ends, as the vertical one beside it already was. Keeping
+  // the tooltip inside the right edge can push its left past zero once the
+  // canvas is narrower than the tooltip, and the name -- the part worth
+  // reading -- is what goes off the side.
+  tip.style.left = `${Math.max(4, Math.min(x + 14, canvas.clientWidth - w - 6))}px`;
   tip.style.top = `${Math.max(4, Math.min(y + 16, canvas.clientHeight - h - 24))}px`;
 }
 

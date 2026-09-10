@@ -36,6 +36,8 @@ const ELEMENT_KEYS = [
   ['at=', 'pin to a U-slot: at=42'],
   ['cols=', 'grid columns for a container'],
   ['dir=', 'layout direction: x or y'],
+  ['gap=', 'space between children; 0 packs them'],
+  ['color=', 'fill colour: #4fa3ff, teal, rgb(1,2,3)'],
 ];
 
 const NET_KEYS = [
@@ -46,13 +48,20 @@ const NET_KEYS = [
   ['show=', 'true/false: start visible or unticked'],
 ];
 
+// Every option a link rule takes, and only those. The parser's own LINK_OPTS
+// is the list, and the suite checks the two match exactly -- offering one the
+// parser does not take is the same fault as missing one, and both have
+// happened: cap= was never offered, while bidir= and label= were offered
+// after being read by nothing at all.
 const LINK_KEYS = [
   ['scope=', 'group matches per rack/row/room/… before wiring'],
   ['mode=', 'star, mesh, chain, ring or pair'],
+  ['cap=', 'stop after this many cables'],
 ];
 
 const MODES = ['star', 'mesh', 'chain', 'ring', 'pair'];
 const STYLES = ['solid', 'dashed'];
+const YES_NO = ['yes', 'no', 'true', 'false'];
 const DIRS = ['x', 'y'];
 
 const IDENT = /^[a-z_][\w-]*$/i;
@@ -142,7 +151,7 @@ export function suggestionsFor(text, caret) {
 
     if (kind === 'net') {
       if (key) {
-        options = valueOptions(key, { style: STYLES, show: ['true', 'false'] }, h);
+        options = valueOptions(key, { style: STYLES, show: YES_NO }, h);
       } else {
         options = [];
         if (idPosition) {

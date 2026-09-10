@@ -57,11 +57,24 @@ function tokenizeQuery(query) {
   return out;
 }
 
-function haystack(el) {
-  if (el.haystack) return el.haystack;
+/**
+ * Everything a bare term searches: identity, tags, and both halves of every
+ * attribute the element sees, inherited ones included. One list, because the
+ * plain and the glob branch used to keep their own -- and the glob's was
+ * missing attributes, so `serv` found two servers and `*serv*` found none.
+ * Adding a wildcard is meant to widen a search, not narrow it to nothing.
+ */
+function searchFields(el) {
+  if (el.searchFields) return el.searchFields;
   const parts = [el.id, el.name, el.kind, ...el.tagsAll];
   for (const k in el.attrsEff) parts.push(k, String(el.attrsEff[k]));
-  el.haystack = parts.join(' ').toLowerCase();
+  el.searchFields = parts;
+  return parts;
+}
+
+function haystack(el) {
+  if (el.haystack) return el.haystack;
+  el.haystack = searchFields(el).join(' ').toLowerCase();
   return el.haystack;
 }
 
@@ -72,7 +85,7 @@ function compileAtom(atom, ctx) {
   if (atom.startsWith('^')) return tagMatcher(lower.slice(1), true);
   if (lower.startsWith('has:')) {
     const test = atom.slice(4);
-    return (el) => ctx.readingOf(test, el, true) !== null;
+    return (el) => ctx.readingsOf(test, el, true).length > 0;
   }
   if (lower.startsWith('kind:')) {
     const re = globToRegExp(atom.slice(5));
@@ -102,11 +115,11 @@ function compileAtom(atom, ctx) {
       return (el) => {
         // Direct readings only: a container inherits its children's samples for
         // display, but "temp_c>70" should select the measured servers, not the room.
-        const reading = ctx.readingOf(key, el, true);
-        if (!reading) return false;
-        return numeric && reading.numeric
+        // Two files can each carry a test of this name, and they stay separate;
+        // the element matches when any of them reads over the threshold.
+        return ctx.readingsOf(key, el, true).some((reading) => (numeric && reading.numeric
           ? op(reading.value, num)
-          : op(String(reading.value).toLowerCase(), rawValue.toLowerCase());
+          : op(String(reading.value).toLowerCase(), rawValue.toLowerCase())));
       };
     }
 
@@ -132,10 +145,12 @@ function compileAtom(atom, ctx) {
   }
 
   // Bare word: substring across everything searchable, or a glob if it has one.
+  // The glob also matches the full path, which is what makes `DH1/A/*` a
+  // query; a path is not worth a substring search, since a substring of one
+  // is almost always just a name.
   if (hasGlob(atom)) {
     const re = globToRegExp(atom);
-    return (el) => re.test(el.id) || re.test(el.name) || re.test(el.path) ||
-                   [...el.tagsAll].some((t) => re.test(t));
+    return (el) => re.test(el.path) || searchFields(el).some((part) => re.test(part));
   }
   return (el) => haystack(el).includes(lower);
 }

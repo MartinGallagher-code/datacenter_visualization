@@ -27,7 +27,13 @@ const RAMPS = {
 export const PALETTE_NAMES = Object.keys(RAMPS);
 
 function hexToRgb(hex) {
-  const n = parseInt(hex.slice(1), 16);
+  // #rgb and #rgba are each digit doubled; the alpha of #rrggbbaa is dropped,
+  // since this only ever picks an ink. Reading #fff as a plain 24-bit number
+  // made it 0x000fff -- a near-black blue, so white text on a white element.
+  let body = hex.slice(1);
+  if (body.length === 3 || body.length === 4) body = [...body].map((c) => c + c).join('');
+  const n = parseInt(body.slice(0, 6), 16);
+  if (!Number.isFinite(n)) return [0, 0, 0];
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
 }
 
@@ -80,17 +86,30 @@ export function colorFor(overlay, reading) {
   let lo = overlay.min;
   let hi = overlay.max;
   let value = reading.value;
+  let palette = overlay.palette;
+  let invert = overlay.invert;
+
   if (overlay.stdMode && overlay.stdMode !== 'off') {
     const st = overlay.stats;
     value = st && st.sd ? (reading.value - st.mean) / st.sd : 0;
-    hi = overlay.zRange || 3;
+    // One scale across every standardised metric, when the panel asks for it.
+    // Spanning +/-sigma is not enough on its own: a per-metric palette, a
+    // per-metric spread, or a `higher=good` inversion each paint +2 sigma
+    // green on one metric and red on the next -- which is the one thing
+    // standardising exists to stop. overlay.zShared is the panel's scale.
+    const shared = overlay.zShared;
+    hi = (shared ? shared.zRange : overlay.zRange) || 3;
     lo = -hi;
+    if (shared) {
+      palette = shared.palette;
+      invert = false;
+    }
   }
 
   const span = hi - lo;
   let t = span === 0 ? 0.5 : (value - lo) / span;
-  if (overlay.invert) t = 1 - t;
-  return ramp(overlay.palette, t);
+  if (invert) t = 1 - t;
+  return ramp(palette, t);
 }
 
 /** Pick black or white text for legibility on top of an rgb()/hex background. */

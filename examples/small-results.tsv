@@ -2,10 +2,10 @@
 # Format:  <test>  <target>  <value>  [key=value ...]
 # Append more with:  tools/dcadd examples/small-results.tsv temp_c DH1/A/R01/u05 61.2
 
-!test	temp_c	unit=C	higher=bad	min=24	max=72	short=TMP	label=Inlet temp
-!test	iperf_gbps	unit=Gb/s	higher=good	short=NET	label=iperf to ToR
-!test	fio_kiops	unit=kIOPS	higher=good	palette=cool	short=IO	label=fio random read
-!test	burnin	short=BRN	label=Burn-in verdict
+!test	temp_c	unit=C	higher=bad	min=24	max=72	short=TMP	label="Inlet temp"
+!test	iperf_gbps	unit=Gb/s	higher=good	short=NET	label="iperf to ToR"
+!test	fio_kiops	unit=kIOPS	higher=good	palette=cool	short=IO	label="fio random read"
+!test	burnin	short=BRN	label="Burn-in verdict"
 
 # ---- run nightly-01
 temp_c	DH1/A/R01/u01	26.1	run=nightly-01

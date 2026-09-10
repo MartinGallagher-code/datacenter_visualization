@@ -26,6 +26,8 @@
 // as individual samples and reduced at draw time by the aggregation the user
 // picks in the UI.
 
+import { PALETTE_NAMES } from './palette.js';
+
 /**
  * Smallest and largest of an array, in one pass.
  *
@@ -64,6 +66,25 @@ export const AGGREGATIONS = {
 };
 
 export const DEFAULT_AGG = 'mean';
+
+// Every spelling of yes and no a person actually writes. `=== 'true'` was the
+// whole vocabulary, so `invert=yes` and `invert=1` meant *not inverted*.
+// (parse.js keeps its own copy for `show=`; both are leaf modules.)
+const YES = new Set(['true', 'yes', 'y', 'on', '1']);
+const flagged = (value) => value !== undefined && YES.has(String(value).trim().toLowerCase());
+
+/**
+ * A meta number that is not a number is not an override -- and the check
+ * below calls this same function, so the warning cannot promise something
+ * the overlay does not do. `Number('')` is 0, which is how a trailing `max=`
+ * used to set the top of the scale to zero and reverse the whole ramp.
+ */
+export const metaNumber = (value, fallback, spec = NUM_ANY) => {
+  if (value === undefined || String(value).trim() === '') return fallback;
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < spec.least || n > spec.most) return fallback;
+  return spec.whole ? Math.trunc(n) : n;
+};
 
 function quantile(values, q) {
   const s = [...values].sort((a, b) => a - b);
@@ -124,13 +145,101 @@ function splitFields(line) {
   return out;
 }
 
-function parseMetaTokens(tokens) {
+/**
+ * `key=value` tokens. Anything else is reported through `onBare` rather than
+ * dropped in silence: a value with a space in it splits into a token that
+ * looks like this, so `label=Inlet temp` used to set the label to "Inlet" and
+ * throw "temp" away without a word.
+ */
+function parseMetaTokens(tokens, onBare) {
   const meta = {};
+  let kept = 0;
   for (const tok of tokens) {
     const at = tok.indexOf('=');
-    if (at > 0) meta[tok.slice(0, at).toLowerCase()] = tok.slice(at + 1);
+    if (at > 0) { meta[tok.slice(0, at).toLowerCase()] = tok.slice(at + 1); kept++; }
+    else if (onBare) onBare(tok);
   }
-  return meta;
+  return kept ? meta : null;
+}
+
+const quoteList = (items) => items.map((t) => `"${t}"`).join(', ');
+
+/**
+ * What a `!test` line may say. A key outside this set is a typo that used to
+ * be dropped in silence, and an enumerated value outside its list silently
+ * meant the default -- `higher=high` read as `higher=bad`, `style=dotted` drew
+ * solid. Both now say so: a setting that does nothing is worse than no
+ * setting, because it looks like one that worked.
+ */
+const num = (least, most, whole = false) => ({ least, most, whole });
+const NUM_ANY = num(-Infinity, Infinity);
+
+const TEST_KEYS = {
+  unit: null,
+  label: null,
+  short: null,
+  min: NUM_ANY,
+  max: NUM_ANY,
+  // Ten is already more digits than a floor plan can show. The ceiling is not
+  // taste: toFixed throws outside 0..100, so decimals=-1 used to take the
+  // whole draw down with a RangeError the moment a value label was painted.
+  decimals: num(0, 10, true),
+  higher: ['bad', 'good'],
+  invert: ['true', 'yes', 'y', 'on', '1', 'false', 'no', 'n', 'off', '0'],
+  agg: Object.keys(AGGREGATIONS),
+  palette: PALETTE_NAMES,
+};
+
+function checkNumberMeta(key, value, spec, name, where, warnings) {
+  const at = `${where}: !test ${name}: ${key}=${value}`;
+  const n = Number(value);
+  if (String(value).trim() === '' || !Number.isFinite(n)) {
+    warnings.push(`${at} is not a number -- ignored`);
+  } else if (n < spec.least || n > spec.most) {
+    warnings.push(`${at} is outside ${spec.least}..${spec.most} -- ignored`);
+  } else if (spec.whole && !Number.isInteger(n)) {
+    warnings.push(`${at} is not a whole number -- using ${Math.trunc(n)}`);
+  }
+}
+
+function checkTestMeta(meta, name, where, warnings) {
+  for (const [key, value] of Object.entries(meta)) {
+    if (!(key in TEST_KEYS)) {
+      warnings.push(`${where}: !test ${name}: unknown key "${key}" -- `
+        + `known keys are ${Object.keys(TEST_KEYS).join(', ')}`);
+      continue;
+    }
+    const allowed = TEST_KEYS[key];
+    if (!allowed) continue;
+    if (Array.isArray(allowed)) {
+      if (!allowed.includes(String(value).toLowerCase())) {
+        warnings.push(`${where}: !test ${name}: ${key}=${value} is not one of `
+          + `${allowed.join(', ')} -- ignored`);
+      }
+    } else {
+      checkNumberMeta(key, value, allowed, name, where, warnings);
+    }
+  }
+}
+
+/**
+ * min and max are judged together, and they can arrive on separate lines, so
+ * this reads the metric's accumulated metadata rather than one line's worth.
+ * A scale of no width paints every value the middle of the ramp, which looks
+ * like an answer; a scale that runs downhill reads backwards, and `invert` is
+ * the way to ask for that on purpose.
+ */
+function checkDomainMeta(meta, name, where, warnings) {
+  const lo = metaNumber(meta.min, null);
+  const hi = metaNumber(meta.max, null);
+  if (lo === null || hi === null) return;
+  if (lo === hi) {
+    warnings.push(`${where}: !test ${name}: min=${meta.min} and max=${meta.max} are `
+      + 'the same -- a scale with no width paints every value the middle of the ramp');
+  } else if (lo > hi) {
+    warnings.push(`${where}: !test ${name}: min=${meta.min} is above max=${meta.max} -- `
+      + 'the colour scale runs backwards; invert=yes is the way to flip it');
+  }
 }
 
 /**
@@ -171,11 +280,29 @@ function parseTextResults(text, into, warnings) {
     if (line.startsWith('!')) {
       const tokens = splitFields(line.slice(1));
       const directive = (tokens.shift() || '').toLowerCase();
-      if (directive !== 'test') return;
+      // A mistyped directive used to vanish, taking every setting on the line
+      // with it -- and looking exactly like a metric that ignored its metadata.
+      if (directive !== 'test') {
+        warnings.push(`results line ${i + 1}: unknown directive "!${directive}" -- only !test is understood`);
+        return;
+      }
       const name = tokens.shift();
-      if (!name) return;
+      if (!name) {
+        warnings.push(`results line ${i + 1}: !test needs the name of the test it describes`);
+        return;
+      }
       const overlay = ensureOverlay(into, name);
-      Object.assign(overlay.meta, parseMetaTokens(tokens));
+      const bare = [];
+      const declared = parseMetaTokens(tokens, (t) => bare.push(t)) || {};
+      checkTestMeta(declared, name, `results line ${i + 1}`, warnings);
+      Object.assign(overlay.meta, declared);
+      if (declared.min !== undefined || declared.max !== undefined) {
+        checkDomainMeta(overlay.meta, name, `results line ${i + 1}`, warnings);
+      }
+      if (bare.length) {
+        warnings.push(`results line ${i + 1}: ignored ${quoteList(bare)} on !test ${name} -- `
+          + 'a value containing a space has to be quoted, as label="Inlet temp"');
+      }
       return;
     }
 
@@ -187,11 +314,20 @@ function parseTextResults(text, into, warnings) {
     const [name, target, rawValue, ...extra] = fields;
     const overlay = ensureOverlay(into, name);
     const num = Number(rawValue);
+    const bare = [];
+    const meta = extra.length ? parseMetaTokens(extra, (t) => bare.push(t)) : null;
+    // Fields split on commas too, so a thousands separator makes "1,234" two
+    // fields and the value silently becomes 1. Whatever the cause, a token
+    // that is not key=value was not understood, and saying so beats guessing.
+    if (bare.length) {
+      warnings.push(`results line ${i + 1}: ignored ${quoteList(bare)} after the value -- `
+        + 'extra fields are key=value, and a value with a space or a comma in it must be quoted');
+    }
     overlay.samples.push({
       target,
       value: Number.isFinite(num) && rawValue.trim() !== '' ? num : rawValue,
       numeric: Number.isFinite(num) && rawValue.trim() !== '',
-      meta: extra.length ? parseMetaTokens(extra) : null,
+      meta,
     });
   });
   return into;
@@ -232,7 +368,9 @@ function parseNdjsonResults(text, into, warnings) {
       warnings.push(`results line ${i + 1}: not valid JSON: "${truncate(line)}"`);
       return;
     }
-    ingestJsonEntry(entry, into, warnings, `line ${i + 1}`);
+    // The same phrasing the parse failure two lines up uses, and the same
+    // the text reader uses: one file reported its lines two ways.
+    ingestJsonEntry(entry, into, warnings, `results line ${i + 1}`);
   });
   return into;
 }
@@ -249,7 +387,9 @@ function ingestJsonDoc(doc, into, warnings, where) {
   // { tests: { name: {unit: …} } } declares metadata for several tests at once.
   if (doc.tests && typeof doc.tests === 'object' && !Array.isArray(doc.tests)) {
     for (const [name, meta] of Object.entries(doc.tests)) {
-      if (meta && typeof meta === 'object') applyJsonMeta(into, name, meta);
+      if (meta && typeof meta === 'object') {
+        applyJsonMeta(into, name, meta, EMPTY_SKIP, warnings, `${where}.tests.${name}`);
+      }
     }
   }
   if (Array.isArray(doc.samples)) {
@@ -270,7 +410,7 @@ function ingestJsonEntry(entry, into, warnings, where) {
   // {"!test": "temp_c", unit: "C", …} is the JSON spelling of a `!test` line.
   const declared = entry['!test'];
   if (declared !== undefined) {
-    applyJsonMeta(into, String(declared), entry, new Set(['!test']));
+    applyJsonMeta(into, String(declared), entry, SKIP_TEST_KEY, warnings, where);
     return;
   }
   const name = entry.test;
@@ -296,11 +436,35 @@ function ingestJsonEntry(entry, into, warnings, where) {
   });
 }
 
-function applyJsonMeta(into, name, source, skip = new Set()) {
+/**
+ * Metadata declared in JSON, checked exactly as a `!test` line is. It was
+ * not, and NDJSON is the shape the docs tell tools to generate -- so the
+ * format most likely to carry a machine's typo was the one format that
+ * accepted anything: `"pallete"`, `"higher": "high"` and `"decimals": -1`
+ * all landed without a word.
+ */
+function applyJsonMeta(into, name, source, skip, warnings, where) {
   const overlay = ensureOverlay(into, name);
+  const declared = {};
+  const dropped = [];
   for (const [key, value] of Object.entries(source)) {
-    if (skip.has(key) || value === null || typeof value === 'object') continue;
-    overlay.meta[key.toLowerCase()] = String(value);
+    if (skip.has(key)) continue;
+    // A key whose value is a structure has no reading as metadata, and
+    // skipping it in silence looked exactly like a setting that worked.
+    if (value === null || typeof value === 'object') {
+      dropped.push(key);
+      continue;
+    }
+    declared[key.toLowerCase()] = String(value);
+  }
+  if (dropped.length) {
+    warnings.push(`${where}: !test ${name}: ignored ${quoteList(dropped)} -- `
+      + 'a metadata value has to be a number or a string');
+  }
+  checkTestMeta(declared, name, where, warnings);
+  Object.assign(overlay.meta, declared);
+  if (declared.min !== undefined || declared.max !== undefined) {
+    checkDomainMeta(overlay.meta, name, where, warnings);
   }
 }
 
@@ -316,18 +480,29 @@ function jsonMeta(meta) {
   return any ? out : null;
 }
 
+const EMPTY_SKIP = new Set();
+const SKIP_TEST_KEY = new Set(['!test']);
+
 const truncate = (line) => (line.length > 60 ? `${line.slice(0, 57)}…` : line);
 
+/**
+ * Overlays are keyed by file *and* test, never by test alone. Two files that
+ * carry the same test name are two overlays: one per file, each with its own
+ * samples, its own domain and its own card. Concatenating runs into one file
+ * is still how you accumulate a metric over time -- that is one file, and one
+ * overlay. Handing over two files is two things to compare, and combining
+ * them would silently answer a question nobody asked.
+ */
+export const overlayKey = (source, name) => (source ? `${source}\u0000${name}` : name);
+
 function ensureOverlay(map, name) {
-  let overlay = map.get(name);
+  const source = map.source || '';
+  const key = overlayKey(source, name);
+  let overlay = map.get(key);
   if (!overlay) {
-    overlay = { name, samples: [], meta: {}, sources: [] };
-    map.set(name, overlay);
+    overlay = { key, name, source, samples: [], meta: {} };
+    map.set(key, overlay);
   }
-  // The same test can arrive from several files -- that is the append-only
-  // workflow working -- so every contributing file is recorded, in order.
-  const source = map.source;
-  if (source && !overlay.sources.includes(source)) overlay.sources.push(source);
   return overlay;
 }
 
@@ -343,6 +518,7 @@ export function bindOverlay(overlay, model) {
   const numericByEl = new Map();
   const textByEl = new Map();
   const unresolved = new Set();
+  const ambiguous = new Map();   // target -> { count, chosen }
   let numericCount = 0;
   let textCount = 0;
 
@@ -359,8 +535,16 @@ export function bindOverlay(overlay, model) {
   const flowsByEl = new Map();
 
   for (const sample of overlay.samples) {
-    const el = model.resolve(sample.target);
+    // resolveWhere rather than resolve: a target that names several elements
+    // still goes to the first, and this is the only place that can say so.
+    const where = model.resolveWhere
+      ? model.resolveWhere(sample.target)
+      : { el: model.resolve(sample.target), count: 1 };
+    const el = where.el;
     if (!el) { unresolved.add(sample.target); continue; }
+    if (where.count > 1 && !ambiguous.has(sample.target)) {
+      ambiguous.set(sample.target, { count: where.count, chosen: el.key });
+    }
     const map = sample.numeric ? numericByEl : textByEl;
     if (sample.numeric) numericCount++; else textCount++;
     direct.add(el.key);
@@ -382,6 +566,8 @@ export function bindOverlay(overlay, model) {
   const domain = numeric && own.length
     ? extent(own)
     : [0, 1];
+  const declaredLo = metaNumber(meta.min, null);
+  const declaredHi = metaNumber(meta.max, null);
 
   const bound = {
     name: overlay.name,
@@ -392,11 +578,15 @@ export function bindOverlay(overlay, model) {
     numericByEl,
     textByEl,
     direct,
-    sources: overlay.sources || [],
+    key: overlay.key || overlay.name,
+    source: overlay.source || '',
     flowsByEl,
     hasFlows: flowsByEl.size > 0,
     sampleCount: overlay.samples.length,
     unresolved: [...unresolved],
+    // Targets that named more than one element. The reading went to the
+    // first; the others look unmeasured, and only this says otherwise.
+    ambiguous: [...ambiguous].map(([target, at]) => ({ target, ...at })),
     // Display state, all user-adjustable from the overlay panel.
     enabled: false,
     drawFlows: false,   // paint the measured pairs as their own edge layer
@@ -411,17 +601,25 @@ export function bindOverlay(overlay, model) {
     // metric back on the setting it was given.
     standardizeAll: 'off',
     zRange: 3,          // sigma at the ends of the ramp
+    // The panel's shared z scale, mirrored on every overlay: { palette,
+    // zRange } while one scale covers every standardised metric, null while
+    // each keeps its own. Only ever consulted when standardising.
+    zShared: null,
     stats: null,        // { mean, sd, n } over the measured elements
     agg: AGGREGATIONS[meta.agg] ? meta.agg : DEFAULT_AGG,
     // `higher=bad` / `higher=good` pick the green-to-red ramp and its direction;
     // an explicit palette= always wins.
     palette: meta.palette || (meta.higher ? 'health' : 'viridis'),
-    invert: meta.invert === 'true' || meta.higher === 'good',
-    min: meta.min !== undefined ? Number(meta.min) : domain[0],
-    max: meta.max !== undefined ? Number(meta.max) : domain[1],
-    autoDomain: meta.min === undefined && meta.max === undefined,
+    invert: flagged(meta.invert) || meta.higher === 'good',
+    // A min= or max= that does not read as a number used to reach the ramp as
+    // NaN, and a NaN domain paints every element the same fallback grey.
+    min: declaredLo ?? domain[0],
+    max: declaredHi ?? domain[1],
+    // Read through metaNumber like the values themselves, or a min= the
+    // reader threw away still counted as a declared domain.
+    autoDomain: declaredLo === null && declaredHi === null,
     dataDomain: domain,
-    decimals: meta.decimals !== undefined ? Number(meta.decimals) : null,
+    decimals: metaNumber(meta.decimals, null, TEST_KEYS.decimals),
     cache: new Map(),
   };
 
@@ -487,11 +685,22 @@ function worstOrMode(values) {
   return best;
 }
 
-/** Recompute the auto domain from the values actually present at a given kind. */
-export function recomputeDomain(overlay, model, kind = 'node') {
+/**
+ * Recompute the auto domain from the values actually on screen: one
+ * aggregated value per measured element.
+ *
+ * The population is the overlay's own direct set, not everything of kind
+ * 'node' -- the same fix recomputeStats needed, and the same reason. A layout
+ * measured at the rack matched nothing here, so the domain stayed the extent
+ * of the raw samples from bindOverlay: four racks whose means run 45..60 were
+ * painted across a 15..90 ramp, landing in the middle fifth of it, all but
+ * the same colour. Aggregation compresses, and a scale that ignores that
+ * washes the picture out while looking like it worked.
+ */
+export function recomputeDomain(overlay, model) {
   const values = [];
   for (const el of model.all) {
-    if (kind && el.kind !== kind) continue;
+    if (!overlay.direct.has(el.key)) continue;
     const v = overlayValue(overlay, el);
     if (v && v.numeric) values.push(v.value);
   }
@@ -509,10 +718,15 @@ export function recomputeDomain(overlay, model, kind = 'node') {
  * value per measured element, so the population is the devices being compared
  * rather than the raw sample rows, which repeat per run.
  */
-export function recomputeStats(overlay, model, kind = 'node') {
+export function recomputeStats(overlay, model) {
   const values = [];
   for (const el of model.all) {
-    if (kind && el.kind !== kind) continue;
+    // The population is whatever was actually measured, found through the
+    // overlay's own direct set rather than by assuming the measured thing is
+    // a `node`. A layout whose samples land on racks used to measure nothing
+    // at all, leaving stats null -- and a null stats paints every element the
+    // exact middle of the ramp, which looks like an answer.
+    if (!overlay.direct.has(el.key)) continue;
     const v = overlayValue(overlay, el);
     if (v && v.numeric) values.push(v.value);
   }
@@ -538,9 +752,33 @@ export const isStandardized = (overlay) => overlay.stdMode && overlay.stdMode !=
 /** The unit to print beside a value -- sigma once the value IS a z-score. */
 export const unitFor = (overlay) => (overlay.stdMode === 'values' ? 'σ' : overlay.unit);
 
+// What a standardised overlay is actually drawn with: the shared z scale
+// where the panel is sharing one, this metric's own settings otherwise.
+export const zRangeOf = (o) => ((isStandardized(o) && o.zShared ? o.zShared.zRange : o.zRange) || 3);
+export const paletteOf = (o) => (isStandardized(o) && o.zShared ? o.zShared.palette : o.palette);
+export const invertedOf = (o) => (isStandardized(o) && o.zShared ? false : o.invert);
+
+/**
+ * What a floor plan shows where a number cannot be printed. `geomean` over a
+ * zero and `harmonic` over values that cancel are genuinely undefined, and
+ * they used to reach the canvas as the words "NaN" and "Infinity".
+ */
+export const NO_VALUE = '\u2014';
+
+/**
+ * A number typed into a box, or the fallback when the box does not hold one.
+ * The panel had its own `Number(input.value)`, and Number('') is 0 -- so
+ * emptying the min box set the bottom of the scale to zero rather than
+ * leaving it alone, the same mistake a trailing `max=` used to make in a
+ * file. One reader for both doors.
+ */
+export const readNumber = metaNumber;
+
 export function formatValue(overlay, value) {
+  if (typeof value === 'number' && !Number.isFinite(value)) return NO_VALUE;
   if (overlay.stdMode === 'values' && typeof value === 'number') {
     const z = zScore(overlay, value);
+    if (!Number.isFinite(z)) return NO_VALUE;
     return `${z >= 0 ? '+' : ''}${z.toFixed(2)}`;
   }
   if (value === null || value === undefined) return '';
@@ -550,8 +788,22 @@ export function formatValue(overlay, value) {
     const span = Math.abs(overlay.max - overlay.min) || Math.abs(value) || 1;
     decimals = span >= 100 ? 0 : span >= 10 ? 1 : span >= 1 ? 2 : 3;
   }
-  const out = value.toFixed(decimals);
+  // The metadata is checked on the way in, so this only catches an overlay
+  // assembled in code -- but toFixed throws outside 0..100, and a label that
+  // throws takes the whole draw with it. Nothing printed is worth that.
+  const places = Math.min(10, Math.max(0, Math.trunc(decimals) || 0));
+  const out = value.toFixed(places);
   return out.replace(/\.0+$/, '').replace(/(\.\d*?)0+$/, '$1');
+}
+
+/**
+ * A reading as it is written beside an element. The unit belongs to the
+ * number, so where there is no number there is no unit either -- "\u2014C" is
+ * not a temperature.
+ */
+export function valueWithUnit(overlay, value) {
+  const text = formatValue(overlay, value);
+  return text === NO_VALUE || text === '' ? text : `${text}${unitFor(overlay)}`;
 }
 
 export function clearOverlayCache(overlay) {

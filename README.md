@@ -81,15 +81,26 @@ like `chassis`, which nests silently.)
 |---|---|
 | `R[01..20]` | `R01 R02 … R20` (zero-padding kept) |
 | `u[1..40x2]` | `u1 u3 … u39` (step) |
-| `A..H` | `A B … H` (letters; bare or bracketed) |
+| `A..H` | `A B … H` (letters; bare or bracketed — both ends must be the same alphabet, so `A..z` is refused rather than expanded through the punctuation between `Z` and `a`) |
 | `[web\|db\|cache]` | `web db cache` (alternatives) |
 | `r[1..2]-[a\|b]` | `r1-a r1-b r2-a r2-b` (cartesian) |
 | `R[1..4,7..10]` | `R1 … R4 R7 … R10` (comma-separated segments) |
+
+A spec that expands to nothing (`r[,]`) is reported: it would otherwise take
+the line and everything indented under it away without a trace.
+
+A mistake in a line's attributes is reported once for the line, naming what
+was written (`"R[01..40]"`) rather than once for each of the forty racks it
+became.
 
 Segments are how numbering with holes stays on one line: racks 1–4 and 7–10
 around a gap are `rack R[1..4,7..10]`, with the children written once instead
 of once per block — see `examples/three-rows.dc`, which also pins sparse
 U-slots the same way (`node [7..15x2,25..31x2] id=u{id} at={id}`).
+
+A placeholder naming something not in scope is reported rather than left in
+the text — `{rak}` for `{rack}`, or `{id}` in an id spec, where the id does
+not exist yet — and the warning lists the names that line could have used.
 
 `{placeholders}` in attributes refer to enclosing elements:
 `name="Hall {id}"`, `power=grid-{i}`, `{room}`, `{row}`, `{parent}`.
@@ -110,7 +121,12 @@ without appearing in the name — see `examples/hostnames.dc`.
   unplaced children auto-fill the lowest free run of slots. A node that lands
   above the rack's declared `u=` height is reported as a warning — `at=42`
   only fits a rack at least 42 U tall.
-- `cols=2` / `dir=x|y` shape generic containers.
+- `cols=2` / `dir=x|y` / `gap=` shape generic containers — `gap=0` packs
+  children with no gutter, and omitting it keeps the per-kind default.
+- The numbers are checked: `u`, `at`, `size` and `cols` must be whole and
+  between 1 and 1000 (`gap` from 0), and a net's `width` between 0.1 and 100. Anything else
+  is reported and ignored rather than quietly coerced — `u=1e9` used to read
+  as 1 and `u=-5` drew a rack of negative height.
 
 ### Networks
 
@@ -129,6 +145,11 @@ link storage +storage,role=server scope=row mode=mesh  # full mesh within a row
 - Selectors: `+tag`, `^tag` (non-inherited), `kind=rack`, `attr=value`,
   bare glob against id/path/ancestors, `!` negation, `|` alternatives,
   `,` for AND.
+- `color=` takes any CSS colour — hex (`#4fa3ff`, `#fff`), a name (`teal`),
+  or a function (`rgb(1,2,3)`, quoted if it contains a space). One the browser
+  cannot read is reported and dropped: the canvas ignores a colour it cannot
+  parse and silently keeps the last one, which would paint the net in the
+  previous net's colour.
 - **Globs work in every part of a selector**, tags included: `*` stands for
   any run of characters and `?` for exactly one. `model=r76*` takes r760 and
   r7625 alike, `model=r762?` only the five-character one, `u1?` the slots
@@ -136,14 +157,29 @@ link storage +storage,role=server scope=row mode=mesh  # full mesh within a row
 - `scope=` groups matches per rack/row/room/… before wiring.
 - `mode=` is `star` (A×B, default with two selectors), `mesh` (default with
   one), `chain`, `ring`, or `pair` (A[i] to B[i]; with one selector,
-  consecutive matches pair off — 1st–2nd, 3rd–4th, …).
+  consecutive matches pair off — 1st–2nd, 3rd–4th, …). `pair` between two
+  selectors of different lengths stops at the shorter one and reports how
+  many were left unwired — two spines paired with eight ToRs is two cables
+  and six racks with no uplink, which `mode=star` is almost always what was
+  meant. With one selector an odd count leaves one over, which is inherent
+  and says nothing.
+- `cap=` stops a rule after that many cables, which is how a selector that
+  turns out to match half the floor is kept from wiring all of it. A cap that
+  is not a whole number between 1 and 100,000,000 is reported and ignored, and
+  a rule that hits its cap says so.
+- A rule wires **two** selectors. A third token is reported rather than
+  dropped, which is what catches a mistyped option — `scoope=rack` cannot be
+  told apart from selecting on an attribute called `scoope`, but it can be
+  counted.
 - A rule that wires nothing says so: a selector that matched no elements (the
   shape a typo makes) and a rule whose matches produced no cables are both
   reported as warnings rather than left as a silently empty fabric.
 - Declared nets **start visible** on a modest floor (up to 20,000 cables in
   total), so wiring something draws something. Past that they start unticked —
-  a hyperscale floor's first render should be the floor. `show=false` on a
-  `net` line starts it hidden either way; `show=true` forces it on.
+  a hyperscale floor's first render should be the floor. `show=` on a `net`
+  line (or `on=`) settles it either way, and takes any spelling of yes or no —
+  `yes` `y` `on` `1` `true`, `no` `n` `off` `0` `false`. Anything else warns
+  and leaves the decision to the size rule.
 
 Networks toggle on and off in the UI, and modest fabrics start on (see
 above). Fabrics that run over the same pair of endpoints draw slightly
@@ -158,6 +194,12 @@ commas or spaces. It is **append-only by design**: to add results from a new
 test run, append lines. `cat run47.tsv >> results.tsv` is a fully supported
 workflow.
 
+Converting data from somewhere else into this format — by hand or by handing
+the job to an AI — is written up in
+[docs/converting-data-to-overlays.md](docs/converting-data-to-overlays.md):
+the target-resolution rules, what each `!test` key does, and the mistakes that
+produce a file which loads cleanly and paints nothing.
+
 ```
 temp_c      DH1/A/R01/u05   61.2    run=nightly-01
 iperf_gbps  DH1/A/R01/u05   94.7
@@ -166,6 +208,10 @@ burnin      DH1/A/R01/u05   PASS
 
 - Targets are element paths, but any **unique suffix** works (`A/R01/u05`,
   or just a hostname if node ids are hostnames). Matching is case-insensitive.
+  A target that fits several elements goes to the first and the metric's card
+  says so — *N ambiguous targets*, naming each one and where its reading went.
+  Slot and role names repeat across racks (forty racks, forty `u01`s), so
+  write enough of the path to be unique when they do.
 - Values may be numbers or words (`PASS`/`WARN`/`FAIL` get traffic-light
   colors; other words get stable categorical colors).
 - **How big can a results file be?** There is no limit in the viewer. A file
@@ -178,7 +224,10 @@ burnin      DH1/A/R01/u05   PASS
 - The **same test + target may repeat freely** (many runs, many instances).
   All samples are kept, and the UI reduces them with the aggregation you pick:
   mean, median, min, max, sum, count, first, last, harmonic mean, geometric
-  mean, p95, p05, stdev, range.
+  mean, p95, p05, stdev, range. A metric of **verdicts** is not averaged and
+  offers no choice: the worst wins, so a failure under a collapsed rack stays
+  visible, and where nothing is worse than anything else the most common value
+  does. The card says so in place of the picker.
 - Optional `!test` lines set display metadata:
 
 ```
@@ -212,6 +261,17 @@ raw. `off` there means "no override", not "force every metric raw". A metric
 loaded while it is on is standardized too. The ramp's spread stays per metric,
 since a shared one would have to overwrite what each card holds.
 
+**one scale** — beside it, and on by default once anything is standardized —
+is what makes two metrics actually comparable by eye. Spanning ±σ is not
+enough on its own: a per-metric `palette=`, a per-metric spread, or a
+`higher=good` inversion each paint the same z-score green on one metric and
+red on the next. Ticked, every standardized metric is drawn from one palette,
+one spread and no inversion, so **the same z-score is the same colour
+everywhere**; each card still shows the palette and spread it would use on its
+own, greyed. The default ramp is `rdbu`, diverging, because a z-score is
+signed and the mean belongs in the middle. Untick it to go back to per-metric
+colours.
+
 The mean and spread are measured over **one aggregated value per measured
 element** — the devices being compared, not the raw sample rows, which repeat
 per run — so changing the aggregation re-measures them. The overlay card shows
@@ -221,7 +281,9 @@ rather than dividing by zero.
 
 (`higher=bad|good` picks the green↔red ramp direction; `palette=` chooses any
 ramp: viridis, magma, plasma, turbo, health, cool, ember, gray, rdbu;
-`agg=` presets the aggregation; `decimals=` fixes formatting.)
+`agg=` presets the aggregation; `decimals=` fixes formatting, 0 to 10 places.
+`min=`/`max=` must be numbers with `min` below `max`; anything else is
+reported in the load report and ignored rather than quietly applied.)
 
 Fields split on tabs, commas or runs of spaces — except inside quotes, so a
 value that needs a space is written `label="Inlet temp"` (single quotes work
@@ -236,8 +298,14 @@ tools/dcadd results.tsv temp_c DH1/A/R01/u05 61.2 run=nightly   # one sample
 my_test | dcadd results.tsv --stdin temp_c                      # target value per line
 dcadd results.tsv --merge run1.tsv run2.tsv                     # concat other files
 dcadd results.tsv --csv fio.csv --test iops --target host --value write_iops
-dcadd results.tsv --meta temp_c unit=C higher=bad min=15 max=95
+dcadd results.tsv --meta temp_c unit=C higher=bad min=15 max=95 'label=Inlet temp'
 ```
+
+A metadata or `key=value` field whose value carries a space or a comma is
+quoted on the way out, so `label=Inlet temp` writes `label="Inlet temp"` and
+reads back whole. The format has no escape, so the quote used is the one the
+value does not contain; a value holding both is refused rather than written
+as something that reads back differently.
 
 ### JSON results
 
@@ -556,7 +624,28 @@ netmesh run --for 60 && dcimport results.tsv --tidy reports/
   tree but has to be chosen again each session. Nothing is read until it is
   clicked, and clicking a results file that is already loaded re-reads it —
   replacing its overlays rather than counting every sample twice, since the
-  format is append-only.
+  format is append-only. A file is known by its path below the open folder, so
+  `monday/results.tsv` and `tuesday/results.tsv` are two files and stay two
+  sets of overlays; where a load genuinely cannot tell two files apart (two
+  named the same, dropped together, with no path between them) they are
+  numbered and the report says so.
+- **Restart** — empties the viewer: no floor plan, no overlays, no filter, no
+  selection, and a blank canvas. **Remove all** in the Overlays panel only ever
+  cleared the overlays and left the floor plan drawn; this clears the lot. What
+  survives is the workspace rather than its contents — panel widths and folds,
+  and the folder held open in Files, so the next thing to load is one click
+  away.
+- **The load report** — every load says what each file did, in a chip at the
+  right of the top bar (`✓ 3`, or `⚠ 1` when something did not go as asked).
+  Click it for the report; a load with a problem opens it by itself. It sits
+  in the top bar rather than a panel because a panel collapses, and the one
+  thing saying a file did not arrive must not be collapsible. It names the
+  quiet outcomes in particular: a file with no data lines in it, a file whose
+  lines are not in `test target value` form, **two layouts at once** (a viewer
+  holds one floor plan — it says which won and which were ignored), and a file
+  re-read over itself (it replaces what it brought before, rather than
+  counting its samples twice). Warnings inside a file name that file, so
+  `line 5:` is never ambiguous between two.
 - **Panels** — either side panel collapses to a slim rail (the `‹` / `›` in
   its heading, and the rail brings it back) and resizes by dragging the edge
   beside the canvas; double-click that edge to reset a width. Every section
@@ -573,10 +662,13 @@ netmesh run --for 60 && dcimport results.tsv --tidy reports/
   Collapse racks/rows/rooms buttons. Collapsed containers show their
   aggregate results computed from all raw samples inside them.
 - **Filter** — the top bar matches anything: bare words search ids, names,
-  tags and attributes; `+gpu` tags (globs too: `+stor*`, `+gp?`);
+  tags and attributes, and a bare glob (`*serv*`, `r76?`) searches exactly the
+  same fields, plus the full path so `DH1/A/*` is a query; `+gpu` tags (globs
+  too: `+stor*`, `+gp?`);
   `kind:rack`; `model=r76*` (`?` matches exactly one character);
   `net:storage`; result queries like `temp_c>70`, `burnin=FAIL`,
-  `has:iperf_gbps`; `!` negates, `|` ors, space ands. Matches keep their
+  `has:iperf_gbps` (a test name can be loaded from more than one file, and the
+  element matches when any of them reads over the threshold); `!` negates, `|` ors, space ands. Matches keep their
   ancestors visible; "hide non-matching" prunes everything else, otherwise
   non-matches are dimmed.
 - **Overlays** — check any number of tests. With N enabled, every element is
@@ -594,8 +686,13 @@ netmesh run --for 60 && dcimport results.tsv --tidy reports/
   the group's overlays and how many are shown, and its **×** removes that
   file's overlays alone. **sort A–Z** orders the metrics alphabetically within
   each file; unticked they keep the order the file wrote them in, which the
-  exports choose deliberately (mx and iperf write theirs in reading order). A test fed by several files (the append-only
-  workflow) is filed under the first that carried it.
+  exports choose deliberately (mx and iperf write theirs in reading order).
+  **Files never combine**: every overlay belongs to exactly one file, so two
+  files that both carry a test called `temp_c` are two overlays with two sets
+  of samples, two domains and two cards — one under each file's group. To
+  accumulate a metric over time, concatenate the runs into *one* file, which
+  is what the append-only format is for. Loading the same file again re-reads
+  it, replacing what it brought before rather than counting its samples twice.
 - **Networks** — toggle each named fabric, or **Show all** / **Hide all** them
   at once; opacity slider for dense views.
 - **Measured flows** — `mx export --peers` and `iperf_orchestrator` write one
@@ -634,8 +731,14 @@ examples/hostnames-results.tsv  results addressed by flat name
 examples/mx/              every layout construct, painted by a real mx run
 tools/dcadd               results appender (python3, stdlib only)
 tools/dcimport            netmesh output -> overlay samples
+docs/                     the results-format guide for converting data in
 tests/fixtures/           real tool output, as the contract the suite checks
 tests/run.mjs             headless test suite (node tests/run.mjs)
+tests/browser.mjs         the same for the page itself (node tests/browser.mjs) —
+                          drives Chromium through the interactions that module
+                          tests cannot reach. Skips with a message where
+                          Playwright is not installed; the viewer still has no
+                          dependencies.
 LICENSE                   GNU General Public License v3
 ```
 

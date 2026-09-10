@@ -28,6 +28,9 @@ function isNum(s) {
   return /^-?\d+$/.test(s);
 }
 
+const ALPHABETS = [/^[A-Z]$/, /^[a-z]$/, /^[0-9]$/];
+const sameAlphabet = (a, b) => ALPHABETS.some((re) => re.test(a) && re.test(b));
+
 function expandRangeSpec(spec) {
   // "1..40x2" | "01..20" | "A..H" | "a|b|c" | "1..4,7..10" | "literal"
   // Comma-separated segments concatenate, so numbering with holes stays one
@@ -49,12 +52,16 @@ function expandRangeSpec(spec) {
   if (isNum(rawLo) && isNum(rawHi)) {
     const lo = parseInt(rawLo, 10);
     const hi = parseInt(rawHi, 10);
-    // "01" implies every value is padded to that width.
-    const width = /^-?0\d/.test(rawLo) ? rawLo.length : 0;
+    // "01" implies every value is padded to that width -- the digits are what
+    // gets padded, so a minus sign is neither counted nor dropped. Padding the
+    // absolute value alone turned [-05..-01] into 005 004 003 002 001, five
+    // positive ids counting the wrong way.
+    const digits = rawLo.startsWith('-') ? rawLo.slice(1) : rawLo;
+    const width = /^0\d/.test(digits) ? digits.length : 0;
     const out = [];
     const dir = hi >= lo ? 1 : -1;
     for (let v = lo; dir > 0 ? v <= hi : v >= hi; v += dir * step) {
-      out.push(width ? String(Math.abs(v)).padStart(width, '0') : String(v));
+      out.push(width ? `${v < 0 ? '-' : ''}${String(Math.abs(v)).padStart(width, '0')}` : String(v));
     }
     return out;
   }
@@ -62,6 +69,14 @@ function expandRangeSpec(spec) {
   if (rawLo.length === 1 && rawHi.length === 1) {
     const lo = rawLo.charCodeAt(0);
     const hi = rawHi.charCodeAt(0);
+    // Both ends have to sit in the same alphabet. Walking the character codes
+    // from any letter to any other let [A..z] run through [ \ ] ^ _ ` on its
+    // way, so a typo for [A..Z] quietly produced seven elements named after
+    // punctuation -- one of them "]".
+    if (!sameAlphabet(rawLo, rawHi)) {
+      throw new Error(`cannot expand range "${spec}": ${rawLo} and ${rawHi} are not both `
+        + 'A-Z, both a-z or both digits');
+    }
     const out = [];
     const dir = hi >= lo ? 1 : -1;
     for (let c = lo; dir > 0 ? c <= hi : c >= hi; c += dir * step) {

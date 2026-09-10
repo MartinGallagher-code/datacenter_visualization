@@ -14,7 +14,10 @@
 // which is what keeps the tree and the canvas showing the same collapse state.
 
 import { PALETTE_NAMES, categoricalColor, colorFor, ramp } from './palette.js';
-import { AGGREGATIONS, formatValue, isStandardized, overlayValue, unitFor } from './results.js';
+import {
+  AGGREGATIONS, invertedOf, isStandardized, overlayValue, paletteOf, readNumber, valueWithUnit,
+  zRangeOf,
+} from './results.js';
 import { countDescendants, linkSummary } from './render.js';
 
 const el = (tag, cls, text) => {
@@ -147,14 +150,21 @@ export function renderOverlays(state, host, actions) {
     pick.addEventListener('change', () => actions.setStandardizeAll(pick.value));
     row.append(pick);
     host.append(row);
+
+    // Spanning +/-sigma is not enough to make two metrics comparable by eye:
+    // a per-metric palette or a `higher=good` inversion still paints the same
+    // z-score green on one and red on the next. One scale fixes that, and is
+    // the whole reason to standardise more than one metric at once.
+    if (overlays.some((o) => isStandardized(o))) host.append(zScaleRow(state, actions));
   }
 
   // Grouped by the file they came from: one results file can carry twenty-odd
   // overlays, and two files loaded together are otherwise indistinguishable.
-  // A test fed by several files is filed under the first that carried it.
+  // Every overlay belongs to exactly one file, including two files that
+  // happen to carry a test of the same name -- those are two overlays.
   const groups = new Map();
   for (const overlay of overlays) {
-    const key = (overlay.sources && overlay.sources[0]) || '';
+    const key = overlay.source || '';
     const bucket = groups.get(key);
     if (bucket) bucket.push(overlay);
     else groups.set(key, [overlay]);
@@ -175,6 +185,48 @@ export function renderOverlays(state, host, actions) {
     if (grouped && state.groupsOff.has(source)) continue;
     for (const overlay of list) host.append(overlayCard(state, overlay, actions));
   }
+}
+
+function zScaleRow(state, actions) {
+  const row = el('div', 'allstd zscale');
+
+  const share = el('label', 'chk');
+  const box = el('input');
+  box.type = 'checkbox';
+  box.checked = !!state.zShared;
+  box.addEventListener('change', () => actions.setZShared(box.checked));
+  share.append(box, el('span', null, 'one scale'));
+  share.title = 'Colour every standardised metric from the same scale, so the same z-score is '
+    + 'the same colour on all of them. This overrides each metric\'s own palette, spread and '
+    + '`higher=good` direction — which is what made +2σ green on one metric and red on the next.';
+  row.append(share);
+
+  const pal = el('select');
+  for (const name of PALETTE_NAMES) {
+    const opt = el('option', null, name);
+    opt.value = name;
+    if (name === state.zPalette) opt.selected = true;
+    pal.append(opt);
+  }
+  pal.disabled = !state.zShared;
+  pal.title = 'The one palette every standardised metric is drawn with. A diverging ramp '
+    + '(rdbu) reads best: a z-score is signed, and the mean belongs in the middle.';
+  pal.addEventListener('change', () => actions.setZScale('zPalette', pal.value));
+  row.append(pal);
+
+  const spread = el('input', 'zspread');
+  spread.value = trimNum(state.zSpread);
+  spread.disabled = !state.zShared;
+  spread.title = 'Standard deviations at each end of the shared ramp';
+  spread.addEventListener('change', () => {
+    const v = readNumber(spread.value, null);
+    // A box that keeps what was typed while the scale keeps something else is
+    // a box that lies about the picture. Put back what is actually in force.
+    if (v === null || v <= 0) { spread.value = trimNum(state.zSpread); return; }
+    actions.setZScale('zSpread', v);
+  });
+  row.append(spread, el('span', 'muted', 'σ'));
+  return row;
 }
 
 function groupHeader(state, source, list, actions) {
@@ -237,16 +289,29 @@ function overlayCard(state, overlay, actions) {
   const grid = el('div', 'grid2');
 
   grid.append(el('label', null, 'combine'));
-  const agg = el('select');
-  for (const [key, def] of Object.entries(AGGREGATIONS)) {
-    const opt = el('option', null, def.label);
-    opt.value = key;
-    if (key === overlay.agg) opt.selected = true;
-    agg.append(opt);
+  if (overlay.numeric) {
+    const agg = el('select');
+    for (const [key, def] of Object.entries(AGGREGATIONS)) {
+      const opt = el('option', null, def.label);
+      opt.value = key;
+      if (key === overlay.agg) opt.selected = true;
+      agg.append(opt);
+    }
+    agg.title = 'How repeated samples for the same element are reduced to one number';
+    agg.addEventListener('change', () => actions.setOverlayAgg(overlay, agg.value));
+    grid.append(agg);
+  } else {
+    // Verdicts are not averaged, and this used to offer to do it: thirteen
+    // aggregations, "mean" showing as the setting for a metric of PASS and
+    // FAIL, and every one of them producing the same answer because the text
+    // path never reads overlay.agg. `last` in particular is a thing a person
+    // would reasonably expect to work.
+    const how = el('span', 'muted', 'worst, then most common');
+    how.title = 'Verdicts are not numbers, so they are not averaged. A failure '
+      + 'beneath a collapsed rack stays visible, and where nothing is worse than '
+      + 'anything else the most frequent value wins.';
+    grid.append(how);
   }
-  agg.title = 'How repeated samples for the same element are reduced to one number';
-  agg.addEventListener('change', () => actions.setOverlayAgg(overlay, agg.value));
-  grid.append(agg);
 
   if (overlay.numeric) {
     // The card always shows this metric's own setting, even while
@@ -270,13 +335,21 @@ function overlayCard(state, overlay, actions) {
     std.addEventListener('change', () => actions.setOverlayStandardize(overlay, std.value));
     grid.append(std);
 
+    // The shared z scale overrides this the way "standardize all" overrides
+    // the setting above it: still shown, still editable, visibly not what is
+    // being drawn.
+    const onShared = isStandardized(overlay) && !!overlay.zShared;
     grid.append(el('label', null, 'palette'));
-    const pal = el('select');
+    const pal = el('select', onShared ? 'overridden' : null);
     for (const name of PALETTE_NAMES) {
       const opt = el('option', null, name);
       opt.value = name;
       if (name === overlay.palette) opt.selected = true;
       pal.append(opt);
+    }
+    if (onShared) {
+      pal.title = `Overridden by the shared z scale (${overlay.zShared.palette}). This is what `
+        + 'this metric goes back to when "one scale" is unticked.';
     }
     pal.addEventListener('change', () => actions.setOverlayField(overlay, 'palette', pal.value));
     grid.append(pal);
@@ -284,12 +357,16 @@ function overlayCard(state, overlay, actions) {
     if (isStandardized(overlay)) {
       grid.append(el('label', null, 'spread'));
       const range = el('div', 'rangerow');
-      const z = el('input');
+      const z = el('input', onShared ? 'overridden' : null);
       z.value = trimNum(overlay.zRange);
-      z.title = 'Standard deviations at each end of the ramp';
+      z.title = onShared
+        ? `Overridden by the shared z scale (±${trimNum(overlay.zShared.zRange)}σ). This is what `
+          + 'this metric goes back to when "one scale" is unticked.'
+        : 'Standard deviations at each end of the ramp';
       z.addEventListener('change', () => {
-        const v = Number(z.value);
-        if (Number.isFinite(v) && v > 0) actions.setOverlayField(overlay, 'zRange', v);
+        const v = readNumber(z.value, null);
+        if (v === null || v <= 0) { z.value = trimNum(overlay.zRange); return; }
+        actions.setOverlayField(overlay, 'zRange', v);
       });
       range.append(z, el('span', 'muted', 'σ'));
       grid.append(range);
@@ -302,11 +379,13 @@ function overlayCard(state, overlay, actions) {
       hi.value = trimNum(overlay.max);
       for (const [input, field] of [[lo, 'min'], [hi, 'max']]) {
         input.addEventListener('change', () => {
-          const v = Number(input.value);
-          if (Number.isFinite(v)) {
-            overlay.autoDomain = false;
-            actions.setOverlayField(overlay, field, v);
-          }
+          // Emptying the box used to read as zero, because Number('') is 0:
+          // clearing `min` pinned the bottom of the scale to zero instead of
+          // leaving it where it was, and nothing on screen said so.
+          const v = readNumber(input.value, null);
+          if (v === null) { input.value = trimNum(overlay[field]); return; }
+          overlay.autoDomain = false;
+          actions.setOverlayField(overlay, field, v);
         });
         range.append(input);
       }
@@ -324,15 +403,15 @@ function overlayCard(state, overlay, actions) {
     const stops = [];
     for (let i = 0; i <= 8; i++) {
       const t = i / 8;
-      stops.push(`${ramp(overlay.palette, overlay.invert ? 1 - t : t)} ${t * 100}%`);
+      stops.push(`${ramp(paletteOf(overlay), invertedOf(overlay) ? 1 - t : t)} ${t * 100}%`);
     }
     legend.style.background = `linear-gradient(90deg, ${stops.join(',')})`;
     body.append(legend);
 
     const scale = el('div', 'legend-scale');
     const std = isStandardized(overlay);
-    const lo = std ? `-${trimNum(overlay.zRange)}σ` : `${trimNum(overlay.min)}${overlay.unit}`;
-    const hi = std ? `+${trimNum(overlay.zRange)}σ` : `${trimNum(overlay.max)}${overlay.unit}`;
+    const lo = std ? `-${trimNum(zRangeOf(overlay))}σ` : `${trimNum(overlay.min)}${overlay.unit}`;
+    const hi = std ? `+${trimNum(zRangeOf(overlay))}σ` : `${trimNum(overlay.max)}${overlay.unit}`;
     scale.append(el('span', null, lo));
     if (std) scale.append(el('span', null, 'mean'));
     scale.append(el('span', null, hi));
@@ -362,6 +441,16 @@ function overlayCard(state, overlay, actions) {
     stats.append(document.createTextNode(' · '));
     stats.append(el('span', null, `${overlay.flowsByEl.size} hosts with flows`));
   }
+  if (overlay.ambiguous && overlay.ambiguous.length) {
+    stats.append(document.createTextNode(' · '));
+    const n = overlay.ambiguous.length;
+    const many = el('span', 'bad', `${n} ambiguous target${n === 1 ? '' : 's'}`);
+    many.title = `Each of these names more than one element. The reading went to the\n`
+      + `first; write more of the path (rack/u01) to say which.\n\n`
+      + overlay.ambiguous.slice(0, 40)
+        .map((a) => `${a.target} — ${a.count} matches, used ${a.chosen}`).join('\n');
+    stats.append(many);
+  }
   if (overlay.unresolved.length) {
     stats.append(document.createTextNode(' · '));
     const bad = el('span', 'bad', `${overlay.unresolved.length} unmatched target${overlay.unresolved.length === 1 ? '' : 's'}`);
@@ -377,7 +466,12 @@ function overlayCard(state, overlay, actions) {
 const trimNum = (v) => (Number.isFinite(v) ? String(Math.round(v * 1000) / 1000) : '');
 // Short, readable figure for the mean/sd note; the overlay's own decimals
 // setting is about its values, not about describing their distribution.
-const formatNum = (v) => (Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 1 ? v.toFixed(2) : v.toFixed(3));
+// Guarded like trimNum above it: an aggregation that does not apply (a
+// geometric mean over a zero) makes the mean non-finite, and toFixed on
+// that prints the word NaN into the panel.
+const formatNum = (v) => (Number.isFinite(v)
+  ? (Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 1 ? v.toFixed(2) : v.toFixed(3))
+  : '—');
 
 // ---------------------------------------------------------------- networks
 
@@ -522,7 +616,7 @@ export function renderInspector(state, host, actions) {
     dot.style.background = colorFor(overlay, reading) || '#444';
     row.append(dot);
     row.append(el('span', null, overlay.label));
-    const value = `${formatValue(overlay, reading.value)}${unitFor(overlay)}`;
+    const value = valueWithUnit(overlay, reading.value);
     const note = reading.samples > 1 ? ` (${overlay.agg} of ${reading.samples})` : '';
     row.append(el('span', 'val', value + note));
     readings.append(row);
@@ -571,7 +665,7 @@ function renderFlows(state, host, node) {
       const name = el('span', 'flowpeer', `→ ${flow.peerEl ? flow.peerEl.name : flow.peer}`);
       if (!flow.peerEl) name.title = `${flow.peer} is not an element in this layout`;
       row.append(name);
-      row.append(el('span', 'val', `${formatValue(overlay, flow.value)}${unitFor(overlay)}`));
+      row.append(el('span', 'val', valueWithUnit(overlay, flow.value)));
       box.append(row);
     }
     if (sorted.length > FLOWS_SHOWN) {
@@ -585,6 +679,47 @@ function renderFlows(state, host, node) {
 // opens the editor there. Results warnings say "results line N" -- a line of
 // a different file -- so only a leading "line N:" counts as jumpable.
 const LAYOUT_LINE = /^line (\d+):/;
+
+// ---------------------------------------------------------------- notices
+// The load report. Warnings live in the Structure block, which is inside a
+// panel that collapses and a section that folds -- so a file that failed
+// could still fail silently. This chip sits in the top bar, where nothing
+// hides it, and opens the report on a click.
+
+export function renderNotices(state, host, button, actions, onJump) {
+  const notices = state.notices || [];
+  const bad = notices.filter((n) => n.level === 'warn').length;
+
+  button.hidden = !notices.length;
+  button.className = `notice-chip${bad ? ' warn' : ''}`;
+  button.textContent = bad ? `⚠ ${bad}` : `✓ ${notices.length}`;
+  button.title = bad
+    ? `${bad} of the last ${notices.length} loads had something to say — click for the report`
+    : 'Last load: click for the report';
+
+  host.hidden = !state.noticesOpen || !notices.length;
+  host.textContent = '';
+  if (host.hidden) return;
+
+  const head = el('div', 'notice-head');
+  head.append(el('span', null, 'Last load'));
+  const close = el('button', 'notice-x', '×');
+  close.title = 'Close the report';
+  close.addEventListener('click', () => actions.toggleNotices(false));
+  head.append(close);
+  host.append(head);
+
+  for (const notice of notices) {
+    const row = el('div', `notice ${notice.level}`);
+    row.append(el('div', 'notice-text', notice.text));
+    if (notice.lines && notice.lines.length) {
+      const detail = el('div', 'notice-detail');
+      fillWarnings(detail, notice.lines, onJump);
+      row.append(detail);
+    }
+    host.append(row);
+  }
+}
 
 export function fillWarnings(box, warnings, onJump) {
   box.textContent = '';
