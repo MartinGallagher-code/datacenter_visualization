@@ -11,7 +11,8 @@
 
 // Headless test suite: node tests/run.mjs
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -819,6 +820,40 @@ if (python.error) {
   const mixed = parseResults(native + nm.out);
   ok(mixed.has('iperf_mbps_out') && mixed.has('rtt_p50'),
      'export-overlay and dcimport overlays coexist in one results file');
+
+  // A field separated by a comma is as split as one separated by a space, so
+  // a host named "a,b" wrote a line reading back as target "a" with the text
+  // value "b" -- the whitespace half of the rule was enforced, the comma half
+  // was not. A peer's name is data from someone else's report rather than
+  // something typed here, so that one is quoted through instead of refused.
+  {
+    const header = readFileSync(join(fixtures, 'netmesh-reports/wr01r01u01.csv'), 'utf8')
+      .split('\n')[0];
+    const dir = mkdtempSync(join(tmpdir(), 'dcimport-'));
+    const report = (host, peer) => {
+      writeFileSync(join(dir, 'x.csv'), `${header}\n1787941142,${host},tx,${peer},udp,64,50,`
+        + '101,100,0.990,72,261,256,384,381,59,9000,confirmed,,,,\n');
+      return dcimport(['--tidy', dir]);
+    };
+
+    const commaHost = report('"a,b"', 'wr01r01u02');
+    ok(commaHost.code !== 0 && commaHost.err.includes('comma'),
+       'a host name carrying a comma is refused, as a space already was');
+
+    for (const [label, peer] of [['a space', '"peer two"'], ['a comma', '"a,b"']]) {
+      const run = report('goodhost', peer);
+      eq(run.code, 0, `a peer carrying ${label} still imports`);
+      const back = parseResults(run.out, new Map(), [], 'imported.tsv');
+      const sample = [...back.values()][0].samples[0];
+      eq(sample.target, 'goodhost', `and the target survives it (${label})`);
+      eq(sample.value, 256, `so does the value (${label})`);
+      eq(sample.meta.peer, peer.replace(/"/g, ''), `and the peer's own name (${label})`);
+    }
+    const clean = [];
+    parseResults(report('goodhost', '"peer two"').out, new Map(), clean, 'imported.tsv');
+    eq(clean, [], 'the quoted line reads back without a word of complaint');
+    rmSync(dir, { recursive: true, force: true });
+  }
 
   // A file that is not a netmesh report fails loudly -- and the mx and iperf
   // reports this tool deliberately no longer reads say where they belong.

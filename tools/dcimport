@@ -47,7 +47,11 @@ License GPLv3+: GNU GPL version 3 or later <https://gnu.org/licenses/gpl.html>.
 This is free software: you are free to change and redistribute it.
 There is NO WARRANTY, to the extent permitted by law."""
 
-BAD_CHARS = set(" \t\n\r")
+# A field is separated by a tab, a comma, OR a run of spaces. A comma inside
+# one splits it in half when the viewer reads the file back, so a host named
+# "a,b" would land as target "a" with the text value "b" -- the whitespace half
+# of this rule was already enforced; the comma half was not.
+BAD_CHARS = set(" \t\n\r,")
 
 
 # --------------------------------------------------------------- metric tables
@@ -70,12 +74,25 @@ NETMESH_HOST = [
 
 # --------------------------------------------------------------------- helpers
 
+def extra(key, value):
+    """`key=value` for a sample line, quoted when the value needs it.
+
+    A peer or probe name is data read out of someone else's report, not
+    something a person typed here, so a space or a comma in it is carried
+    through rather than refused -- unquoted it would split the field and the
+    flow would point at the wrong host.
+    """
+    text = str(value).strip()
+    return '%s="%s"' % (key, text) if any(c in BAD_CHARS for c in text) else "%s=%s" % (key, text)
+
+
 def clean(field, what):
     text = str(field).strip()
     if not text:
         sys.exit("dcimport: empty %s" % what)
     if any(c in BAD_CHARS for c in text):
-        sys.exit("dcimport: %s may not contain whitespace: %r" % (what, text))
+        sys.exit("dcimport: %s may not contain whitespace or a comma "
+                 "-- both separate fields: %r" % (what, text))
     return text
 
 
@@ -218,10 +235,10 @@ def _tidy_row(row, out):
     direction = (row.get("dir") or "").strip()
     peer = (row.get("peer") or "").strip()
     if direction == "tx":
-        extras = ["peer=%s" % peer] if peer and peer != "*" else []
+        extras = [extra("peer", peer)] if peer and peer != "*" else []
         probe = (row.get("probe") or "").strip()
         if probe:
-            extras.append("probe=%s" % probe)
+            extras.append(extra("probe", probe))
         _emit(NETMESH_TX, row, host, out, extras)
     elif direction == "host":
         _emit(NETMESH_HOST, row, host, out, [])
