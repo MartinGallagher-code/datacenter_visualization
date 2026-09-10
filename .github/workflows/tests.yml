@@ -29,8 +29,8 @@ jobs:
     name: module tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: '22'
       # tools/dcadd and tools/dcimport are python3, stdlib only, and ~70 of
@@ -44,8 +44,8 @@ jobs:
     name: browser tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: '22'
       # The viewer has no dependencies and this does not give it any:
