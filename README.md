@@ -734,6 +734,11 @@ tools/dcimport            netmesh output -> overlay samples
 docs/                     the results-format guide for converting data in
 tests/fixtures/           real tool output, as the contract the suite checks
 tests/run.mjs             headless test suite (node tests/run.mjs)
+tests/browser.mjs         the same for the page itself (node tests/browser.mjs) —
+                          drives Chromium through the interactions that module
+                          tests cannot reach. Skips with a message where
+                          Playwright is not installed; the viewer still has no
+                          dependencies.
 LICENSE                   GNU General Public License v3
 ```
 
