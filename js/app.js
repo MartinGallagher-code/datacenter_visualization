@@ -243,7 +243,13 @@ const actions = {
     if (overlay.autoDomain) recomputeDomain(overlay, state.model);
     // The population is the per-element values, so a different aggregation is
     // a different distribution: the mean and spread have to be measured again.
+    // When standardizing is off they are dropped rather than left alone --
+    // the two switches deliberately keep stats across an off/on cycle, and a
+    // stale set survived that cycle to be reused against different values.
+    // Same metric, same settings, z of 1.4 or 4.5 depending on the order the
+    // two were clicked.
     if (overlay.stdMode !== 'off') recomputeStats(overlay, state.model);
+    else overlay.stats = null;
     refreshPanels();
     invalidate();
   },

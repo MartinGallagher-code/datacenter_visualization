@@ -22,7 +22,7 @@ import { parseLayout, isColor, LINK_OPTS, NUMBERS } from '../js/parse.js';
 import {
   parseResults, bindOverlay, overlayValue, AGGREGATIONS, extent,
   recomputeStats, zScore, formatValue, unitFor, zRangeOf, paletteOf, invertedOf, overlayKey,
-  valueWithUnit, NO_VALUE, recomputeDomain, readNumber,
+  valueWithUnit, NO_VALUE, recomputeDomain, readNumber, clearOverlayCache,
 } from '../js/results.js';
 import { layout } from '../js/layout.js';
 import { linkSummary, sharesLineage } from '../js/render.js';
@@ -1878,6 +1878,97 @@ if (python.error) {
   ok((fed.stderr || '').includes('skipped 2'), 'and the two unreadable ones are reported');
   ok((fed.stderr || '').includes("'u02,62.3'"), 'by content, so the cause is visible');
   ok(!(fed.stderr || '').includes('# note'), 'blank lines and comments are not "skipped"');
+}
+
+// ------------------------------------------- stats that outlived their aggregation
+// Standardizing measures the mean and spread of the aggregated values, and
+// the two standardize switches deliberately keep that measurement across an
+// off/on cycle so flipping them is cheap. Changing the aggregation makes it
+// a measurement of something else -- and while standardizing was off, the
+// change did not drop it. The same metric on the same settings then coloured
+// two different ways depending on the order the switches were clicked.
+{
+  const plan = parseLayout(['dc D', '  rack r1 u=6', '    node n1 at=1',
+                            '    node n2 at=2', '    node n3 at=3'].join('\n'));
+  const rows = [];
+  for (const [n, vals] of [[1, [10, 90]], [2, [20, 20]], [3, [30, 30]]]) {
+    for (const v of vals) rows.push(`m n${n} ${v}`);
+  }
+  const fresh = () => bindOverlay(
+    parseResults(`!test m unit=C\n${rows.join('\n')}\n`, new Map(), [], 'f').get(overlayKey('f', 'm')),
+    plan);
+
+  // The app's three actions, as they behave after the fix.
+  const setAgg = (o) => (agg) => {
+    o.agg = agg;
+    clearOverlayCache(o);
+    if (o.stdMode !== 'off') recomputeStats(o, plan);
+    else o.stats = null;
+  };
+  const on = (o) => () => {
+    o.standardize = 'colour';
+    if (o.stdMode !== 'off' && !o.stats) recomputeStats(o, plan);
+  };
+  const zOf = (o) => zScore(o, overlayValue(o, plan.byKey.get('D/r1/n1')).value);
+
+  const direct = fresh();
+  setAgg(direct)('max');
+  on(direct)();
+  const roundabout = fresh();
+  setAgg(roundabout)('mean');
+  on(roundabout)();
+  roundabout.standardize = 'off';
+  setAgg(roundabout)('max');
+  on(roundabout)();
+
+  eq(roundabout.stats.mean, direct.stats.mean, 'the mean belongs to the aggregation in force');
+  eq(zOf(roundabout), zOf(direct), 'so the same settings give the same z either way round');
+  ok(Math.abs(zOf(direct) - 1.4018) < 0.001, 'and it is the z of the maxima, not of the means');
+
+  // Flipping standardizing off and on without touching the aggregation must
+  // still reuse the measurement -- that is what the cache is for.
+  const kept = fresh();
+  on(kept)();
+  const first = kept.stats;
+  kept.standardize = 'off';
+  on(kept)();
+  ok(kept.stats === first, 'an off/on cycle alone still costs nothing');
+}
+
+// ------------------------------------------- a control with nothing to control
+// Verdicts are not averaged: the text path takes the worst, then the most
+// common, and never reads overlay.agg. The card offered all thirteen
+// aggregations anyway, showed "mean" as the setting for a metric of PASS and
+// FAIL, and every one of them produced the same answer.
+{
+  const plan = parseLayout(['dc D', '  rack r1 u=4', '    node n1 at=1'].join('\n'));
+  const o = bindOverlay(
+    parseResults('burnin n1 PASS\nburnin n1 FAIL\nburnin n1 PASS\n', new Map(), [], 'f')
+      .get(overlayKey('f', 'burnin')), plan);
+  eq(o.numeric, false, 'a metric of verdicts is not numeric');
+
+  const seen = new Set();
+  for (const agg of Object.keys(AGGREGATIONS)) {
+    o.agg = agg;
+    clearOverlayCache(o);
+    seen.add(overlayValue(o, plan.byKey.get('D/r1/n1')).value);
+  }
+  eq([...seen], ['FAIL'], 'and no aggregation changes what it reads -- the worst verdict wins');
+}
+
+// ------------------------------------------- a layout's warnings lost their count
+// detail() caps a results file's warnings and adds "… and N more".
+// layoutNotice sliced to the same cap and added nothing, so a layout with a
+// hundred warnings showed twenty and looked like it had twenty.
+{
+  const many = Array.from({ length: 100 }, (_, i) => `line ${i + 1}: x`);
+  const n = layoutNotice('floor.dc', 5, many);
+  eq(n.lines.length, 21, 'twenty detail lines, plus the tally');
+  ok(n.lines[20].includes('80 more'), 'and the tally counts what is not shown');
+  ok(n.text.includes('100 warnings'), 'the summary had the true count all along');
+  eq(layoutNotice('floor.dc', 5, ['line 2: x']).lines, ['line 2: x'],
+     'a short list is still shown whole, with no tally');
+  eq(layoutNotice('floor.dc', 5, []).lines, [], 'and a clean layout has no lines at all');
 }
 
 console.log(failures ? `${failures}/${count} tests FAILED` : `all ${count} tests passed`);

@@ -213,7 +213,10 @@ burnin      DH1/A/R01/u05   PASS
 - The **same test + target may repeat freely** (many runs, many instances).
   All samples are kept, and the UI reduces them with the aggregation you pick:
   mean, median, min, max, sum, count, first, last, harmonic mean, geometric
-  mean, p95, p05, stdev, range.
+  mean, p95, p05, stdev, range. A metric of **verdicts** is not averaged and
+  offers no choice: the worst wins, so a failure under a collapsed rack stays
+  visible, and where nothing is worse than anything else the most common value
+  does. The card says so in place of the picker.
 - Optional `!test` lines set display metadata:
 
 ```

@@ -289,16 +289,29 @@ function overlayCard(state, overlay, actions) {
   const grid = el('div', 'grid2');
 
   grid.append(el('label', null, 'combine'));
-  const agg = el('select');
-  for (const [key, def] of Object.entries(AGGREGATIONS)) {
-    const opt = el('option', null, def.label);
-    opt.value = key;
-    if (key === overlay.agg) opt.selected = true;
-    agg.append(opt);
+  if (overlay.numeric) {
+    const agg = el('select');
+    for (const [key, def] of Object.entries(AGGREGATIONS)) {
+      const opt = el('option', null, def.label);
+      opt.value = key;
+      if (key === overlay.agg) opt.selected = true;
+      agg.append(opt);
+    }
+    agg.title = 'How repeated samples for the same element are reduced to one number';
+    agg.addEventListener('change', () => actions.setOverlayAgg(overlay, agg.value));
+    grid.append(agg);
+  } else {
+    // Verdicts are not averaged, and this used to offer to do it: thirteen
+    // aggregations, "mean" showing as the setting for a metric of PASS and
+    // FAIL, and every one of them producing the same answer because the text
+    // path never reads overlay.agg. `last` in particular is a thing a person
+    // would reasonably expect to work.
+    const how = el('span', 'muted', 'worst, then most common');
+    how.title = 'Verdicts are not numbers, so they are not averaged. A failure '
+      + 'beneath a collapsed rack stays visible, and where nothing is worse than '
+      + 'anything else the most frequent value wins.';
+    grid.append(how);
   }
-  agg.title = 'How repeated samples for the same element are reduced to one number';
-  agg.addEventListener('change', () => actions.setOverlayAgg(overlay, agg.value));
-  grid.append(agg);
 
   if (overlay.numeric) {
     // The card always shows this metric's own setting, even while

@@ -72,7 +72,10 @@ export function layoutNotice(name, elements, warnings) {
     level: warnings.length ? 'warn' : 'ok',
     text: `${name}: ${plural(elements, 'element')}`
       + (warnings.length ? `, ${plural(warnings.length, 'warning')}` : ''),
-    lines: warnings.slice(0, DETAIL_LINES),
+    // Through detail(), like a results file: this used to slice to the cap
+    // and drop the rest without the "… and N more" line, so a layout with a
+    // hundred warnings showed twenty and looked like it had twenty.
+    lines: detail('', warnings),
   };
 }
 
