@@ -1127,6 +1127,41 @@ ok(!matchesFilter('mxrun.tsv', 'mx.*'), 'and that dot has to be there: it is not
   eq(bound('min=0 max=100').autoDomain, false, 'and does count');
 }
 
+// ------------------------------------------------ placeholders that resolve
+// A `{placeholder}` naming something not in scope used to reach the floor
+// plan as literal text -- an element actually called `p{i}`, repeated under
+// every parent, or a server named `{rak}u15`.
+{
+  const warnsOf = (src) => parseLayout(src).warnings.filter((w) => w.includes('placeholder'));
+
+  // The forms the README documents all resolve, and say nothing.
+  eq(warnsOf(['dc D', '  room wr12', '    rack r06 u=42',
+              '      node [7..9] id=u{id} at={id} name={room}{rack}u{id} +row-{i}'].join('\n')),
+     [], 'every documented placeholder resolves');
+
+  const typo = warnsOf(['dc D', '  room wr12', '    rack r06 u=42',
+                        '      node [1..20] name={rak}'].join('\n'));
+  eq(typo.length, 1, 'a misspelt placeholder is reported once, not once per element');
+  ok(typo[0].includes('{rack}'), 'and the message lists the names that would have worked');
+
+  // {id} and {i} belong to an attribute: the id spec is substituted before
+  // the ids exist, so a placeholder there can never resolve.
+  const inSpec = warnsOf(['dc D', '  rack r[1..2] u=4', '    node p{i} at=1'].join('\n'));
+  eq(inSpec.length, 1, 'a placeholder in an id spec is reported once across every parent');
+  ok(inSpec[0].startsWith('line 3: id '), 'and names the id as where it sits');
+
+  eq(warnsOf(['dc D', '  rack r[1..2] u=42', '    node [1..2] name={rak} +t{nope}'].join('\n')).length,
+     2, 'two different mistakes on one line are two warnings');
+
+  // Every layout the repo ships stays quiet, which is what makes the check
+  // worth having: it has to fire on mistakes and not on the house style.
+  for (const file of ['examples/small.dc', 'examples/mega.dc', 'examples/hostnames.dc',
+                      'examples/three-rows.dc', 'examples/mx/floor.dc', 'examples/iperf/floor.dc']) {
+    eq(parseLayout(readFileSync(join(root, file), 'utf8')).warnings, [],
+       `${file} parses without a word`);
+  }
+}
+
 // --------------------------------------------- settings that do nothing
 // An enumerated value outside its vocabulary used to mean the default,
 // silently: higher=high read as higher=bad, style=dotted drew solid,

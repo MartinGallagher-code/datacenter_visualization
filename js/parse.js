@@ -235,9 +235,38 @@ function contextFor(parent) {
   return ctx;
 }
 
+const PLACEHOLDER = /\{[^{}]*\}/;
+
+/**
+ * A `{placeholder}` that survived substitution named something not in scope --
+ * a typo like `{rak}`, or `{id}` used in an id spec, where the id does not
+ * exist yet. It used to reach the floor plan as literal text: an element
+ * actually called `p{i}`, repeated under every parent. Reported once per
+ * line, with the names that WERE available, since the answer is almost
+ * always one of them.
+ */
+const warnedPlaceholders = new WeakMap();
+
+function noteUnresolved(text, what, ctx, model, line) {
+  if (!PLACEHOLDER.test(text)) return;
+  // Once per line, not once per element: materialize runs again under every
+  // parent, and a rack of twenty would otherwise say the same thing twenty
+  // times -- or, worse, fill the whole warning list with one mistake.
+  let seen = warnedPlaceholders.get(model);
+  if (!seen) warnedPlaceholders.set(model, (seen = new Set()));
+  const key = `${line}\u0000${text}`;
+  if (seen.has(key)) return;
+  seen.add(key);
+  model.warnings.push(`line ${line}: ${what} "${text}": no such placeholder here -- `
+    + `this line can use ${Object.keys(ctx).sort().map((k) => `{${k}}`).join(' ')}`);
+}
+
 function materialize(syn, parent, model) {
   const baseCtx = contextFor(parent);
   const spec = syn.idSpec ? subst(syn.idSpec, baseCtx) : null;
+  // The id spec is substituted before the ids exist, so {id} and {i} are not
+  // available to it -- they belong on an attribute, as `id=u{id}` does.
+  if (spec) noteUnresolved(spec, 'id', baseCtx, model, syn.line);
 
   let ids;
   try {
@@ -274,9 +303,18 @@ function materialize(syn, parent, model) {
     for (const [, v] of attrEntries) if (v.includes('{')) { dynamic = true; break; }
     if (dynamic) {
       attrs = {};
-      for (const [k, v] of attrEntries) attrs[k] = subst(v, ctx);
+      for (const [k, v] of attrEntries) {
+        attrs[k] = subst(v, ctx);
+        noteUnresolved(attrs[k], `${k}=`, ctx, model, syn.line);
+      }
     }
-    const tags = syn.tags.some((t) => t.includes('{')) ? syn.tags.map((t) => subst(t, ctx)) : syn.tags;
+    const tags = syn.tags.some((t) => t.includes('{'))
+      ? syn.tags.map((t) => {
+        const out = subst(t, ctx);
+        noteUnresolved(out, 'tag +', ctx, model, syn.line);
+        return out;
+      })
+      : syn.tags;
     const id = attrs.id || rawId;
 
     const el = makeElement(syn.kind, id, parent, attrs, tags, model, syn.line);

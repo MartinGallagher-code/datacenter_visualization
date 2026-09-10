@@ -91,6 +91,10 @@ around a gap are `rack R[1..4,7..10]`, with the children written once instead
 of once per block — see `examples/three-rows.dc`, which also pins sparse
 U-slots the same way (`node [7..15x2,25..31x2] id=u{id} at={id}`).
 
+A placeholder naming something not in scope is reported rather than left in
+the text — `{rak}` for `{rack}`, or `{id}` in an id spec, where the id does
+not exist yet — and the warning lists the names that line could have used.
+
 `{placeholders}` in attributes refer to enclosing elements:
 `name="Hall {id}"`, `power=grid-{i}`, `{room}`, `{row}`, `{parent}`.
 
