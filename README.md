@@ -158,8 +158,14 @@ link storage +storage,role=server scope=row mode=mesh  # full mesh within a row
 - `mode=` is `star` (A×B, default with two selectors), `mesh` (default with
   one), `chain`, `ring`, or `pair` (A[i] to B[i]; with one selector,
   consecutive matches pair off — 1st–2nd, 3rd–4th, …).
-- `bidir=`, `label=` and `cap=` finish the rule: wire the reverse direction
-  too, name the rule in the panel, and stop after that many cables.
+- `cap=` stops a rule after that many cables, which is how a selector that
+  turns out to match half the floor is kept from wiring all of it. A cap that
+  is not a whole number between 1 and 100,000,000 is reported and ignored, and
+  a rule that hits its cap says so.
+- A rule wires **two** selectors. A third token is reported rather than
+  dropped, which is what catches a mistyped option — `scoope=rack` cannot be
+  told apart from selecting on an attribute called `scoope`, but it can be
+  counted.
 - A rule that wires nothing says so: a selector that matched no elements (the
   shape a typo makes) and a rule whose matches produced no cables are both
   reported as warnings rather than left as a silently empty fabric.

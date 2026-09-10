@@ -429,15 +429,21 @@ function setCollapseAtKind(kind) {
 }
 
 function loadLayoutText(text, { keepCamera = false, name = '' } = {}) {
+  // A net tick belongs to the floor plan it was made on. It has to outlive a
+  // re-parse -- the editor re-parses on every keystroke and builds fresh net
+  // objects -- but not a different file: untick `mgmt` on one layout and the
+  // next one's `net mgmt show=yes` arrived hidden, its own instruction
+  // overruled by a decision about a document it has nothing to do with.
+  if (name !== state.layoutName) state.netOverrides.clear();
   state.layoutText = text;
   state.layoutName = name;
   state.model = parseLayout(text);
   // The user's own panel toggles outlive the re-parse; a net the file no
   // longer declares just drops its stale entry.
-  for (const [name, enabled] of state.netOverrides) {
-    const net = state.model.nets.get(name);
+  for (const [netName, enabled] of state.netOverrides) {
+    const net = state.model.nets.get(netName);
     if (net) net.enabled = enabled;
-    else state.netOverrides.delete(name);
+    else state.netOverrides.delete(netName);
   }
   state.selected = null;
   state.warnings = [...state.model.warnings];

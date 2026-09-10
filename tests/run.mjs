@@ -1763,9 +1763,10 @@ ok(!matchesFilter('mxrun.tsv', 'mx.*'), 'and that dot has to be there: it is not
 
 // ------------------------------------------- what the editor knows
 // The completions teach the syntax, so a key the parser takes and the editor
-// never offers is a feature nobody finds. cap=, bidir= and label= on a link
-// rule had all three worked and never been suggested. These assertions are
-// the guard: the lists are in two files and will drift again otherwise.
+// never offers is a feature nobody finds -- cap= on a link rule worked and
+// was never suggested. The reverse is the same fault: bidir= and label= were
+// suggested while nothing read them. These assertions are the guard, since
+// the lists live in two files and will drift again otherwise.
 {
   const offered = (text) => new Set((suggestionsFor(text, text.length) || { options: [] })
     .options.map((o) => o.text));
@@ -1774,6 +1775,14 @@ ok(!matchesFilter('mxrun.tsv', 'mx.*'), 'and that dot has to be there: it is not
   for (const key of LINK_OPTS) {
     ok(linkOpts.has(`${key}=`), `the editor offers ${key}= on a link rule`);
   }
+  // And offers nothing else: teaching an option the parser does not take is
+  // the same fault as missing one, and both have happened -- cap= was never
+  // offered, while bidir= and label= were, after being read by nothing.
+  // This layout declares no elements, so nothing is harvested from it and
+  // the only `key=` completions left are the options and the kind selector.
+  eq([...linkOpts].filter((t) => t.endsWith('=')).sort(),
+     ['kind=', ...[...LINK_OPTS].map((k) => `${k}=`)].sort(),
+     'the editor teaches exactly the options a link rule takes');
 
   const elementKeys = offered('dc D\n  room R\n    rack r1 ');
   // `size` is the old spelling of `u` and is deliberately not taught twice.
@@ -1969,6 +1978,126 @@ if (python.error) {
   eq(layoutNotice('floor.dc', 5, ['line 2: x']).lines, ['line 2: x'],
      'a short list is still shown whole, with no tally');
   eq(layoutNotice('floor.dc', 5, []).lines, [], 'and a clean layout has no lines at all');
+}
+
+// ------------------------------------------- a tick that followed you to another floor
+// A net's checkbox has to outlive a re-parse: the editor re-parses on every
+// keystroke and builds fresh net objects, so without a remembered choice the
+// tick snapped back mid-edit. It was remembered by name and nothing else, so
+// it also outlived loading a different file -- untick `mgmt` on one floor
+// plan and the next one's `net mgmt show=yes` arrived hidden, its own
+// instruction overruled by a decision about a document it never met.
+//
+// app.js holds that state, so what is checked here is the rule it now
+// follows: the choice is kept while the layout's name is the same, and
+// dropped when it changes.
+{
+  const overrides = new Map();
+  let layoutName = '';
+  // What loadLayoutText does, in the order it does it.
+  const load = (text, name) => {
+    if (name !== layoutName) overrides.clear();
+    layoutName = name;
+    const model = parseLayout(text);
+    for (const [netName, enabled] of overrides) {
+      const net = model.nets.get(netName);
+      if (net) net.enabled = enabled;
+      else overrides.delete(netName);
+    }
+    return model;
+  };
+  const untick = (model, name) => { model.nets.get(name).enabled = false; overrides.set(name, false); };
+
+  const A = 'dc A\n  rack r1 u=4\n    node n1 at=1\n    node n2 at=2\n'
+    + 'net mgmt color=#888\nnet data color=#4fa3ff\nlink data n1 n2\nlink mgmt n1 n2\n';
+  const B = 'dc B\n  rack r1 u=4\n    node n1 at=1\n    node n2 at=2\n'
+    + 'net data color=#4fa3ff show=yes\nnet mgmt color=#888 show=yes\nlink data n1 n2\nlink mgmt n1 n2\n';
+
+  const a = load(A, 'a.dc');
+  eq(a.nets.get('mgmt').enabled, true, 'a small floor starts with its nets drawn');
+  untick(a, 'mgmt');
+
+  const edited = load(`${A}    node n3 at=3\n`, 'a.dc');
+  eq(edited.nets.get('mgmt').enabled, false, 'editing the same layout keeps the tick as it was');
+  eq(edited.nets.get('data').enabled, true, 'and leaves the others alone');
+
+  const other = load(B, 'b.dc');
+  eq(other.nets.get('mgmt').enabled, true, "another file's show=yes is not overruled");
+  eq(overrides.size, 0, 'and nothing is carried over to be applied later');
+
+  // A net the file no longer declares still drops out, as it always did.
+  const shrunk = load(A, 'a.dc');
+  untick(shrunk, 'mgmt');
+  load('dc A\n  rack r1 u=4\n    node n1 at=1\nnet data color=#4fa3ff\n', 'a.dc');
+  eq(overrides.has('mgmt'), false, 'a stale entry is dropped when its net goes');
+}
+
+// ------------------------------------------- link options that were not options
+// bidir= and label= sat in LINK_OPTS and were read by nothing. Cables here
+// are undirected -- a pair is deduped by a sorted key and drawn as one line,
+// so there is no reverse to wire -- and a per-rule label reached every link
+// object and no part of the UI. Both were accepted in silence, and the
+// editor had been taught to suggest them.
+{
+  const wire = (rule) => {
+    const m = parseLayout(['dc D', '  rack r1 u=10', '    node tor at=10 role=tor',
+                           '    node s[1..3] at={i} role=server',
+                           'net n color=#4fa3ff', rule].join('\n'));
+    return { links: m.links.length, warnings: m.warnings };
+  };
+
+  eq(wire('link n role=server role=tor').warnings, [], 'an ordinary rule says nothing');
+  eq(wire('link n role=server role=tor').links, 3, 'and wires the three servers to the ToR');
+
+  for (const dead of ['bidir=yes', 'label=Uplink', 'scoope=rack']) {
+    const got = wire(`link n role=server role=tor ${dead}`);
+    eq(got.links, 3, `${dead} changes no cable`);
+    eq(got.warnings.length, 1, `and ${dead} is reported`);
+    ok(got.warnings[0].includes(`"${dead}"`), 'naming the token that did nothing');
+    ok(got.warnings[0].includes('scope, mode, cap'), 'and the options that would have worked');
+  }
+
+  // cap was the last parseInt in the codebase, with the u=1e9 failure exactly:
+  // NaN made `made >= cap` false forever, so cap=abc meant no cap at all, and
+  // cap=1e6 read as 1 and wired a single cable.
+  eq(wire('link n role=server role=tor cap=2').links, 2, 'a cap stops the rule');
+  ok(wire('link n role=server role=tor cap=2').warnings[0].includes('hit the cap of 2'),
+     'and says it did');
+  const junk = wire('link n role=server role=tor cap=abc');
+  eq(junk.links, 3, 'a cap that is not a number is no cap');
+  ok(junk.warnings[0].includes('is not a number'), 'and is reported rather than assumed');
+  const wide = wire('link n role=server role=tor cap=1e6');
+  eq(wide.links, 3, 'cap=1e6 is a million, not one');
+  eq(wide.warnings, [], 'and is a perfectly good cap');
+  ok(wire('link n role=server role=tor cap=0').warnings[0].includes('outside 1..100000000'),
+     'a cap of zero is not a cap, it is a typo');
+  eq(wire('link n role=server role=tor cap=0').links, 3, 'and is ignored, not obeyed');
+
+  // Every layout the repo ships stays quiet under the new link checks.
+  for (const file of ['examples/small.dc', 'examples/mega.dc', 'examples/hostnames.dc',
+                      'examples/three-rows.dc', 'examples/mx/floor.dc', 'examples/iperf/floor.dc']) {
+    eq(parseLayout(readFileSync(join(root, file), 'utf8')).warnings, [],
+       `${file} wires without a word`);
+  }
+}
+
+// ------------------------------------------- a label cut in half
+// fitText sliced by UTF-16 index, so a cut that landed inside a surrogate
+// pair left half a character -- which draws as a replacement box. Names come
+// out of somebody's inventory, and emoji turn up in inventories.
+{
+  // The measurement is the canvas's; the cutting is ours, and that is what
+  // is checked here: a prefix of the code points, never of the code units.
+  const cutBy = (text, keep) => [...text].slice(0, keep).join('');
+  const lone = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(^|[^\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
+  const name = 'rack\u{1F525}\u{1F525}alpha';
+  ok(lone.test(name.slice(0, 5)), 'slicing by code unit can leave half a character');
+  for (let keep = 0; keep <= [...name].length; keep++) {
+    ok(!lone.test(cutBy(name, keep)), `cutting to ${keep} code points leaves none`);
+  }
+  eq(cutBy(name, 5), 'rack\u{1F525}', 'and a cut after the first emoji keeps it whole');
+  eq(cutBy('plain', 3), 'pla', 'ordinary text cuts exactly as before');
 }
 
 console.log(failures ? `${failures}/${count} tests FAILED` : `all ${count} tests passed`);

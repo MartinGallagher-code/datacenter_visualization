@@ -33,7 +33,14 @@
 import { expand, subst } from './expand.js';
 import { compileSelector } from './select.js';
 
-export const LINK_OPTS = new Set(['scope', 'mode', 'bidir', 'label', 'cap']);
+// What a link rule takes. `bidir` and `label` were in here and read by
+// nothing: cables in this model are undirected -- a pair is deduped by a
+// sorted key and drawn as one line, so there is no reverse to wire -- and a
+// per-rule label reached every link object and no part of the UI. Both are
+// gone rather than left looking like settings.
+export const LINK_OPTS = new Set(['scope', 'mode', 'cap']);
+const LINK_NUMBERS = { cap: [1, 100000000] };
+const DEFAULT_CAP = 2000000;
 // Attributes that describe *this* element only and must not cascade to children.
 const NON_INHERITED = new Set(['id', 'name', 'at', 'u', 'cols', 'dir', 'gap', 'label', 'size']);
 
@@ -232,6 +239,8 @@ function checkDir(attrs, what, model, line) {
       `line ${line}: ${what}: dir=${dir} is neither x nor y -- laid out along x`);
   }
 }
+
+const quoteTokens = (list) => list.map((t) => `"${t}"`).join(', ');
 
 function makeElement(kind, id, parent, attrs, tags, model, line) {
   let key = parent ? `${parent.key}/${id}` : id;
@@ -504,7 +513,10 @@ function buildLinks(rules, model) {
 
   for (const rule of rules) {
     netIndex++;
-    const cap = parseInt(rule.cap ?? '2000000', 10);
+    // The last parseInt in the codebase, with the same failure the layout
+    // attributes had: cap=abc was NaN, and `made >= NaN` is false forever, so
+    // it meant no cap at all; cap=1e6 read as 1 and wired a single cable.
+    const cap = intAttr(rule.cap, DEFAULT_CAP, LINK_NUMBERS.cap);
     let made = 0;
     let matchedA = 0;
     let matchedB = 0;
@@ -532,7 +544,7 @@ function buildLinks(rules, model) {
       const sig = netIndex * 0x100000000000 + x.n * 0x100000 + y.n;
       if (seen.has(sig)) return;
       seen.add(sig);
-      const link = { net: rule.net, a: x, b: y, label: rule.label };
+      const link = { net: rule.net, a: x, b: y };
       links.push(link);
       if (x.links === NO_LINKS) x.links = [];
       if (y.links === NO_LINKS) y.links = [];
@@ -652,15 +664,25 @@ const truthy = (value) => {
         const positional = [];
         const opts = {};
         for (const tok of child.tokens) {
-          const at = tok.indexOf('=');
-          const key = at > 0 ? tok.slice(0, at).toLowerCase() : null;
-          if (key && LINK_OPTS.has(key)) opts[key] = tok.slice(at + 1);
+          const eqAt = tok.indexOf('=');
+          const key = eqAt > 0 ? tok.slice(0, eqAt).toLowerCase() : null;
+          if (key && LINK_OPTS.has(key)) opts[key] = tok.slice(eqAt + 1);
           else positional.push(tok);
         }
-        linkRules.push({
-          net: child.idSpec, line: child.line,
-          selA: positional.shift(), selB: positional.shift(), ...opts,
-        });
+        checkNumbers(opts, `net "${child.idSpec}"`, model, child.line, LINK_NUMBERS);
+        const selA = positional.shift();
+        const selB = positional.shift();
+        // A rule wires at most two selectors and dropped the rest without a
+        // word. An option nobody recognises lands here -- `scoope=rack` is
+        // indistinguishable from selecting on an attribute called `scoope`,
+        // so it cannot be named as a typo, but a third selector can be
+        // counted, and counting it catches the same mistake.
+        if (positional.length) {
+          model.warnings.push(`line ${child.line}: net "${child.idSpec}": a link rule wires two `
+            + `selectors, so ${quoteTokens(positional)} did nothing -- `
+            + `known options are ${[...LINK_OPTS].join(', ')}`);
+        }
+        linkRules.push({ net: child.idSpec, line: child.line, selA, selB, ...opts });
       } else if (child.kind === 'title') {
         model.title = child.idSpec || child.attrs.name || model.title;
       } else {

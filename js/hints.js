@@ -48,14 +48,14 @@ const NET_KEYS = [
   ['show=', 'true/false: start visible or unticked'],
 ];
 
-// Every option a link rule takes. The parser's own LINK_OPTS is the list;
-// three of them were missing here, so cap=, bidir= and label= existed,
-// worked, and were never once offered by the editor that teaches the syntax.
+// Every option a link rule takes, and only those. The parser's own LINK_OPTS
+// is the list, and the suite checks the two match exactly -- offering one the
+// parser does not take is the same fault as missing one, and both have
+// happened: cap= was never offered, while bidir= and label= were offered
+// after being read by nothing at all.
 const LINK_KEYS = [
   ['scope=', 'group matches per rack/row/room/… before wiring'],
   ['mode=', 'star, mesh, chain, ring or pair'],
-  ['bidir=', 'yes/no: also wire the reverse direction'],
-  ['label=', 'name this rule in the panel'],
   ['cap=', 'stop after this many cables'],
 ];
 
