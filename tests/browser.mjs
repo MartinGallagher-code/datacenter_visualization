@@ -443,6 +443,91 @@ await test('a wildcard finds what the substring finds', async () => {
   eq(await countFor('r76*'), model, 'and a glob over it finds the same');
 });
 
+// A z-score says how unusual and never how much, and the ramp clamps at its
+// ends, so an outlier at -4.8σ painted exactly like one at -3.1σ. The card
+// now says what ran off, the legend carries the real units under the sigma,
+// and `fit` widens the range until nothing is clamped.
+await test('the scale says what it could not reach', async () => {
+  await openLayout();
+  await drop('r.tsv', RESULTS);
+  await page.waitForTimeout(700);
+  await page.evaluate(() => document.querySelectorAll('#overlays .overlay input[type=checkbox]')
+    .forEach((c) => c.click()));
+  await page.evaluate(() => {
+    const s = document.querySelector('.allstd select');
+    s.value = 'colour';
+    s.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  await page.waitForTimeout(500);
+  await expandCards();
+
+  const card = (name) => page.evaluate((n) => {
+    const o = [...document.querySelectorAll('#overlays .overlay')]
+      .find((x) => x.querySelector('.overlay-name').textContent.trim() === n);
+    const rows = [...o.querySelectorAll('.legend-scale')].map((r) =>
+      [...r.children].map((c) => c.textContent).join('|'));
+    return { rows, tail: o.querySelector('.overlay-stats .bad')?.textContent || '',
+             stats: o.querySelector('.overlay-stats').innerText.replace(/\s+/g, ' ') };
+  }, name);
+
+  const iperf = await card('iperf to ToR');
+  eq(iperf.rows.length, 2, 'a standardised legend carries two rows');
+  eq(iperf.rows[0], '≤ -3σ|mean|≥ +3σ', 'the ends say they are ends, not the edge of the data');
+  ok(/Gb\/s/.test(iperf.rows[1]), `and the row under it is in the metric's units  (${iperf.rows[1]})`);
+  ok(iperf.tail.includes('20 past the ends'), `the card counts what clamped  (${iperf.tail})`);
+  ok(iperf.tail.includes('-4.82σ'), 'and names how far the furthest one got');
+  ok(/± [\d.]+Gb\/s/.test(iperf.stats), `the spread carries its unit  (${iperf.stats})`);
+
+  // Fit widens the shared range until every metric fits inside it.
+  await page.click('.allstd .zfit');
+  await page.waitForTimeout(500);
+  eq(await page.evaluate(() => document.querySelector('.zspread').value), '5',
+     'fit reaches past the furthest point on any standardised metric');
+  for (const name of ['Inlet temp', 'iperf to ToR', 'fio random read']) {
+    eq((await card(name)).tail, '', `${name} has nothing clamped after fit`);
+  }
+});
+
+// The raw figure was recoverable from no surface at all in `values` mode,
+// and a verdict was being given a sigma it cannot have.
+await test('a reading shows the number and how unusual it is', async () => {
+  await openLayout();
+  await drop('r.tsv', RESULTS);
+  await page.waitForTimeout(700);
+  await page.evaluate(() => document.querySelectorAll('#overlays .overlay input[type=checkbox]')
+    .forEach((c) => c.click()));
+  await page.fill('#filter', 'u01');
+  await page.waitForTimeout(400);
+  const rows = await page.evaluate(() =>
+    [...document.querySelectorAll('#tree .tree-row')].map((r) => r.innerText.trim()));
+  await page.evaluate((i) => document.querySelectorAll('#tree .tree-row')[i].click(),
+    rows.findIndex((r) => /^u01/.test(r)));
+  await page.waitForTimeout(400);
+
+  const readings = () => page.evaluate(() => {
+    const h = [...document.querySelectorAll('#inspector h2')].find((x) => x.textContent === 'Readings');
+    return h ? [...h.nextElementSibling.querySelectorAll('.reading')]
+      .map((r) => r.innerText.replace(/\s+/g, ' ')) : [];
+  });
+  const setAll = (v) => page.evaluate((v) => {
+    const s = document.querySelector('.allstd select');
+    s.value = v;
+    s.dispatchEvent(new Event('change', { bubbles: true }));
+  }, v);
+
+  const plain = await readings();
+  ok(plain.some((r) => /Inlet temp [\d.]+C \(/.test(r)), `unstandardised reads in units  (${plain[0]})`);
+  ok(!plain.some((r) => r.includes('σ')), 'and mentions no sigma at all');
+
+  await setAll('values');
+  await page.waitForTimeout(400);
+  const std = await readings();
+  ok(std.some((r) => /Inlet temp [\d.]+C [-+][\d.]+σ/.test(r)),
+     `standardised shows both the value and the z  (${std[0]})`);
+  ok(std.some((r) => /Burn-in verdict PASS$|Burn-in verdict PASS /.test(r)),
+     `a verdict is not given a sigma  (${std.find((r) => r.includes('Burn-in'))})`);
+});
+
 // ------------------------------------------------------------------ done
 
 for (const line of noise) {

@@ -23,6 +23,7 @@ import {
   parseResults, bindOverlay, overlayValue, AGGREGATIONS, extent,
   recomputeStats, zScore, formatValue, unitFor, zRangeOf, paletteOf, invertedOf, overlayKey,
   valueWithUnit, NO_VALUE, recomputeDomain, readNumber, clearOverlayCache,
+  readingText, offScale,
 } from '../js/results.js';
 import { layout } from '../js/layout.js';
 import { linkSummary, sharesLineage } from '../js/render.js';
@@ -2158,6 +2159,88 @@ if (python.error) {
   eq(iperf.warnings, [], 'examples/iperf/floor.dc wires every rack it declares');
   eq(iperf.links.filter((l) => l.net === 'uplink').length, 16,
      'every one of the eight ToRs reaches both spines');
+}
+
+// ------------------------------------------- how far out is "out"
+// A z-score says how unusual and never how much, and the ramp clamps at
+// ±zRange, so an element at -4.8σ painted exactly like one at -3.1σ -- the
+// difference vanished at the one extreme worth looking at. Measured on the
+// shipped example: iperf_gbps has twenty hosts past ±3σ, all the same colour.
+{
+  const plan = parseLayout(readFileSync(join(root, 'examples/small.dc'), 'utf8'));
+  const bound = (name) => {
+    const raw = parseResults(readFileSync(join(root, 'examples/small-results.tsv'), 'utf8'),
+                             new Map(), [], 'r.tsv');
+    const o = bindOverlay(raw.get(overlayKey('r.tsv', name)), plan);
+    o.standardize = 'colour';
+    recomputeStats(o, plan);
+    return o;
+  };
+
+  // The extremes are measured with the stats, since nothing else can say
+  // where the tail actually reaches.
+  const iperf = bound('iperf_gbps');
+  ok(Math.abs(iperf.stats.zMin - -4.82) < 0.01, `iperf reaches -4.82σ  (${iperf.stats.zMin})`);
+  ok(Math.abs(iperf.stats.zMax - 0.46) < 0.01, 'and only +0.46σ the other way');
+
+  const off = offScale(iperf, plan);
+  eq(off.count, 20, 'twenty hosts sit past the default ±3σ');
+  ok(Math.abs(off.worst - -4.82) < 0.01, 'and the furthest is reported, signed');
+  eq(off.range, 3, 'against the range actually in force');
+
+  // Widening past the furthest point empties the tail -- which is what the
+  // fit button does, and the only way those twenty become distinguishable.
+  iperf.zRange = 5;
+  const wide = offScale(iperf, plan);
+  eq(wide.count, 0, 'nothing is clamped once the range covers the data');
+  eq(wide.range, 5, 'and the answer is for the new range, not the memoised old one');
+
+  // A metric whose tail is inside the scale says so.
+  const fio = bound('fio_kiops');
+  eq(offScale(fio, plan).count, 1, 'fio has one past ±3σ');
+  ok(Math.abs(offScale(fio, plan).worst - 3.11) < 0.01, 'at +3.11σ');
+
+  // The memo is keyed on what can change the answer, so it cannot go stale.
+  const temp = bound('temp_c');
+  const first = offScale(temp, plan);
+  ok(offScale(temp, plan) === first, 'asking twice costs one walk');
+  temp.zRange = 1;
+  ok(offScale(temp, plan) !== first, 'and changing the range asks again');
+  ok(offScale(temp, plan).count > first.count, 'a tighter range clamps more');
+}
+
+// ------------------------------------------- a reading needs both numbers
+// The z-score alone cannot say how much: +2σ is 17C on one metric and 0.4%
+// on another. In `values` mode the raw figure was recoverable from no
+// surface at all -- element, tooltip and inspector all printed the z.
+{
+  const plan = parseLayout(['dc D', '  rack r1 u=6', '    node n1 at=1',
+                            '    node n2 at=2', '    node n3 at=3'].join('\n'));
+  const o = bindOverlay(parseResults('!test m unit=C\nm n1 10\nm n2 20\nm n3 30\n',
+                                     new Map(), [], 'f').get(overlayKey('f', 'm')), plan);
+  const n3 = plan.byKey.get('D/r1/n3');
+  const val = () => overlayValue(o, n3).value;
+
+  o.standardize = 'off';
+  eq(readingText(o, val()), '30C', 'unstandardised, a reading is just the reading');
+  eq(formatValue(o, val()), '30', 'and the floor plan shows the number');
+
+  o.standardize = 'colour';
+  recomputeStats(o, plan);
+  eq(readingText(o, val()), '30C  +1.22σ', 'colouring by z puts the z beside the value');
+  eq(formatValue(o, val()), '30', 'while the floor plan still shows the value');
+
+  o.standardize = 'values';
+  eq(readingText(o, val()), '30C  +1.22σ', 'and in values mode the raw figure comes back');
+  eq(formatValue(o, val()), '+1.22', 'though the floor plan shows the z, as that mode asks');
+
+  // σ is the unit of a z-score. A verdict has none, and "PASSσ" is not a
+  // reading -- unitFor answers for the overlay, not for the value it labels.
+  const verdict = bindOverlay(parseResults('v n1 PASS\n', new Map(), [], 'f')
+    .get(overlayKey('f', 'v')), plan);
+  verdict.standardize = 'values';
+  eq(valueWithUnit(verdict, 'PASS'), 'PASS', 'a verdict is never given a sigma');
+  eq(readingText(verdict, 'PASS'), 'PASS', 'through either printer');
 }
 
 console.log(failures ? `${failures}/${count} tests FAILED` : `all ${count} tests passed`);

@@ -16,8 +16,8 @@ import { layout } from './layout.js';
 import { parseLayout } from './parse.js';
 import { Renderer, countDescendants } from './render.js';
 import {
-  bindOverlay, clearOverlayCache, overlayValue, parseResults, recomputeDomain,
-  recomputeStats, valueWithUnit,
+  bindOverlay, clearOverlayCache, isStandardized, offScale, overlayValue, parseResults,
+  readingText, recomputeDomain, recomputeStats,
 } from './results.js';
 import {
   fillWarnings, renderInspector, renderNets, renderNotices, renderOverlays, renderTree, renderWarnings,
@@ -84,6 +84,10 @@ const state = {
     error: '',
     needsPermission: false,
     loaded: new Set(),
+  },
+
+  offScale(overlay) {
+    return offScale(overlay, state.model);
   },
 
   isVisible(node) {
@@ -273,6 +277,38 @@ const actions = {
     applyZScale();
     refreshPanels();
     invalidate();
+  },
+
+  /**
+   * Widen the σ range until nothing is left clamped.
+   *
+   * Past the end of the ramp every element paints the same colour, so an
+   * outlier at -4.8σ is indistinguishable from one at -3.1σ -- the
+   * difference vanishes exactly where it matters most. With no overlay named
+   * this fits the shared scale, which has to reach the furthest point on any
+   * standardised metric or the one it cannot reach keeps a flat tail.
+   */
+  fitZScale(overlay) {
+    const reach = (o) => {
+      if (!o.stats || !o.stats.sd) return 0;
+      return Math.max(Math.abs(o.stats.zMin), Math.abs(o.stats.zMax));
+    };
+    // A tenth of a sigma of headroom, so the furthest element sits inside
+    // the ramp rather than exactly on its last colour.
+    const round = (z) => Math.max(0.5, Math.ceil(z * 10) / 10 + 0.1);
+
+    if (overlay) {
+      if (!reach(overlay)) return;
+      actions.setOverlayField(overlay, 'zRange', round(reach(overlay)));
+      return;
+    }
+    let widest = 0;
+    for (const o of state.overlays.values()) {
+      if (!isStandardized(o)) continue;
+      if (!o.stats) recomputeStats(o, state.model);
+      widest = Math.max(widest, reach(o));
+    }
+    if (widest) actions.setZScale('zSpread', round(widest));
   },
 
   toggleNotices(open = !state.noticesOpen) {
@@ -1450,7 +1486,7 @@ function showTooltip(node, x, y) {
   if (node.children.length) lines.push(`${countDescendants(node)} inside${node.collapsed ? ' — collapsed' : ''}`);
   for (const overlay of state.activeOverlays) {
     const reading = overlayValue(overlay, node);
-    if (reading) lines.push(`${overlay.label}: ${valueWithUnit(overlay, reading.value)}`);
+    if (reading) lines.push(`${overlay.label}: ${readingText(overlay, reading.value)}`);
   }
   tip.textContent = lines.join('\n');
   tip.hidden = false;

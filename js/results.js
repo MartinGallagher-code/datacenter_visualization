@@ -736,8 +736,54 @@ export function recomputeStats(overlay, model) {
   const mean = sum / values.length;
   let sq = 0;
   for (const v of values) sq += (v - mean) * (v - mean);
-  overlay.stats = { mean, sd: Math.sqrt(sq / values.length), n: values.length };
+  const sd = Math.sqrt(sq / values.length);
+  // The extremes, kept because a z-score alone cannot say how far out "out"
+  // is: the colour ramp clamps at +/-zRange, so -3.1 and -4.8 paint the same
+  // and the difference between them disappears at exactly the end of the
+  // scale anyone is looking at.
+  let lo = Infinity;
+  let hi = -Infinity;
+  if (sd) {
+    for (const v of values) {
+      const z = (v - mean) / sd;
+      if (z < lo) lo = z;
+      if (z > hi) hi = z;
+    }
+  } else {
+    lo = 0;
+    hi = 0;
+  }
+  overlay.stats = { mean, sd, n: values.length, zMin: lo, zMax: hi };
   return true;
+}
+
+/**
+ * What ran off the end of the ramp, for the scale currently in force.
+ *
+ * Counting means walking the measured set, and the panel re-renders on every
+ * interaction, so the answer is memoised against the three things that can
+ * change it. zRange in particular changes without the stats changing -- it is
+ * a slider -- so it cannot be folded into recomputeStats.
+ */
+export function offScale(overlay, model) {
+  const s = overlay.stats;
+  const range = zRangeOf(overlay);
+  if (!s || !s.sd || !Number.isFinite(range)) return { count: 0, worst: 0, range };
+  const key = `${range}\u0000${s.mean}\u0000${s.sd}\u0000${s.n}`;
+  if (overlay.offScaleMemo && overlay.offScaleMemo.key === key) return overlay.offScaleMemo.value;
+
+  let count = 0;
+  for (const el of model.all) {
+    if (!overlay.direct.has(el.key)) continue;
+    const v = overlayValue(overlay, el);
+    if (!v || !v.numeric) continue;
+    if (Math.abs((v.value - s.mean) / s.sd) > range) count++;
+  }
+  // The furthest out, signed, so the card can say which end it ran off.
+  const worst = Math.abs(s.zMin) > Math.abs(s.zMax) ? s.zMin : s.zMax;
+  const value = { count, worst, range };
+  overlay.offScaleMemo = { key, value };
+  return value;
 }
 
 /** How many standard deviations a value sits from the mean. */
@@ -774,15 +820,8 @@ export const NO_VALUE = '\u2014';
  */
 export const readNumber = metaNumber;
 
-export function formatValue(overlay, value) {
-  if (typeof value === 'number' && !Number.isFinite(value)) return NO_VALUE;
-  if (overlay.stdMode === 'values' && typeof value === 'number') {
-    const z = zScore(overlay, value);
-    if (!Number.isFinite(z)) return NO_VALUE;
-    return `${z >= 0 ? '+' : ''}${z.toFixed(2)}`;
-  }
-  if (value === null || value === undefined) return '';
-  if (typeof value !== 'number') return String(value);
+/** The number in its own units, whatever standardising is doing. */
+function formatRaw(overlay, value) {
   let decimals = overlay.decimals;
   if (decimals === null || Number.isNaN(decimals)) {
     const span = Math.abs(overlay.max - overlay.min) || Math.abs(value) || 1;
@@ -796,6 +835,37 @@ export function formatValue(overlay, value) {
   return out.replace(/\.0+$/, '').replace(/(\.\d*?)0+$/, '$1');
 }
 
+export function formatValue(overlay, value) {
+  if (typeof value === 'number' && !Number.isFinite(value)) return NO_VALUE;
+  if (overlay.stdMode === 'values' && typeof value === 'number') {
+    const z = zScore(overlay, value);
+    if (!Number.isFinite(z)) return NO_VALUE;
+    return `${z >= 0 ? '+' : ''}${z.toFixed(2)}`;
+  }
+  if (value === null || value === undefined) return '';
+  if (typeof value !== 'number') return String(value);
+  return formatRaw(overlay, value);
+}
+
+/**
+ * A reading as the inspector and the tooltip print it: the number in its own
+ * units, and while standardising how unusual it is beside it.
+ *
+ * Neither figure answers on its own. A z-score says how unusual and never how
+ * much -- +2σ is 17C on one metric and 0.4% on another -- and in `values`
+ * mode the raw figure was recoverable from no surface at all. The floor plan
+ * keeps showing whichever single number the mode asks for, because a slice is
+ * too narrow for two; these two surfaces have the room.
+ */
+export function readingText(overlay, value) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return valueWithUnit(overlay, value);
+  const raw = `${formatRaw(overlay, value)}${overlay.unit}`;
+  if (!isStandardized(overlay) || !overlay.stats || !overlay.stats.sd) return raw;
+  const z = zScore(overlay, value);
+  if (!Number.isFinite(z)) return raw;
+  return `${raw}  ${z >= 0 ? '+' : ''}${z.toFixed(2)}σ`;
+}
+
 /**
  * A reading as it is written beside an element. The unit belongs to the
  * number, so where there is no number there is no unit either -- "\u2014C" is
@@ -803,7 +873,13 @@ export function formatValue(overlay, value) {
  */
 export function valueWithUnit(overlay, value) {
   const text = formatValue(overlay, value);
-  return text === NO_VALUE || text === '' ? text : `${text}${unitFor(overlay)}`;
+  if (text === NO_VALUE || text === '') return text;
+  // σ is the unit of a z-score, and a verdict does not have one. Standardise
+  // the panel with a PASS/FAIL metric loaded and every verdict on it read
+  // "PASSσ": unitFor answers for the overlay, which is standardised, while
+  // the reading it is labelling is a word.
+  const unit = typeof value === 'number' ? unitFor(overlay) : overlay.unit;
+  return `${text}${unit}`;
 }
 
 export function clearOverlayCache(overlay) {

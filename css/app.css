@@ -347,6 +347,11 @@ select.overridden, input.overridden { opacity: 0.55; border-style: dashed; }
   display: flex; justify-content: space-between;
   font-family: var(--mono); font-size: 10px; color: var(--ink-dim);
 }
+/* The same three points of the ramp, in the metric's own units, under the
+   sigma row they belong to. Dimmer: the sigma is what the colour means, this
+   is what it is worth. */
+.legend-scale.real { color: var(--ink-dim); opacity: .72; margin-top: 1px; }
+.zfit { padding: 0 5px; font-size: 10px; }
 .overlay-stats { font-family: var(--mono); font-size: 10px; color: var(--ink-dim); }
 .overlay-stats .bad { color: var(--warn); }
 

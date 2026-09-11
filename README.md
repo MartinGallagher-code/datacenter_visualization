@@ -275,9 +275,28 @@ colours.
 The mean and spread are measured over **one aggregated value per measured
 element** — the devices being compared, not the raw sample rows, which repeat
 per run — so changing the aggregation re-measures them. The overlay card shows
-what they came out as (`mean 40.5C ± 8.73 over 480`), the ramp ends default to
+what they came out as (`mean 40.5C ± 8.73C over 480`), the ramp ends default to
 ±3σ and are adjustable, and a metric with no spread at all reads 0σ everywhere
 rather than dividing by zero.
+
+**A z-score says how unusual, never how much.** +2σ is 17 °C on one metric and
+0.4% on another, and sharing one scale across metrics is exactly what makes
+that worth knowing. Three things say it:
+
+- The legend carries **two rows**: `≤ -3σ · mean · ≥ +3σ` over what those three
+  points are worth here — `14.31C · 40.50C · 66.68C`.
+- The inspector and the tooltip show **both numbers**: `38.8Gb/s  -4.82σ`. The
+  floor plan still shows whichever single number the mode asks for, because a
+  slice is too narrow for two.
+- Hovering the units row says what one σ is worth on this metric.
+
+**The ends are where the colour stops, not where the data stops.** Everything
+past ±3σ paints the same colour, so an outlier at -4.8σ is indistinguishable
+from one at -3.1σ — at exactly the extreme worth looking at. The card counts
+what ran off (`20 past the ends, worst -4.82σ`), those elements carry a bar on
+the edge they left by, and **fit** widens the range until nothing is clamped.
+On a shared scale, fit reaches past the furthest point on *any* standardized
+metric, since one range has to hold them all.
 
 (`higher=bad|good` picks the green↔red ramp direction; `palette=` chooses any
 ramp: viridis, magma, plasma, turbo, health, cool, ember, gray, rdbu;
