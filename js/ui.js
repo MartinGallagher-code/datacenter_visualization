@@ -15,7 +15,7 @@
 
 import { PALETTE_NAMES, categoricalColor, colorFor, ramp } from './palette.js';
 import {
-  AGGREGATIONS, invertedOf, isStandardized, overlayValue, paletteOf, readNumber, valueWithUnit,
+  AGGREGATIONS, invertedOf, isStandardized, overlayValue, paletteOf, readNumber, readingText,
   zRangeOf,
 } from './results.js';
 import { countDescendants, linkSummary } from './render.js';
@@ -226,6 +226,16 @@ function zScaleRow(state, actions) {
     actions.setZScale('zSpread', v);
   });
   row.append(spread, el('span', 'muted', 'σ'));
+
+  // One click to stop clamping. The shared ramp has to reach the furthest
+  // point on *any* standardised metric, or the one it cannot reach keeps
+  // painting its tail a single colour.
+  const fit = el('button', 'zfit', 'fit');
+  fit.disabled = !state.zShared;
+  fit.title = 'Widen the shared range until every standardised metric fits inside it, '
+    + 'so nothing is left clamped at the end of the ramp';
+  fit.addEventListener('click', () => actions.fitZScale());
+  row.append(fit);
   return row;
 }
 
@@ -369,6 +379,13 @@ function overlayCard(state, overlay, actions) {
         actions.setOverlayField(overlay, 'zRange', v);
       });
       range.append(z, el('span', 'muted', 'σ'));
+      const fit = el('button', 'zfit', 'fit');
+      fit.disabled = onShared;
+      fit.title = onShared
+        ? 'The shared scale sets the range — fit it from the panel above'
+        : 'Widen the range until the furthest element fits inside it';
+      fit.addEventListener('click', () => actions.fitZScale(overlay));
+      range.append(fit);
       grid.append(range);
     } else {
       grid.append(el('label', null, 'range'));
@@ -410,12 +427,31 @@ function overlayCard(state, overlay, actions) {
 
     const scale = el('div', 'legend-scale');
     const std = isStandardized(overlay);
-    const lo = std ? `-${trimNum(zRangeOf(overlay))}σ` : `${trimNum(overlay.min)}${overlay.unit}`;
-    const hi = std ? `+${trimNum(zRangeOf(overlay))}σ` : `${trimNum(overlay.max)}${overlay.unit}`;
+    const range = zRangeOf(overlay);
+    // The ends of a standardised ramp are where the colour STOPS changing,
+    // not where the data stops: anything further out clamps to the same
+    // colour. "-3σ" read as the bottom of the range; "≤ -3σ" is what it is.
+    const lo = std ? `≤ -${trimNum(range)}σ` : `${trimNum(overlay.min)}${overlay.unit}`;
+    const hi = std ? `≥ +${trimNum(range)}σ` : `${trimNum(overlay.max)}${overlay.unit}`;
     scale.append(el('span', null, lo));
     if (std) scale.append(el('span', null, 'mean'));
     scale.append(el('span', null, hi));
     body.append(scale);
+
+    // What those three points are worth in this metric's own units. A shared
+    // z scale makes +2σ the same colour everywhere, which is the whole point
+    // and exactly why it matters that +2σ is 17C here and 0.4% next door.
+    if (std && overlay.stats && overlay.stats.sd) {
+      const { mean, sd } = overlay.stats;
+      // formatNum, not trimNum: a legend wants 14.31C, not 14.309C, and it
+      // is the same rounding the mean beside it already uses.
+      const real = el('div', 'legend-scale real');
+      real.append(el('span', null, `${formatNum(mean - range * sd)}${overlay.unit}`));
+      real.append(el('span', null, `${formatNum(mean)}${overlay.unit}`));
+      real.append(el('span', null, `${formatNum(mean + range * sd)}${overlay.unit}`));
+      real.title = `One σ is ${formatNum(sd)}${overlay.unit} on this metric`;
+      body.append(real);
+    }
   }
 
   if (overlay.hasFlows) {
@@ -434,8 +470,22 @@ function overlayCard(state, overlay, actions) {
   stats.append(el('span', null, `${overlay.sampleCount} samples`));
   if (isStandardized(overlay) && overlay.stats) {
     stats.append(document.createTextNode(' · '));
-    stats.append(el('span', null,
-      `mean ${formatNum(overlay.stats.mean)}${overlay.unit} ± ${formatNum(overlay.stats.sd)} over ${overlay.stats.n}`));
+    // The unit belongs to the spread as much as to the mean: "± 8.73" could
+    // be degrees, a percentage, or anything else, and the spread is the one
+    // figure that says what a σ on this metric is worth.
+    stats.append(el('span', null, `mean ${formatNum(overlay.stats.mean)}${overlay.unit}`
+      + ` ± ${formatNum(overlay.stats.sd)}${overlay.unit} over ${overlay.stats.n}`));
+
+    const off = state.offScale ? state.offScale(overlay) : null;
+    if (off && off.count) {
+      stats.append(document.createTextNode(' · '));
+      const tail = el('span', 'bad',
+        `${off.count} past the ends, worst ${off.worst >= 0 ? '+' : ''}${formatNum(off.worst)}σ`);
+      tail.title = `${off.count} element${off.count === 1 ? '' : 's'} sit beyond ±${trimNum(off.range)}σ `
+        + 'and all paint the same colour at the end of the ramp — widen the σ range, '
+        + 'or press fit, to tell them apart.';
+      stats.append(tail);
+    }
   }
   if (overlay.hasFlows) {
     stats.append(document.createTextNode(' · '));
@@ -616,7 +666,7 @@ export function renderInspector(state, host, actions) {
     dot.style.background = colorFor(overlay, reading) || '#444';
     row.append(dot);
     row.append(el('span', null, overlay.label));
-    const value = valueWithUnit(overlay, reading.value);
+    const value = readingText(overlay, reading.value);
     const note = reading.samples > 1 ? ` (${overlay.agg} of ${reading.samples})` : '';
     row.append(el('span', 'val', value + note));
     readings.append(row);
@@ -665,7 +715,7 @@ function renderFlows(state, host, node) {
       const name = el('span', 'flowpeer', `→ ${flow.peerEl ? flow.peerEl.name : flow.peer}`);
       if (!flow.peerEl) name.title = `${flow.peer} is not an element in this layout`;
       row.append(name);
-      row.append(el('span', 'val', valueWithUnit(overlay, flow.value)));
+      row.append(el('span', 'val', readingText(overlay, flow.value)));
       box.append(row);
     }
     if (sorted.length > FLOWS_SHOWN) {
