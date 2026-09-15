@@ -621,5 +621,10 @@ select.overridden, input.overridden { opacity: 0.55; border-style: dashed; }
 .about p { margin: 0 0 6px; }
 .about p:last-child { margin-bottom: 0; }
 .about a { color: var(--accent); }
+/* Empty until js/version.js is read, so it must not leave a gap when
+   the module graph never ran -- :empty collapses the padding too. */
+.version { font-variant-numeric: tabular-nums; padding: 0 4px;
+           border: 1px solid var(--line); border-radius: 3px; }
+.version:empty { display: none; }
 
 #statuslicense { margin-left: auto; white-space: nowrap; color: #6b7484; }

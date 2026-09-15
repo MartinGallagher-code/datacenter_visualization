@@ -32,6 +32,7 @@ import { dirname, join, normalize, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+const { VERSION } = await import(join(root, 'js/version.js'));
 let failures = 0;
 let count = 0;
 let current = '';
@@ -536,6 +537,25 @@ await test('a reading shows the number and how unusual it is', async () => {
      `standardised shows both the value and the z  (${std[0]})`);
   ok(std.some((r) => /Burn-in verdict PASS$|Burn-in verdict PASS /.test(r)),
      `a verdict is not given a sigma  (${std.find((r) => r.includes('Burn-in'))})`);
+});
+
+// The version is written into the About box by js/app.js from js/version.js.
+// index.html carries an empty slot, so a broken import leaves the box reading
+// "Datacenter Layout Viewer" with nothing after it -- which looks like a page
+// that simply has no version rather than a page whose scripts half-ran. The
+// module tests can prove the two source files agree; only this can prove the
+// number reaches the screen.
+await test('the About box shows the version', async () => {
+  await openLayout();
+  const shown = await page.evaluate(() => {
+    const el = document.querySelector('#version');
+    return el ? el.textContent.trim() : null;
+  });
+  eq(shown, VERSION, 'About prints the version from js/version.js');
+  ok(await page.evaluate(() => {
+    const el = document.querySelector('#version');
+    return el && el.getBoundingClientRect().width > 0;
+  }), 'and it is actually laid out, not an empty span');
 });
 
 // ------------------------------------------------------------------ done

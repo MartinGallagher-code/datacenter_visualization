@@ -26,6 +26,7 @@ import {
   droppedLayoutsNotice, layoutNotice, plural, prefixed, resultsFileNotice,
 } from './report.js';
 import { attachHints, renderReference } from './hints.js';
+import { VERSION } from './version.js';
 import {
   classify, directoryFromDataTransfer, ensureRead, getFile, pathLabel, pickDirectory,
   probeSizes, readDir, renderBrowser, supportsDirectoryPicker, treeFromFiles, walkPath,
@@ -1523,6 +1524,13 @@ function debounce(fn, ms) {
     timer = setTimeout(() => fn(...args), ms);
   };
 }
+
+// The About box is the one place a version belongs in a viewer with no
+// chrome to put it in, and it is written from js/version.js rather than
+// typed into index.html so there is no third copy of the number to forget.
+// A bug report that quotes it names a tree.
+const versionSlot = document.getElementById('version');
+if (versionSlot) versionSlot.textContent = VERSION;
 
 boot();
 restoreBrowser();
