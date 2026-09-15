@@ -743,18 +743,54 @@ export function recomputeStats(overlay, model) {
   // scale anyone is looking at.
   let lo = Infinity;
   let hi = -Infinity;
+  // How many sit beyond two sigma, which is what says whether sigma is a fair
+  // yardstick at all. Counted here because it is a property of the
+  // distribution, not of whatever range the ramp happens to be set to.
+  let wide = 0;
   if (sd) {
     for (const v of values) {
       const z = (v - mean) / sd;
       if (z < lo) lo = z;
       if (z > hi) hi = z;
+      if (Math.abs(z) > 2) wide++;
     }
   } else {
     lo = 0;
     hi = 0;
   }
-  overlay.stats = { mean, sd, n: values.length, zMin: lo, zMax: hi };
+  overlay.stats = { mean, sd, n: values.length, zMin: lo, zMax: hi, wide };
   return true;
+}
+
+/**
+ * What a normal distribution puts beyond two standard deviations.
+ *
+ * Comparing a metric's own figure against this is the cheapest check on
+ * whether σ means the same thing here as on the metric beside it -- which is
+ * the assumption a shared z scale rests on and never states. Far above and a
+ * few outliers have inflated σ, suppressing their own z and flattening
+ * everyone else; far below and the spread is being set by something other
+ * than the bulk of the data.
+ */
+export const NORMAL_BEYOND_2SD = 0.0455;
+
+/**
+ * Whether a metric's two-sigma tail is further from normal than chance
+ * explains, at the size of the population it was measured over.
+ *
+ * A fixed ratio will not do. The count is binomial, so its own noise is
+ * sqrt(n·p·(1-p)) -- on twenty elements the expected tail is 0.9 and a single
+ * element either side doubles the percentage. Judged by ratio alone the mark
+ * fires on nothing at all on a small floor, which is exactly how a warning
+ * teaches people to ignore it. Two standard errors is the line: it stays
+ * quiet on twenty measured nodes, and still catches a split population or a
+ * fat tail once there are enough of them to tell.
+ */
+export function tailIsOdd(stats) {
+  if (!stats || !stats.n || !stats.sd) return false;
+  const expected = stats.n * NORMAL_BEYOND_2SD;
+  const noise = Math.sqrt(stats.n * NORMAL_BEYOND_2SD * (1 - NORMAL_BEYOND_2SD));
+  return Math.abs(stats.wide - expected) > 2 * noise;
 }
 
 /**

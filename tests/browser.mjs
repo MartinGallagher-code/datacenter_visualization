@@ -478,6 +478,16 @@ await test('the scale says what it could not reach', async () => {
   ok(iperf.tail.includes('-4.82σ'), 'and names how far the furthest one got');
   ok(/± [\d.]+Gb\/s/.test(iperf.stats), `the spread carries its unit  (${iperf.stats})`);
 
+  // Whether σ is a fair yardstick here -- the assumption a shared scale rests
+  // on. Shown plainly on every standardised card, and marked only when the
+  // tail is further from normal than chance explains at that sample size.
+  ok(/[\d.]+% beyond ±2σ, normal ≈4\.5%/.test(iperf.stats),
+     `the card reports the shape of the distribution  (${iperf.stats})`);
+  const marked = await page.evaluate(() =>
+    [...document.querySelectorAll('#overlays .overlay-stats .bad')].map((b) => b.textContent));
+  ok(!marked.some((m) => m.includes('beyond ±2σ')),
+     `and leaves it unmarked on data that behaves  (${marked.join(' / ')})`);
+
   // Fit widens the shared range until every metric fits inside it.
   await page.click('.allstd .zfit');
   await page.waitForTimeout(500);

@@ -15,8 +15,8 @@
 
 import { PALETTE_NAMES, categoricalColor, colorFor, ramp } from './palette.js';
 import {
-  AGGREGATIONS, invertedOf, isStandardized, overlayValue, paletteOf, readNumber, readingText,
-  zRangeOf,
+  AGGREGATIONS, invertedOf, isStandardized, NORMAL_BEYOND_2SD, overlayValue, paletteOf,
+  readNumber, readingText, tailIsOdd, zRangeOf,
 } from './results.js';
 import { countDescendants, linkSummary } from './render.js';
 
@@ -475,6 +475,30 @@ function overlayCard(state, overlay, actions) {
     // figure that says what a σ on this metric is worth.
     stats.append(el('span', null, `mean ${formatNum(overlay.stats.mean)}${overlay.unit}`
       + ` ± ${formatNum(overlay.stats.sd)}${overlay.unit} over ${overlay.stats.n}`));
+
+    // Whether σ is a fair yardstick here at all. A shared z scale assumes the
+    // same σ means the same thing on every metric, which holds only while
+    // their distributions are a similar shape -- an assumption the panel
+    // rests on and never stated. Shown plainly, and marked only when it is
+    // materially off, so it stays quiet on data that behaves.
+    if (overlay.stats.n && overlay.stats.sd) {
+      const share = overlay.stats.wide / overlay.stats.n;
+      stats.append(document.createTextNode(' · '));
+      const odd = tailIsOdd(overlay.stats);
+      const shape = el('span', odd ? 'bad' : null,
+        `${(share * 100).toFixed(1)}% beyond ±2σ, normal ≈${(NORMAL_BEYOND_2SD * 100).toFixed(1)}%`);
+      shape.title = odd
+        ? 'Far from what a normal distribution puts out there, so σ is a poor '
+          + 'yardstick on this metric: comparing its z-scores against another '
+          + "metric's is comparing two different things. A handful of extreme "
+          + 'values inflates σ and suppresses their own z; a split population '
+          + 'inflates it and flattens everyone.'
+        : 'How much of this metric sits beyond two standard deviations, against '
+          + 'what a normal distribution would put there. Close to it means σ '
+          + 'means much the same here as on the metric beside it, which is what '
+          + 'a shared z scale assumes.';
+      stats.append(shape);
+    }
 
     const off = state.offScale ? state.offScale(overlay) : null;
     if (off && off.count) {

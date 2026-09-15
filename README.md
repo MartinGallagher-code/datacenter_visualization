@@ -290,6 +290,17 @@ that worth knowing. Three things say it:
   slice is too narrow for two.
 - Hovering the units row says what one σ is worth on this metric.
 
+**Is σ a fair yardstick here?** A shared scale assumes one σ means the same
+thing on every metric, which holds only while their distributions are a
+similar shape — so each card says how much of its metric sits beyond ±2σ
+against the 4.5% a normal distribution puts there. Close to it and the
+comparison is sound. It is highlighted only when the tail is further from
+normal than chance explains **at that sample size**: on twenty elements the
+expected tail is 0.9, so one element either side doubles the percentage, and
+a mark that fires on that is a mark you learn to ignore. A split population
+(σ set by the gap, nothing in the tails) and a fat tail (σ set by the bulk,
+too much outside it) are both caught once there are enough elements to tell.
+
 **The ends are where the colour stops, not where the data stops.** Everything
 past ±3σ paints the same colour, so an outlier at -4.8σ is indistinguishable
 from one at -3.1σ — at exactly the extreme worth looking at. The card counts
