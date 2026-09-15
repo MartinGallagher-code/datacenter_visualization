@@ -23,6 +23,7 @@ import {
   parseResults, bindOverlay, overlayValue, AGGREGATIONS, extent,
   recomputeStats, zScore, formatValue, unitFor, zRangeOf, paletteOf, invertedOf, overlayKey,
   valueWithUnit, NO_VALUE, recomputeDomain, readNumber, clearOverlayCache,
+  readingText, offScale, tailIsOdd, NORMAL_BEYOND_2SD,
 } from '../js/results.js';
 import { layout } from '../js/layout.js';
 import { linkSummary, sharesLineage } from '../js/render.js';
@@ -2158,6 +2159,148 @@ if (python.error) {
   eq(iperf.warnings, [], 'examples/iperf/floor.dc wires every rack it declares');
   eq(iperf.links.filter((l) => l.net === 'uplink').length, 16,
      'every one of the eight ToRs reaches both spines');
+}
+
+// ------------------------------------------- how far out is "out"
+// A z-score says how unusual and never how much, and the ramp clamps at
+// ±zRange, so an element at -4.8σ painted exactly like one at -3.1σ -- the
+// difference vanished at the one extreme worth looking at. Measured on the
+// shipped example: iperf_gbps has twenty hosts past ±3σ, all the same colour.
+{
+  const plan = parseLayout(readFileSync(join(root, 'examples/small.dc'), 'utf8'));
+  const bound = (name) => {
+    const raw = parseResults(readFileSync(join(root, 'examples/small-results.tsv'), 'utf8'),
+                             new Map(), [], 'r.tsv');
+    const o = bindOverlay(raw.get(overlayKey('r.tsv', name)), plan);
+    o.standardize = 'colour';
+    recomputeStats(o, plan);
+    return o;
+  };
+
+  // The extremes are measured with the stats, since nothing else can say
+  // where the tail actually reaches.
+  const iperf = bound('iperf_gbps');
+  ok(Math.abs(iperf.stats.zMin - -4.82) < 0.01, `iperf reaches -4.82σ  (${iperf.stats.zMin})`);
+  ok(Math.abs(iperf.stats.zMax - 0.46) < 0.01, 'and only +0.46σ the other way');
+
+  const off = offScale(iperf, plan);
+  eq(off.count, 20, 'twenty hosts sit past the default ±3σ');
+  ok(Math.abs(off.worst - -4.82) < 0.01, 'and the furthest is reported, signed');
+  eq(off.range, 3, 'against the range actually in force');
+
+  // Widening past the furthest point empties the tail -- which is what the
+  // fit button does, and the only way those twenty become distinguishable.
+  iperf.zRange = 5;
+  const wide = offScale(iperf, plan);
+  eq(wide.count, 0, 'nothing is clamped once the range covers the data');
+  eq(wide.range, 5, 'and the answer is for the new range, not the memoised old one');
+
+  // A metric whose tail is inside the scale says so.
+  const fio = bound('fio_kiops');
+  eq(offScale(fio, plan).count, 1, 'fio has one past ±3σ');
+  ok(Math.abs(offScale(fio, plan).worst - 3.11) < 0.01, 'at +3.11σ');
+
+  // The memo is keyed on what can change the answer, so it cannot go stale.
+  const temp = bound('temp_c');
+  const first = offScale(temp, plan);
+  ok(offScale(temp, plan) === first, 'asking twice costs one walk');
+  temp.zRange = 1;
+  ok(offScale(temp, plan) !== first, 'and changing the range asks again');
+  ok(offScale(temp, plan).count > first.count, 'a tighter range clamps more');
+}
+
+// ------------------------------------------- a reading needs both numbers
+// The z-score alone cannot say how much: +2σ is 17C on one metric and 0.4%
+// on another. In `values` mode the raw figure was recoverable from no
+// surface at all -- element, tooltip and inspector all printed the z.
+{
+  const plan = parseLayout(['dc D', '  rack r1 u=6', '    node n1 at=1',
+                            '    node n2 at=2', '    node n3 at=3'].join('\n'));
+  const o = bindOverlay(parseResults('!test m unit=C\nm n1 10\nm n2 20\nm n3 30\n',
+                                     new Map(), [], 'f').get(overlayKey('f', 'm')), plan);
+  const n3 = plan.byKey.get('D/r1/n3');
+  const val = () => overlayValue(o, n3).value;
+
+  o.standardize = 'off';
+  eq(readingText(o, val()), '30C', 'unstandardised, a reading is just the reading');
+  eq(formatValue(o, val()), '30', 'and the floor plan shows the number');
+
+  o.standardize = 'colour';
+  recomputeStats(o, plan);
+  eq(readingText(o, val()), '30C  +1.22σ', 'colouring by z puts the z beside the value');
+  eq(formatValue(o, val()), '30', 'while the floor plan still shows the value');
+
+  o.standardize = 'values';
+  eq(readingText(o, val()), '30C  +1.22σ', 'and in values mode the raw figure comes back');
+  eq(formatValue(o, val()), '+1.22', 'though the floor plan shows the z, as that mode asks');
+
+  // σ is the unit of a z-score. A verdict has none, and "PASSσ" is not a
+  // reading -- unitFor answers for the overlay, not for the value it labels.
+  const verdict = bindOverlay(parseResults('v n1 PASS\n', new Map(), [], 'f')
+    .get(overlayKey('f', 'v')), plan);
+  verdict.standardize = 'values';
+  eq(valueWithUnit(verdict, 'PASS'), 'PASS', 'a verdict is never given a sigma');
+  eq(readingText(verdict, 'PASS'), 'PASS', 'through either printer');
+}
+
+// ------------------------------------------- is σ a fair yardstick here
+// A shared z scale assumes one σ means the same thing on every metric, which
+// holds only while their distributions are a similar shape. The panel rested
+// on that and never stated it. The two-sigma tail against what a normal
+// distribution puts there is the cheapest check, and it belongs with the
+// stats because it is a property of the distribution, not of the ramp.
+{
+  const spread = (values) => {
+    const plan = parseLayout(['dc D', `  rack r1 u=${values.length + 2}`]
+      .concat(values.map((_, i) => `    node n${i + 1} at=${i + 1}`)).join('\n'));
+    const o = bindOverlay(parseResults(`!test m unit=X\n${
+      values.map((v, i) => `m n${i + 1} ${v}`).join('\n')}\n`, new Map(), [], 'f')
+      .get(overlayKey('f', 'm')), plan);
+    o.standardize = 'colour';
+    recomputeStats(o, plan);
+    return o.stats;
+  };
+  const near = (n, c, s) => Array.from({ length: n }, (_, i) => c + (i % 2 ? s : -s));
+
+  eq(NORMAL_BEYOND_2SD, 0.0455, 'a normal distribution puts 4.55% beyond two sigma');
+
+  // The count rides along with the mean and spread, in the same pass.
+  const tight = spread(near(100, 10, 0.5));
+  eq(tight.n, 100, 'the population is the measured elements');
+  eq(tight.wide, 0, 'two clean clusters of one value have no tail at all');
+
+  // A fixed ratio will not do, and this is the case that proves it: on twenty
+  // elements the expected tail is 0.9, so one element either side doubles the
+  // percentage and a ratio test marks noise as a finding.
+  const small = spread([8, 9, 9, 10, 10, 10, 10, 10, 11, 11, 12, 7, 13, 10, 10, 10, 9, 11, 10, 10]);
+  ok(small.wide / small.n > 2 * NORMAL_BEYOND_2SD,
+     `twenty ordinary values can sit at twice normal by chance  (${small.wide}/${small.n})`);
+  eq(tailIsOdd(small), false, 'and are not marked, because at that size it means nothing');
+
+  // Once there are enough elements to tell, the shapes that make σ lie do get
+  // caught: a split population (σ set by the gap, nothing in the tails) and a
+  // fat tail (σ set by the bulk, too much outside it).
+  eq(tailIsOdd(spread([...near(10, 10, 0.2), ...near(10, 100, 0.2)])), false,
+     'a split population of twenty is still too small to call');
+  eq(tailIsOdd(spread([...near(50, 10, 0.2), ...near(50, 100, 0.2)])), true,
+     'at a hundred it is called');
+  eq(tailIsOdd(spread([...near(90, 10, 0.2), 22, 24, 26, 28, 30, 21, 23, 25, 27, 29])), true,
+     'and so is a fat tail at the same size');
+
+  eq(tailIsOdd(null), false, 'no stats is not an odd shape');
+  eq(tailIsOdd({ n: 100, sd: 0, wide: 0 }), false, 'nor is a metric with no spread to speak of');
+
+  // Every metric the repo ships stays quiet: a mark that fires on ordinary
+  // data is a mark people learn to ignore.
+  const plan = parseLayout(readFileSync(join(root, 'examples/small.dc'), 'utf8'));
+  for (const raw of parseResults(readFileSync(join(root, 'examples/small-results.tsv'), 'utf8'),
+                                 new Map(), [], 'r.tsv').values()) {
+    const o = bindOverlay(raw, plan);
+    if (!o.numeric) continue;
+    o.standardize = 'colour';
+    recomputeStats(o, plan);
+    eq(tailIsOdd(o.stats), false, `examples: ${o.name} is a shape σ describes fairly`);
+  }
 }
 
 console.log(failures ? `${failures}/${count} tests FAILED` : `all ${count} tests passed`);

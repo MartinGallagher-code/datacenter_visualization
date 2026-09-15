@@ -20,10 +20,12 @@
 
 import { centerOf, labelOf } from './layout.js';
 import { colorFor, contrastInk } from './palette.js';
-import { formatValue, overlayValue } from './results.js';
+import { formatValue, isStandardized, overlayValue, zRangeOf, zScore } from './results.js';
 
 const THEME = {
   bg: '#0d1117',
+  // The edge marker for a reading the colour ramp could not reach.
+  offScale: '#f0f6fc',
   containerFill: 'rgba(255,255,255,0.022)',
   containerStroke: 'rgba(255,255,255,0.10)',
   labelBand: 'rgba(255,255,255,0.05)',
@@ -324,6 +326,26 @@ export class Renderer {
 
       ctx.fillStyle = color || base || 'rgba(255,255,255,0.04)';
       ctx.fillRect(sx, y, sliceW, h);
+
+      // Past the end of the ramp the colour stops changing, so -3.1σ and
+      // -4.8σ paint identically and the difference disappears at exactly the
+      // extreme worth looking at. A bar on the edge it ran off says which
+      // ones the scale could not reach; `fit` on the card makes them spread
+      // out again.
+      // Gated on the element being big enough to see, the way the value
+      // labels above already are: a 1U node at a fitted zoom is two pixels
+      // tall, and a marker on it would be sub-pixel and round away to
+      // nothing. Off-scale is a thing you read once you are close enough to
+      // read anything.
+      if (reading && reading.numeric && sh > 6 && isStandardized(overlay)
+          && overlay.stats && overlay.stats.sd) {
+        const z = zScore(overlay, reading.value);
+        if (Math.abs(z) > zRangeOf(overlay)) {
+          const bar = Math.max(2 / this.camera.scale, h * 0.12);
+          ctx.fillStyle = THEME.offScale;
+          ctx.fillRect(sx, z > 0 ? y : y + h - bar, sliceW, bar);
+        }
+      }
 
       if (!reading || !showText) continue;
 
