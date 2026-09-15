@@ -30,6 +30,7 @@ import { linkSummary, sharesLineage } from '../js/render.js';
 import { compileQuery, applyFilter } from '../js/filter.js';
 import { ramp, categoricalColor, colorFor, contrastInk } from '../js/palette.js';
 import { suggestionsFor } from '../js/hints.js';
+import { VERSION } from '../js/version.js';
 import {
   classify, formatSize, matchesFilter, pathLabel, sortEntries, treeFromFiles,
 } from '../js/browse.js';
@@ -2300,6 +2301,89 @@ if (python.error) {
     o.standardize = 'colour';
     recomputeStats(o, plan);
     eq(tailIsOdd(o.stats), false, `examples: ${o.name} is a shape σ describes fairly`);
+  }
+}
+
+// ------------------------------------------------------------------ version
+// One number for the whole project, written in two places because no file is
+// readable from both a browser module graph and a Python interpreter. Two
+// readers for one value is the shape of nearly every bug this suite has
+// caught, so the pair is pinned here: every other place the number appears
+// -- pyproject.toml, the tools' --version, the release workflow, the About
+// box -- reads one of the two rather than restating it, and this section
+// fails the moment that stops being true.
+{
+  ok(/^\d+\.\d+\.\d+$/.test(VERSION), `js/version.js VERSION is a semver (${VERSION})`);
+
+  const pyInit = readFileSync(join(root, 'python/dcviz/__init__.py'), 'utf8');
+  const pyVersion = (pyInit.match(/^__version__ = "([^"]+)"$/m) || [])[1];
+  eq(pyVersion, VERSION, 'python/dcviz/__init__.py agrees with js/version.js');
+
+  // The newest heading in the changelog is this version: a release with no
+  // entry is a release nobody can read the diff of.
+  const changelog = readFileSync(join(root, 'CHANGELOG.md'), 'utf8');
+  const headings = [...changelog.matchAll(/^## (\d+\.\d+\.\d+)/gm)].map((m) => m[1]);
+  eq(headings[0], VERSION, 'CHANGELOG.md leads with this version');
+  eq(headings.length, new Set(headings).size, 'and lists each version once');
+
+  // pyproject reads __version__ rather than carrying a third copy. Assert the
+  // indirection itself, because a literal there would pass every other check
+  // in this section and still ship the wrong number on PyPI.
+  const pyproject = readFileSync(join(root, 'pyproject.toml'), 'utf8');
+  ok(/^\s*dynamic = \["version"\]$/m.test(pyproject), 'pyproject takes its version dynamically');
+  ok(/^path = "python\/dcviz\/__init__\.py"$/m.test(pyproject), 'and reads it from the package');
+  ok(!new RegExp(`^version = "${VERSION.replace(/\./g, '\\\\.')}"`, 'm').test(pyproject),
+     'and states no copy of its own');
+
+  // The README is the front page and the PyPI description both, so it does
+  // state the number in prose -- which makes it the one copy a tool cannot
+  // derive. Pin it here rather than letting the front page advertise the
+  // version before last.
+  const readme = readFileSync(join(root, 'README.md'), 'utf8');
+  eq((readme.match(/^Current version \*\*(\d+\.\d+\.\d+)\*\*/m) || [])[1], VERSION,
+     'README.md states this version');
+
+  // The About box is written from js/version.js, not typed into index.html.
+  const html = readFileSync(join(root, 'index.html'), 'utf8');
+  ok(/<span id="version"/.test(html), 'index.html has a slot for the version');
+  ok(!html.includes(VERSION), 'and no hard-coded copy of the number');
+
+  if (python.error) {
+    skip('version: the tools', 'no python3');
+  } else {
+    // What `--version` prints, through the shims a checkout actually runs.
+    // GNU convention puts the *package* version in that line, which is why
+    // dcadd's own 1.0 and dcimport's 1.2 are gone: two components of one
+    // tree reporting two numbers told a bug reporter nothing.
+    for (const tool of ['dcadd', 'dcimport']) {
+      const run = spawnSync(join(root, 'tools', tool), ['--version'], { encoding: 'utf8' });
+      eq(run.status, 0, `tools/${tool} --version exits 0`);
+      eq((run.stdout || '').split('\n')[0],
+         `${tool} (Datacenter Layout Viewer) ${VERSION}`,
+         `tools/${tool} reports the project version`);
+      ok((run.stdout || '').includes('GPLv3+'), `tools/${tool} --version states the licence`);
+    }
+
+    // The dcviz CLI only exists once something is installed, so it is run out
+    // of the source tree the way the wheel will import it.
+    const env = { ...process.env, PYTHONPATH: join(root, 'python') };
+    const cli = (...args) => spawnSync('python3', ['-m', 'dcviz', ...args],
+                                       { encoding: 'utf8', env });
+    const ver = cli('--version');
+    eq(ver.status, 0, 'python3 -m dcviz --version exits 0');
+    eq((ver.stdout || '').split('\n')[0], `dcviz (Datacenter Layout Viewer) ${VERSION}`,
+       'dcviz reports the project version');
+
+    // `dcviz path` is how serve.py finds the viewer. From a checkout that is
+    // the repository root; from a wheel it is dcviz/static/. Getting this
+    // wrong ships a package that installs and then serves nothing, which no
+    // other test in this repo would notice.
+    const where = cli('path');
+    eq(where.status, 0, 'dcviz path exits 0');
+    eq((where.stdout || '').trim(), root, 'and finds the viewer at the repository root');
+
+    // A bare `dcviz` is a usage error, not a crash and not a silent success.
+    eq(cli().status, 2, 'dcviz with no subcommand exits 2');
   }
 }
 

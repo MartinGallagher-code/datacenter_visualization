@@ -8,12 +8,33 @@ as any number of simultaneous color overlays.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
+Current version **1.0.0** — see [CHANGELOG.md](CHANGELOG.md). One number
+covers the viewer, the file formats and the tools; the formats are the
+compatibility promise, so a file that loads today loads on every later 1.x
+([how a release is cut](docs/releasing.md)).
+
 ## Run it
 
+Any static file server works, and a clone is already the whole app:
+
 ```sh
-python3 -m http.server 8000        # any static file server works
+python3 -m http.server 8000        # in the clone
 # open http://localhost:8000/
 ```
+
+Or install it, and get the server and the two overlay tools with it:
+
+```sh
+pip install datacenter-layout-viewer
+dcviz serve                        # opens the viewer in a browser
+dcviz serve --dir ~/layouts        # ... with that directory at /files/
+```
+
+The package has **no runtime dependencies** — it is the same static files
+plus a hundred lines of `http.server` — and neither route is more supported
+than the other. A server is not optional, though: browsers refuse to load ES
+modules from a `file://` URL, so opening `index.html` directly gives a page
+with dead buttons and a banner saying so.
 
 The viewer starts empty. Load files with the **Load files…** button, from the
 **Files** browser in the left panel, by dragging them onto the window, or with
@@ -319,12 +340,13 @@ Fields split on tabs, commas or runs of spaces — except inside quotes, so a
 value that needs a space is written `label="Inlet temp"` (single quotes work
 too) and the quotes are not part of it.
 
-### `tools/dcadd` — appending made even easier
+### `dcadd` — appending made even easier
 
-Optional helper; plain `>>` works too.
+Optional helper; plain `>>` works too. `tools/dcadd` runs it from a clone
+with nothing installed; `pip install` puts it on `PATH` as `dcadd`.
 
 ```sh
-tools/dcadd results.tsv temp_c DH1/A/R01/u05 61.2 run=nightly   # one sample
+dcadd results.tsv temp_c DH1/A/R01/u05 61.2 run=nightly   # one sample
 my_test | dcadd results.tsv --stdin temp_c                      # target value per line
 dcadd results.tsv --merge run1.tsv run2.tsv                     # concat other files
 dcadd results.tsv --csv fio.csv --test iops --target host --value write_iops
@@ -600,7 +622,7 @@ and `last` read as then-and-now. `--overlay-map` and `--overlay-prefix` rename
 hosts onto whatever the layout calls those nodes, and `--overlay-format ndjson`
 writes NDJSON instead.
 
-### `tools/dcimport` — netmesh output, directly
+### `dcimport` — netmesh output, directly
 
 `dcadd --csv` already imports any CSV with a target column and a value
 column. `dcimport` is for netmesh, whose output does not have that shape,
@@ -609,6 +631,7 @@ paints **elements**.
 
 ```sh
 dcimport results.tsv --tidy reports/          # netmesh
+tools/dcimport results.tsv --tidy reports/    # ... or straight from a clone
 ```
 
 | Source | What arrives |
@@ -750,8 +773,8 @@ netmesh run --for 60 && dcimport results.tsv --tidy reports/
 ## Tests
 
 ```sh
-node tests/run.mjs        # 782 assertions over the modules
-node tests/browser.mjs    # 37 more, driving the page in Chromium
+node tests/run.mjs        # 836 assertions over the modules
+node tests/browser.mjs    # 55 more, driving the page in Chromium
 ```
 
 Both skip what they cannot run — `tests/run.mjs` needs python3 for the
@@ -761,8 +784,11 @@ passes: a green run that quietly tested nothing is indistinguishable from a
 green run that tested everything, and that is the one result a test suite must
 never give.
 
-GitHub Actions runs both on every push and pull request, as two jobs, so a red
-mark says which layer broke.
+GitHub Actions runs both on every push and pull request, plus a third job that
+builds the Python package, installs the wheel into a clean environment and
+fetches a page from the server it provides — the wheel's layout is not the
+checkout's, so nothing else here would notice a package that installs and then
+serves nothing. Three jobs, so a red mark says which layer broke.
 
 ## Repository layout
 
@@ -776,8 +802,17 @@ examples/iperf/          a floor plan using every layout feature, with a real
                          export-overlay run painted over it (see its README)
 examples/hostnames-results.tsv  results addressed by flat name
 examples/mx/              every layout construct, painted by a real mx run
-tools/dcadd               results appender (python3, stdlib only)
-tools/dcimport            netmesh output -> overlay samples
+js/version.js             the project's version; python/dcviz/__init__.py
+                          carries the other half and tests/run.mjs pins them
+python/dcviz/             the Python side: dcadd, dcimport and `dcviz serve`,
+                          which is what `pip install` ships. Stdlib only.
+tools/dcadd, tools/dcimport
+                          two-line shims that run those from a clone with
+                          nothing installed, so the copy that ships and the
+                          copy that runs are one file
+pyproject.toml            packaging (hatchling; no runtime dependencies)
+CHANGELOG.md              what changed, per version
+docs/releasing.md         how a release is cut, and the one manual PyPI step
 docs/                     the results-format guide for converting data in
 tests/fixtures/           real tool output, as the contract the suite checks
 tests/run.mjs             headless test suite (node tests/run.mjs)
@@ -786,7 +821,8 @@ tests/browser.mjs         the same for the page itself (node tests/browser.mjs) 
                           tests cannot reach. Skips with a message where
                           Playwright is not installed; the viewer still has no
                           dependencies.
-.github/workflows/        both suites on every push and pull request
+.github/workflows/        both suites plus a package build on every push and
+                          pull request; release.yml on a v* tag
 LICENSE                   GNU General Public License v3
 ```
 

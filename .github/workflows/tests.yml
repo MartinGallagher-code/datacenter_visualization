@@ -57,3 +57,60 @@ jobs:
           npm install -g playwright@1.56.1
           playwright install --with-deps chromium
       - run: node tests/browser.mjs --strict
+
+  package:
+    name: package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+      # 3.9 is the floor pyproject claims. Claiming it and never running it
+      # is how a f-string or a match statement gets into a tool that a RHEL
+      # box is then told it can install.
+
+      - name: Build
+        run: |
+          python -m pip install --upgrade build twine
+          python -m build
+
+      # PyPI renders README.md on the project page and rejects a release
+      # whose metadata it cannot render -- after the upload has started, so
+      # the version is burnt. Checking here costs seconds.
+      - name: Check metadata
+        run: python -m twine check --strict dist/*
+
+      # The wheel's layout is not the checkout's: the viewer's files live at
+      # the repository root and are copied to dcviz/static/ at build time.
+      # Nothing else in this repo exercises the copied shape, so a wheel that
+      # installs and then serves an empty directory would pass every other
+      # job here.
+      - name: Install the wheel and use it
+        run: |
+          python -m venv /tmp/env
+          /tmp/env/bin/pip install dist/*.whl
+          /tmp/env/bin/dcviz --version
+          /tmp/env/bin/dcadd --version
+          /tmp/env/bin/dcimport --version
+          for f in index.html js/app.js js/version.js css/app.css examples/small.dc; do
+            test -f "$(/tmp/env/bin/dcviz path)/$f" || { echo "missing from the wheel: $f"; exit 1; }
+          done
+
+      # An install that pulls in a dependency is a broken promise, not a
+      # broken build, so nothing else would catch it.
+      - name: No runtime dependencies
+        run: |
+          test "$(/tmp/env/bin/pip list --format=freeze | grep -cv '^\(pip\|setuptools\|wheel\|datacenter-layout-viewer\)==')" -eq 0
+
+      - name: Serve, and fetch the page it serves
+        run: |
+          /tmp/env/bin/dcviz serve -p 8099 --no-browser --quiet &
+          for _ in $(seq 1 40); do curl -fsS -o /dev/null http://127.0.0.1:8099/ && break; sleep 0.25; done
+          curl -fsS http://127.0.0.1:8099/ | grep -q 'id="version"'
+          curl -fsS -D - -o /dev/null http://127.0.0.1:8099/js/app.js | grep -qi 'content-type: text/javascript'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/

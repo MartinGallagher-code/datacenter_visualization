@@ -1,0 +1,82 @@
+# Packaging for the Datacenter Layout Viewer.
+#
+# The viewer is static HTML, CSS and ES modules -- no build step, no runtime
+# dependencies, and none of that changes here. This file exists for one
+# reason: a browser will not load ES modules from a `file://` URL, so the
+# viewer needs *something* to serve its directory, and the README has always
+# answered that with `python3 -m http.server`. Packaging it makes
+# `pip install` a complete install: the server, the two overlay tools and the
+# viewer's files arrive together and `dcviz serve` opens it.
+#
+# `dependencies` is empty and stays empty. Building needs hatchling; running
+# needs nothing but the standard library.
+
+[build-system]
+requires = ["hatchling>=1.21"]
+build-backend = "hatchling.build"
+
+[project]
+name = "datacenter-layout-viewer"
+description = "A very light datacenter floor-plan viewer: one plain-text file describes the whole datacenter, a second paints test results over it."
+readme = "README.md"
+requires-python = ">=3.9"
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
+authors = [{ name = "Martin J. Gallagher" }]
+keywords = ["datacenter", "visualization", "floor-plan", "rack", "overlay", "network"]
+dependencies = []
+dynamic = ["version"]
+
+classifiers = [
+  "Development Status :: 5 - Production/Stable",
+  "Environment :: Web Environment",
+  "Intended Audience :: System Administrators",
+  "Intended Audience :: Information Technology",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: JavaScript",
+  "Topic :: System :: Systems Administration",
+  "Topic :: System :: Networking :: Monitoring",
+  "Topic :: Scientific/Engineering :: Visualization",
+]
+
+[project.urls]
+Homepage = "https://github.com/MartinGallagher-code/datacenter_visualization"
+Source = "https://github.com/MartinGallagher-code/datacenter_visualization"
+Changelog = "https://github.com/MartinGallagher-code/datacenter_visualization/blob/main/CHANGELOG.md"
+Issues = "https://github.com/MartinGallagher-code/datacenter_visualization/issues"
+
+[project.scripts]
+dcviz = "dcviz.cli:main"
+dcadd = "dcviz.dcadd:main"
+dcimport = "dcviz.dcimport:main"
+
+# One version for the whole project, read rather than restated. The other
+# half of the pair is VERSION in js/version.js; tests/run.mjs fails if they
+# disagree.
+[tool.hatch.version]
+path = "python/dcviz/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["python/dcviz"]
+
+# The viewer's files stay at the repository root, where a clone can be served
+# with `python3 -m http.server` and where every relative path in index.html
+# already points. Keeping a second copy under python/dcviz/static/ so the
+# wheel could pick it up is exactly the duplication that drifts, so the copy
+# is made at build time instead and only exists inside the wheel.
+[tool.hatch.build.targets.wheel.force-include]
+"index.html" = "dcviz/static/index.html"
+"css" = "dcviz/static/css"
+"js" = "dcviz/static/js"
+"examples" = "dcviz/static/examples"
+"docs" = "dcviz/static/docs"
+"LICENSE" = "dcviz/static/LICENSE"
+"README.md" = "dcviz/static/README.md"
+
+[tool.hatch.build.targets.sdist]
+# An sdist that can rebuild the wheel and run the suite that proves it.
+include = [
+  "/index.html", "/css", "/js", "/examples", "/docs", "/python", "/tools",
+  "/tests", "/README.md", "/CHANGELOG.md", "/LICENSE", "/pyproject.toml",
+]
