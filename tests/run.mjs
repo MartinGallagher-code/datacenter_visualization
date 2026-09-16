@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url';
 
 import { expand, subst } from '../js/expand.js';
 import { compileSelector } from '../js/select.js';
-import { parseLayout, isColor, LINK_OPTS, NUMBERS } from '../js/parse.js';
+import { parseLayout, isColor, looksLikeLayout, LINK_OPTS, NUMBERS } from '../js/parse.js';
 import {
   parseResults, bindOverlay, overlayValue, AGGREGATIONS, extent,
   recomputeStats, zScore, formatValue, unitFor, zRangeOf, paletteOf, invertedOf, overlayKey,
@@ -32,7 +32,7 @@ import { ramp, categoricalColor, colorFor, contrastInk } from '../js/palette.js'
 import { suggestionsFor } from '../js/hints.js';
 import { VERSION } from '../js/version.js';
 import {
-  classify, formatSize, matchesFilter, pathLabel, sortEntries, treeFromFiles,
+  classify, formatSize, matchesFilter, namedAsData, pathLabel, readable, sortEntries, treeFromFiles,
 } from '../js/browse.js';
 import {
   droppedLayoutsNotice, layoutNotice, prefixed, resultsFileNotice,
@@ -621,12 +621,56 @@ ok(looksLikeWideTsv('!test rtt unit=ms\nTimestamp\thost\trtt\n2026-09-16T12:00:0
 ok(!looksLikeWideTsv('temp_c u01 26\n'), 'nor one written with spaces');
 ok(!looksLikeWideTsv('{"test":"a","target":"b","value":1}'), 'nor JSON');
 ok(!looksLikeWideTsv('2026-09-16T12:00:00\t1\t2\n'), 'a number where the host goes is not a host');
+
+// A stamp is not always a date. A script counts its passes as often as it
+// stamps them, and read strictly, `1  host_1  5` fell through to the results
+// format -- where the first field is the *test name*, so every stamp in the
+// file became a metric of its own, each holding one sample. The pair is what
+// makes the loose reading safe: a number in the first field and a name in the
+// second is a shape `<test> <target> <value>` does not have.
+ok(looksLikeWideTsv('1\thost_1\t5\n2\thost_1\t6\n'), 'a counter is a stamp, given a host beside it');
+ok(looksLikeWideTsv('1.5\thost_1\t5\n'), 'and so is a fractional one');
+ok(!looksLikeWideTsv('1\t2\t3\n'), 'but a number where the host goes is still not a host');
+ok(!looksLikeTime('1'), 'while "is this an instant" on its own stays a narrow question');
+
+// Tabs are what let a heading be `rtt (us)`; a row with no tab in it at all is
+// a table somebody typed or awk wrote, and refusing to read one is refusing
+// the format for the sake of a rule about it.
+ok(looksLikeWideTsv('1 host_1 5\n2 host_1 6\n'), 'a space-separated table is a table');
+ok(looksLikeWideTsv('Timestamp host rtt cpu\n1 host_1 5 40\n'), 'header and all');
+ok(!looksLikeWideTsv('temp_c u01 26.1\ntemp_c u02 27.4\n'), 'and a results file written with spaces still is one');
+ok(!looksLikeWideTsv('temp_c DH1/A/R01/u01 26.1 run=nightly-01\n'), 'extra key=value fields included');
 ok(!looksLikeTime('26.1'), 'a reading is not an instant');
 ok(!looksLikeTime('123456789'), 'and nine digits is just a number');
 eq(timeValue('1757980800'), 1757980800000, 'epoch seconds become milliseconds');
 eq(timeValue('nonsense'), null, 'and a stamp that is not one says so');
 
 eq([0, 1, 25, 26, 27].map(columnLetter), ['A', 'B', 'Z', 'AA', 'AB'], 'unnamed columns get letters');
+
+// The whole of the reported case, end to end: three rows, one host, a counter
+// for a stamp and no header. One metric with three samples -- not three
+// metrics with one each, and not a metric named after the time.
+{
+  for (const [how, text] of [
+    ['tab-separated', '1\thost_1\t5\n2\thost_1\t6\n3\thost_1\t3\n'],
+    ['space-separated', '1 host_1 5\n2 host_1 6\n3 host_1 3\n'],
+  ]) {
+    const rows = [];
+    const read = readWideTsv(text, (name, sample) => rows.push({ name, sample }), []);
+    eq(read.columns.map((c) => c.name), ['A'], `${how}: one unnamed column is one metric`);
+    eq(read.hosts, ['host_1'], `${how}: one host`);
+    eq(rows.map((r) => r.sample.value), [5, 6, 3], `${how}: three samples of it`);
+    eq(rows.map((r) => r.sample.meta.time), ['1', '2', '3'],
+       `${how}: with the stamp kept on each, since it is data and not a name`);
+  }
+
+  // The arrow survives being split on whitespace, which it does not do by
+  // itself: `host_1 -> host_2` is three fields to `split(/\s+/)`.
+  const flows = [];
+  readWideTsv('1 host_1 -> host_2 5\n', (name, sample) => flows.push(sample), []);
+  eq(flows[0].target, 'host_1', 'a space-separated flow still starts where it starts');
+  eq(flows[0].meta.peer, 'host_2', 'and still names its far end');
+}
 
 eq(splitFlow('a -> b'), { host: 'a', peer: 'b', via: [] }, 'an arrow is a pair');
 eq(splitFlow('a→b'), { host: 'a', peer: 'b', via: [] }, 'whichever arrow is typed');
@@ -802,6 +846,29 @@ eq(commonDomain(['wr01r01u01', 'wr01r01u02']), '', 'and hosts with no dots have 
   const odd = parseLayout(layoutFromHosts(['rack[1]-u|01', 'a..b']));
   eq(odd.warnings, [], 'a hostname carrying range syntax does not expand');
   ok(odd.resolve('rack[1]-u|01'), 'and still answers to its own name');
+}
+
+// The guard on all of the above. Detection decides which reader a file gets,
+// so loosening it is the one change here that can quietly re-read a file that
+// was working: every results file in this repository is checked against the
+// format it actually is. `1 host_1 5` was the loosening that made this worth
+// writing down.
+{
+  const shouldBeWide = new Set([
+    'examples/live/flows.tsv',
+    'examples/live/room-wr01.tsv',
+    'examples/live/room-wr02.tsv',
+  ]);
+  const listing = spawnSync('find', ['examples', 'tests/fixtures', '-type', 'f'],
+    { cwd: root, encoding: 'utf8' });
+  const files = (listing.stdout || '').trim().split('\n')
+    .filter((f) => /\.(tsv|csv|ndjson)$/.test(f)).sort();
+  ok(files.length >= 10, `there are results files to check  (${files.length})`);
+  for (const file of files) {
+    const wide = looksLikeWideTsv(readFileSync(join(root, file), 'utf8'));
+    ok(wide === shouldBeWide.has(file),
+       `${file} reads as ${shouldBeWide.has(file) ? 'a table' : 'a results file'}`);
+  }
 }
 
 // Which files in a folder a dashboard is made of: the same rule the browse
@@ -1346,6 +1413,30 @@ eq(classify('FLOOR.LAYOUT'), 'layout', 'extensions are matched case-insensitivel
 eq(classify('mx-run.tsv'), 'results', 'a .tsv is results');
 eq(classify('notes.md'), 'other', 'anything else is neither');
 eq(classify('archive.tsv.gz'), 'other', 'the extension has to be the last one');
+
+// The extension is a hint for the listing and never the decision. Which
+// reader a file gets is worked out from what is inside it, so a table written
+// to `today.log`, `metrics.dat` or a file with no extension at all is the
+// same table it would be in `today.tsv` -- and a viewer that will not open it
+// is telling somebody their own data file is not one, on the evidence of its
+// name.
+eq(classify('today.log'), 'results', 'a log is where a table usually ends up');
+eq(classify('metrics.dat'), 'results', 'and so is a .dat');
+eq(classify('run47'), 'results', 'a file with no extension is offered, not hidden');
+eq(classify('.gitignore'), 'other', 'though a dotfile is configuration, and stays out of the listing');
+ok(readable('notes.md') && readable('run47') && readable('weird.qqq'),
+   'anything that could be text can be opened');
+ok(!readable('photo.png') && !readable('archive.tsv.gz') && !readable('lib.so'),
+   'and only what cannot be text is refused');
+ok(namedAsData('run.tsv') && namedAsData('today.log'), 'a name can say "data"');
+ok(!namedAsData('run47') && !namedAsData('floor.dc'), 'or say nothing at all');
+
+// What a name that says nothing leaves to the contents: a floor plan called
+// `floor` is a floor plan, not a results file that turns out to hold nothing.
+ok(looksLikeLayout('# a comment first\ndc DC1 name="X"\n  room R1\n'), 'a layout opens with its root');
+ok(looksLikeLayout('title My Floor\ndc DC1\n'), 'or with a title line');
+ok(!looksLikeLayout('1\thost_1\t5\n'), 'a table does not');
+ok(!looksLikeLayout('temp_c\tu01\t26\n'), 'and neither does a results file');
 
 eq(formatSize(0), '0 B', 'zero bytes');
 eq(formatSize(1023), '1023 B', 'under a kilobyte stays in bytes');

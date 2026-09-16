@@ -687,6 +687,45 @@ await test('a loaded floor plan is not replaced by one click', async () => {
      'the second click does it');
 });
 
+// The smallest table there is: a counter, a host, a value. Read strictly this
+// fell through to the results format -- where the first field is the test name
+// -- so the three stamps became three metrics holding one sample each.
+await test('a counter for a stamp is a stamp, not a metric name', async () => {
+  await drop('t.tsv', '1\thost_1\t5\n2\thost_1\t6\n3\thost_1\t3\n');
+  await page.waitForTimeout(700);
+  eq(await cardNames(), ['A'], 'one column, one metric, named for the column it is');
+  eq(await sampleCount('A'), 3, 'holding all three rows');
+  await buildPlan();
+  await page.click('#overlays .overlay-head');
+  await page.waitForTimeout(300);
+  const reading = await page.evaluate(() => {
+    const row = [...document.querySelectorAll('#tree .tree-row')].pop();
+    row.click();
+    return document.querySelector('#inspector').innerText.replace(/\s+/g, ' ');
+  });
+  ok(/4\.67 \(mean of 3\)/.test(reading), `and one host reading the mean of them  (${reading.slice(-40)})`);
+});
+
+// The name is a hint for the listing, never the decision. A table written to
+// `today.log`, `metrics.dat` or a file with no extension is the same table.
+await test('a table loads whatever it is called', async () => {
+  for (const name of ['run47', 'today.log', 'metrics.dat']) {
+    await page.goto(base, { waitUntil: 'networkidle' });
+    await drop(name, '1\thost_1\t5\n2\thost_1\t6\n');
+    await page.waitForTimeout(600);
+    eq(await cardNames(), ['A'], `${name} is read as the table it is`);
+  }
+  // ...and a floor plan whose name says nothing is still a floor plan, rather
+  // than a results file that turns out to hold none.
+  await page.goto(base, { waitUntil: 'networkidle' });
+  await drop('floor', 'dc DC1 name="No extension"\n  room R1\n    row A\n      rack R01 u=10\n'
+    + '        node u[01..04] role=server\n');
+  await page.waitForTimeout(600);
+  eq(await page.evaluate(() => document.querySelector('#title').textContent), 'No extension',
+     'an extension-less layout opens as the floor plan');
+  eq(await cardNames(), [], 'and not as a results file with nothing in it');
+});
+
 await test('a flow row measures a pair, not a host', async () => {
   await drop('live/room.tsv', WIDE);
   await page.waitForTimeout(700);
@@ -712,7 +751,7 @@ await test('two tables in one folder are one dashboard', async () => {
   ]);
   await page.waitForTimeout(700);
   eq(await cardNames(), ['rtt'], 'the same column in both files is one metric');
-  eq(await groupNames(), ['*.tsv'], 'grouped by the folder they share, not by file');
+  eq(await groupNames(), ['*'], 'grouped by the folder they share, not by file');
   // Both files' rows are in it. One sample each, and the metric holds two --
   // which is the difference between combining them and whichever file
   // happened to be read last quietly replacing the other.
@@ -822,7 +861,7 @@ await test('a folder loads as one dashboard and reloads without doubling', async
     .find((b) => b.textContent.trim() === 'Load all').click());
   await page.waitForTimeout(1200);
 
-  eq(await groupNames(), ['*.tsv'], 'the folder is the group, not each file in it');
+  eq(await groupNames(), ['*'], 'the folder is the group, not each file in it');
   const cards = await cardNames();
   eq(cards.sort(), ['Gb/s', 'cpu %', 'loss %', 'retransmits', 'rtt'],
      'every column of every file in the folder');

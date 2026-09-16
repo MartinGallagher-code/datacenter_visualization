@@ -25,6 +25,27 @@ their shapes are not a promise.
   A table may carry the results format's own `!test` lines, checked exactly as
   they are there, so a column can be given a unit, a palette or a range
   without a second syntax for it.
+- **The extension no longer decides what a file is.** Which reader a file gets
+  is worked out from what is inside it, so a table written to `today.log`,
+  `metrics.dat` or a file with no extension at all loads exactly as it would
+  from `run.tsv` — by drop, from the pickers (the `accept=` filter that hid
+  them is gone), from the Files panel, and from **Load all**, where the
+  pattern you type is what decides. Only a name that says the bytes are not
+  text (`.png`, `.gz`, `.so`) is refused. Going the other way, a floor plan
+  called `floor` that opens with `dc DC1` is read as a layout rather than as a
+  results file that turns out to hold nothing. A merged group is now named
+  after the folder it came from (`runs/*`) rather than `*.tsv`, which was a
+  label that lied about files not called that.
+- **A stamp is not always a date, and a table is not always tab-separated.**
+  The first column may be a plain number counting the passes — `1  host_1  5`
+  — and a row with no tab in it is split on runs of spaces. Read strictly,
+  such a file fell through to the results format, where the first field is the
+  *test name*: every stamp in it became a metric of its own holding one
+  sample. The loose reading is safe because the pair is what decides — a
+  number in the first field and a name in the second is a shape
+  `<test> <target> <value>` does not have — and every results file in the
+  repository is now checked against the format it actually is, so loosening
+  detection again cannot quietly re-read one that works.
 - **A floor plan can be built from the data, on request.** **Build from data**
   in the Structure panel reads one out of the names in *any* loaded results —
   a results target is already a path through a floor plan somebody wrote, rows

@@ -23,15 +23,54 @@
 // in names and sizes, and the app reads the one file that gets clicked.
 
 const LAYOUT_RE = /\.(dc|layout)$/i;
-const RESULTS_RE = /\.(tsv|csv|txt|ndjson|json|results)$/i;
+
+// What a data file tends to be called. This list is a *hint for the listing*,
+// nothing more: which reader a file gets is worked out from what is inside it,
+// and a table written to `today.log`, `metrics.dat` or a file with no
+// extension at all is the same table it would be in `today.tsv`.
+const RESULTS_RE = /\.(tsv|csv|txt|tab|ndjson|json|jsonl|results|log|dat|data|out|metrics)$/i;
+
+// The one thing an extension can settle: this is not text, so there is nothing
+// to read. Everything else is offered, because the alternative is telling
+// somebody their own data file is not a data file on the evidence of its name.
+const BINARY_RE = new RegExp('\\.(png|jpe?g|gif|bmp|webp|ico|tiff?|pdf|zip|gz|bz2|xz|zst|tar|tgz'
+  + '|7z|rar|mp[34]|m4[av]|mov|avi|mkv|webm|wav|ogg|flac|woff2?|ttf|otf|eot'
+  + '|exe|dll|so|dylib|bin|img|iso|o|a|obj|lib|class|jar|war|pyc|pyo|wasm'
+  + '|db|sqlite3?|mdb|parquet|avro|feather|npy|npz|pkl|xls[xmb]?|docx?|pptx?)$', 'i');
+
+/**
+ * Can this be read at all?
+ *
+ * False only for a name that says the bytes are not text. A `.md`, a `.py`, a
+ * `.conf` or a file called `run47` may not be results, but the reader will say
+ * so in words; refusing to open it on the strength of its name cannot.
+ */
+export const readable = (name) => !BINARY_RE.test(name);
+
+/**
+ * Is this named like a data file? Not "can it be read" -- that is `readable`
+ * -- but "does the name itself say results". What it is for: a file whose
+ * name says nothing is worth a look inside before it is assumed to be one.
+ */
+export const namedAsData = (name) => RESULTS_RE.test(name);
 
 const MAX_ROWS = 400;          // rows rendered before the rest is a summary line
 export const SIZE_PROBE_MAX = 500;   // files whose size is worth a metadata read
 
-/** 'layout' opens as the floor plan, 'results' as overlays, 'other' not at all. */
+/**
+ * 'layout' opens as the floor plan, 'results' as overlays, 'other' is
+ * everything the listing does not show until "all files" is ticked -- which
+ * is not the same as everything it refuses to open. See `readable`.
+ *
+ * A name with no extension at all counts as results: nothing else in a folder
+ * of runs is called `run47`, and a viewer that hides it is a viewer that
+ * cannot open the file the user is pointing at. A dotfile is the exception --
+ * `.gitignore` is configuration, and listing it beside the runs is noise.
+ */
 export function classify(name) {
   if (LAYOUT_RE.test(name)) return 'layout';
   if (RESULTS_RE.test(name)) return 'results';
+  if (!name.startsWith('.') && !name.includes('.')) return 'results';
   return 'other';
 }
 
@@ -333,9 +372,15 @@ function row(entry, b, a) {
   if (entry.size !== undefined) node.append(el('span', 'browse-size', formatSize(entry.size)));
   if (loaded) node.append(el('span', 'browse-flag', '✓'));
 
-  if (kind === 'other') {
+  if (kind === 'other' && !readable(entry.name)) {
     node.disabled = true;
-    node.title = 'Not a layout or a results file';
+    node.title = 'Not a text file, so there is nothing here to read';
+  } else if (kind === 'other') {
+    // Not a name this viewer knows, which is not the same as not being data.
+    // The reader works the format out from the contents and says so if it
+    // cannot; that is a better answer than a row that will not be clicked.
+    node.title = `Open ${entry.name} — the format is read from the file itself, `
+      + 'whatever it is called';
   } else if (kind === 'layout') {
     node.title = loaded ? `Reload ${entry.name} as the floor plan` : `Open ${entry.name} as the floor plan`;
   } else {
@@ -343,6 +388,6 @@ function row(entry, b, a) {
       ? `Already loaded — re-read ${entry.name}, replacing its overlays`
       : `Add the overlays in ${entry.name}`;
   }
-  if (kind !== 'other') node.addEventListener('click', () => a.browseLoad(entry));
+  if (!node.disabled) node.addEventListener('click', () => a.browseLoad(entry));
   return node;
 }
