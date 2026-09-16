@@ -24,4 +24,4 @@
 //
 // Bumping it: edit here and in python/dcviz/__init__.py, add the CHANGELOG
 // entry, then follow docs/releasing.md.
-export const VERSION = '1.0.0';
+export const VERSION = '1.0.1';

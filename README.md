@@ -14,7 +14,7 @@ as any number of simultaneous color overlays.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.0.0** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.0.1** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
