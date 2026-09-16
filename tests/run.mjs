@@ -38,8 +38,9 @@ import {
   droppedLayoutsNotice, layoutNotice, prefixed, resultsFileNotice,
 } from '../js/report.js';
 import {
-  columnLetter, commonDomain, layoutFromHosts, looksLikeTime, looksLikeWideTsv, matchesPattern,
-  placeHost, readWideTsv, slugify, splitFlow, tailRecords, timeValue,
+  columnLetter, commonDomain, layoutFromHosts, looksLikeTime, looksLikeWideTsv, markOf,
+  matchesPattern, placeHost, readWideTsv, recordsSince, slugify, splitFlow, splitPreamble,
+  tailRecords, timeValue,
 } from '../js/tsv.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -699,14 +700,72 @@ eq(splitFlow('plain'), { host: 'plain', peer: '' }, 'and a host on its own is st
   eq(tailRecords(text, 99), text, 'and a limit past the end is no limit');
 }
 
-// A floor plan read out of the hostnames, for data that arrived with none.
-eq(placeHost('wr12r06u15'), { room: 'wr12', rack: 'r06', node: 'u15' },
+// Appending rather than replacing: the same file read again, with only the
+// records it has gained taken from it. The mark left between two reads is the
+// last few records themselves, because a dashboard reads the *tail* of a file
+// and an offset into the file is a number it never has.
+{
+  const head = 'Timestamp\thost\trtt';
+  const row = (i) => `2026-09-16T12:00:${String(i).padStart(2, '0')}\th1\t${100 + i}`;
+  const file = (n) => [head, ...Array.from({ length: n }, (_, i) => row(i))].join('\n');
+
+  const first = recordsSince(file(5), null);
+  eq(first.records, 5, 'the first read of a file is all of it');
+  eq(first.missed, false, 'with nothing missed, since there was nothing to miss');
+  eq(first.mark.length, 3, 'and it leaves the last few records as the mark');
+
+  const second = recordsSince(file(8), first.mark);
+  eq(second.records, 3, 'the next read takes only what was added');
+  eq(splitPreamble(second.text).head, [head],
+     'carrying the header, so the records can be parsed on their own');
+  eq(splitPreamble(second.text).data, [row(5), row(6), row(7)], 'and only the new records');
+
+  const quiet = recordsSince(file(8), second.mark);
+  eq(quiet.records, 0, 'a file nobody wrote to has nothing new in it');
+  eq(quiet.text, '', 'so there is nothing to parse');
+  eq(quiet.mark, second.mark, 'and the mark stays where it was, rather than being lost');
+
+  // Reading only the tail is the normal case, and it means the older half of
+  // the mark has scrolled out of the window by the next pass. The last record
+  // of it is still enough to say where we were.
+  const window = tailRecords(file(10), 4);
+  const slid = recordsSince(window, second.mark);
+  eq(slid.records, 2, 'a mark half out of the window still lines up on what is left of it');
+  eq(slid.missed, false, 'which is not a gap');
+  eq(splitPreamble(slid.text).data, [row(8), row(9)], 'and takes exactly the records after it');
+
+  // Grown by more than the window, or rewritten from the top: there is
+  // nothing to line up with, and taking the rows anyway would count some of
+  // them twice. The caller replaces the file instead, and is told why.
+  const jumped = recordsSince(tailRecords(file(40), 4), second.mark);
+  eq(jumped.missed, true, 'a jump past the window is reported, not guessed at');
+  eq(jumped.records, 4, 'with what is there now handed over to replace the file');
+
+  // A table sampling on a timer writes the same line twice the moment two
+  // passes measure the same values. One row is not an identity; three are.
+  const same = [head, 'a\tb\t1', 'a\tb\t1', 'a\tb\t1', 'a\tb\t1'].join('\n');
+  const dup = recordsSince(same, null);
+  eq(dup.records, 4, 'four identical records are four records');
+  eq(recordsSince(same, dup.mark).records, 0, 'and reading them again adds none of them');
+  eq(markOf(['a', 'b', 'c', 'd', 'e']), ['c', 'd', 'e'], 'the mark is the last three records');
+  eq(markOf(['a']), ['a'], 'or as many as there are');
+}
+
+// A floor plan read out of the names, for data whose floor plan is not
+// written yet. Never built on its own -- the button in the Structure panel
+// asks for it -- and built from the names in *any* results file, not only a
+// table's: a results target is a path through a floor plan somebody wrote.
+eq(placeHost('wr12r06u15'), { room: 'wr12', row: '', rack: 'r06', node: 'u15' },
    'letter-and-digit runs are a room, a rack and a machine');
-eq(placeHost('dc1-hall2-r03-u05'), { room: 'dc1-hall2', rack: 'r03', node: 'u05' },
-   'separators say the same thing, with the leading parts as the room');
-eq(placeHost('rack01-server05'), { room: '', rack: 'rack01', node: 'server05' },
+eq(placeHost('dc1-hall2-r03-u05'), { room: 'dc1', row: 'hall2', rack: 'r03', node: 'u05' },
+   'separators say the same thing, with a row between the room and the rack');
+eq(placeHost('DH1/A/R01/u05'), { room: 'DH1', row: 'A', rack: 'R01', node: 'u05' },
+   'a results target is already a path, and keeps the row it names');
+eq(placeHost('a/b/c/d/e'), { room: 'a-b', row: 'c', rack: 'd', node: 'e' },
+   'anything deeper folds into the room, which has space for a longer name');
+eq(placeHost('rack01-server05'), { room: '', row: '', rack: 'rack01', node: 'server05' },
    'two parts are a rack and a machine');
-eq(placeHost('mailserver'), { room: '', rack: 'hosts', node: 'mailserver' },
+eq(placeHost('mailserver'), { room: '', row: '', rack: 'hosts', node: 'mailserver' },
    'and a name with no structure in it goes in a rack of its own');
 eq(commonDomain(['a.dc.example.com', 'b.dc.example.com']), 'dc.example.com',
    'a tail two hosts share is a domain, not two levels of structure');
@@ -719,7 +778,15 @@ eq(commonDomain(['wr01r01u01', 'wr01r01u02']), '', 'and hosts with no dots have 
   const plan = parseLayout(layoutFromHosts(hosts));
   eq(plan.warnings, [], 'the generated plan parses without a warning of its own');
   for (const host of hosts) ok(plan.resolve(host), `results still resolve to ${host}`);
-  eq(plan.resolve('wr12r06u15').key, 'TSV/wr12/A/r06/u15', 'placed under the room and rack in its name');
+  eq(plan.resolve('wr12r06u15').key, 'DATA/wr12/A/r06/u15', 'placed under the room and rack in its name');
+
+  // A results file's targets build a plan too: they are paths, and the rows
+  // in them are rows. Nothing about this is particular to a table.
+  const fromTargets = parseLayout(layoutFromHosts(['DH1/A/R01/u05', 'DH1/A/R01/u06', 'DH1/B/R02/tor']));
+  eq(fromTargets.warnings, [], 'a plan built from results targets parses clean');
+  eq(fromTargets.resolve('DH1/A/R01/u05').key, 'DATA/DH1/A/R01/u05',
+     'and puts the room, the row and the rack where the target said they were');
+  eq(fromTargets.counts.get('row'), 2, 'the rows named in the targets are the rows');
   eq(plan.resolve('mail.a.example.com').parent.kind, 'rack', 'and a domain is not two levels of rack');
 
   // Two hosts that reduce to one id are two elements, not one renamed by the

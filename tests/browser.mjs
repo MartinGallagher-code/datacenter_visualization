@@ -218,6 +218,13 @@ const sampleCount = (name) => page.evaluate((wanted) => {
   return null;
 }, name);
 
+/** The Structure panel's build button: a floor plan out of the loaded names. */
+const buildPlan = async ({ confirm = false } = {}) => {
+  await page.click('#build .btnrow button');
+  if (confirm) await page.click('#build .btnrow button');
+  await page.waitForTimeout(700);
+};
+
 /**
  * The "last N records" box. Set deliberately in every test that depends on
  * it, in both directions: it is remembered across reloads, so a test that set
@@ -600,24 +607,90 @@ const WIDE = [
   '',
 ].join('\n');
 
-await test('a wide TSV brings its own floor plan', async () => {
+await test('a table loads without inventing a floor plan', async () => {
   await drop('live/room.tsv', WIDE);
   await page.waitForTimeout(700);
   eq((await cardNames()).sort(), ['loss %', 'rtt', 'verdict'], 'one metric per column');
+  // The .dc file is what says where the machines are. A viewer that answers
+  // that question because a results file arrived is guessing at the one thing
+  // it was not told, so it waits to be asked.
   const counts = await page.evaluate(() => document.querySelector('#filter-count').textContent);
-  ok(/\d+ elements/.test(counts), `a floor plan was built  (${counts})`);
+  eq(counts, '0 elements', 'and no floor plan appears on its own');
+  ok(await page.evaluate(() => /Build from data/.test(document.querySelector('#build').innerText)),
+     'the Structure panel offers to build one');
+});
+
+await test('building a floor plan from the names in the data', async () => {
+  await drop('live/room.tsv', WIDE);
+  await page.waitForTimeout(700);
+  await buildPlan();
+  const counts = await page.evaluate(() => document.querySelector('#filter-count').textContent);
+  ok(/\d+ elements/.test(counts) && counts !== '0 elements', `a floor plan is built  (${counts})`);
   ok(await page.evaluate(() => !!document.querySelector('#tree .tree-row')),
      'and it is in the structure tree');
   // The hosts are placed by their names: wr01 r01 u01 is a room, a rack and a
-  // machine, which is the whole reason this can be guessed at all.
+  // machine, which is the whole reason this can be read off them at all.
   const rooms = await page.evaluate(() =>
     [...document.querySelectorAll('#tree .tree-row .tree-name')].map((e) => e.textContent.trim()));
   ok(rooms.includes('wr01'), `the room comes out of the hostname  (${rooms.slice(0, 4).join(', ')})`);
+  // It is an ordinary layout: the editor opens it, and Download .dc keeps it.
+  await page.click('#btn-edit');
+  await page.waitForTimeout(300);
+  const text = await page.evaluate(() => document.querySelector('#editor-text').value);
+  ok(/^dc DATA /m.test(text), 'the editor holds it as .dc text');
+  ok(text.includes('name=wr01r01u01'), 'with every host named, so the readings still resolve');
+  await page.click('#btn-edit');
+  // And it can be thrown away again without unloading the data.
+  await page.click('#build .btnrow button:nth-child(2)');
+  await page.waitForTimeout(400);
+  eq(await page.evaluate(() => document.querySelector('#filter-count').textContent), '0 elements',
+     'Clear takes the built plan away');
+  eq((await cardNames()).length, 3, 'and leaves the data loaded');
+});
+
+// A results file in the original format builds a plan too -- its targets are
+// paths through a floor plan somebody wrote, rows and all. Nothing about
+// building one is particular to a table.
+await test('a results file builds a floor plan from its targets', async () => {
+  await drop('r.tsv', 'alpha\tDH1/A/R01/u01\t1\nalpha\tDH1/A/R01/u02\t2\nalpha\tDH1/B/R02/tor\t3\n');
+  await page.waitForTimeout(700);
+  eq(await page.evaluate(() => document.querySelector('#filter-count').textContent), '0 elements',
+     'nothing is built on its own here either');
+  await buildPlan();
+  const rooms = await page.evaluate(() =>
+    [...document.querySelectorAll('#tree .tree-row .tree-name')].map((e) => e.textContent.trim()));
+  ok(rooms.includes('DH1'), `the room in the target is a room  (${rooms.join(', ')})`);
+  ok(rooms.includes('A') && rooms.includes('B'), 'and the rows in it are rows');
+  ok(await page.evaluate(() =>
+    !!document.querySelector('#overlays .overlay')
+    && !/not on this floor plan/.test(document.querySelector('#build').innerText)),
+     'with every target landing on it');
+});
+
+// Replacing a floor plan that came from a file takes two clicks: that file is
+// what the data is meant to be read against, and one mis-click would swap it
+// for a guess.
+await test('a loaded floor plan is not replaced by one click', async () => {
+  await openLayout();
+  await drop('r.tsv', RESULTS);
+  await page.waitForTimeout(700);
+  const before = await page.evaluate(() => document.querySelector('#filter-count').textContent);
+  await page.click('#build .btnrow button');
+  await page.waitForTimeout(400);
+  eq(await page.evaluate(() => document.querySelector('#filter-count').textContent), before,
+     'the first click changes nothing');
+  ok(await page.evaluate(() => /Replace the loaded floor plan\?/.test(document.querySelector('#build').innerText)),
+     'and asks');
+  await page.click('#build .btnrow button');
+  await page.waitForTimeout(700);
+  ok(await page.evaluate(() => document.querySelector('#filter-count').textContent) !== before,
+     'the second click does it');
 });
 
 await test('a flow row measures a pair, not a host', async () => {
   await drop('live/room.tsv', WIDE);
   await page.waitForTimeout(700);
+  await buildPlan();
   await page.evaluate(() => {
     document.querySelector('#filter').value = 'peer=wr01r02u01';
     document.querySelector('#filter').dispatchEvent(new Event('input', { bubbles: true }));
@@ -644,6 +717,7 @@ await test('two tables in one folder are one dashboard', async () => {
   // which is the difference between combining them and whichever file
   // happened to be read last quietly replacing the other.
   eq(await sampleCount('rtt'), 2, 'carrying the samples of both');
+  await buildPlan();
   await expandCards();
   eq(await page.evaluate(() =>
     [...document.querySelectorAll('#overlays .rangerow input')].map((i) => i.value)),
@@ -653,6 +727,7 @@ await test('two tables in one folder are one dashboard', async () => {
 await test('every metric prints the name the filter takes', async () => {
   await drop('live/room.tsv', WIDE);
   await page.waitForTimeout(700);
+  await buildPlan();
   await expandCards();
   const slugs = await page.evaluate(() =>
     [...document.querySelectorAll('#overlays .overlay-slug')].map((e) => e.textContent.trim()));
@@ -766,6 +841,58 @@ await test('a folder loads as one dashboard and reloads without doubling', async
   // used to put them at the end of the list.
   eq(await cardNames(), before, 'and the cards stay where they were');
 });
+
+
+// Appending rather than replacing. The tail is what a live dashboard reads --
+// the end of a log that grows all day -- and this is how a view longer than
+// that tail accumulates from it.
+await test('append mode keeps what the tail scrolled past', async () => {
+  await setTail('');
+  const rows = (n) => FEED_HEAD + Array.from({ length: n }, (_, i) =>
+    FEED_ROW(String(i).padStart(2, '0'), `DH1/A/R01/u0${(i % 3) + 1}`, 100 + i)).join('');
+  fixtures.set('/fx/live/feed.tsv', rows(3));
+  await page.evaluate(() => [...document.querySelectorAll('#live button')]
+    .find((b) => b.textContent.trim() === 'Reload now').click());
+  await page.waitForTimeout(800);
+  eq(await sampleCount('rtt'), 3, 'three rows to start with');
+
+  // Read only the last two records of the file from here on.
+  await setTail(2);
+  eq(await sampleCount('rtt'), 2, 'replace mode shows exactly what the tail reads');
+
+  await page.evaluate(() => {
+    const mode = document.querySelector('#live select');
+    mode.value = 'append';
+    mode.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  await page.waitForTimeout(300);
+  const reload = async () => {
+    await page.evaluate(() => [...document.querySelectorAll('#live button')]
+      .find((b) => b.textContent.trim() === 'Reload now').click());
+    await page.waitForTimeout(800);
+  };
+
+  await reload();
+  eq(await sampleCount('rtt'), 2, 'the first append pass is the one that marks the place');
+  fixtures.set('/fx/live/feed.tsv', rows(4));
+  await reload();
+  eq(await sampleCount('rtt'), 3, 'the next row is added to what was already loaded');
+  fixtures.set('/fx/live/feed.tsv', rows(5));
+  await reload();
+  eq(await sampleCount('rtt'), 4, 'and the one after it, past what the tail can see at once');
+  await reload();
+  eq(await sampleCount('rtt'), 4, 'a file nobody wrote to adds nothing');
+
+  // Grown by more than the window between two passes: there is nothing to
+  // line up with, so the file is read again as the truth rather than having
+  // rows counted twice -- and the report says which it did and why.
+  fixtures.set('/fx/live/feed.tsv', rows(40));
+  await reload();
+  eq(await sampleCount('rtt'), 2, 'a jump past the window replaces instead of appending');
+  const report = await page.evaluate(() => document.querySelector('#notices').innerText);
+  ok(report.includes('could not be lined up with the last read'), 'saying so');
+  await setTail('');
+}, { url: '?layout=examples/small.dc&results=fx/live/feed.tsv' });
 
 // module tests can prove the two source files agree; only this can prove the
 // number reaches the screen.

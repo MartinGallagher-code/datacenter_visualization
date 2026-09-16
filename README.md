@@ -12,8 +12,9 @@ datacenter — rooms, rows, racks, servers, and the logical networks between the
 append-only file carries test results, which the viewer paints over the layout
 as any number of simultaneous color overlays. A wide TSV table —
 `Timestamp  host  var1  var2 …`, which is what monitoring already writes — is
-read as it stands, floor plan and all, and can be reloaded on a timer as a
-live dashboard.
+read as it stands, and a folder of them can be reloaded on a timer as a live
+dashboard. Where the layout is not written yet, one can be read out of the
+hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
@@ -679,9 +680,9 @@ netmesh run --for 60 && dcimport results.tsv --tidy reports/
 ## A table you already have
 
 Most monitoring already writes a wide table: a timestamp, a host, and a column
-per thing measured. The viewer reads that directly — no conversion step, and
-**no layout file either**. Drop it in and there is a floor plan with the
-numbers on it.
+per thing measured. The viewer reads that directly — no conversion step. Load
+your `.dc` file beside it as usual, or, if the layout is not written yet, ask
+for one to be [built from the names in the data](#building-a-floor-plan-from-the-data).
 
 ```
 Timestamp             host          rtt (us)   loss %   cpu %
@@ -691,10 +692,11 @@ Timestamp             host          rtt (us)   loss %   cpu %
 ```
 
 Columns are separated by **tabs** (only tabs — that is what lets a heading be
-`rtt (us)` rather than three columns). Try it:
+`rtt (us)` rather than three columns). Try it, with a floor plan read out of
+the hostnames:
 
 ```
-http://localhost:8000/?results=examples/live/room-wr01.tsv
+http://localhost:8000/?build=1&results=examples/live/room-wr01.tsv
 ```
 
 - **The header is optional.** Without one the columns are called `A`, `B`,
@@ -729,26 +731,45 @@ http://localhost:8000/?results=examples/live/room-wr01.tsv
   keeps a file's metrics to itself, deliberately; this is the format where the
   opposite is what you meant. Two folders stay two dashboards.)
 
-### The floor plan it builds
+## Building a floor plan from the data
 
-With no `.dc` file loaded, the hosts are placed by reading their names: the
-last part is the machine, the part before it its rack, and the rest its room.
+The `.dc` file is what says where the machines are, and normally that is the
+file you load. But the names in a results file often carry their position
+anyway, and sometimes the layout is not written yet — so **Build from data**,
+in the Structure panel, reads a floor plan out of them. It is a button and
+never anything else: nothing here invents a floor plan because a file arrived.
+
+It works on **any** loaded results, not only a table: a results target is
+already a path through a floor plan somebody wrote, rows and all.
 
 ```
+DH1/A/R01/u05      ->  room DH1, row A, rack R01, machine u05
 wr12r06u15         ->  room wr12, rack r06, machine u15
-dc1-hall2-r03-u05  ->  room dc1-hall2, rack r03, machine u05
+dc1-hall2-r03-u05  ->  room dc1, row hall2, rack r03, machine u05
 rack01-server05    ->  rack rack01, machine server05
 mailserver         ->  one rack of hosts
 web01.dc.acme.com  ->  the domain the hosts share is dropped, not read as racks
 ```
 
-`-`, `_`, `/`, `:` and `.` split a name; a name with no separator is split at
-its letter-and-digit runs, which is what makes `wr12r06u15` three levels. It
-is a guess and it is meant to be replaced: **load a `.dc` file and the real
-floor plan takes over**, with every overlay still bound to the same hosts.
-**Edit layout** opens the generated plan in the editor, where **Download .dc**
-saves it to keep and correct. New hosts appearing in the data rebuild it; a
-layout you loaded yourself is never overwritten.
+The last part of a name is the machine, the part before it its rack, then its
+row, and the rest its room. `-`, `_`, `/`, `:` and `.` split a name; a name
+with no separator is split at its letter-and-digit runs, which is what makes
+`wr12r06u15` three levels. Racks that name no row are dealt into rows of
+twelve, so a flat fleet is a floor plan rather than one very long line.
+
+- It is an **ordinary layout**: `dc DATA … +generated`, which **Edit layout**
+  opens and **Download .dc** saves to correct by hand.
+- While it is the floor plan it **follows the data** — a host that starts
+  reporting gets a place without being asked for again — and **Clear** takes
+  it away, leaving the data loaded.
+- **Loading a `.dc` file replaces it**, every overlay still bound to the same
+  hosts. Going the other way, replacing a floor plan you loaded, takes two
+  clicks: that file is what the data is meant to be read against.
+- When a layout is loaded, the panel also says how many targets in the data
+  are **not on it** — the number that otherwise only reads as "nothing was
+  measured".
+- `&build=1` in the URL does the same thing on load, which is what makes a
+  link to a folder of tables a dashboard somebody else can open.
 
 ### Live: reload on a timer
 
@@ -764,6 +785,24 @@ The **Live** panel (left, under Files) turns loaded files into a dashboard:
   screen. Headers, comments and `!test` lines are kept whatever their age —
   losing them would take the column names and units with them. Empty means the
   whole file.
+- **replace what it brought** / **add the rows since last time** — what a pass
+  *does* with what it reads.
+
+  *Replace* reads each file again from scratch: the file is the truth, which
+  is what a file rewritten in place needs, and what stops a growing log from
+  counting its rows twice.
+
+  *Append* takes only the records that were not in the last read and adds them
+  to what is loaded — so the view accumulates past the tail, which is the
+  point: read the last 500 rows every ten seconds, keep the whole hour. Where
+  the new read starts is found by looking for the **end of the last read
+  inside it** (the last few records, matched as a block, since one row is not
+  an identity — a table on a timer writes the same line twice the moment two
+  passes measure the same values). A file that cannot be lined up — rewritten
+  from the top, or grown by more than the tail being read — is *replaced*
+  instead and the report says so, because taking rows that cannot be lined up
+  would count some of them twice. Past 400,000 accumulated samples on a metric
+  the oldest are dropped as new ones arrive, making it a rolling window.
 - **Reload now** — one pass, on demand.
 - **Load all**, in the Files panel, loads every results file in the open
   folder matching the name filter (`*.tsv` by default) and then **follows that
@@ -895,8 +934,8 @@ quietly left stale.
 ## Tests
 
 ```sh
-node tests/run.mjs        # 937 assertions over the modules
-node tests/browser.mjs    # 80 more, driving the page in Chromium
+node tests/run.mjs        # 960 assertions over the modules
+node tests/browser.mjs    # 101 more, driving the page in Chromium
 ```
 
 Both skip what they cannot run — `tests/run.mjs` needs python3 for the

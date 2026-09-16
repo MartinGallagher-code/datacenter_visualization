@@ -351,27 +351,105 @@ const truncate = (line) => (line.length > 60 ? `${line.slice(0, 57)}…` : line)
 // age. Dropping a `!test` line or a header because it scrolled off the top
 // would take the units, the palette and the column names with it.
 
+/**
+ * A file split into the lines that describe it and the lines that are data.
+ *
+ * The first group is everything that says what the records mean -- comments,
+ * `!test` metadata, the column header -- and it has to travel with any subset
+ * of the records, however old it is. Take the last hundred rows of a table
+ * without its header and every metric comes back called A, B, C.
+ */
+export function splitPreamble(text) {
+  const head = [];
+  const data = [];
+  for (const line of String(text || '').split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    if (trimmed.startsWith('#') || trimmed.startsWith('!') || headerColumns(line)) head.push(line);
+    else data.push(line);
+  }
+  return { head, data };
+}
+
 export function tailRecords(text, keep) {
   const limit = Math.floor(Number(keep) || 0);
   if (!(limit > 0)) return String(text || '');
-  const lines = String(text || '').split(/\r?\n/);
-
-  const describes = (line) => {
-    const trimmed = line.trim();
-    if (!trimmed) return false;
-    if (trimmed.startsWith('#') || trimmed.startsWith('!')) return true;
-    return !!headerColumns(line);
-  };
-
-  const head = [];
-  const data = [];
-  for (const line of lines) {
-    if (!line.trim()) continue;
-    if (describes(line)) head.push(line);
-    else data.push(line);
-  }
-  if (data.length <= limit) return lines.join('\n');
+  const { head, data } = splitPreamble(text);
+  if (data.length <= limit) return [...head, ...data].join('\n');
   return [...head, ...data.slice(data.length - limit)].join('\n');
+}
+
+// --------------------------------------------------------------- since when
+//
+// Appending rather than replacing: the same file read again, with only the
+// rows that were not there last time taken from it.
+//
+// The mark left between two reads is the last few records themselves, not a
+// byte offset and not a row count. A dashboard reads the *tail* of a file --
+// that is the whole point of reading only the end of a log that grows all day
+// -- so an offset into the file is a number this never has. The last records
+// are in hand either way, and finding them again in the next read is what
+// says where the new ones start.
+//
+// Three of them rather than one, because one row is not an identity: a table
+// sampling every second writes the same line twice the moment two passes
+// measure the same values, and a mark that matches the wrong one of those
+// silently skips or repeats everything between.
+
+const MARK_ROWS = 3;
+
+/** The mark to carry to the next read: the last few records of this one. */
+export const markOf = (data) => data.slice(Math.max(0, data.length - MARK_ROWS));
+
+/**
+ * What is new in `text` since the read that produced `mark`.
+ *
+ * Returns the records that were not in that read, with the file's preamble in
+ * front of them so they can be parsed on their own, and the mark to carry
+ * forward. `missed` is the honest part: the mark was nowhere in this read, so
+ * either the file was rewritten rather than appended to, or it grew by more
+ * than was read back and some records went past unseen.
+ */
+export function recordsSince(text, mark) {
+  const { head, data } = splitPreamble(text);
+  const carry = markOf(data);
+
+  if (!mark || !mark.length) {
+    return { text: data.length ? [...head, ...data].join('\n') : '', records: data.length, mark: carry, missed: false };
+  }
+
+  // The last place this read still matches the end of the last one.
+  //
+  // Longest match first, then shorter: reading only the tail of a file means
+  // the older half of the mark may have scrolled out of the window between
+  // two passes, and the last record of it is still enough to say where we
+  // were. Searching backwards within each length, because the answer wanted
+  // is the most recent match -- an identical block earlier in the file is not
+  // where we left off.
+  let at = -1;
+  for (let len = mark.length; len > 0 && at < 0; len--) {
+    const tail = mark.slice(mark.length - len);
+    for (let i = data.length - len; i >= 0; i--) {
+      let same = true;
+      for (let j = 0; j < len; j++) {
+        if (data[i + j] !== tail[j]) { same = false; break; }
+      }
+      if (same) { at = i + len; break; }
+    }
+  }
+
+  if (at < 0) {
+    return { text: data.length ? [...head, ...data].join('\n') : '', records: data.length, mark: carry, missed: true };
+  }
+  const fresh = data.slice(at);
+  return {
+    text: fresh.length ? [...head, ...fresh].join('\n') : '',
+    records: fresh.length,
+    // Nothing new leaves the mark where it was: re-marking on an empty read
+    // would lose the place entirely.
+    mark: fresh.length ? carry : mark,
+    missed: false,
+  };
 }
 
 // ------------------------------------------------------------ floor plan
@@ -435,9 +513,21 @@ export function placeHost(name) {
 
   const node = segments.length ? segments[segments.length - 1] : name;
   const containers = segments.slice(0, -1);
-  if (!containers.length) return { room: '', rack: 'hosts', node };
-  if (containers.length === 1) return { room: '', rack: containers[0], node };
-  return { room: containers.slice(0, -1).join('-'), rack: containers[containers.length - 1], node };
+  if (!containers.length) return { room: '', row: '', rack: 'hosts', node };
+  if (containers.length === 1) return { room: '', row: '', rack: containers[0], node };
+  if (containers.length === 2) return { room: containers[0], row: '', rack: containers[1], node };
+  // Three levels or more is the shape a *results* target usually has, because
+  // it is a path through a floor plan somebody wrote: `DH1/A/R01/u05` is a
+  // room, a row, a rack and a machine, and reading the row as part of the
+  // room's name would flatten exactly the structure that was handed over.
+  // Anything deeper than that folds into the room, which is the level with
+  // room for a longer name.
+  return {
+    room: containers.slice(0, -2).join('-'),
+    row: containers[containers.length - 2],
+    rack: containers[containers.length - 1],
+    node,
+  };
 }
 
 // An id in a layout file is a range spec: `[`, `]`, `|`, `,` and `..` all mean
@@ -492,13 +582,19 @@ export function layoutFromHosts(hosts, opts = {}) {
     return name;
   };
 
-  // room -> rack -> [{ id, host }]
+  // room -> row -> rack -> [{ id, host }]. A name that does not say which row
+  // a rack is in lands in one called '', and the racks of that row are dealt
+  // into rows of twelve at the end -- a hundred racks on one line is a floor
+  // plan nobody can read, and a single column is worse.
   const rooms = new Map();
   for (const host of names) {
-    const { room, rack, node } = placeHost(strip(host));
+    const { room, row, rack, node } = placeHost(strip(host));
     const roomKey = room || '';
-    let racks = rooms.get(roomKey);
-    if (!racks) { racks = new Map(); rooms.set(roomKey, racks); }
+    let rowsHere = rooms.get(roomKey);
+    if (!rowsHere) { rowsHere = new Map(); rooms.set(roomKey, rowsHere); }
+    const rowKey = row || '';
+    let racks = rowsHere.get(rowKey);
+    if (!racks) { racks = new Map(); rowsHere.set(rowKey, racks); }
     const rackKey = rack || 'hosts';
     let nodes = racks.get(rackKey);
     if (!nodes) { nodes = []; racks.set(rackKey, nodes); }
@@ -514,35 +610,51 @@ export function layoutFromHosts(hosts, opts = {}) {
     nodes.push({ id, host });
   }
 
-  const title = opts.title || 'TSV hosts';
+  const title = opts.title || 'Hosts in the data';
+  const id = safeId(opts.id || 'DATA');
   const out = [];
-  out.push('# Floor plan generated from the hosts in the loaded TSV data.');
+  out.push('# Floor plan built from the names in the loaded data, because it was asked');
+  out.push('# for -- nothing generates this on its own.');
   out.push('#');
-  out.push(`# ${names.length} host${names.length === 1 ? '' : 's'}, placed by reading the names:`);
-  out.push('# the last part is the machine, the part before it its rack, the rest its room.');
-  out.push('# Nothing here is authoritative -- it is a stand-in so the numbers have');
-  out.push('# somewhere to land. Load a .dc file and it takes over, with every overlay');
-  out.push('# still bound to the same hosts; or edit this one and save it from the editor.');
+  out.push(`# ${names.length} host${names.length === 1 ? '' : 's'}. The last part of a name is the`);
+  out.push('# machine, the part before it its rack, then its row, and the rest its room.');
+  out.push('# Nothing here is authoritative: it is a stand-in so the numbers have somewhere');
+  out.push('# to land. Load a .dc file and it takes over, with every overlay still bound to');
+  out.push('# the same hosts -- or keep this one: it is an ordinary layout, and Download .dc');
+  out.push('# in the editor saves it to edit by hand.');
   out.push('');
-  out.push(`dc TSV name=${quoteAttr(title)}${domain ? ` domain=${quoteAttr(domain)}` : ''} +tsv`);
+  out.push(`dc ${id} name=${quoteAttr(title)}${domain ? ` domain=${quoteAttr(domain)}` : ''} +generated`);
 
   const indent = (n) => '  '.repeat(n);
-  for (const [room, racks] of [...rooms].sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true }))) {
+  const byName = (a, b) => a[0].localeCompare(b[0], undefined, { numeric: true });
+
+  const writeRack = (rack, nodes, depth) => {
+    out.push(`${indent(depth)}rack ${safeId(rack)} u=${Math.max(nodes.length, 8)}`);
+    for (const entry of nodes) {
+      const attr = entry.id === entry.host ? '' : ` name=${quoteAttr(entry.host)}`;
+      out.push(`${indent(depth + 1)}node ${entry.id}${attr} +generated`);
+    }
+  };
+
+  for (const [room, rowsHere] of [...rooms].sort(byName)) {
     let depth = 1;
     if (room) {
       out.push('');
       out.push(`${indent(depth)}room ${safeId(room)}`);
       depth++;
     }
-    const rackList = [...racks].sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true }));
-    for (let i = 0; i < rackList.length; i += RACKS_PER_ROW) {
-      const chunk = rackList.slice(i, i + RACKS_PER_ROW);
-      out.push(`${indent(depth)}row ${rowName(i / RACKS_PER_ROW)}`);
-      for (const [rack, nodes] of chunk) {
-        out.push(`${indent(depth + 1)}rack ${safeId(rack)} u=${Math.max(nodes.length, 8)}`);
-        for (const { id, host } of nodes) {
-          const attr = id === host ? '' : ` name=${quoteAttr(host)}`;
-          out.push(`${indent(depth + 2)}node ${id}${attr} +tsv`);
+    for (const [row, racks] of [...rowsHere].sort(byName)) {
+      const rackList = [...racks].sort(byName);
+      if (row) {
+        out.push(`${indent(depth)}row ${safeId(row)}`);
+        for (const [rack, nodes] of rackList) writeRack(rack, nodes, depth + 1);
+        continue;
+      }
+      // No row in the names: deal the racks into rows of twelve, lettered.
+      for (let i = 0; i < rackList.length; i += RACKS_PER_ROW) {
+        out.push(`${indent(depth)}row ${rowName(i / RACKS_PER_ROW)}`);
+        for (const [rack, nodes] of rackList.slice(i, i + RACKS_PER_ROW)) {
+          writeRack(rack, nodes, depth + 1);
         }
       }
     }

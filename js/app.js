@@ -20,14 +20,14 @@ import {
   readingText, recomputeDomain, recomputeStats,
 } from './results.js';
 import {
-  fillWarnings, renderInspector, renderLive, renderNets, renderNotices, renderOverlays, renderTree,
-  renderWarnings,
+  fillWarnings, renderBuild, renderInspector, renderLive, renderNets, renderNotices, renderOverlays,
+  renderTree, renderWarnings,
 } from './ui.js';
 import {
   droppedLayoutsNotice, layoutNotice, plural, prefixed, resultsFileNotice,
 } from './report.js';
 import { attachHints, renderReference } from './hints.js';
-import { layoutFromHosts, matchesPattern, tailRecords } from './tsv.js';
+import { layoutFromHosts, matchesPattern, recordsSince, tailRecords } from './tsv.js';
 import { VERSION } from './version.js';
 import {
   classify, directoryFromDataTransfer, ensureRead, getFile, pathLabel, pickDirectory,
@@ -79,6 +79,9 @@ const state = {
   // hosts arrive -- and the moment a real layout is loaded it is not one.
   autoLayout: false,
   autoHosts: '',            // the host list the generated plan was built from
+  // The build button asks twice before it replaces a floor plan that came
+  // from a file: this is the armed state between the two clicks.
+  buildArmed: false,
 
   // Where the loaded files came from, so they can be read again. A live
   // dashboard is these same files re-read on a timer, which needs the handle
@@ -88,7 +91,14 @@ const state = {
   // Reload on a timer, reading only the end of each file. `tail` is records,
   // not bytes: the last N rows of the table, with the header and every !test
   // line kept whatever their age.
-  live: { on: false, seconds: 10, tail: 0, at: 0, error: '', busy: false },
+  // `mode` is what a pass does with what it reads:
+  //   'replace'  the file is the truth; its samples are read again from
+  //              scratch, which is what a file rewritten in place needs
+  //   'append'   only the records that were not in the last read are taken,
+  //              and they are added to what is already loaded -- which is how
+  //              a window longer than the tail accumulates from a log that is
+  //              only ever read at its end
+  live: { on: false, seconds: 10, tail: 0, mode: 'replace', at: 0, error: '', busy: false },
 
   // A folder re-listed on every refresh, so a file that appears between two
   // reloads joins the dashboard on its own. Null when nothing is watched.
@@ -211,6 +221,7 @@ function refreshPanels() {
   recomputeActiveOverlays();
   renderBrowserPanel();
   renderLive(state, $('live'), actions);
+  renderBuild(state, $('build'), actions);
   renderTree(state, $('tree'), actions);
   renderOverlays(state, $('overlays'), actions);
   renderNets(state, $('nets'), actions);
@@ -414,6 +425,47 @@ const actions = {
     invalidate();
   },
 
+  /**
+   * Build a floor plan from the names in the loaded data, on request.
+   *
+   * Replacing a floor plan that was loaded from a file is a second click:
+   * that file is what the data is supposed to be read against, and one
+   * mis-click would swap it for a guess.
+   */
+  buildLayout({ confirmed = false } = {}) {
+    const replacingFile = !!state.model.all.length && !state.autoLayout;
+    if (replacingFile && !confirmed) {
+      state.buildArmed = true;
+      refreshPanels();
+      return;
+    }
+    state.buildArmed = false;
+    state.notices = [];
+    const hosts = loadedHosts();
+    if (!hosts.length) {
+      note('warn', 'nothing to build a floor plan from: no results are loaded');
+      showWarnings();
+      refreshPanels();
+      return;
+    }
+    // A signature match is what stops the timed rebuild from redrawing an
+    // unchanged floor plan; asked for by hand, it has to build anyway.
+    state.autoHosts = '';
+    buildLayoutFromData();
+    note('note', `floor plan built from the ${plural(hosts.length, 'host')} in the loaded data`
+      + (hosts.length >= MAX_BUILT_HOSTS ? ` (the first ${MAX_BUILT_HOSTS.toLocaleString()})` : '')
+      + ' — it follows the data from here, and Download .dc in the editor keeps it');
+    showWarnings();
+  },
+
+  /** Back to no floor plan, leaving the data loaded. */
+  dropBuiltLayout() {
+    if (!state.autoLayout) return;
+    state.buildArmed = false;
+    loadLayoutText('', { keepCamera: false });
+    refreshPanels();
+  },
+
   setSortOverlays(on) {
     state.sortOverlays = on;
     refreshPanels();
@@ -481,6 +533,7 @@ const actions = {
     // just emptied, seconds later, with no visible reason.
     state.sources.clear();
     state.watch = null;
+    state.buildArmed = false;
     state.live.on = false;
     state.live.at = 0;
     state.live.error = '';
@@ -568,7 +621,11 @@ function mergeGroupFor(name) {
   return `${at < 0 ? '' : name.slice(0, at + 1)}*.tsv`;
 }
 
-/** @param files [{ text, name }] -- the name groups the overlays in the panel. */
+/**
+ * @param files [{ text, name, append }] -- the name groups the overlays in the
+ *   panel; `append` adds the file's records to the ones it already brought,
+ *   for a caller that has worked out which of them are new.
+ */
 function loadResultsText(files, { replace = false, quiet = false } = {}) {
   if (replace && state.rawOverlays.size) {
     note('note', `replaced the ${plural(state.rawOverlays.size, 'metric')} loaded before: `
@@ -589,7 +646,11 @@ function loadResultsText(files, { replace = false, quiet = false } = {}) {
     // append-only, so a second read of the same file would otherwise count
     // every sample twice. (A wide TSV shares its overlays with the rest of
     // its folder, so what is dropped there is its samples, not the metric.)
-    const replaced = dropSource(name);
+    //
+    // Unless the caller has already done that arithmetic: a live refresh in
+    // append mode hands over only the records this file has gained since it
+    // was last read, and those are added to what it brought before.
+    const replaced = file.append ? 0 : dropSource(name);
 
     const beforeSamples = countSamples(state.rawOverlays);
     const warnings = [];
@@ -614,10 +675,11 @@ function loadResultsText(files, { replace = false, quiet = false } = {}) {
   }
 
   sweepEmpty();
+  if (files.some((file) => file.append)) pruneAccumulated();
 
-  // Hosts with no floor plan to stand on get one made for them, which is what
-  // lets a table of timestamps and hostnames be dropped straight in.
-  if (!autoLayoutFromHosts({ quiet })) {
+  // A plan built from the data follows the data: a host that starts reporting
+  // gets a place on the floor without being asked for twice.
+  if (!refreshBuiltLayout({ quiet })) {
     rebindOverlays();
     refresh();
   }
@@ -625,21 +687,26 @@ function loadResultsText(files, { replace = false, quiet = false } = {}) {
 }
 
 /**
- * Every host a wide TSV has mentioned, including the far end of a flow.
+ * Every host the loaded data mentions, in every format, including the far end
+ * of a measured flow.
  *
  * Read back off the samples rather than remembered from the parse: a reload
- * replaces a file's samples, a metric can be removed by hand, and the
- * generated floor plan has to follow what is actually loaded now.
+ * replaces a file's samples, a metric can be removed by hand, and a plan built
+ * from these has to follow what is actually loaded now. A results file's
+ * targets are paths through a floor plan somebody wrote, and they carry their
+ * structure with them -- `DH1/A/R01/u05` is a room, a row, a rack and a
+ * machine -- so this is not only for tables.
  */
-function tsvHosts() {
+const MAX_BUILT_HOSTS = 50000;
+
+function loadedHosts() {
   const hosts = new Map();
   const add = (name) => {
-    if (!name) return;
+    if (!name || hosts.size >= MAX_BUILT_HOSTS) return;
     const key = String(name).toLowerCase();
     if (!hosts.has(key)) hosts.set(key, String(name));
   };
   for (const overlay of state.rawOverlays.values()) {
-    if (!overlay.wide) continue;
     for (const sample of overlay.samples) {
       add(sample.target);
       if (sample.meta && sample.meta.peer) add(sample.meta.peer);
@@ -649,20 +716,22 @@ function tsvHosts() {
 }
 
 /**
- * Build a floor plan out of the hosts in the loaded tables, when there is no
- * floor plan or the only one is another of these.
+ * Build a floor plan out of the names in the loaded data.
  *
- * A .dc file the user loaded is never overwritten: the whole point of loading
- * one is that it knows where the machines actually are. Returns true when it
- * reloaded the layout, which has already refreshed everything.
+ * Only ever on request -- from the button in the Structure panel, or from the
+ * refresh below keeping a plan that was asked for in step with new hosts. A
+ * viewer that invents a floor plan because a file arrived would be guessing
+ * at the one thing the .dc file exists to state.
+ *
+ * Returns true when it loaded a layout, which has already refreshed
+ * everything.
  */
-function autoLayoutFromHosts({ quiet = false } = {}) {
-  if (state.model.all.length && !state.autoLayout) return false;
-  const hosts = tsvHosts();
+function buildLayoutFromData({ quiet = false } = {}) {
+  const hosts = loadedHosts();
   if (!hosts.length) return false;
   const signature = hosts.join('\n');
-  // Regenerating on every reload would throw away collapse state and the
-  // camera twenty times a minute for a dashboard whose hosts never change.
+  // Rebuilding on every reload would throw away collapse state and the camera
+  // twenty times a minute for a dashboard whose hosts never change.
   if (state.autoLayout && signature === state.autoHosts) return false;
   const first = !state.model.all.length;
   // loadLayoutText starts the warning list again from the layout's own, which
@@ -677,11 +746,16 @@ function autoLayoutFromHosts({ quiet = false } = {}) {
   if (quiet) state.noticesOpen = wasOpen;
   state.warnings = carried.concat(state.model.warnings);
   state.autoHosts = signature;
-  if (first) {
-    note('note', `no floor plan loaded, so one was built from the ${plural(hosts.length, 'host')} `
-      + 'in the data — load a .dc file to replace it, or open the editor to keep and edit this one');
-  }
   return true;
+}
+
+/**
+ * Keep a built plan in step with the data. Does nothing to a floor plan that
+ * came from a file, and nothing at all until one has been built.
+ */
+function refreshBuiltLayout({ quiet = false } = {}) {
+  if (!state.autoLayout) return false;
+  return buildLayoutFromData({ quiet });
 }
 
 function showWarnings({ open = true } = {}) {
@@ -749,6 +823,26 @@ function dropSource(name) {
     // the ones that really did go.
   }
   return gone;
+}
+
+// A dashboard that appends runs for days, and nothing about "reload every ten
+// seconds" says "and use all the memory in the machine". This is a ceiling,
+// not a setting: past it the oldest samples of that metric go, which is the
+// rolling window a live view wants anyway. It is high enough that a metric
+// sampled once a second per host across a hundred hosts reaches it in about
+// an hour of accumulation.
+const MAX_KEPT_SAMPLES = 400000;
+let prunedOnce = false;
+
+function pruneAccumulated() {
+  for (const overlay of state.rawOverlays.values()) {
+    if (overlay.samples.length <= MAX_KEPT_SAMPLES) continue;
+    overlay.samples = overlay.samples.slice(overlay.samples.length - MAX_KEPT_SAMPLES);
+    if (prunedOnce) continue;
+    prunedOnce = true;
+    note('note', `a metric reached ${MAX_KEPT_SAMPLES.toLocaleString()} accumulated samples — `
+      + 'the oldest are being dropped as new ones arrive, so the view is a rolling window');
+  }
 }
 
 /**
@@ -865,6 +959,11 @@ async function boot() {
   }
   if (texts.length) loadResultsText(texts);
   else { refresh(); showWarnings(); }
+
+  // `&build=1` asks for the floor plan to be read out of the names, which is
+  // what makes a link to a folder of tables a dashboard somebody else can
+  // open. It is the button, written into the URL -- never the default.
+  if (params.get('build') && !layoutUrl && state.rawOverlays.size) actions.buildLayout();
 }
 
 // ---------------------------------------------------------------- picking
@@ -1264,6 +1363,7 @@ function saveLiveState() {
     localStorage.setItem(LIVE_KEY, JSON.stringify({
       seconds: state.live.seconds,
       tail: state.live.tail,
+      mode: state.live.mode,
       watch: state.watch ? { path: state.watch.path, pattern: state.watch.pattern } : null,
     }));
   } catch { /* private window: the settings just do not come back */ }
@@ -1274,6 +1374,7 @@ function loadLiveState() {
     const saved = JSON.parse(localStorage.getItem(LIVE_KEY) || '{}');
     if (Number.isFinite(saved.seconds)) state.live.seconds = clampSeconds(saved.seconds);
     if (Number.isFinite(saved.tail)) state.live.tail = clampTail(saved.tail);
+    if (saved.mode === 'append' || saved.mode === 'replace') state.live.mode = saved.mode;
     // The pattern comes back so "Load all" in the folder that was watched
     // offers it again; the watch itself never starts on its own. Reading
     // files on a timer is something a person switches on.
@@ -1360,6 +1461,13 @@ async function refreshSources({ manual = false } = {}) {
 
   const failures = [];
   const files = [];
+  // The report covers this pass. Without this a dashboard running for an hour
+  // would carry every notice of every pass in it -- but a pass that finds
+  // nothing to do has nothing to say either, and clearing the last pass's
+  // report on its behalf would take a warning off the screen a few seconds
+  // after it appeared.
+  const carried = state.notices;
+  state.notices = [];
   try {
     if (state.watch) {
       try {
@@ -1371,21 +1479,24 @@ async function refreshSources({ manual = false } = {}) {
     for (const [label, source] of state.sources) {
       if (source.layout) continue;         // the floor plan is not a feed
       try {
-        files.push({ text: await readSource(source), name: label });
+        const read = await readSource(source);
+        const file = nextRecords(source, tailRecords(read, state.live.tail), label);
+        if (file) files.push(file);
       } catch (err) {
         failures.push(`${label} — ${err.message}`);
       }
     }
-    // The report covers this pass. Without this a dashboard running for an
-    // hour would carry every notice of every pass in it.
-    state.notices = [];
     if (files.length) {
       loadResultsText(files, { quiet: !manual });
-    } else if (manual) {
-      note('warn', state.sources.size
-        ? 'nothing could be re-read — every loaded file failed'
-        : 'nothing to reload: no results files are loaded');
-      showWarnings();
+    } else {
+      if (manual) {
+        note('warn', state.sources.size
+          ? 'nothing new to read — every loaded file is unchanged, or could not be read'
+          : 'nothing to reload: no results files are loaded');
+      } else if (!state.notices.length) {
+        state.notices = carried;
+      }
+      showWarnings({ open: manual });
     }
     state.live.at = Date.now();
     state.live.error = failures.join(' · ');
@@ -1393,6 +1504,50 @@ async function refreshSources({ manual = false } = {}) {
     state.live.busy = false;
     renderLivePanel();
   }
+}
+
+/**
+ * What this pass should load from one file, given what the last pass did.
+ *
+ * In replace mode, and on the first pass over a file, that is the whole read:
+ * the file is the truth and its samples are read again from it.
+ *
+ * In append mode it is the records the file has gained since it was last
+ * read, worked out by finding the end of the last read inside this one. When
+ * that cannot be found -- the file was rewritten rather than appended to, or
+ * it grew by more than the tail being read -- the file is replaced instead,
+ * and the pass says so: taking rows that cannot be lined up would count some
+ * of them twice, and a dashboard that quietly doubles its own numbers is
+ * worse than one that says it lost the thread.
+ *
+ * Returns null when there is nothing to do, which is the common case for a
+ * file nobody has written to since the last pass -- and the reason a folder
+ * of quiet logs costs nothing to watch.
+ */
+function nextRecords(source, text, label) {
+  if (state.live.mode !== 'append') {
+    // The mark goes with the mode: switching to append later starts from a
+    // full read rather than from a place recorded under different rules.
+    source.mark = null;
+    return { text, name: label };
+  }
+
+  const marked = !!(source.mark && source.mark.length);
+  const since = recordsSince(text, source.mark);
+  source.mark = since.mark;
+  if (!since.records) return null;                    // nothing new in it
+
+  // Lined up with the last read: take the records after it, and add them.
+  if (marked && !since.missed) return { text: since.text, name: label, append: true };
+
+  if (marked) {
+    note('warn', `${label}: could not be lined up with the last read — it was rewritten, or it `
+      + 'grew by more than the tail being read, so it was loaded again from what is there now. '
+      + 'A longer tail or a shorter interval keeps the thread.');
+  }
+  // No mark yet (the first pass over this file), or nothing to line up with.
+  // Either way the file itself is the truth, and replaces what it brought.
+  return { text, name: label };
 }
 
 const liveActions = {
@@ -1420,6 +1575,18 @@ const liveActions = {
     // files are read again at once -- otherwise the box says "last 500" over a
     // floor plan still painted from every record in the file.
     if (changed && state.sources.size) refreshSources({ manual: true });
+  },
+
+  /**
+   * Replace what each file brought, or add what it has gained since the last
+   * read. Switching either way starts the next pass from a full read: the
+   * place recorded under one rule is not a place under the other.
+   */
+  setLiveMode(mode) {
+    state.live.mode = mode === 'append' ? 'append' : 'replace';
+    for (const source of state.sources.values()) source.mark = null;
+    saveLiveState();
+    renderLivePanel();
   },
 
   refreshNow() { refreshSources({ manual: true }); },

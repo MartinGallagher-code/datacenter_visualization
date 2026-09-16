@@ -807,12 +807,90 @@ export function renderNotices(state, host, button, actions, onJump) {
   }
 }
 
+
+// ------------------------------------------------------------------- build
+// Making a floor plan out of the names in the data. It is a button and never
+// anything else: the .dc file exists to say where the machines are, and a
+// viewer that guesses at that because a results file arrived would be
+// answering a question nobody asked. The button is here because the answer is
+// sometimes genuinely useful -- a fleet whose hostnames carry their position,
+// a first look at data whose floor plan is not written yet, or a starting
+// point to save with Download .dc and correct by hand.
+
+export function renderBuild(state, host, actions) {
+  if (!host) return;
+  host.textContent = '';
+
+  const loaded = state.rawOverlays.size > 0;
+  const built = !!state.autoLayout;
+  const empty = !state.model.all.length;
+
+  if (!loaded && empty) {
+    host.append(el('p', 'muted', 'No floor plan. Load a .dc file, or load results and build one '
+      + 'from the names in them.'));
+    return;
+  }
+  if (!loaded) return;                    // a floor plan and nothing to compare it to
+
+  const bar = el('div', 'btnrow');
+  const armed = !!state.buildArmed;
+  const build = el('button', armed ? 'danger' : null,
+    armed ? 'Replace the loaded floor plan?' : built ? 'Rebuild from data' : 'Build from data');
+  build.title = built
+    ? 'Build the plan again from the names in the data as it stands now'
+    : empty
+      ? 'Read a floor plan out of the hostnames in the loaded data: the last part of a name '
+        + 'is the machine, the part before it its rack, then its row, and the rest its room. '
+        + 'A guess, and a starting point — Download .dc in the editor keeps it.'
+      : 'Replace the floor plan you loaded with one read out of the hostnames in the data. '
+        + 'The file itself is untouched and one click away in Files.';
+  build.addEventListener('click', () => actions.buildLayout({ confirmed: armed }));
+  bar.append(build);
+
+  if (built) {
+    const drop = el('button', null, 'Clear');
+    drop.title = 'Throw the built plan away. The data stays loaded.';
+    drop.addEventListener('click', () => actions.dropBuiltLayout());
+    bar.append(drop);
+  }
+  host.append(bar);
+
+  if (built) {
+    host.append(el('p', 'muted', 'Built from the data — it follows new hosts as they arrive, '
+      + 'and a .dc file you load replaces it.'));
+    return;
+  }
+
+  if (empty) {
+    host.append(el('p', 'muted', 'No floor plan yet: the data is loaded and there is nothing '
+      + 'to paint it on. Load a .dc file, or build one from the names.'));
+    return;
+  }
+
+  // The number worth showing beside the button: how much of the data has
+  // nowhere to land on the floor plan that is loaded. A results file written
+  // against a different layout reads as "nothing was measured", and this is
+  // the one place that says otherwise before every card has to be opened.
+  let unresolved = 0;
+  for (const overlay of state.overlays.values()) unresolved += overlay.unresolved.length;
+  if (unresolved) {
+    host.append(el('p', 'muted', `${unresolved.toLocaleString()} `
+      + `target${unresolved === 1 ? '' : 's'} in the data ${unresolved === 1 ? 'is' : 'are'} `
+      + 'not on this floor plan.'));
+  }
+}
+
 // -------------------------------------------------------------------- live
 // The dashboard controls: reload the loaded files on a timer, read only the
 // end of each one, and follow a folder so a file that appears joins in. Every
 // one of these is off until it is switched on -- a viewer that starts reading
 // the disk on a timer because a file was once opened would be a surprise, and
 // this panel is where the surprise is traded for a switch.
+
+const LIVE_MODES = [
+  ['replace', 'replace what it brought'],
+  ['append', 'add the rows since last time'],
+];
 
 const clockTime = (at) => {
   if (!at) return '';
@@ -864,6 +942,28 @@ export function renderLive(state, host, actions) {
   tail.addEventListener('change', () => actions.setLiveTail(tail.value));
   tailRow.append(tail, el('span', 'muted', 'records per file'));
   host.append(tailRow);
+
+  const modeRow = el('div', 'live-row');
+  modeRow.append(el('span', null, 'and'));
+  const mode = el('select', 'live-mode');
+  for (const [value, label] of LIVE_MODES) {
+    const opt = el('option', null, label);
+    opt.value = value;
+    if (value === (live.mode || 'replace')) opt.selected = true;
+    mode.append(opt);
+  }
+  mode.title = 'What a pass does with what it reads.\n\n'
+    + '"replace what it brought" reads each file again from scratch: the file is the truth, '
+    + 'which is what a file rewritten in place needs, and what keeps a growing log from '
+    + 'counting its rows twice.\n\n'
+    + '"add the rows since last time" takes only the records that were not in the last read — '
+    + 'found by looking for the end of that read inside this one — and adds them to what is '
+    + 'loaded. That is how a view longer than the tail accumulates from a log that is only ever '
+    + 'read at its end. A file that cannot be lined up (rewritten, or grown by more than the '
+    + 'tail) is replaced instead, and the report says so.';
+  mode.addEventListener('change', () => actions.setLiveMode(mode.value));
+  modeRow.append(mode);
+  host.append(modeRow);
 
   const bar = el('div', 'btnrow');
   const now = el('button', null, live.busy ? 'Reading…' : 'Reload now');

@@ -1,8 +1,8 @@
-# `examples/live` — three tables, one dashboard, no layout file
+# `examples/live` — three tables, one dashboard
 
 ```sh
 python3 -m http.server 8000
-# http://localhost:8000/?results=examples/live/room-wr01.tsv,examples/live/room-wr02.tsv,examples/live/flows.tsv
+# http://localhost:8000/?build=1&results=examples/live/room-wr01.tsv,examples/live/room-wr02.tsv,examples/live/flows.tsv
 ```
 
 There is no `.dc` file here and nothing to write before this works. These are
@@ -15,10 +15,13 @@ Timestamp             host          rtt (us)   loss %   cpu %
 2026-09-16T12:00:00   wr01r01u02    134.6      0.089    32
 ```
 
-The floor plan on screen was read out of the hostnames: `wr01r01u01` is room
-`wr01`, rack `r01`, machine `u01`. It is a stand-in — load a real `.dc` file
-and it takes over, with every overlay still bound to the same hosts — but it
-is a stand-in you can open in **Edit layout** and save with **Download .dc**.
+The `build=1` in that URL is the one thing here that is not automatic: it asks
+for a floor plan to be read out of the hostnames, which is what **Build from
+data** in the Structure panel does. `wr01r01u01` is room `wr01`, rack `r01`,
+machine `u01`. Drop the parameter and the tables still load — there is simply
+nothing to paint them on until you load a `.dc` file or press that button.
+What it builds is an ordinary layout: **Edit layout** opens it and **Download
+.dc** saves it to correct by hand.
 
 ## What each file is here to show
 
@@ -53,3 +56,9 @@ rows twice, so a file that is appended to all day is safe to read all day. Set
 **last N records per file** to read only the end of it — the header, the
 comments and any `!test` lines are kept whatever their age, so the column names
 and units survive.
+
+To keep more than the tail can see at once, switch the pass from *replace what
+it brought* to **add the rows since last time**: each pass then takes only the
+records that were not in the last read and adds them to what is loaded. Read
+the last 200 rows every ten seconds and the view still accumulates the whole
+run.
