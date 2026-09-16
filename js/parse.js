@@ -617,6 +617,24 @@ function buildLinks(rules, model) {
 
 // ---------------------------------------------------------------------- main
 
+/**
+ * Does this text open like a floor plan?
+ *
+ * For a file whose *name* says nothing -- no extension, or one this viewer
+ * does not know -- so that `floor` is read as the layout it is rather than as
+ * a results file that turns out to hold nothing. Deliberately narrow: a
+ * layout's root line, and nothing else. Every other file keeps being read the
+ * way its contents say, which is what makes the name not matter.
+ */
+export function looksLikeLayout(text) {
+  for (const raw of String(text || '').split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith('#')) continue;
+    return /^(dc|title)\s+\S/i.test(line);
+  }
+  return false;
+}
+
 export function parseLayout(text) {
   const warnings = [];
   const model = {

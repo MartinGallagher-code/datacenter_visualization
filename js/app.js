@@ -13,7 +13,7 @@
 
 import { compileQuery, applyFilter } from './filter.js';
 import { layout } from './layout.js';
-import { parseLayout } from './parse.js';
+import { looksLikeLayout, parseLayout } from './parse.js';
 import { Renderer, countDescendants } from './render.js';
 import {
   bindOverlay, clearOverlayCache, isStandardized, offScale, overlayValue, parseResults,
@@ -31,7 +31,8 @@ import { layoutFromHosts, matchesPattern, recordsSince, tailRecords } from './ts
 import { VERSION } from './version.js';
 import {
   classify, directoryFromDataTransfer, ensureRead, getFile, pathLabel, pickDirectory,
-  probeSizes, readDir, renderBrowser, supportsDirectoryPicker, treeFromFiles, walkPath,
+  namedAsData, probeSizes, readable, readDir, renderBrowser, supportsDirectoryPicker,
+  treeFromFiles, walkPath,
 } from './browse.js';
 
 const $ = (id) => document.getElementById(id);
@@ -618,7 +619,10 @@ const countSamples = (overlays) => {
  */
 function mergeGroupFor(name) {
   const at = String(name || '').lastIndexOf('/');
-  return `${at < 0 ? '' : name.slice(0, at + 1)}*.tsv`;
+  // The folder, not a guess at what the files in it are called: the tables of
+  // a dashboard are as often `today.log` or `run47` as `run.tsv`, and a group
+  // header naming an extension none of them has is a label that lies.
+  return `${at < 0 ? '' : name.slice(0, at + 1)}*`;
 }
 
 /**
@@ -1015,9 +1019,15 @@ async function pickFiles() {
     // whatever folder some other page on the origin used last.
     id: 'dc-layout-files',
     multiple: true,
+    // The dialog's own "All Files" option stays available beside this, which
+    // is what opens a table called `today.log` or `run47`: the extensions here
+    // are the common ones, not the readable ones.
     types: [{
       description: 'Layouts and results',
-      accept: { 'text/plain': ['.dc', '.layout', '.tsv', '.csv', '.txt', '.ndjson', '.json', '.results'] },
+      accept: {
+        'text/plain': ['.dc', '.layout', '.tsv', '.csv', '.txt', '.tab', '.ndjson',
+                       '.json', '.jsonl', '.results', '.log', '.dat', '.data', '.out'],
+      },
     }],
   };
   // A file handle starts the picker in the directory that holds it, which
@@ -1083,7 +1093,13 @@ async function ingestFiles(items) {
       note('warn', `${label}: could not be read — ${err.message}`);
       continue;
     }
-    const layout = isLayoutFile(file.name);
+    // The name settles it when the name says something -- `.dc`, or any of the
+    // extensions a data file is normally given. When it says nothing, the
+    // first line does: a file called `floor` that opens with `dc DC1` is a
+    // floor plan, and reading it as results would find nothing in it and say
+    // so about the wrong thing.
+    const layout = isLayoutFile(file.name)
+      || (!namedAsData(file.name) && looksLikeLayout(text));
     // What this file was opened through, so it can be opened again. A live
     // dashboard is these same files re-read on a timer, and a File object
     // handed over by the picker is a snapshot -- the handle behind it is what
@@ -1415,7 +1431,9 @@ async function rescanWatch() {
   for (const entry of entries) {
     if (entry.kind !== 'file') continue;
     if (!matchesPattern(entry.name, watch.pattern)) continue;
-    if (classify(entry.name) !== 'results') continue;
+    // The pattern the user typed is what decides here -- `*.log` means those
+    // files. Only something that cannot be text at all is refused.
+    if (classify(entry.name) === 'layout' || !readable(entry.name)) continue;
     found.set(pathLabel(path, entry.name), entry);
   }
   watch.count = found.size;

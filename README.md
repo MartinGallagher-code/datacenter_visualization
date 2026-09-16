@@ -713,6 +713,13 @@ http://localhost:8000/?build=1&results=examples/live/room-wr01.tsv
 
   is **one** metric, on one host, with three samples — not three metrics
   called 1, 2 and 3.
+- **The name does not matter.** Which reader a file gets is worked out from
+  what is inside it, so a table written to `today.log`, `metrics.dat` or a
+  file with no extension at all is the same table it would be in `run.tsv`.
+  The Files panel lists the usual data extensions by default and everything
+  else behind **all files** — but it will open anything that could be text,
+  and only refuses what cannot be (`.png`, `.gz`, `.so`). Going the other way,
+  a floor plan called `floor` that opens with `dc DC1` is read as a layout.
 - **The header is optional.** Without one the columns are called `A`, `B`,
   `C`… — so give the file a header line, or a `!test` line per column, when
   the metric deserves a name. A header may be commented out
@@ -838,8 +845,11 @@ quietly left stale.
 - **Files** — the panel's **Open folder…** keeps a directory open beside the
   canvas, instead of a dialog that shows one and forgets it. Layouts and
   results are listed with their sizes (worth seeing before clicking a 300 MB
-  file); a click loads one — a `.dc` as the floor plan, a `.tsv` as overlays
-  added to what is already there — and a ✓ marks what is in. Subdirectories
+  file); a click loads one — a `.dc` as the floor plan, anything else as
+  overlays added to what is already there — and a ✓ marks what is in. The
+  extension only decides what is *listed*, never what can be opened: tick
+  **all files** and a `today.log`, a `metrics.dat` or a file with no extension
+  opens exactly the same way, because the format is read from the file. Subdirectories
   open, the breadcrumb goes back up, `⟳` re-reads a folder that has gained a
   file, and the name filter takes globs (`mx*.tsv`). Dropping a folder on the
   window opens it here. In Chromium the folder and the path inside it come
@@ -950,8 +960,8 @@ quietly left stale.
 ## Tests
 
 ```sh
-node tests/run.mjs        # 991 assertions over the modules
-node tests/browser.mjs    # 104 more, driving the page in Chromium
+node tests/run.mjs        # 1,003 assertions over the modules
+node tests/browser.mjs    # 109 more, driving the page in Chromium
 ```
 
 Both skip what they cannot run — `tests/run.mjs` needs python3 for the

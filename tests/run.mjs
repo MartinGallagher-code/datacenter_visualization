@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url';
 
 import { expand, subst } from '../js/expand.js';
 import { compileSelector } from '../js/select.js';
-import { parseLayout, isColor, LINK_OPTS, NUMBERS } from '../js/parse.js';
+import { parseLayout, isColor, looksLikeLayout, LINK_OPTS, NUMBERS } from '../js/parse.js';
 import {
   parseResults, bindOverlay, overlayValue, AGGREGATIONS, extent,
   recomputeStats, zScore, formatValue, unitFor, zRangeOf, paletteOf, invertedOf, overlayKey,
@@ -32,7 +32,7 @@ import { ramp, categoricalColor, colorFor, contrastInk } from '../js/palette.js'
 import { suggestionsFor } from '../js/hints.js';
 import { VERSION } from '../js/version.js';
 import {
-  classify, formatSize, matchesFilter, pathLabel, sortEntries, treeFromFiles,
+  classify, formatSize, matchesFilter, namedAsData, pathLabel, readable, sortEntries, treeFromFiles,
 } from '../js/browse.js';
 import {
   droppedLayoutsNotice, layoutNotice, prefixed, resultsFileNotice,
@@ -1413,6 +1413,30 @@ eq(classify('FLOOR.LAYOUT'), 'layout', 'extensions are matched case-insensitivel
 eq(classify('mx-run.tsv'), 'results', 'a .tsv is results');
 eq(classify('notes.md'), 'other', 'anything else is neither');
 eq(classify('archive.tsv.gz'), 'other', 'the extension has to be the last one');
+
+// The extension is a hint for the listing and never the decision. Which
+// reader a file gets is worked out from what is inside it, so a table written
+// to `today.log`, `metrics.dat` or a file with no extension at all is the
+// same table it would be in `today.tsv` -- and a viewer that will not open it
+// is telling somebody their own data file is not one, on the evidence of its
+// name.
+eq(classify('today.log'), 'results', 'a log is where a table usually ends up');
+eq(classify('metrics.dat'), 'results', 'and so is a .dat');
+eq(classify('run47'), 'results', 'a file with no extension is offered, not hidden');
+eq(classify('.gitignore'), 'other', 'though a dotfile is configuration, and stays out of the listing');
+ok(readable('notes.md') && readable('run47') && readable('weird.qqq'),
+   'anything that could be text can be opened');
+ok(!readable('photo.png') && !readable('archive.tsv.gz') && !readable('lib.so'),
+   'and only what cannot be text is refused');
+ok(namedAsData('run.tsv') && namedAsData('today.log'), 'a name can say "data"');
+ok(!namedAsData('run47') && !namedAsData('floor.dc'), 'or say nothing at all');
+
+// What a name that says nothing leaves to the contents: a floor plan called
+// `floor` is a floor plan, not a results file that turns out to hold nothing.
+ok(looksLikeLayout('# a comment first\ndc DC1 name="X"\n  room R1\n'), 'a layout opens with its root');
+ok(looksLikeLayout('title My Floor\ndc DC1\n'), 'or with a title line');
+ok(!looksLikeLayout('1\thost_1\t5\n'), 'a table does not');
+ok(!looksLikeLayout('temp_c\tu01\t26\n'), 'and neither does a results file');
 
 eq(formatSize(0), '0 B', 'zero bytes');
 eq(formatSize(1023), '1023 B', 'under a kilobyte stays in bytes');
