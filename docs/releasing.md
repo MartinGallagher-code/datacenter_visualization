@@ -47,26 +47,34 @@ in `js/` is not a major bump.
 2. `node tests/run.mjs --strict && node tests/browser.mjs --strict`.
    The version section is in the first one; it is faster to be told here.
 3. Merge to `main`.
-4. Tag the merge commit and push the tag:
+4. **Actions → release → Run workflow.** One click, nothing to type.
 
-   ```sh
-   git tag -a v1.0.0 -m 'Datacenter Layout Viewer 1.0.0'
-   git push origin v1.0.0
-   ```
+The workflow reads the version out of the tree, tags that commit, builds,
+re-checks that the wheel installs and reports the right number, creates the
+GitHub release with the changelog section as its notes, and publishes to
+PyPI.
 
-The `release` workflow then builds, re-checks that the tag matches the tree,
-installs the wheel and runs it, creates the GitHub release with the changelog
-section as its notes, and publishes to PyPI.
+It asks for nothing because there is nothing worth asking. The tag is
+*derived* from `python/dcviz/__init__.py`, never typed at it — a release that
+takes a typed version will eventually publish one the tree does not carry,
+and PyPI never lets a number be reused. The same rule is why re-running the
+button on an unbumped tree stops immediately: the tag already exists, so that
+version is already out, and it says so rather than failing at the upload
+twenty steps later.
 
-**Tag the commit that carries the version.** The workflow refuses a `v1.2.3`
-tag on a tree that says `1.0.0` rather than publishing the wrong number — PyPI
-never lets a version be reused, so a bad upload costs the number permanently.
+Pushing a `v*` tag by hand still works and does the same thing, with the tag
+checked against the tree instead of created from it:
 
-## PyPI, once
+```sh
+git tag -a v1.0.1 -m 'Datacenter Layout Viewer 1.0.1'
+git push origin v1.0.1
+```
+
+## PyPI, once — already done
 
 Publishing uses [trusted publishing](https://docs.pypi.org/trusted-publishers/),
-so no token is stored in this repository. It has to be registered once, at
-<https://pypi.org/manage/account/publishing/>:
+so no token is stored in this repository. It was registered once, at
+<https://pypi.org/manage/account/publishing/>, and needs nothing further:
 
 | Field | Value |
 |---|---|
@@ -76,14 +84,17 @@ so no token is stored in this repository. It has to be registered once, at
 | Workflow name | `release.yml` |
 | Environment name | `pypi` |
 
-For a project that does not exist on PyPI yet this is the *pending publisher*
-form on the same page; it becomes an ordinary publisher on the first upload.
-Then add a `pypi` environment under the repository's **Settings → Environments**
-(no secrets in it — it exists so the publish step can be gated and reviewed).
+Kept here because it is the thing to re-check if the `pypi` job ever fails
+with `invalid-publisher`: that error means the token was fine and no
+publisher matched it, so one of those five rows is off. The run's log prints
+the claims GitHub actually sent, which is what to compare them against. The
+two easy slips are the repository name (`datacenter_visualization`, the repo
+— not the package name) and the workflow, which is `release.yml` and not a
+path.
 
-Until that is done the `pypi` job fails and the two before it still pass, so
-the tag, the GitHub release and the artifacts all survive; re-run the job when
-the publisher exists.
+A failed publish loses nothing else: the tag, the GitHub release and the
+artifacts are all made before it, so fixing the row and re-running the one
+job finishes the release.
 
 ## What is *not* versioned
 

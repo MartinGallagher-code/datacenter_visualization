@@ -2343,6 +2343,21 @@ if (python.error) {
   eq((readme.match(/^Current version \*\*(\d+\.\d+\.\d+)\*\*/m) || [])[1], VERSION,
      'README.md states this version');
 
+  // The release workflow reads __version__ out of the same file this section
+  // does, with its own regex, in a place nothing else exercises until the
+  // one moment it matters. Two readers for one value again -- so run the
+  // workflow's reader here and require it to agree.
+  const release = readFileSync(join(root, '.github/workflows/release.yml'), 'utf8');
+  const reader = (release.match(/re\.search\(r'([^']+)', pathlib/) || [])[1];
+  ok(reader, 'release.yml reads the version with a regex this test can find');
+  eq((pyInit.match(new RegExp(reader.replace(/\\"/g, '"'))) || [])[1], VERSION,
+     "and that regex still finds it  (it runs at release time, where a miss is expensive)");
+
+  // The button has to stay a button. An input here is a thing to get wrong
+  // at the one moment nobody wants a puzzle.
+  ok(/^  workflow_dispatch:$/m.test(release), 'release.yml is dispatchable with no inputs');
+  ok(!/^\s+inputs:$/m.test(release), 'and asks for nothing when you click it');
+
   // Badges. A badge is a claim on the front page that nothing else checks,
   // which makes it the exact shape this section exists for: the version one
   // is served by PyPI and self-corrects, but the rest are typed, so they are

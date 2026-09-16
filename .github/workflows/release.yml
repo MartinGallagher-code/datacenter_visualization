@@ -1,28 +1,31 @@
 # Datacenter Layout Viewer — release workflow
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# A release is a tag. Pushing `v1.2.3` builds the package, checks that the
-# tag matches the version the tree actually carries, attaches the artifacts
-# to a GitHub release, and publishes to PyPI.
+# Releasing is one click: Actions -> release -> "Run workflow". Nothing to
+# type. The workflow reads the version out of the tree, tags that commit,
+# builds, makes the GitHub release and publishes to PyPI.
 #
-# The tag is not the source of the version -- python/dcviz/__init__.py is
-# (with js/version.js as its pinned twin; see the note in that file). The tag
-# is checked against it rather than injected into it, because a build that
-# takes its version from whatever ref triggered it will happily publish
-# 1.2.3 from a tree that says 1.0.0, and PyPI will never let that number be
-# reused.
+# It asks for nothing because there is nothing it could sensibly ask. The
+# version lives in python/dcviz/__init__.py (with js/version.js as its pinned
+# twin -- see the note in that file), so the tag is *derived* from the tree,
+# never typed at it and never taken from whatever ref triggered the run. A
+# release that took a typed version would happily publish 1.2.3 from a tree
+# that says 1.0.1, and PyPI never lets a number be reused.
+#
+# Pushing a `v*` tag by hand still works and does the same thing; the tag is
+# then checked against the tree instead of created from it.
+#
+# So the whole procedure is: bump the version (four files -- see
+# docs/releasing.md), merge to main, click Run workflow.
 #
 # PyPI publishing uses trusted publishing (OIDC): no token is stored here.
-# It needs one piece of setup, once, at
+# It needed one piece of setup, once, at
 # https://pypi.org/manage/account/publishing/ --
 #   PyPI project:     datacenter-layout-viewer
 #   Owner:            MartinGallagher-code
 #   Repository:       datacenter_visualization
 #   Workflow:         release.yml
 #   Environment:      pypi
-# Until that exists the publish step fails and everything before it -- the
-# build, the version check, the GitHub release -- still succeeds, so the
-# release is not lost.
 
 name: release
 
@@ -30,10 +33,6 @@ on:
   push:
     tags: ['v*']
   workflow_dispatch:
-    inputs:
-      tag:
-        description: 'Existing tag to build (e.g. v1.0.0)'
-        required: true
 
 permissions:
   contents: read
@@ -42,12 +41,15 @@ jobs:
   build:
     name: build and verify
     runs-on: ubuntu-latest
+    permissions:
+      contents: write          # to create the tag when run from the button
     outputs:
-      version: ${{ steps.check.outputs.version }}
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0       # tags, so an already-released version is caught
       - uses: actions/setup-node@v5
         with:
           node-version: '22'
@@ -55,24 +57,56 @@ jobs:
         with:
           python-version: '3.11'
 
-      # The drift guards: js/version.js, python/dcviz/__init__.py, the
-      # tools' --version and the newest CHANGELOG heading all have to agree
-      # before anything is built. This is the last moment a mismatch is free
-      # to fix.
+      # The drift guards: js/version.js, python/dcviz/__init__.py, the tools'
+      # --version, the README line and the newest CHANGELOG heading all have
+      # to agree before anything is built. This is the last moment a mismatch
+      # is free to fix.
       - run: node tests/run.mjs --strict
 
-      - name: The tag is the version the tree carries
-        id: check
+      - name: Read the version out of the tree
+        id: version
         run: |
           version=$(python -c "import re,pathlib; print(re.search(r'__version__ = \"([^\"]+)\"', pathlib.Path('python/dcviz/__init__.py').read_text()).group(1))")
-          tag='${{ inputs.tag || github.ref_name }}'
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          if [ "v$version" != "$tag" ]; then
-            echo "::error::tag $tag but the tree says $version -- tag the commit that carries the version, or bump the version first"
+          echo "tag=v$version"    >> "$GITHUB_OUTPUT"
+          echo "the tree says $version"
+          grep -q "^## $version " CHANGELOG.md \
+            || { echo "::error::CHANGELOG.md has no '## $version' entry -- add one before releasing"; exit 1; }
+
+      # Two ways in, one rule: the tag and the tree must end up agreeing.
+      # From the button there is no tag yet, so make it. From a pushed tag
+      # there is, so check it.
+      - name: Tag it
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            if [ "$GITHUB_REF_NAME" != "$TAG" ]; then
+              echo "::error::pushed tag $GITHUB_REF_NAME but the tree says $VERSION -- tag the commit that carries the version, or bump the version first"
+              exit 1
+            fi
+            echo "released from the pushed tag $TAG"
+            exit 0
+          fi
+
+          # A version that is already tagged has already been released, and
+          # PyPI would refuse the upload at the very end of the run. Say so
+          # now, and say what to do about it.
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "::error::$TAG already exists -- $VERSION is released. Bump the version (see docs/releasing.md) and run this again."
             exit 1
           fi
-          grep -q "^## $version " CHANGELOG.md \
-            || { echo "::error::CHANGELOG.md has no '## $version' entry"; exit 1; }
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "Datacenter Layout Viewer $VERSION"
+          # This push does not start a second run of this workflow: GitHub
+          # refuses to trigger workflows from a GITHUB_TOKEN push, which is
+          # what keeps one click from becoming two releases. Do not "fix"
+          # this by pushing with a PAT.
+          git push origin "$TAG"
+          echo "tagged $TAG at $(git rev-parse --short HEAD)"
 
       - name: Build
         run: |
@@ -85,7 +119,7 @@ jobs:
           python -m venv /tmp/env
           /tmp/env/bin/pip install dist/*.whl
           test "$(/tmp/env/bin/dcviz --version | head -1)" \
-             = "dcviz (Datacenter Layout Viewer) ${{ steps.check.outputs.version }}"
+             = "dcviz (Datacenter Layout Viewer) ${{ steps.version.outputs.version }}"
           test -f "$(/tmp/env/bin/dcviz path)/js/app.js"
 
       - uses: actions/upload-artifact@v4
@@ -101,8 +135,6 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v5
-        with:
-          ref: ${{ inputs.tag || github.ref }}
       - uses: actions/download-artifact@v4
         with:
           name: dist
@@ -130,7 +162,7 @@ jobs:
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ inputs.tag || github.ref_name }}
+          TAG: ${{ needs.build.outputs.tag }}
         run: |
           gh release create "$TAG" dist/* \
             --repo "${{ github.repository }}" \
