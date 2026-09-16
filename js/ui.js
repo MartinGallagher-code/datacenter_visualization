@@ -298,6 +298,18 @@ function overlayCard(state, overlay, actions) {
   const body = el('div', 'overlay-body');
   const grid = el('div', 'grid2');
 
+  // The name to type at it. A metric is called whatever wrote the file, and
+  // the filter box reads a bare word -- so `iperf Mb/s (out)` is untypeable
+  // there, and guessing what it folds to is not a thing anyone should have to
+  // do. Printed here, one click away from being in the box.
+  grid.append(el('label', null, 'filter as'));
+  const slug = el('button', 'overlay-slug', overlay.slug);
+  slug.title = `Add has:${overlay.slug} to the filter, showing only what this metric measured. `
+    + `The same name takes a comparison: ${overlay.slug}>10, ${overlay.slug}!=pass.`
+    + (overlay.slug === overlay.name.toLowerCase() ? '' : `  (the metric itself is "${overlay.name}")`);
+  slug.addEventListener('click', () => actions.appendFilter(`has:${overlay.slug}`));
+  grid.append(slug);
+
   grid.append(el('label', null, 'combine'));
   if (overlay.numeric) {
     const agg = el('select');
@@ -792,6 +804,200 @@ export function renderNotices(state, host, button, actions, onJump) {
       row.append(detail);
     }
     host.append(row);
+  }
+}
+
+
+// ------------------------------------------------------------------- build
+// Making a floor plan out of the names in the data. It is a button and never
+// anything else: the .dc file exists to say where the machines are, and a
+// viewer that guesses at that because a results file arrived would be
+// answering a question nobody asked. The button is here because the answer is
+// sometimes genuinely useful -- a fleet whose hostnames carry their position,
+// a first look at data whose floor plan is not written yet, or a starting
+// point to save with Download .dc and correct by hand.
+
+export function renderBuild(state, host, actions) {
+  if (!host) return;
+  host.textContent = '';
+
+  const loaded = state.rawOverlays.size > 0;
+  const built = !!state.autoLayout;
+  const empty = !state.model.all.length;
+
+  if (!loaded && empty) {
+    host.append(el('p', 'muted', 'No floor plan. Load a .dc file, or load results and build one '
+      + 'from the names in them.'));
+    return;
+  }
+  if (!loaded) return;                    // a floor plan and nothing to compare it to
+
+  const bar = el('div', 'btnrow');
+  const armed = !!state.buildArmed;
+  const build = el('button', armed ? 'danger' : null,
+    armed ? 'Replace the loaded floor plan?' : built ? 'Rebuild from data' : 'Build from data');
+  build.title = built
+    ? 'Build the plan again from the names in the data as it stands now'
+    : empty
+      ? 'Read a floor plan out of the hostnames in the loaded data: the last part of a name '
+        + 'is the machine, the part before it its rack, then its row, and the rest its room. '
+        + 'A guess, and a starting point — Download .dc in the editor keeps it.'
+      : 'Replace the floor plan you loaded with one read out of the hostnames in the data. '
+        + 'The file itself is untouched and one click away in Files.';
+  build.addEventListener('click', () => actions.buildLayout({ confirmed: armed }));
+  bar.append(build);
+
+  if (built) {
+    const drop = el('button', null, 'Clear');
+    drop.title = 'Throw the built plan away. The data stays loaded.';
+    drop.addEventListener('click', () => actions.dropBuiltLayout());
+    bar.append(drop);
+  }
+  host.append(bar);
+
+  if (built) {
+    host.append(el('p', 'muted', 'Built from the data — it follows new hosts as they arrive, '
+      + 'and a .dc file you load replaces it.'));
+    return;
+  }
+
+  if (empty) {
+    host.append(el('p', 'muted', 'No floor plan yet: the data is loaded and there is nothing '
+      + 'to paint it on. Load a .dc file, or build one from the names.'));
+    return;
+  }
+
+  // The number worth showing beside the button: how much of the data has
+  // nowhere to land on the floor plan that is loaded. A results file written
+  // against a different layout reads as "nothing was measured", and this is
+  // the one place that says otherwise before every card has to be opened.
+  let unresolved = 0;
+  for (const overlay of state.overlays.values()) unresolved += overlay.unresolved.length;
+  if (unresolved) {
+    host.append(el('p', 'muted', `${unresolved.toLocaleString()} `
+      + `target${unresolved === 1 ? '' : 's'} in the data ${unresolved === 1 ? 'is' : 'are'} `
+      + 'not on this floor plan.'));
+  }
+}
+
+// -------------------------------------------------------------------- live
+// The dashboard controls: reload the loaded files on a timer, read only the
+// end of each one, and follow a folder so a file that appears joins in. Every
+// one of these is off until it is switched on -- a viewer that starts reading
+// the disk on a timer because a file was once opened would be a surprise, and
+// this panel is where the surprise is traded for a switch.
+
+const LIVE_MODES = [
+  ['replace', 'replace what it brought'],
+  ['append', 'add the rows since last time'],
+];
+
+const clockTime = (at) => {
+  if (!at) return '';
+  try {
+    return new Date(at).toLocaleTimeString();
+  } catch {
+    return '';
+  }
+};
+
+export function renderLive(state, host, actions) {
+  if (!host) return;
+  host.textContent = '';
+  const live = state.live;
+
+  const row = el('div', 'live-row');
+  const auto = el('label', 'chk');
+  const box = el('input');
+  box.type = 'checkbox';
+  box.checked = !!live.on;
+  box.addEventListener('change', () => actions.setLive(box.checked));
+  auto.append(box, el('span', null, 'reload every'));
+  auto.title = 'Read every loaded results file again, on a timer. The same reader and the '
+    + 'same rules as opening it by hand: a file replaces what it brought last time, so a '
+    + 'log being appended to does not count its rows twice.';
+  row.append(auto);
+
+  const secs = el('input', 'live-num');
+  secs.type = 'number';
+  secs.min = '1';
+  secs.max = '3600';
+  secs.value = String(live.seconds);
+  secs.title = 'Seconds between passes. A pass still running when the next one is due is '
+    + 'simply the pass that is running: they never overlap.';
+  secs.addEventListener('change', () => actions.setLiveSeconds(secs.value));
+  row.append(secs, el('span', 'muted', 's'));
+  host.append(row);
+
+  const tailRow = el('div', 'live-row');
+  tailRow.append(el('span', null, 'last'));
+  const tail = el('input', 'live-num');
+  tail.type = 'number';
+  tail.min = '0';
+  tail.value = live.tail ? String(live.tail) : '';
+  tail.placeholder = 'all';
+  tail.title = 'Read only the last N rows of each file, the way tail -n does. Headers, '
+    + 'comments and !test lines are kept whatever their age, so the units and the column '
+    + 'names survive scrolling off the top. Empty means the whole file.';
+  tail.addEventListener('change', () => actions.setLiveTail(tail.value));
+  tailRow.append(tail, el('span', 'muted', 'records per file'));
+  host.append(tailRow);
+
+  const modeRow = el('div', 'live-row');
+  modeRow.append(el('span', null, 'and'));
+  const mode = el('select', 'live-mode');
+  for (const [value, label] of LIVE_MODES) {
+    const opt = el('option', null, label);
+    opt.value = value;
+    if (value === (live.mode || 'replace')) opt.selected = true;
+    mode.append(opt);
+  }
+  mode.title = 'What a pass does with what it reads.\n\n'
+    + '"replace what it brought" reads each file again from scratch: the file is the truth, '
+    + 'which is what a file rewritten in place needs, and what keeps a growing log from '
+    + 'counting its rows twice.\n\n'
+    + '"add the rows since last time" takes only the records that were not in the last read — '
+    + 'found by looking for the end of that read inside this one — and adds them to what is '
+    + 'loaded. That is how a view longer than the tail accumulates from a log that is only ever '
+    + 'read at its end. A file that cannot be lined up (rewritten, or grown by more than the '
+    + 'tail) is replaced instead, and the report says so.';
+  mode.addEventListener('change', () => actions.setLiveMode(mode.value));
+  modeRow.append(mode);
+  host.append(modeRow);
+
+  const bar = el('div', 'btnrow');
+  const now = el('button', null, live.busy ? 'Reading…' : 'Reload now');
+  now.disabled = !!live.busy;
+  now.title = 'Read every loaded results file again, once';
+  now.addEventListener('click', () => actions.refreshNow());
+  bar.append(now);
+  host.append(bar);
+
+  if (state.watch) {
+    const watched = el('div', 'live-watch');
+    const where = [...state.watch.path].join('/') || 'the open folder';
+    watched.append(el('span', 'live-watch-name', `${where}/${state.watch.pattern}`));
+    const stop = el('button', 'overlay-x', '×');
+    stop.title = 'Stop following this folder. Nothing already loaded is unloaded.';
+    stop.addEventListener('click', () => actions.stopWatch());
+    watched.append(stop);
+    watched.title = `Every file here matching ${state.watch.pattern} is part of the dashboard. `
+      + 'The folder is listed again on every pass, so a file that appears joins it and one '
+      + 'that disappears takes its samples with it.';
+    host.append(watched);
+  }
+
+  const feeding = [...state.sources.values()].filter((s) => !s.layout).length;
+  const bits = [];
+  bits.push(feeding ? `${feeding} file${feeding === 1 ? '' : 's'}` : 'no files loaded');
+  if (state.watch) bits.push(`${state.watch.count} matching`);
+  if (live.at) bits.push(`read ${clockTime(live.at)}`);
+  host.append(el('p', 'muted live-status', bits.join(' · ')));
+
+  if (live.error) host.append(el('p', 'warn', live.error));
+  if (!feeding && !state.watch) {
+    host.append(el('p', 'muted',
+      'Load a results file, or open a folder in Files and use “Load all” there, and this reloads it.'));
   }
 }
 
