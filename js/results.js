@@ -17,8 +17,15 @@
 // The same (test, target) may appear any number of times. Duplicates are kept
 // as individual samples and reduced at draw time by the aggregation the user
 // picks in the UI.
+//
+// Two other shapes land in the same overlays: JSON (below), and the wide TSV
+// table tsv.js reads -- `Timestamp  host  var1 var2 ...`, one column per
+// metric, which is what monitoring already writes. Which reader runs is
+// worked out from the file, never declared in it, and the format above is not
+// touched by either.
 
 import { PALETTE_NAMES } from './palette.js';
+import { looksLikeWideTsv, readWideTsv, slugify } from './tsv.js';
 
 /**
  * Smallest and largest of an array, in one pass.
@@ -170,6 +177,10 @@ const TEST_KEYS = {
   unit: null,
   label: null,
   short: null,
+  // The name the filter box takes for this metric. One is always derived from
+  // the test's name; declaring it is for when the derived one is not the name
+  // the people reading the floor already use.
+  slug: null,
   min: NUM_ANY,
   max: NUM_ANY,
   // Ten is already more digits than a floor plan can show. The ceiling is not
@@ -238,20 +249,53 @@ function checkDomainMeta(meta, name, where, warnings) {
  * Parse one or more results files into overlay definitions.
  * Returns a Map of test name -> overlay { name, samples: [{target, value, meta}], meta }.
  *
- * Accepts the plain-text format above, or the JSON forms below when the file
- * starts with `{` or `[`. Nothing has to declare which it is: a results file
- * that begins with a brace cannot be a `test target value` line.
+ * Accepts the plain-text format above, the JSON forms below when the file
+ * starts with `{` or `[`, and the wide TSV table tsv.js describes when the
+ * file is one. Nothing has to declare which it is: a results file that begins
+ * with a brace cannot be a `test target value` line, and one whose first two
+ * columns are a timestamp and a host cannot be one either.
+ *
+ * @param opts { group } -- the source the overlays are filed under when it is
+ *   not the file itself. Wide TSV files in one folder are one dashboard, so
+ *   they share a group and a column of the same name in two of them is one
+ *   overlay; every sample still carries the file it came from, which is what
+ *   lets one file of the set be re-read on its own.
  */
-export function parseResults(text, into = new Map(), warnings = [], source = '') {
+export function parseResults(text, into = new Map(), warnings = [], source = '', opts = {}) {
   // `source` rides along on the map so ensureOverlay can tag what it creates
   // without threading a parameter through every JSON and text path below.
   into.source = source;
   try {
+    if (looksLikeWideTsv(text)) {
+      into.source = opts.group || source;
+      return parseWideResults(text, into, warnings, source);
+    }
     return looksLikeJson(text) ? parseJsonResults(text, into, warnings)
                                : parseTextResults(text, into, warnings);
   } finally {
     into.source = '';
   }
+}
+
+/**
+ * A wide TSV read into the same overlays every other format produces. One
+ * column becomes one metric; the heading is its label, a unit in brackets its
+ * unit, and the slug the filter box takes is computed here so two files that
+ * spell a column the same way agree on it.
+ */
+function parseWideResults(text, into, warnings, file) {
+  const onDirective = (line, where) => applyDirective(line, into, warnings, where);
+  readWideTsv(text, (name, sample, column) => {
+    const overlay = ensureOverlay(into, name);
+    if (!overlay.meta.unit && column.unit) overlay.meta.unit = column.unit;
+    overlay.wide = true;
+    // Which file last put something in here. Several files share one overlay
+    // in this format, so "what did this file bring" cannot be answered by the
+    // overlay's source the way it is for every other format.
+    overlay.lastFile = file;
+    overlay.samples.push(sample);
+  }, warnings, { where: 'tsv line', file, onDirective });
+  return into;
 }
 
 /** First meaningful character, ignoring blank lines and `#` comments. */
@@ -264,37 +308,50 @@ function looksLikeJson(text) {
   return false;
 }
 
+/**
+ * One `!test` line, wherever it was written.
+ *
+ * Its own function because a wide TSV may carry these too: a table that wants
+ * a unit, a palette or a range on one of its columns says so in the syntax
+ * this format already has, rather than in a second one invented for tables.
+ * The checks, the warnings and their wording are then the same line for line,
+ * which is the point of sharing the code rather than the shape.
+ */
+function applyDirective(line, into, warnings, where) {
+  const tokens = splitFields(line.slice(1));
+  const directive = (tokens.shift() || '').toLowerCase();
+  // A mistyped directive used to vanish, taking every setting on the line
+  // with it -- and looking exactly like a metric that ignored its metadata.
+  if (directive !== 'test') {
+    warnings.push(`${where}: unknown directive "!${directive}" -- only !test is understood`);
+    return;
+  }
+  const name = tokens.shift();
+  if (!name) {
+    warnings.push(`${where}: !test needs the name of the test it describes`);
+    return;
+  }
+  const overlay = ensureOverlay(into, name);
+  const bare = [];
+  const declared = parseMetaTokens(tokens, (t) => bare.push(t)) || {};
+  checkTestMeta(declared, name, where, warnings);
+  Object.assign(overlay.meta, declared);
+  if (declared.min !== undefined || declared.max !== undefined) {
+    checkDomainMeta(overlay.meta, name, where, warnings);
+  }
+  if (bare.length) {
+    warnings.push(`${where}: ignored ${quoteList(bare)} on !test ${name} -- `
+      + 'a value containing a space has to be quoted, as label="Inlet temp"');
+  }
+}
+
 function parseTextResults(text, into, warnings) {
   text.split(/\r?\n/).forEach((raw, i) => {
     const line = raw.trim();
     if (!line || line.startsWith('#')) return;
 
     if (line.startsWith('!')) {
-      const tokens = splitFields(line.slice(1));
-      const directive = (tokens.shift() || '').toLowerCase();
-      // A mistyped directive used to vanish, taking every setting on the line
-      // with it -- and looking exactly like a metric that ignored its metadata.
-      if (directive !== 'test') {
-        warnings.push(`results line ${i + 1}: unknown directive "!${directive}" -- only !test is understood`);
-        return;
-      }
-      const name = tokens.shift();
-      if (!name) {
-        warnings.push(`results line ${i + 1}: !test needs the name of the test it describes`);
-        return;
-      }
-      const overlay = ensureOverlay(into, name);
-      const bare = [];
-      const declared = parseMetaTokens(tokens, (t) => bare.push(t)) || {};
-      checkTestMeta(declared, name, `results line ${i + 1}`, warnings);
-      Object.assign(overlay.meta, declared);
-      if (declared.min !== undefined || declared.max !== undefined) {
-        checkDomainMeta(overlay.meta, name, `results line ${i + 1}`, warnings);
-      }
-      if (bare.length) {
-        warnings.push(`results line ${i + 1}: ignored ${quoteList(bare)} on !test ${name} -- `
-          + 'a value containing a space has to be quoted, as label="Inlet temp"');
-      }
+      applyDirective(line, into, warnings, `results line ${i + 1}`);
       return;
     }
 
@@ -565,6 +622,13 @@ export function bindOverlay(overlay, model) {
     name: overlay.name,
     label: meta.label || overlay.name,
     short: meta.short || overlay.name,
+    // The name the filter box can actually take. A metric is named by whatever
+    // wrote the file -- `iperf Mb/s (out)`, `RTT p99 (us)` -- and the filter's
+    // grammar reads a bare word, so a name with a space in it is two terms and
+    // one with a slash is a glob. The slug is that name with those characters
+    // folded to underscores; the card prints it, and the filter accepts either.
+    slug: slugify(meta.slug || overlay.name),
+    wide: !!overlay.wide,
     unit: meta.unit || '',
     numeric,
     numericByEl,

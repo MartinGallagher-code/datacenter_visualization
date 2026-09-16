@@ -45,8 +45,14 @@ SPDX-FileCopyrightText: 2026 Martin J. Gallagher
       <div id="browser" class="browser"></div>
     </section>
 
+    <section class="block" id="live-block" data-section="live">
+      <h2>Live</h2>
+      <div id="live"></div>
+    </section>
+
     <section class="block" id="structure">
       <h2>Structure</h2>
+      <div id="build"></div>
       <div class="btnrow">
         <button data-collapse="expand">Expand all</button>
         <button data-collapse="rack">Collapse racks</button>
@@ -130,7 +136,10 @@ Insert template (above) drops in a commented starting point."></textarea>
 
 <div id="drop" class="dropzone" hidden><div>Drop <code>.dc</code> layout and <code>.tsv</code> results files</div></div>
 
-<input type="file" id="filepicker" multiple accept=".dc,.txt,.tsv,.csv,.results" hidden>
+<!-- No accept= filter: which reader a file gets is worked out from what is
+     inside it, so a table called today.log or run47 is as loadable as one
+     called run.tsv, and a filter here would hide it from the dialog. -->
+<input type="file" id="filepicker" multiple hidden>
 <input type="file" id="dirpicker" webkitdirectory directory multiple hidden>
 
 <script type="module" src="js/app.js"></script>

@@ -13,26 +13,93 @@ their shapes are not a promise.
 
 ## Unreleased
 
-### Changed
+- **A wide TSV table loads as it stands.** `Timestamp  host  var1  var2 …`,
+  tab-separated — the shape monitoring already writes — is read as a second
+  format, chosen per file and detected rather than declared. One column
+  becomes one metric; the header is optional (unnamed columns are `A`, `B`,
+  `C`…) and may be commented out; a bracketed or trailing-`%` unit in a
+  heading becomes the metric's unit; a blank cell is "not measured", never
+  zero. **The results format is untouched**: a file is only read as a table
+  when it could not be a results file — first field an instant, second a host,
+  and a real tab between them.
+  A table may carry the results format's own `!test` lines, checked exactly as
+  they are there, so a column can be given a unit, a palette or a range
+  without a second syntax for it.
+- **The extension no longer decides what a file is.** Which reader a file gets
+  is worked out from what is inside it, so a table written to `today.log`,
+  `metrics.dat` or a file with no extension at all loads exactly as it would
+  from `run.tsv` — by drop, from the pickers (the `accept=` filter that hid
+  them is gone), from the Files panel, and from **Load all**, where the
+  pattern you type is what decides. Only a name that says the bytes are not
+  text (`.png`, `.gz`, `.so`) is refused. Going the other way, a floor plan
+  called `floor` that opens with `dc DC1` is read as a layout rather than as a
+  results file that turns out to hold nothing. A merged group is now named
+  after the folder it came from (`runs/*`) rather than `*.tsv`, which was a
+  label that lied about files not called that.
+- **A stamp is not always a date, and a table is not always tab-separated.**
+  The first column may be a plain number counting the passes — `1  host_1  5`
+  — and a row with no tab in it is split on runs of spaces. Read strictly,
+  such a file fell through to the results format, where the first field is the
+  *test name*: every stamp in it became a metric of its own holding one
+  sample. The loose reading is safe because the pair is what decides — a
+  number in the first field and a name in the second is a shape
+  `<test> <target> <value>` does not have — and every results file in the
+  repository is now checked against the format it actually is, so loosening
+  detection again cannot quietly re-read one that works.
+- **A floor plan can be built from the data, on request.** **Build from data**
+  in the Structure panel reads one out of the names in *any* loaded results —
+  a results target is already a path through a floor plan somebody wrote, rows
+  and all: `DH1/A/R01/u05` is a room, a row, a rack and a machine, and
+  `wr12r06u15` and `rack01-server05` are read the same way. A domain the hosts
+  share is dropped rather than read as racks. Nothing builds one on its own:
+  the `.dc` file is what says where the machines are. What is built is an
+  ordinary layout (`dc DATA … +generated`) that the editor opens and
+  **Download .dc** saves; while it stands it follows new hosts as they arrive,
+  **Clear** takes it away, and loading a `.dc` file replaces it with every
+  overlay still bound. Replacing a floor plan that came from a file takes two
+  clicks. `&build=1` in the URL does the same on load, and the panel also says
+  how many targets in the data are not on the floor plan that is loaded.
+- **A host may be a flow.** `wr01r01u05 -> wr01r02u09` in the host column
+  measures the path between two machines: the sample belongs to where it
+  started, with the far end as its `peer=`, which is what **draw measured
+  flows** paints and `peer=` filters. `->`, `=>` and `→` all work.
+- **Tables in one folder are one dashboard.** One file per host, per metric or
+  per hour: a column of the same name in two of them is one metric carrying
+  the samples of both. Every other format still keeps a file's metrics to
+  itself, and two folders stay two dashboards.
+- **Live reload.** A new **Live** panel re-reads every loaded results file on a
+  timer, optionally only the **last N records** of each (`tail -n`, with
+  headers, comments and `!test` lines kept whatever their age). **Load all** in
+  the Files panel loads every file in the open folder matching the name filter
+  and then follows the folder, so a file written while the dashboard is up
+  joins it and one that disappears takes its samples with it. Nothing reads on
+  a timer until it is switched on.
+- **A pass can add instead of replacing.** *Add the rows since last time*
+  takes only the records a file has gained — found by looking for the end of
+  the last read inside this one, the last few records matched as a block — and
+  adds them to what is loaded, so the view accumulates past the tail: read the
+  last 500 rows every ten seconds, keep the whole hour. A file that cannot be
+  lined up (rewritten from the top, or grown by more than the tail being read)
+  is replaced instead and the report says so, rather than counting rows twice.
+  Past 400,000 accumulated samples on a metric the oldest are dropped, making
+  it a rolling window.
+- **Every metric prints the name the filter box can take.** A metric is called
+  whatever wrote the file, and the filter reads a bare word — so `iperf Mb/s
+  (out)` was two terms and a glob, untypeable at the metric it names. Each card
+  now shows a **filter as** name (`iperf_mb_s_out`) above **combine**: click it
+  to filter by that metric, or type it into a comparison. The original name
+  still works where it can be typed; `slug=` on a `!test` line overrides the
+  derived one.
 
-- **Licensing and attribution are now identical across every repository in
-  the suite.** The notice said the same thing eleven slightly different ways —
+- **Licensing and attribution are identical across every repository in the
+  suite.** The notice said the same thing eleven slightly different ways —
   different badge text, different `--version` wording, five styles of file
-  header, and in places a different holder or even a different licence. All of
-  it is now one form:
-  - **Holder:** `Martin J. Gallagher` everywhere (several places said
-    "Martin Gallagher", dropping the middle initial).
-  - **Licence:** `GPL-3.0-or-later` everywhere, with `LICENSE` and
-    `LICENSES/GPL-3.0-or-later.txt` the same verbatim FSF text in every repo.
-  - **File headers:** the two-line SPDX pair
-    (`SPDX-License-Identifier` then `SPDX-FileCopyrightText`), replacing the
-    `Copyright (C) …` variants and the long inline GPL notices.
-  - **`--version`:** the same five-line GNU-style block under every tool's own
-    name and version.
-  - **README:** the same licence badge and the same `## License` section.
-  - **REUSE:** a `REUSE.toml` of the same shape in every repo; `reuse lint`
-    passes in all of them.
-
+  header, and in places a different holder. It is one form now: the holder is
+  `Martin J. Gallagher`, the licence `GPL-3.0-or-later`, `LICENSE` and
+  `LICENSES/GPL-3.0-or-later.txt` the same verbatim FSF text everywhere, every
+  source file carrying the two-line SPDX header in place of the ten-line
+  inline GPL notice, and `dcviz`/`dcadd`/`dcimport` printing the same
+  five-line block as every sibling tool. `reuse lint` passes.
 - Releasing is one click. `release.yml`'s **Run workflow** button asked for a
   tag to build, which is a thing to get wrong at the one moment nobody wants
   a puzzle. It now takes no input at all: it reads the version out of the

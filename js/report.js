@@ -27,7 +27,7 @@ function detail(name, warnings) {
  * that carry the same test name are two overlays, never one -- so the case
  * worth spelling out is the quiet one: a file that produced nothing at all.
  */
-export function resultsFileNotice(name, { fresh, reloaded = 0, samples, warnings }) {
+export function resultsFileNotice(name, { fresh, reloaded = 0, samples, warnings, wide = false }) {
   const label = name || 'pasted results';
   const lines = detail(name, warnings);
 
@@ -44,9 +44,17 @@ export function resultsFileNotice(name, { fresh, reloaded = 0, samples, warnings
 
   const summary = `${label}: ${plural(fresh.length, 'metric')}, ${plural(samples, 'sample')}`;
   const notes = [];
+  // Which reader read it. A wide table's metrics are its column headings and
+  // are shared with the rest of the folder, so "one metric per column, and it
+  // may already have had samples in it" is the difference worth naming.
+  if (wide) notes.push('read as a wide TSV table, one metric per column');
   // Loading the same file twice replaces it rather than counting it twice,
   // which is worth saying: nothing was added the second time.
-  if (reloaded) notes.push(`re-read, replacing the ${plural(reloaded, 'metric')} it loaded before`);
+  if (reloaded) {
+    notes.push(wide
+      ? 're-read, replacing the rows it loaded before'
+      : `re-read, replacing the ${plural(reloaded, 'metric')} it loaded before`);
+  }
   // "warnings", not "lines skipped": a warning can be a line that could not be
   // read at all, or a token on a line that loaded fine, and calling the second
   // one a skipped line sends you looking for missing data that is right there.

@@ -19,7 +19,7 @@ import { fileURLToPath } from 'node:url';
 
 import { expand, subst } from '../js/expand.js';
 import { compileSelector } from '../js/select.js';
-import { parseLayout, isColor, LINK_OPTS, NUMBERS } from '../js/parse.js';
+import { parseLayout, isColor, looksLikeLayout, LINK_OPTS, NUMBERS } from '../js/parse.js';
 import {
   parseResults, bindOverlay, overlayValue, AGGREGATIONS, extent,
   recomputeStats, zScore, formatValue, unitFor, zRangeOf, paletteOf, invertedOf, overlayKey,
@@ -33,11 +33,16 @@ import { ramp, categoricalColor, colorFor, contrastInk } from '../js/palette.js'
 import { suggestionsFor } from '../js/hints.js';
 import { VERSION } from '../js/version.js';
 import {
-  classify, formatSize, matchesFilter, pathLabel, sortEntries, treeFromFiles,
+  classify, formatSize, matchesFilter, namedAsData, pathLabel, readable, sortEntries, treeFromFiles,
 } from '../js/browse.js';
 import {
   droppedLayoutsNotice, layoutNotice, prefixed, resultsFileNotice,
 } from '../js/report.js';
+import {
+  columnLetter, commonDomain, layoutFromHosts, looksLikeTime, looksLikeWideTsv, markOf,
+  matchesPattern, placeHost, readWideTsv, recordsSince, slugify, splitFlow, splitPreamble,
+  tailRecords, timeValue,
+} from '../js/tsv.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 let failures = 0;
@@ -585,6 +590,353 @@ eq(braced.get('temp_c').samples.length, 1, 'comment starting with { stays text')
   eq(anon.get('t').key, 't', 'and is keyed by the test name alone');
 }
 
+
+// ------------------------------------------------------------------ wide TSV
+// The second reader: a table of `Timestamp host var...`, which is what a
+// monitoring script already writes. Everything here is about telling it apart
+// from the results format without touching that format, and about the two
+// things the table can say that the results format cannot: an unnamed column,
+// and a host that is really a pair.
+
+// A name the filter box can take. Every one of these used to be untypeable at
+// the metric it names: a space is two terms, a slash is a glob, a leading
+// digit parses as a bare word.
+eq(slugify('iperf Mb/s (out)'), 'iperf_mb_s_out', 'spaces, a slash and brackets fold to one word');
+eq(slugify('RTT p99'), 'rtt_p99', 'and the case goes, since filter keys ignore it');
+eq(slugify('temp_c'), 'temp_c', 'a name that was already fine is left alone');
+eq(slugify('50th pct'), '_50th_pct', 'a leading digit gains an underscore, or the key is not a key');
+eq(slugify('%%%'), 'metric', 'a name of nothing but punctuation still has to be called something');
+eq(slugify(''), 'metric', 'and so does no name at all');
+ok(/^[A-Za-z_][\w.-]*$/.test(slugify('98.5 %ile / peak')), 'every slug is a key the filter can read');
+
+// Detection. This is the load-bearing part: read a results file as a table
+// and every column of it becomes a metric named after somebody's hostname.
+ok(looksLikeWideTsv('Timestamp\thost\ta\tb\n2026-09-16T12:00:00\th1\t1\t2\n'), 'a named header is a table');
+ok(looksLikeWideTsv('# Timestamp\thost\ta\n2026-09-16T12:00:00\th1\t1\n'), 'even commented out');
+ok(looksLikeWideTsv('2026-09-16T12:00:00\th1\t1\t2\n'), 'a timestamp and a host need no header');
+ok(looksLikeWideTsv('1757980800\th1\t1\t2\n'), 'epoch seconds count as a timestamp');
+ok(!looksLikeWideTsv('temp_c\tDH1/A/R01/u01\t26.1\trun=nightly-01\n'), 'a results line is not a table');
+ok(!looksLikeWideTsv('!test temp_c unit=C\ntemp_c\tu01\t26\n'), 'and neither is one with a !test line');
+ok(looksLikeWideTsv('!test rtt unit=ms\nTimestamp\thost\trtt\n2026-09-16T12:00:00\th1\t5\n'),
+   'though a !test line above a table does not make it one: the rows decide');
+ok(!looksLikeWideTsv('temp_c u01 26\n'), 'nor one written with spaces');
+ok(!looksLikeWideTsv('{"test":"a","target":"b","value":1}'), 'nor JSON');
+ok(!looksLikeWideTsv('2026-09-16T12:00:00\t1\t2\n'), 'a number where the host goes is not a host');
+
+// A stamp is not always a date. A script counts its passes as often as it
+// stamps them, and read strictly, `1  host_1  5` fell through to the results
+// format -- where the first field is the *test name*, so every stamp in the
+// file became a metric of its own, each holding one sample. The pair is what
+// makes the loose reading safe: a number in the first field and a name in the
+// second is a shape `<test> <target> <value>` does not have.
+ok(looksLikeWideTsv('1\thost_1\t5\n2\thost_1\t6\n'), 'a counter is a stamp, given a host beside it');
+ok(looksLikeWideTsv('1.5\thost_1\t5\n'), 'and so is a fractional one');
+ok(!looksLikeWideTsv('1\t2\t3\n'), 'but a number where the host goes is still not a host');
+ok(!looksLikeTime('1'), 'while "is this an instant" on its own stays a narrow question');
+
+// Tabs are what let a heading be `rtt (us)`; a row with no tab in it at all is
+// a table somebody typed or awk wrote, and refusing to read one is refusing
+// the format for the sake of a rule about it.
+ok(looksLikeWideTsv('1 host_1 5\n2 host_1 6\n'), 'a space-separated table is a table');
+ok(looksLikeWideTsv('Timestamp host rtt cpu\n1 host_1 5 40\n'), 'header and all');
+ok(!looksLikeWideTsv('temp_c u01 26.1\ntemp_c u02 27.4\n'), 'and a results file written with spaces still is one');
+ok(!looksLikeWideTsv('temp_c DH1/A/R01/u01 26.1 run=nightly-01\n'), 'extra key=value fields included');
+ok(!looksLikeTime('26.1'), 'a reading is not an instant');
+ok(!looksLikeTime('123456789'), 'and nine digits is just a number');
+eq(timeValue('1757980800'), 1757980800000, 'epoch seconds become milliseconds');
+eq(timeValue('nonsense'), null, 'and a stamp that is not one says so');
+
+eq([0, 1, 25, 26, 27].map(columnLetter), ['A', 'B', 'Z', 'AA', 'AB'], 'unnamed columns get letters');
+
+// The whole of the reported case, end to end: three rows, one host, a counter
+// for a stamp and no header. One metric with three samples -- not three
+// metrics with one each, and not a metric named after the time.
+{
+  for (const [how, text] of [
+    ['tab-separated', '1\thost_1\t5\n2\thost_1\t6\n3\thost_1\t3\n'],
+    ['space-separated', '1 host_1 5\n2 host_1 6\n3 host_1 3\n'],
+  ]) {
+    const rows = [];
+    const read = readWideTsv(text, (name, sample) => rows.push({ name, sample }), []);
+    eq(read.columns.map((c) => c.name), ['A'], `${how}: one unnamed column is one metric`);
+    eq(read.hosts, ['host_1'], `${how}: one host`);
+    eq(rows.map((r) => r.sample.value), [5, 6, 3], `${how}: three samples of it`);
+    eq(rows.map((r) => r.sample.meta.time), ['1', '2', '3'],
+       `${how}: with the stamp kept on each, since it is data and not a name`);
+  }
+
+  // The arrow survives being split on whitespace, which it does not do by
+  // itself: `host_1 -> host_2` is three fields to `split(/\s+/)`.
+  const flows = [];
+  readWideTsv('1 host_1 -> host_2 5\n', (name, sample) => flows.push(sample), []);
+  eq(flows[0].target, 'host_1', 'a space-separated flow still starts where it starts');
+  eq(flows[0].meta.peer, 'host_2', 'and still names its far end');
+}
+
+eq(splitFlow('a -> b'), { host: 'a', peer: 'b', via: [] }, 'an arrow is a pair');
+eq(splitFlow('a→b'), { host: 'a', peer: 'b', via: [] }, 'whichever arrow is typed');
+eq(splitFlow('a -> b -> c').via, ['b'], 'a path keeps its hops');
+eq(splitFlow('plain'), { host: 'plain', peer: '' }, 'and a host on its own is still a host');
+
+{
+  const warnings = [];
+  const rows = [];
+  const read = readWideTsv([
+    '# a script writing a row per host per pass',
+    'Timestamp\thost\trtt (us)\tloss %\tverdict',
+    '2026-09-16T12:00:00\twr01r01u01\t184.2\t0.01\tpass',
+    '2026-09-16T12:00:10\twr01r01u02\t191\t\tfail',
+    '2026-09-16T12:00:20\twr01r01u01 -> wr01r02u01\t410\t1.2\tpass',
+  ].join('\n'), (name, sample, column) => rows.push({ name, sample, column }), warnings);
+
+  eq(warnings, [], 'a well-formed table reads without a word');
+  eq(read.hosts, ['wr01r01u01', 'wr01r01u02', 'wr01r02u01'], 'every host, the far end of a flow included');
+  eq(read.columns.map((c) => c.name), ['rtt', 'loss %', 'verdict'], 'one metric per column');
+  eq(read.columns.map((c) => c.unit), ['us', '%', ''], 'a bracketed unit and a trailing % are units');
+  eq(read.columns.map((c) => c.slug), ['rtt', 'loss', 'verdict'], 'and each carries its filter name');
+  eq(rows.length, 8, 'a blank cell is not a sample: eight values in nine cells');
+  eq(rows[0].sample.value, 184.2, 'numbers read as numbers');
+  eq(rows[2].sample.numeric, false, 'and a verdict stays a verdict');
+  eq(rows[0].sample.meta.time, '2026-09-16T12:00:00', 'every sample keeps its stamp');
+  eq(rows[5].sample.target, 'wr01r01u01', 'a flow belongs to the host it started at');
+  eq(rows[5].sample.meta.peer, 'wr01r02u01', 'with the far end as its peer, which is what draws it');
+
+  // A header that arrives again mid-file is the next day's: concatenated
+  // days each bring one, and a column that moved between them must not be
+  // read under its old neighbour's name.
+  const moved = [];
+  readWideTsv([
+    'Timestamp\thost\ta\tb',
+    '2026-09-16T12:00:00\th1\t1\t2',
+    'Timestamp\thost\tb\ta',
+    '2026-09-16T12:00:10\th1\t3\t4',
+  ].join('\n'), (name, sample) => moved.push([name, sample.value]), []);
+  eq(moved, [['a', 1], ['b', 2], ['b', 3], ['a', 4]], 'the second header is read, not ignored');
+
+  // An unnamed table is still a table.
+  const letters = [];
+  readWideTsv('2026-09-16T12:00:00\th1\t5\t6\n', (name) => letters.push(name), []);
+  eq(letters, ['A', 'B'], 'with its columns named after letters');
+
+  // A short line in a table is a truncated write -- the usual cause is
+  // reading a file while it is being appended to -- and filing whatever it
+  // does hold against the wrong column would be worse than skipping it.
+  const short = [];
+  const shortWarnings = [];
+  readWideTsv('Timestamp\thost\ta\n2026-09-16T12:00:00\n2026-09-16T12:00:10\th1\t7\n',
+    (name, sample) => short.push(sample.value), shortWarnings);
+  eq(short, [7], 'the truncated row is skipped');
+  eq(shortWarnings.length, 1, 'and reported rather than dropped in silence');
+}
+
+// tail -n, for a file that is appended to all day. The records go; everything
+// that describes them stays, or the units and the column names scroll off the
+// top and every metric comes back called A.
+{
+  const text = ['# note', '!test x unit=C', 'Timestamp\thost\trtt',
+    '2026-09-16T12:00:00\th1\t1', '2026-09-16T12:00:10\th1\t2',
+    '2026-09-16T12:00:20\th1\t3'].join('\n');
+  const kept = tailRecords(text, 2).split('\n');
+  eq(kept.slice(0, 3), ['# note', '!test x unit=C', 'Timestamp\thost\trtt'],
+     'the header, the comment and the !test line survive the tail');
+  eq(kept.slice(3), ['2026-09-16T12:00:10\th1\t2', '2026-09-16T12:00:20\th1\t3'],
+     'and the last two records are the last two records');
+  eq(tailRecords(text, 0), text, 'no limit means the whole file');
+  eq(tailRecords(text, 99), text, 'and a limit past the end is no limit');
+}
+
+// Appending rather than replacing: the same file read again, with only the
+// records it has gained taken from it. The mark left between two reads is the
+// last few records themselves, because a dashboard reads the *tail* of a file
+// and an offset into the file is a number it never has.
+{
+  const head = 'Timestamp\thost\trtt';
+  const row = (i) => `2026-09-16T12:00:${String(i).padStart(2, '0')}\th1\t${100 + i}`;
+  const file = (n) => [head, ...Array.from({ length: n }, (_, i) => row(i))].join('\n');
+
+  const first = recordsSince(file(5), null);
+  eq(first.records, 5, 'the first read of a file is all of it');
+  eq(first.missed, false, 'with nothing missed, since there was nothing to miss');
+  eq(first.mark.length, 3, 'and it leaves the last few records as the mark');
+
+  const second = recordsSince(file(8), first.mark);
+  eq(second.records, 3, 'the next read takes only what was added');
+  eq(splitPreamble(second.text).head, [head],
+     'carrying the header, so the records can be parsed on their own');
+  eq(splitPreamble(second.text).data, [row(5), row(6), row(7)], 'and only the new records');
+
+  const quiet = recordsSince(file(8), second.mark);
+  eq(quiet.records, 0, 'a file nobody wrote to has nothing new in it');
+  eq(quiet.text, '', 'so there is nothing to parse');
+  eq(quiet.mark, second.mark, 'and the mark stays where it was, rather than being lost');
+
+  // Reading only the tail is the normal case, and it means the older half of
+  // the mark has scrolled out of the window by the next pass. The last record
+  // of it is still enough to say where we were.
+  const window = tailRecords(file(10), 4);
+  const slid = recordsSince(window, second.mark);
+  eq(slid.records, 2, 'a mark half out of the window still lines up on what is left of it');
+  eq(slid.missed, false, 'which is not a gap');
+  eq(splitPreamble(slid.text).data, [row(8), row(9)], 'and takes exactly the records after it');
+
+  // Grown by more than the window, or rewritten from the top: there is
+  // nothing to line up with, and taking the rows anyway would count some of
+  // them twice. The caller replaces the file instead, and is told why.
+  const jumped = recordsSince(tailRecords(file(40), 4), second.mark);
+  eq(jumped.missed, true, 'a jump past the window is reported, not guessed at');
+  eq(jumped.records, 4, 'with what is there now handed over to replace the file');
+
+  // A table sampling on a timer writes the same line twice the moment two
+  // passes measure the same values. One row is not an identity; three are.
+  const same = [head, 'a\tb\t1', 'a\tb\t1', 'a\tb\t1', 'a\tb\t1'].join('\n');
+  const dup = recordsSince(same, null);
+  eq(dup.records, 4, 'four identical records are four records');
+  eq(recordsSince(same, dup.mark).records, 0, 'and reading them again adds none of them');
+  eq(markOf(['a', 'b', 'c', 'd', 'e']), ['c', 'd', 'e'], 'the mark is the last three records');
+  eq(markOf(['a']), ['a'], 'or as many as there are');
+}
+
+// A floor plan read out of the names, for data whose floor plan is not
+// written yet. Never built on its own -- the button in the Structure panel
+// asks for it -- and built from the names in *any* results file, not only a
+// table's: a results target is a path through a floor plan somebody wrote.
+eq(placeHost('wr12r06u15'), { room: 'wr12', row: '', rack: 'r06', node: 'u15' },
+   'letter-and-digit runs are a room, a rack and a machine');
+eq(placeHost('dc1-hall2-r03-u05'), { room: 'dc1', row: 'hall2', rack: 'r03', node: 'u05' },
+   'separators say the same thing, with a row between the room and the rack');
+eq(placeHost('DH1/A/R01/u05'), { room: 'DH1', row: 'A', rack: 'R01', node: 'u05' },
+   'a results target is already a path, and keeps the row it names');
+eq(placeHost('a/b/c/d/e'), { room: 'a-b', row: 'c', rack: 'd', node: 'e' },
+   'anything deeper folds into the room, which has space for a longer name');
+eq(placeHost('rack01-server05'), { room: '', row: '', rack: 'rack01', node: 'server05' },
+   'two parts are a rack and a machine');
+eq(placeHost('mailserver'), { room: '', row: '', rack: 'hosts', node: 'mailserver' },
+   'and a name with no structure in it goes in a rack of its own');
+eq(commonDomain(['a.dc.example.com', 'b.dc.example.com']), 'dc.example.com',
+   'a tail two hosts share is a domain, not two levels of structure');
+eq(commonDomain(['a.one.example.com', 'b.two.example.com']), 'example.com', 'as far as it is shared');
+eq(commonDomain(['wr01r01u01', 'wr01r01u02']), '', 'and hosts with no dots have no domain');
+
+{
+  const hosts = ['wr12r06u15', 'wr12r06u16', 'wr12r07u02', 'db-primary',
+                 'mail.a.example.com', 'web.a.example.com'];
+  const plan = parseLayout(layoutFromHosts(hosts));
+  eq(plan.warnings, [], 'the generated plan parses without a warning of its own');
+  for (const host of hosts) ok(plan.resolve(host), `results still resolve to ${host}`);
+  eq(plan.resolve('wr12r06u15').key, 'DATA/wr12/A/r06/u15', 'placed under the room and rack in its name');
+
+  // A results file's targets build a plan too: they are paths, and the rows
+  // in them are rows. Nothing about this is particular to a table.
+  const fromTargets = parseLayout(layoutFromHosts(['DH1/A/R01/u05', 'DH1/A/R01/u06', 'DH1/B/R02/tor']));
+  eq(fromTargets.warnings, [], 'a plan built from results targets parses clean');
+  eq(fromTargets.resolve('DH1/A/R01/u05').key, 'DATA/DH1/A/R01/u05',
+     'and puts the room, the row and the rack where the target said they were');
+  eq(fromTargets.counts.get('row'), 2, 'the rows named in the targets are the rows');
+  eq(plan.resolve('mail.a.example.com').parent.kind, 'rack', 'and a domain is not two levels of rack');
+
+  // Two hosts that reduce to one id are two elements, not one renamed by the
+  // duplicate-path rule -- which would have taken a host off the floor.
+  const clash = parseLayout(layoutFromHosts(['r01-u01', 'r01.u01']));
+  eq(clash.warnings, [], 'names that collide are numbered apart, not warned about');
+  ok(clash.resolve('r01-u01') !== clash.resolve('r01.u01'), 'and stay two machines');
+  eq(clash.all.filter((e) => e.kind === 'node').length, 2, 'both machines are on the floor');
+
+  // A name full of range syntax is a name, not a range: `[`, `..` and `|`
+  // all mean something in a layout id, and expanding one would scatter a
+  // host across elements that do not exist.
+  const odd = parseLayout(layoutFromHosts(['rack[1]-u|01', 'a..b']));
+  eq(odd.warnings, [], 'a hostname carrying range syntax does not expand');
+  ok(odd.resolve('rack[1]-u|01'), 'and still answers to its own name');
+}
+
+// The guard on all of the above. Detection decides which reader a file gets,
+// so loosening it is the one change here that can quietly re-read a file that
+// was working: every results file in this repository is checked against the
+// format it actually is. `1 host_1 5` was the loosening that made this worth
+// writing down.
+{
+  const shouldBeWide = new Set([
+    'examples/live/flows.tsv',
+    'examples/live/room-wr01.tsv',
+    'examples/live/room-wr02.tsv',
+  ]);
+  const listing = spawnSync('find', ['examples', 'tests/fixtures', '-type', 'f'],
+    { cwd: root, encoding: 'utf8' });
+  const files = (listing.stdout || '').trim().split('\n')
+    .filter((f) => /\.(tsv|csv|ndjson)$/.test(f)).sort();
+  ok(files.length >= 10, `there are results files to check  (${files.length})`);
+  for (const file of files) {
+    const wide = looksLikeWideTsv(readFileSync(join(root, file), 'utf8'));
+    ok(wide === shouldBeWide.has(file),
+       `${file} reads as ${shouldBeWide.has(file) ? 'a table' : 'a results file'}`);
+  }
+}
+
+// Which files in a folder a dashboard is made of: the same rule the browse
+// panel filters by, so what is listed and what is loaded cannot disagree.
+ok(matchesPattern('mx-2026-09-16.tsv', '*.tsv'), 'a glob matches by shape');
+ok(!matchesPattern('notes.txt', '*.tsv'), 'and rejects what it does not match');
+ok(matchesPattern('room-wr01.tsv', 'room'), 'a bare word is a substring, as in the panel');
+
+// ------------------------------------------------- a table read into overlays
+// The wide reader hands its rows to the same overlays every other format
+// produces -- and, unlike every other format, several files share them: a
+// folder of tables is one dashboard, not one dashboard per file.
+{
+  const flat = parseLayout(readFileSync(join(root, 'examples/hostnames.dc'), 'utf8'));
+  const into = new Map();
+  const warnings = [];
+  const group = 'live/*.tsv';
+  parseResults('Timestamp\thost\trtt (us)\n2026-09-16T12:00:00\twr01r01u01\t180\n',
+    into, warnings, 'live/a.tsv', { group });
+  parseResults('Timestamp\thost\trtt (us)\tcpu\n2026-09-16T12:00:00\twr01r01u02\t190\t40\n',
+    into, warnings, 'live/b.tsv', { group });
+
+  eq(warnings, [], 'two tables read without complaint');
+  eq([...into.values()].map((o) => o.name).sort(), ['cpu', 'rtt'],
+     'a column of the same name in two files is one metric');
+  const rtt = into.get(overlayKey(group, 'rtt'));
+  eq(rtt.samples.length, 2, 'carrying the samples of both');
+  eq(rtt.samples.map((s) => s.meta.file), ['live/a.tsv', 'live/b.tsv'],
+     'each sample still knows which file it came from, which is what lets one be re-read');
+  eq(rtt.source, group, 'and the metric is filed under the folder they share');
+
+  const bound = bindOverlay(rtt, flat);
+  eq(bound.unit, 'us', 'a bracketed unit reaches the overlay');
+  eq(bound.slug, 'rtt', 'and so does the name the filter takes');
+  eq(bound.unresolved, [], 'the hosts resolve against a layout that names them');
+  ok(bound.wide, 'the overlay knows it came from a table');
+
+  // A table may carry the results format's own `!test` line, so a column can
+  // be given a unit, a palette or a range without a second syntax for it --
+  // and is checked by the same code, which is the point of sharing it.
+  const declaredTable = new Map();
+  const tableWarnings = [];
+  parseResults([
+    '!test rtt unit=ms higher=bad palette=turbo',
+    '!test rtt pallete=turbo',
+    'Timestamp\thost\trtt (us)',
+    '2026-09-16T12:00:00\twr01r01u01\t5',
+  ].join('\n'), declaredTable, tableWarnings, 'live/c.tsv', { group });
+  const declaredRtt = bindOverlay(declaredTable.get(overlayKey(group, 'rtt')), flat);
+  eq(declaredRtt.unit, 'ms', 'a declared unit beats the one read off the heading');
+  eq(declaredRtt.palette, 'turbo', 'and a declared palette reaches the overlay');
+  eq(tableWarnings.length, 1, 'a typo on one is reported');
+  ok(tableWarnings[0].startsWith('tsv line 2: !test rtt: unknown key "pallete"'),
+     `naming the line of the table it was written on  (${tableWarnings[0]})`);
+
+  // A metric from any other format still carries a slug: every card shows one,
+  // and `iperf Mb/s (out)` is exactly the name a results file can also write.
+  const classic = new Map();
+  parseResults('!test rtt_p99 label="RTT p99 (us)"\nrtt_p99\twr01r01u01\t1\n', classic, [], 'r.tsv');
+  eq(bindOverlay(classic.get(overlayKey('r.tsv', 'rtt_p99')), flat).slug, 'rtt_p99',
+     'a results file\'s metric has one too');
+  const declared = new Map();
+  parseResults('!test "odd name" slug=odd\n', declared, [], 'r.tsv');
+  eq(bindOverlay(declared.get(overlayKey('r.tsv', 'odd name')), flat).slug, 'odd',
+     'and slug= on a !test line overrides the derived one');
+}
+
 // -------------------------------------------------------------- flow data
 // mx and iperf measure a host PAIR, and those samples carry `peer=`. They are
 // kept whole beside the aggregate, because the aggregate is exactly what
@@ -1063,6 +1415,30 @@ eq(classify('mx-run.tsv'), 'results', 'a .tsv is results');
 eq(classify('notes.md'), 'other', 'anything else is neither');
 eq(classify('archive.tsv.gz'), 'other', 'the extension has to be the last one');
 
+// The extension is a hint for the listing and never the decision. Which
+// reader a file gets is worked out from what is inside it, so a table written
+// to `today.log`, `metrics.dat` or a file with no extension at all is the
+// same table it would be in `today.tsv` -- and a viewer that will not open it
+// is telling somebody their own data file is not one, on the evidence of its
+// name.
+eq(classify('today.log'), 'results', 'a log is where a table usually ends up');
+eq(classify('metrics.dat'), 'results', 'and so is a .dat');
+eq(classify('run47'), 'results', 'a file with no extension is offered, not hidden');
+eq(classify('.gitignore'), 'other', 'though a dotfile is configuration, and stays out of the listing');
+ok(readable('notes.md') && readable('run47') && readable('weird.qqq'),
+   'anything that could be text can be opened');
+ok(!readable('photo.png') && !readable('archive.tsv.gz') && !readable('lib.so'),
+   'and only what cannot be text is refused');
+ok(namedAsData('run.tsv') && namedAsData('today.log'), 'a name can say "data"');
+ok(!namedAsData('run47') && !namedAsData('floor.dc'), 'or say nothing at all');
+
+// What a name that says nothing leaves to the contents: a floor plan called
+// `floor` is a floor plan, not a results file that turns out to hold nothing.
+ok(looksLikeLayout('# a comment first\ndc DC1 name="X"\n  room R1\n'), 'a layout opens with its root');
+ok(looksLikeLayout('title My Floor\ndc DC1\n'), 'or with a title line');
+ok(!looksLikeLayout('1\thost_1\t5\n'), 'a table does not');
+ok(!looksLikeLayout('temp_c\tu01\t26\n'), 'and neither does a results file');
+
 eq(formatSize(0), '0 B', 'zero bytes');
 eq(formatSize(1023), '1023 B', 'under a kilobyte stays in bytes');
 eq(formatSize(1024), '1.0 KB', 'a kilobyte');
@@ -1258,6 +1634,18 @@ ok(!matchesFilter('mxrun.tsv', 'mx.*'), 'and that dot has to be there: it is not
   const emptied = resultsFileNotice('monday.tsv', { fresh: [], reloaded: 2, samples: 0, warnings: [] });
   eq(emptied.level, 'warn', 'a re-read that loads nothing is a warning');
   ok(emptied.text.includes('the 2 metrics it loaded before are gone'), 'and names what went with it');
+
+  // A wide table says which reader read it, because that changes what a
+  // metric is: a column heading shared with the rest of the folder, rather
+  // than a test name this file owns.
+  const table = resultsFileNotice('live/room.tsv',
+    { fresh: ['rtt', 'loss'], samples: 320, warnings: [], wide: true });
+  eq(table.level, 'ok', 'a table is an ordinary load');
+  ok(table.text.includes('read as a wide TSV table, one metric per column'), 'and says how it was read');
+  const tableAgain = resultsFileNotice('live/room.tsv',
+    { fresh: ['rtt'], reloaded: 1, samples: 320, warnings: [], wide: true });
+  ok(tableAgain.text.includes('replacing the rows it loaded before'),
+     're-reading one replaces its rows, not the metric the whole folder shares');
 
   const partial = resultsFileNotice('mixed.tsv',
     { fresh: ['a'], samples: 10, warnings: ['results line 9: bad'] });

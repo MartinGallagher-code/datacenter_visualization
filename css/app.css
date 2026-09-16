@@ -232,6 +232,38 @@ select.overridden, input.overridden { opacity: 0.55; border-style: dashed; }
 }
 .browse-filter:focus { outline: none; border-color: var(--accent); }
 
+/* Live: the dashboard controls. Two short rows of number-plus-unit, so the
+   interval and the tail read as the sentences they are ("reload every 10 s",
+   "last 500 records per file") rather than as a form. */
+/* The second click of a two-click action: replacing a floor plan that was
+   loaded from a file. Red because it is the one button here that throws
+   something away. */
+button.danger {
+  color: #f0a0a0; border-color: #5a2a2a; background: #2a1517;
+}
+button.danger:hover { color: #ffbdbd; border-color: #8a3a3a; }
+
+.live-row {
+  display: flex; align-items: center; gap: 6px;
+  margin-bottom: 6px; font-size: 11.5px; color: var(--ink-dim);
+}
+.live-row .chk { white-space: nowrap; }
+.live-num {
+  width: 68px; flex: none;
+  font-family: var(--mono); font-size: 11px; padding: 2px 5px;
+}
+.live-watch {
+  display: flex; align-items: center; gap: 4px;
+  margin-bottom: 6px; padding: 3px 4px 3px 7px;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 4px;
+}
+.live-watch-name {
+  flex: 1; min-width: 0;
+  font-family: var(--mono); font-size: 10.5px; color: var(--ink);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.live-status { margin: 0; font-size: 11px; }
+
 .browse-list {
   max-height: 260px;
   overflow: auto;
@@ -332,6 +364,19 @@ select.overridden, input.overridden { opacity: 0.55; border-style: dashed; }
 .grid2 { display: grid; grid-template-columns: auto 1fr; gap: 5px 7px; align-items: center; }
 .grid2 label { color: var(--ink-dim); font-size: 11px; }
 .grid2 select, .grid2 input { width: 100%; padding: 2px 5px; font-size: 11.5px; }
+/* The name the filter box takes for this metric: a value, not a label, so it
+   is set in the same monospace as everything else that gets typed. It is a
+   button because clicking it puts `has:<slug>` in the filter. */
+.overlay-slug {
+  justify-self: start;
+  font-family: var(--mono); font-size: 11px;
+  color: var(--accent);
+  background: #0f141c; border: 1px solid var(--line); border-radius: 3px;
+  padding: 1px 6px; cursor: pointer;
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.overlay-slug:hover { border-color: var(--accent); }
+
 .rangerow { display: flex; gap: 5px; align-items: center; }
 .rangerow input { width: 100%; font-family: var(--mono); font-size: 11px; }
 .legend { height: 9px; border-radius: 3px; border: 1px solid var(--line); }
