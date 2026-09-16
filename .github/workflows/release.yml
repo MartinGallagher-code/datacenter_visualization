@@ -1,5 +1,6 @@
-# Datacenter Layout Viewer — release workflow
 # SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 Martin J. Gallagher
+# Datacenter Layout Viewer — release workflow
 #
 # Releasing is one click: Actions -> release -> "Run workflow". Nothing to
 # type. The workflow reads the version out of the tree, tags that commit,

@@ -1,5 +1,6 @@
-# Datacenter Layout Viewer — test workflow
 # SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 Martin J. Gallagher
+# Datacenter Layout Viewer — test workflow
 #
 # Two jobs rather than one, so a red mark says which layer broke: the modules
 # (tests/run.mjs) or the page (tests/browser.mjs). They are independent and

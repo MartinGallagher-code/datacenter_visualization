@@ -4,7 +4,8 @@
 [![PyPI](https://img.shields.io/pypi/v/datacenter-layout-viewer.svg)](https://pypi.org/project/datacenter-layout-viewer/)
 [![Python](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://pypi.org/project/datacenter-layout-viewer/)
 [![dependencies](https://img.shields.io/badge/dependencies-none-success.svg)](https://github.com/MartinGallagher-code/datacenter_visualization/blob/main/pyproject.toml)
-[![License](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](https://github.com/MartinGallagher-code/datacenter_visualization/blob/main/LICENSE)
+[![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](https://www.gnu.org/licenses/gpl-3.0.html)
+[![REUSE status](https://api.reuse.software/badge/github.com/MartinGallagher-code/datacenter_visualization)](https://api.reuse.software/info/github.com/MartinGallagher-code/datacenter_visualization)
 
 A very light datacenter viewer. One plain-text file describes the whole
 datacenter — rooms, rows, racks, servers, and the logical networks between them
@@ -834,12 +835,12 @@ LICENSE                   GNU General Public License v3
 
 ## License
 
-Copyright © 2026 Martin J. Gallagher.
+Copyright (C) 2026 Martin J. Gallagher
 
 This program is free software: you can redistribute it and/or modify it under
-the terms of the [GNU General Public License](LICENSE) as published by the Free
-Software Foundation, either version 3 of the License, or (at your option) any
-later version.
+the terms of the GNU General Public License as published by the Free Software
+Foundation, either version 3 of the License, or (at your option) any later
+version.
 
 This program is distributed in the hope that it will be useful, but WITHOUT ANY
 WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
@@ -847,3 +848,8 @@ PARTICULAR PURPOSE. See the GNU General Public License for more details.
 
 You should have received a copy of the GNU General Public License along with
 this program. If not, see <https://www.gnu.org/licenses/>.
+
+Full text: [LICENSE](LICENSE) — SPDX identifier `GPL-3.0-or-later`. This
+repository follows the [REUSE Specification](https://reuse.software/): source
+files carry SPDX copyright and licence headers, and the licence text lives in
+[`LICENSES/`](LICENSES).
