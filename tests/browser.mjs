@@ -687,6 +687,25 @@ await test('a loaded floor plan is not replaced by one click', async () => {
      'the second click does it');
 });
 
+// The smallest table there is: a counter, a host, a value. Read strictly this
+// fell through to the results format -- where the first field is the test name
+// -- so the three stamps became three metrics holding one sample each.
+await test('a counter for a stamp is a stamp, not a metric name', async () => {
+  await drop('t.tsv', '1\thost_1\t5\n2\thost_1\t6\n3\thost_1\t3\n');
+  await page.waitForTimeout(700);
+  eq(await cardNames(), ['A'], 'one column, one metric, named for the column it is');
+  eq(await sampleCount('A'), 3, 'holding all three rows');
+  await buildPlan();
+  await page.click('#overlays .overlay-head');
+  await page.waitForTimeout(300);
+  const reading = await page.evaluate(() => {
+    const row = [...document.querySelectorAll('#tree .tree-row')].pop();
+    row.click();
+    return document.querySelector('#inspector').innerText.replace(/\s+/g, ' ');
+  });
+  ok(/4\.67 \(mean of 3\)/.test(reading), `and one host reading the mean of them  (${reading.slice(-40)})`);
+});
+
 await test('a flow row measures a pair, not a host', async () => {
   await drop('live/room.tsv', WIDE);
   await page.waitForTimeout(700);

@@ -225,7 +225,7 @@ commas or spaces. It is **append-only by design**: to add results from a new
 test run, append lines. `cat run47.tsv >> results.tsv` is a fully supported
 workflow.
 
-**Already have a table?** A file of `Timestamp  host  var1  var2 …` loads as
+**Already have a table?** A file of `<stamp>  host  var1  var2 …` loads as
 it stands, no conversion and no layout file — see
 [A table you already have](#a-table-you-already-have). This format stays
 exactly as it is described here; that is a second reader, chosen per file.
@@ -691,18 +691,34 @@ Timestamp             host          rtt (us)   loss %   cpu %
 2026-09-16T12:00:10   wr01r01u05    186.9      0.00     39
 ```
 
-Columns are separated by **tabs** (only tabs — that is what lets a heading be
-`rtt (us)` rather than three columns). Try it, with a floor plan read out of
-the hostnames:
+Columns are separated by **tabs** where the row has them — that is what lets a
+heading be `rtt (us)` rather than three columns — and by **runs of spaces**
+where it has none, so a table typed by hand or written by `awk` reads too. Try
+it, with a floor plan read out of the hostnames:
 
 ```
 http://localhost:8000/?build=1&results=examples/live/room-wr01.tsv
 ```
 
+- **The first column is the stamp, and it is only the stamp.** A date, a time,
+  an epoch, or a plain number counting the passes — `1`, `2`, `3` is as much a
+  first column as an ISO date is. It is kept on every sample and it never
+  names anything: a file like
+
+  ```
+  1   host_1   5
+  2   host_1   6
+  3   host_1   3
+  ```
+
+  is **one** metric, on one host, with three samples — not three metrics
+  called 1, 2 and 3.
 - **The header is optional.** Without one the columns are called `A`, `B`,
-  `C`… A header may be commented out (`# Timestamp<TAB>host<TAB>…`), so the
-  file stays a table to `awk`, and a second header part-way down the file is
-  read as a new one — concatenated days each bring their own.
+  `C`… — so give the file a header line, or a `!test` line per column, when
+  the metric deserves a name. A header may be commented out
+  (`# Timestamp<TAB>host<TAB>…`), so the file stays a table to `awk`, and a
+  second header part-way down the file is read as a new one — concatenated
+  days each bring their own.
 - **A heading carries its unit** when it is bracketed (`rtt (us)`, `loss [%]`)
   or ends in `%`. The metric keeps the whole heading as its label.
 - **A blank cell is "not measured"**, never zero. Averaging a gap as zero is
@@ -934,8 +950,8 @@ quietly left stale.
 ## Tests
 
 ```sh
-node tests/run.mjs        # 960 assertions over the modules
-node tests/browser.mjs    # 101 more, driving the page in Chromium
+node tests/run.mjs        # 991 assertions over the modules
+node tests/browser.mjs    # 104 more, driving the page in Chromium
 ```
 
 Both skip what they cannot run — `tests/run.mjs` needs python3 for the

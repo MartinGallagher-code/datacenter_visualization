@@ -74,11 +74,21 @@ export function slugify(name) {
 
 // ------------------------------------------------------------------- reading
 
-// The separator is a tab, and only a tab. The results format splits on runs of
-// spaces as well, which is exactly why a table whose header reads
-// "Timestamp host rtt (us)" cannot be read that way: the unit would become a
-// column of its own.
+// Tabs where there are tabs, whitespace where there are none.
+//
+// A tab is the separator worth having: it is the only one that lets a heading
+// be `rtt (us)` rather than three columns, and it is what a script writing a
+// table emits. But a table typed by hand, or piped out of awk, is
+// space-separated, and refusing to read one is refusing the format for the
+// sake of a rule about it. So a row that contains a tab is split on tabs and
+// keeps the spaces inside its fields; a row with no tab at all is split on
+// runs of whitespace, where a heading is one word and `a -> b` is glued back
+// together first.
 const TAB = '\t';
+
+const splitRow = (line) => (line.includes(TAB)
+  ? line.split(TAB).map((f) => f.trim())
+  : line.replace(ARROW_GLUE, '->').trim().split(/\s+/));
 
 const TIME_COLUMNS = new Set(['timestamp', 'time', 'ts', 'date', 'datetime', 'when', 'epoch']);
 const HOST_COLUMNS = new Set([
@@ -87,6 +97,11 @@ const HOST_COLUMNS = new Set([
 
 // `a -> b`, and the spellings of the same arrow people actually type.
 const ARROW = /\s*(?:->|=>|-->|→)\s*/;
+
+// The same arrow, with the spaces around it, closed up before a row is split
+// on whitespace -- otherwise `host_1 -> host_2` is three fields and the flow
+// becomes a host called "->".
+const ARROW_GLUE = /\s*(?:->|=>|-->|→)\s*/g;
 
 /** Split `host -> peer` into the pair it names. A plain host has no peer. */
 export function splitFlow(host) {
@@ -157,12 +172,14 @@ function contentLines(text) {
  *
  *   * a header row whose first two columns are named like a timestamp and a
  *     host (`Timestamp<TAB>host<TAB>...`), with or without a leading `#`;
- *   * a first data row whose first field reads as an instant and whose second
- *     is not a number.
+ *   * a first data row whose first field is a stamp -- a date, a time, an
+ *     epoch, or a plain number counting the passes -- and whose second field
+ *     is not a number, because that is the host.
  *
- * Both need a real tab and at least three columns. A results line is
- * `<test> <target> <value>`, so its first field is a test name -- never a
- * date, never an epoch -- and it has no header at all.
+ * Both need at least three columns, split on tabs where the row has them and
+ * on runs of whitespace where it does not. A results line is `<test> <target>
+ * <value>`, so its first field is a test *name* -- never a date, never a
+ * count -- and it has no header at all.
  */
 export function looksLikeWideTsv(text) {
   for (const { line } of contentLines(text)) {
@@ -177,19 +194,28 @@ export function looksLikeWideTsv(text) {
       if (headerColumns(trimmed.replace(/^#+\s?/, ''))) return true;
       continue;
     }
-    if (!line.includes(TAB)) return false;
-    const fields = line.split(TAB).map((f) => f.trim());
+    const fields = splitRow(line);
     if (fields.length < 3) return false;
     if (headerColumns(line)) return true;
-    return looksLikeTime(fields[0]) && numberOf(fields[1]) === null && fields[1] !== '';
+    // A timestamp with a host beside it. "Timestamp" is read loosely here --
+    // looser than looksLikeTime, which answers "is this definitely an instant"
+    // and has no second column to lean on. A monitoring script counts its
+    // passes as often as it stamps them, and `1`, `2`, `3` is as much a first
+    // column as an ISO date is; read strictly, those rows fell through to the
+    // results format and every stamp became the name of a metric.
+    //
+    // The pair is what makes it safe. A results line is `<test> <target>
+    // <value>`, and a test is named, not numbered -- so a number in the first
+    // field and a name in the second is a shape that format does not have.
+    const stamp = looksLikeTime(fields[0]) || numberOf(fields[0]) !== null;
+    return stamp && fields[0] !== '' && numberOf(fields[1]) === null && fields[1] !== '';
   }
   return false;
 }
 
 /** The column names of a header row, or null when the row is not one. */
 function headerColumns(line) {
-  if (!line.includes(TAB)) return null;
-  const fields = line.split(TAB).map((f) => f.trim());
+  const fields = splitRow(line);
   if (fields.length < 3) return null;
   const first = fields[0].toLowerCase().replace(/[^a-z]/g, '');
   const second = fields[1].toLowerCase().replace(/[^a-z]/g, '');
@@ -275,7 +301,7 @@ export function readWideTsv(text, emit, warnings = [], opts = {}) {
       if (commented && !header) header = commented;
       continue;
     }
-    const fields = line.split(TAB);
+    const fields = splitRow(line);
     if (fields.length < 3) {
       // A short line in a table is a truncated write -- the tail of a file
       // being appended to as it is read is the usual cause -- and reading it
