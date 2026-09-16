@@ -779,7 +779,7 @@ netmesh run --for 60 && dcimport results.tsv --tidy reports/
 ## Tests
 
 ```sh
-node tests/run.mjs        # 846 assertions over the modules
+node tests/run.mjs        # 850 assertions over the modules
 node tests/browser.mjs    # 55 more, driving the page in Chromium
 ```
 

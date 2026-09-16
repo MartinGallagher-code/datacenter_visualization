@@ -11,6 +11,16 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## Unreleased
+
+- Releasing is one click. `release.yml`'s **Run workflow** button asked for a
+  tag to build, which is a thing to get wrong at the one moment nobody wants
+  a puzzle. It now takes no input at all: it reads the version out of the
+  tree, tags that commit itself, and releases. Pushing a `v*` tag by hand
+  still works and does the same thing. Re-running it on a tree whose version
+  is already tagged stops on the spot and says to bump, instead of failing at
+  the PyPI upload twenty steps later.
+
 ## 1.0.1 — 2026-09-16
 
 Documentation and packaging metadata only. The viewer, the file formats and
