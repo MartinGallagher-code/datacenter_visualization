@@ -11,6 +11,17 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## Unreleased
+
+- The README leads with `datacenter-layout-viewer` rather than the old
+  `layout_visualizer`, and carries badges: CI, the PyPI version, the Python
+  floor, no dependencies, and the licence. Each typed badge is pinned by the
+  version section of `tests/run.mjs` to the thing it claims about, so one that
+  goes stale fails the suite rather than misleading the front page.
+- Per-version `Programming Language :: Python :: 3.x` classifiers, which are
+  what PyPI's own filtering reads. Metadata only; it reaches PyPI with the
+  next release.
+
 ## 1.0.0 — 2026-09-15
 
 First versioned release. The project has been in use, and handed over as

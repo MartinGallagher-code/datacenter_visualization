@@ -1,4 +1,10 @@
-# layout_visualizer
+# datacenter-layout-viewer
+
+[![tests](https://github.com/MartinGallagher-code/datacenter_visualization/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/MartinGallagher-code/datacenter_visualization/actions/workflows/tests.yml)
+[![PyPI](https://img.shields.io/pypi/v/datacenter-layout-viewer.svg)](https://pypi.org/project/datacenter-layout-viewer/)
+[![Python](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://pypi.org/project/datacenter-layout-viewer/)
+[![dependencies](https://img.shields.io/badge/dependencies-none-success.svg)](https://github.com/MartinGallagher-code/datacenter_visualization/blob/main/pyproject.toml)
+[![License](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](https://github.com/MartinGallagher-code/datacenter_visualization/blob/main/LICENSE)
 
 A very light datacenter viewer. One plain-text file describes the whole
 datacenter — rooms, rows, racks, servers, and the logical networks between them
@@ -773,7 +779,7 @@ netmesh run --for 60 && dcimport results.tsv --tidy reports/
 ## Tests
 
 ```sh
-node tests/run.mjs        # 836 assertions over the modules
+node tests/run.mjs        # 846 assertions over the modules
 node tests/browser.mjs    # 55 more, driving the page in Chromium
 ```
 

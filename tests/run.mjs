@@ -2343,6 +2343,47 @@ if (python.error) {
   eq((readme.match(/^Current version \*\*(\d+\.\d+\.\d+)\*\*/m) || [])[1], VERSION,
      'README.md states this version');
 
+  // Badges. A badge is a claim on the front page that nothing else checks,
+  // which makes it the exact shape this section exists for: the version one
+  // is served by PyPI and self-corrects, but the rest are typed, so they are
+  // pinned to what they claim about.
+  // One parse, reused: alt text -> the href the image sits behind.
+  const badges = new Map([...readme.matchAll(/^\[!\[([^\]]+)\]\((https:\/\/[^)]+)\)\]\(([^)]+)\)$/gm)]
+    .map((m) => [m[1], { img: m[2], href: m[3] }]));
+  const badge = (alt) => (badges.get(alt) || {}).img || '';
+
+  // "python 3.9+" has to be the floor pyproject actually claims, and the
+  // classifiers PyPI filters on have to start at the same number. A badge
+  // saying 3.9 over a package that needs 3.11 sends people to an install
+  // error.
+  const floor = (pyproject.match(/^requires-python = ">=(\d+\.\d+)"$/m) || [])[1];
+  eq(badge('Python'), `https://img.shields.io/badge/python-${floor}%2B-blue.svg`,
+     `the python badge states requires-python  (${floor}+)`);
+  ok(pyproject.includes(`"Programming Language :: Python :: ${floor}",`),
+     `and ${floor} is among the classifiers PyPI filters on`);
+
+  // The dependency badge is the project's headline property. CI proves it on
+  // an installed wheel; this proves the claim is still one pyproject makes.
+  ok(/^dependencies = \[\]$/m.test(pyproject), 'the "dependencies: none" badge is true of pyproject');
+  ok(badge('dependencies').includes('dependencies-none'), 'and is the badge shown');
+
+  // The licence badge, the LICENSE file and pyproject are three statements of
+  // one fact, and the PyPI page renders the middle one.
+  ok(badge('License').includes('GPL--3.0--or--later'), 'the licence badge says GPLv3+');
+  ok(/^license = "GPL-3\.0-or-later"$/m.test(pyproject), 'and pyproject agrees');
+
+  // The tests badge has to point at the workflow that exists, under the name
+  // that workflow reports itself by, or it renders "no status" forever.
+  ok(badge('tests').includes('/actions/workflows/tests.yml/badge.svg'), 'the tests badge names tests.yml');
+  ok(readFileSync(join(root, '.github/workflows/tests.yml'), 'utf8').includes('\nname: tests\n'),
+     'and that workflow is the one called "tests"');
+
+  // Every badge points somewhere a PyPI reader can follow. README is the
+  // package's long description, where a relative href is a dead link.
+  eq(badges.size, 5, 'all five badges parse');
+  ok([...badges.values()].every((b) => b.href.startsWith('https://')),
+     'and every badge links absolutely');
+
   // The About box is written from js/version.js, not typed into index.html.
   const html = readFileSync(join(root, 'index.html'), 'utf8');
   ok(/<span id="version"/.test(html), 'index.html has a slot for the version');
