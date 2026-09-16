@@ -10,7 +10,10 @@ A very light datacenter viewer. One plain-text file describes the whole
 datacenter — rooms, rows, racks, servers, and the logical networks between them
 — compactly enough that a hyperscale campus fits on a single page. A second
 append-only file carries test results, which the viewer paints over the layout
-as any number of simultaneous color overlays.
+as any number of simultaneous color overlays. A wide TSV table —
+`Timestamp  host  var1  var2 …`, which is what monitoring already writes — is
+read as it stands, floor plan and all, and can be reloaded on a timer as a
+live dashboard.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
@@ -220,6 +223,11 @@ One sample per line — `test  target  value  [key=value …]` — separated by 
 commas or spaces. It is **append-only by design**: to add results from a new
 test run, append lines. `cat run47.tsv >> results.tsv` is a fully supported
 workflow.
+
+**Already have a table?** A file of `Timestamp  host  var1  var2 …` loads as
+it stands, no conversion and no layout file — see
+[A table you already have](#a-table-you-already-have). This format stays
+exactly as it is described here; that is a second reader, chosen per file.
 
 Converting data from somewhere else into this format — by hand or by handing
 the job to an AI — is written up in
@@ -668,6 +676,108 @@ manifest floor.dc 'room[1]' | netmesh gen --servers -
 netmesh run --for 60 && dcimport results.tsv --tidy reports/
 ```
 
+## A table you already have
+
+Most monitoring already writes a wide table: a timestamp, a host, and a column
+per thing measured. The viewer reads that directly — no conversion step, and
+**no layout file either**. Drop it in and there is a floor plan with the
+numbers on it.
+
+```
+Timestamp             host          rtt (us)   loss %   cpu %
+2026-09-16T12:00:00   wr01r01u05    184.2      0.01     37
+2026-09-16T12:00:00   wr01r01u06    191.0      0.00     41
+2026-09-16T12:00:10   wr01r01u05    186.9      0.00     39
+```
+
+Columns are separated by **tabs** (only tabs — that is what lets a heading be
+`rtt (us)` rather than three columns). Try it:
+
+```
+http://localhost:8000/?results=examples/live/room-wr01.tsv
+```
+
+- **The header is optional.** Without one the columns are called `A`, `B`,
+  `C`… A header may be commented out (`# Timestamp<TAB>host<TAB>…`), so the
+  file stays a table to `awk`, and a second header part-way down the file is
+  read as a new one — concatenated days each bring their own.
+- **A heading carries its unit** when it is bracketed (`rtt (us)`, `loss [%]`)
+  or ends in `%`. The metric keeps the whole heading as its label.
+- **A blank cell is "not measured"**, never zero. Averaging a gap as zero is
+  the one mistake that makes every number on a floor look better than it is.
+- **A value may be a word** (`PASS`/`FAIL`), exactly as in the results format.
+- **A host may be a flow**: `wr01r01u05 -> wr01r02u09` measures the path
+  between two machines rather than a property of one. The sample belongs to
+  the host it started at, with the far end as its `peer=`, which is what the
+  viewer already draws as a [measured flow](#the-viewer) and filters with
+  `peer=`. `->`, `=>` and `→` all work, and `a -> b -> c` keeps its hops.
+- **A column can still be given display metadata.** A table may carry the
+  results format's own `!test` lines, checked exactly as they are there, so a
+  column gets a unit, a palette, a range or a short name without a second
+  syntax for it — and without stopping the file being read as a table:
+
+  ```
+  !test  rtt   unit=us  higher=bad  min=0 max=500  short=RTT
+  !test  loss  unit=%   higher=bad  slug=loss_pct
+  Timestamp             host          rtt   loss
+  2026-09-16T12:00:00   wr01r01u05    184   0.01
+  ```
+
+- **Several files combine.** Tables in the *same folder* are one dashboard:
+  one file per host, or per metric, or per hour — a column of the same name in
+  two of them is one metric carrying the samples of both. (Every other format
+  keeps a file's metrics to itself, deliberately; this is the format where the
+  opposite is what you meant. Two folders stay two dashboards.)
+
+### The floor plan it builds
+
+With no `.dc` file loaded, the hosts are placed by reading their names: the
+last part is the machine, the part before it its rack, and the rest its room.
+
+```
+wr12r06u15         ->  room wr12, rack r06, machine u15
+dc1-hall2-r03-u05  ->  room dc1-hall2, rack r03, machine u05
+rack01-server05    ->  rack rack01, machine server05
+mailserver         ->  one rack of hosts
+web01.dc.acme.com  ->  the domain the hosts share is dropped, not read as racks
+```
+
+`-`, `_`, `/`, `:` and `.` split a name; a name with no separator is split at
+its letter-and-digit runs, which is what makes `wr12r06u15` three levels. It
+is a guess and it is meant to be replaced: **load a `.dc` file and the real
+floor plan takes over**, with every overlay still bound to the same hosts.
+**Edit layout** opens the generated plan in the editor, where **Download .dc**
+saves it to keep and correct. New hosts appearing in the data rebuild it; a
+layout you loaded yourself is never overwritten.
+
+### Live: reload on a timer
+
+The **Live** panel (left, under Files) turns loaded files into a dashboard:
+
+- **reload every N s** — re-reads every loaded results file on a timer. The
+  same reader and the same rules as opening one by hand, so a file being
+  appended to replaces what it brought last time instead of counting its rows
+  twice. A pass still running when the next is due is simply the pass that is
+  running: they never overlap.
+- **last N records per file** — reads only the end of each file, the way
+  `tail -n` does, so a log that grows all day stays the size of what is on
+  screen. Headers, comments and `!test` lines are kept whatever their age —
+  losing them would take the column names and units with them. Empty means the
+  whole file.
+- **Reload now** — one pass, on demand.
+- **Load all**, in the Files panel, loads every results file in the open
+  folder matching the name filter (`*.tsv` by default) and then **follows that
+  folder**: on each pass it is listed again, so a file written while the
+  dashboard is up joins it, and one that disappears takes its samples with it.
+  The × beside the watched folder in Live stops that; nothing already loaded
+  is unloaded.
+
+Files opened through the folder browser reload best — the browser hands over a
+handle that reads the file as it is now. Files chosen through the plain file
+input are re-read by path, which works until the file is replaced rather than
+appended to; a file that cannot be re-read is named in the panel rather than
+quietly left stale.
+
 ## The viewer
 
 - **Files** — the panel's **Open folder…** keeps a directory open beside the
@@ -730,6 +840,12 @@ netmesh run --for 60 && dcimport results.tsv --tidy reports/
   element matches when any of them reads over the threshold); `!` negates, `|` ors, space ands. Matches keep their
   ancestors visible; "hide non-matching" prunes everything else, otherwise
   non-matches are dimmed.
+  **A metric with a space or a slash in its name has a second name** that the
+  box can read: `iperf Mb/s (out)` answers to `iperf_mb_s_out`, and every
+  overlay card prints its own under **filter as** — click it to filter by that
+  metric, or type it into a comparison (`iperf_mb_s_out>18000`). The original
+  name still works where it can be typed at all; `slug=` on a `!test` line
+  sets a different one.
 - **Overlays** — check any number of tests. With N enabled, every element is
   split into N side-by-side slices, each colored by its test with the test's
   short name and value printed on it (2, 3, 4, 5… all work). Per overlay you
@@ -779,8 +895,8 @@ netmesh run --for 60 && dcimport results.tsv --tidy reports/
 ## Tests
 
 ```sh
-node tests/run.mjs        # 850 assertions over the modules
-node tests/browser.mjs    # 55 more, driving the page in Chromium
+node tests/run.mjs        # 937 assertions over the modules
+node tests/browser.mjs    # 80 more, driving the page in Chromium
 ```
 
 Both skip what they cannot run — `tests/run.mjs` needs python3 for the
@@ -808,6 +924,11 @@ examples/iperf/          a floor plan using every layout feature, with a real
                          export-overlay run painted over it (see its README)
 examples/hostnames-results.tsv  results addressed by flat name
 examples/mx/              every layout construct, painted by a real mx run
+examples/live/            three wide TSV tables in one folder: the format that
+                          needs no layout file, and what "Load all" loads
+js/tsv.js                 the wide-table reader: detection, the arrow that
+                          makes a host a flow, tail -n, and the floor plan
+                          read out of hostnames
 js/version.js             the project's version; python/dcviz/__init__.py
                           carries the other half and tests/run.mjs pins them
 python/dcviz/             the Python side: dcadd, dcimport and `dcviz serve`,

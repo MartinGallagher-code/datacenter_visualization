@@ -8,6 +8,15 @@ Read this whole page before writing any output. Most of the ways this goes
 wrong are decisions made in the first thirty seconds: the wrong target string,
 the wrong test name, an unquoted label.
 
+> **First, check whether there is anything to convert.** If the data is
+> already a table of `Timestamp`, a host, and a column per measurement,
+> tab-separated, the viewer reads it as it stands — and builds a floor plan
+> out of the hostnames if there is no `.dc` file. See *A table you already
+> have* in the README. Converting such a table into the format below is work
+> that buys nothing except a `!test` line's worth of display metadata, which
+> can be added to the table's file too. Convert when the data is not that
+> shape: a per-run report, a nested export, a tool's own output.
+
 ---
 
 ## 1. What you are producing

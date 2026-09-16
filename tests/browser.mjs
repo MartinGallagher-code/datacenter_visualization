@@ -102,9 +102,14 @@ const MIME = {
   '.tsv': 'text/tab-separated-values', '.dc': 'text/plain', '.json': 'application/json',
 };
 
+const FEED_HEAD = 'Timestamp\thost\trtt\n';
+const FEED_ROW = (at, host, value) => `2026-09-16T12:00:${at}\t${host}\t${value}\n`;
+
 const fixtures = new Map([
   ['/fx/runs/monday/results.tsv', '!test alpha unit=A\nalpha\tDH1/A/R01/u01\t21\n'],
   ['/fx/runs/tuesday/results.tsv', '!test beta unit=B\nbeta\tDH1/A/R01/u02\t42\n'],
+  // A file that grows between reads, which is what a live dashboard watches.
+  ['/fx/live/feed.tsv', FEED_HEAD + FEED_ROW('00', 'DH1/A/R01/u01', 100)],
 ]);
 
 function serve() {
@@ -112,7 +117,13 @@ function serve() {
     const url = new URL(req.url, 'http://localhost');
     const path = decodeURIComponent(url.pathname);
     if (fixtures.has(path)) {
-      res.writeHead(200, { 'content-type': 'text/tab-separated-values' });
+      // no-store, because two of the tests below change a fixture and read it
+      // again: a cached copy would make a live reload look broken when it is
+      // the test that is lying.
+      res.writeHead(200, {
+        'content-type': 'text/tab-separated-values',
+        'cache-control': 'no-store',
+      });
       res.end(fixtures.get(path));
       return;
     }
@@ -192,6 +203,35 @@ const cardNames = () => page.evaluate(() =>
   [...document.querySelectorAll('#overlays .overlay .overlay-name')].map((e) => e.textContent.trim()));
 const groupNames = () => page.evaluate(() =>
   [...document.querySelectorAll('#overlays .overlay-group-name')].map((g) => g.textContent.trim()));
+/**
+ * How many samples a metric holds, read off the card's own remove button --
+ * which is where the viewer already says it, so the test reads what a person
+ * reads instead of reaching into the app's state.
+ */
+const sampleCount = (name) => page.evaluate((wanted) => {
+  for (const card of document.querySelectorAll('#overlays .overlay')) {
+    const label = card.querySelector('.overlay-name');
+    if (!label || label.textContent.trim() !== wanted) continue;
+    const m = /its ([\d,]+) samples?/.exec(card.querySelector('.overlay-x').title);
+    return m ? Number(m[1].replace(/,/g, '')) : null;
+  }
+  return null;
+}, name);
+
+/**
+ * The "last N records" box. Set deliberately in every test that depends on
+ * it, in both directions: it is remembered across reloads, so a test that set
+ * it would otherwise be tailing every test that ran after it.
+ */
+const setTail = async (value) => {
+  await page.evaluate((v) => {
+    const box = document.querySelector('#live input[type=number]:not([min="1"])');
+    box.value = v;
+    box.dispatchEvent(new Event('change', { bubbles: true }));
+  }, String(value));
+  await page.waitForTimeout(600);
+};
+
 const statsLine = () => page.evaluate(() =>
   document.querySelector('#overlays .overlay-stats')?.innerText.replace(/\s+/g, ' ').trim() || '');
 const netTicks = () => page.evaluate(() =>
@@ -543,6 +583,190 @@ await test('a reading shows the number and how unusual it is', async () => {
 // index.html carries an empty slot, so a broken import leaves the box reading
 // "Datacenter Layout Viewer" with nothing after it -- which looks like a page
 // that simply has no version rather than a page whose scripts half-ran. The
+
+// ------------------------------------------------------------------ wide TSV
+//
+// A table of timestamps and hostnames, dropped on a viewer with no floor plan
+// in it. Every part of that sentence used to be impossible: the reader, the
+// hosts, and above all the plan -- there was nothing to paint on, and the
+// answer was "write a .dc file first".
+
+const WIDE = [
+  'Timestamp\thost\trtt (us)\tloss %\tverdict',
+  '2026-09-16T12:00:00\twr01r01u01\t184.2\t0.01\tpass',
+  '2026-09-16T12:00:00\twr01r01u02\t191.0\t0.00\tpass',
+  '2026-09-16T12:00:10\twr01r02u01\t204.5\t0.30\tfail',
+  '2026-09-16T12:00:10\twr01r01u01 -> wr01r02u01\t410.0\t1.20\tpass',
+  '',
+].join('\n');
+
+await test('a wide TSV brings its own floor plan', async () => {
+  await drop('live/room.tsv', WIDE);
+  await page.waitForTimeout(700);
+  eq((await cardNames()).sort(), ['loss %', 'rtt', 'verdict'], 'one metric per column');
+  const counts = await page.evaluate(() => document.querySelector('#filter-count').textContent);
+  ok(/\d+ elements/.test(counts), `a floor plan was built  (${counts})`);
+  ok(await page.evaluate(() => !!document.querySelector('#tree .tree-row')),
+     'and it is in the structure tree');
+  // The hosts are placed by their names: wr01 r01 u01 is a room, a rack and a
+  // machine, which is the whole reason this can be guessed at all.
+  const rooms = await page.evaluate(() =>
+    [...document.querySelectorAll('#tree .tree-row .tree-name')].map((e) => e.textContent.trim()));
+  ok(rooms.includes('wr01'), `the room comes out of the hostname  (${rooms.slice(0, 4).join(', ')})`);
+});
+
+await test('a flow row measures a pair, not a host', async () => {
+  await drop('live/room.tsv', WIDE);
+  await page.waitForTimeout(700);
+  await page.evaluate(() => {
+    document.querySelector('#filter').value = 'peer=wr01r02u01';
+    document.querySelector('#filter').dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  await page.waitForTimeout(400);
+  const counts = await page.evaluate(() => document.querySelector('#filter-count').textContent);
+  ok(/^1 \//.test(counts), `the arrow's left-hand host is the one that measured it  (${counts})`);
+});
+
+await test('two tables in one folder are one dashboard', async () => {
+  await page.evaluate(([a, b]) => {
+    const dt = new DataTransfer();
+    dt.items.add(new File([a], 'a.tsv', { type: 'text/plain' }));
+    dt.items.add(new File([b], 'b.tsv', { type: 'text/plain' }));
+    document.body.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true }));
+  }, [
+    'Timestamp\thost\trtt\n2026-09-16T12:00:00\twr01r01u01\t10\n',
+    'Timestamp\thost\trtt\n2026-09-16T12:00:00\twr01r01u02\t20\n',
+  ]);
+  await page.waitForTimeout(700);
+  eq(await cardNames(), ['rtt'], 'the same column in both files is one metric');
+  eq(await groupNames(), ['*.tsv'], 'grouped by the folder they share, not by file');
+  // Both files' rows are in it. One sample each, and the metric holds two --
+  // which is the difference between combining them and whichever file
+  // happened to be read last quietly replacing the other.
+  eq(await sampleCount('rtt'), 2, 'carrying the samples of both');
+  await expandCards();
+  eq(await page.evaluate(() =>
+    [...document.querySelectorAll('#overlays .rangerow input')].map((i) => i.value)),
+     ['10', '20'], 'and the scale spans both files\' values');
+});
+
+await test('every metric prints the name the filter takes', async () => {
+  await drop('live/room.tsv', WIDE);
+  await page.waitForTimeout(700);
+  await expandCards();
+  const slugs = await page.evaluate(() =>
+    [...document.querySelectorAll('#overlays .overlay-slug')].map((e) => e.textContent.trim()));
+  eq(slugs.sort(), ['loss', 'rtt', 'verdict'], 'a name with a space and a % folds to one word');
+  // And the card is not just showing it: clicking puts it in the filter, and
+  // the filter understands it. `loss %>0.2` cannot be typed at all.
+  await page.evaluate(() => {
+    const cards = [...document.querySelectorAll('#overlays .overlay')];
+    const card = cards.find((c) => c.querySelector('.overlay-slug').textContent.trim() === 'loss');
+    card.querySelector('.overlay-slug').click();
+  });
+  await page.waitForTimeout(400);
+  eq(await page.evaluate(() => document.querySelector('#filter').value), 'has:loss',
+     'clicking it filters by the metric');
+  await page.evaluate(() => {
+    const box = document.querySelector('#filter');
+    box.value = 'loss>0.2';
+    box.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  await page.waitForTimeout(400);
+  const counts = await page.evaluate(() => document.querySelector('#filter-count').textContent);
+  // The two over the line are the rack-2 host at 0.30 and, at 1.20, the host
+  // the flow row was measured from -- a flow belongs to where it started.
+  ok(/^2 \//.test(counts), `and comparisons take it too  (${counts})`);
+});
+
+await test('reading only the tail of a file', async () => {
+  await drop('live/room.tsv', WIDE);
+  await page.waitForTimeout(700);
+  eq(await sampleCount('rtt'), 4, 'four rows carry an rtt');
+  await setTail(2);
+  eq(await sampleCount('rtt'), 2, 'and "last 2 records" keeps the last two of them');
+  // The header is not a record. Losing it to the tail would take the column
+  // names with it, and every metric would come back called A, B, C.
+  eq((await cardNames()).sort(), ['loss %', 'rtt', 'verdict'], 'the header survives tailing');
+});
+
+
+// A dashboard is the same file, read again. The reload path is the one piece
+// of this that cannot be checked without a server, because it is about what
+// the file says *now* rather than what it said when it was opened.
+
+await test('reload now reads the file again', async () => {
+  await setTail('');
+  eq(await sampleCount('rtt'), 1, 'one row to start with');
+  fixtures.set('/fx/live/feed.tsv', FEED_HEAD
+    + FEED_ROW('00', 'DH1/A/R01/u01', 100)
+    + FEED_ROW('10', 'DH1/A/R01/u02', 200));
+  await page.evaluate(() => [...document.querySelectorAll('#live button')]
+    .find((b) => b.textContent.trim() === 'Reload now').click());
+  await page.waitForTimeout(700);
+  // Two, not three: the file is re-read, not appended to what it said before.
+  // Counting the first row twice is the failure this format invites.
+  eq(await sampleCount('rtt'), 2, 'the new row arrives and the old one is not counted twice');
+}, { url: '?layout=examples/small.dc&results=fx/live/feed.tsv' });
+
+await test('auto-reload picks up a row on its own', async () => {
+  await setTail('');
+  fixtures.set('/fx/live/feed.tsv', FEED_HEAD + FEED_ROW('00', 'DH1/A/R01/u01', 100));
+  await page.evaluate(() => {
+    const secs = document.querySelector('#live input[min="1"]');
+    secs.value = '1';
+    secs.dispatchEvent(new Event('change', { bubbles: true }));
+    document.querySelector('#live input[type=checkbox]').click();
+  });
+  await page.waitForTimeout(400);
+  fixtures.set('/fx/live/feed.tsv', FEED_HEAD
+    + FEED_ROW('00', 'DH1/A/R01/u01', 100)
+    + FEED_ROW('10', 'DH1/A/R01/u02', 200)
+    + FEED_ROW('20', 'DH1/A/R01/u03', 300));
+  await page.waitForTimeout(2600);
+  eq(await sampleCount('rtt'), 3, 'the timer brought the rows nobody asked for again');
+  // And it stops when it is told to, or a test that leaves it running would
+  // be reading the disk underneath every test after it.
+  await page.evaluate(() => document.querySelector('#live input[type=checkbox]').click());
+  fixtures.set('/fx/live/feed.tsv', FEED_HEAD + FEED_ROW('00', 'DH1/A/R01/u01', 100));
+  await page.waitForTimeout(2200);
+  eq(await sampleCount('rtt'), 3, 'and unticking it stops the timer');
+}, { url: '?layout=examples/small.dc&results=fx/live/feed.tsv' });
+
+
+// Load all: a folder becomes one dashboard, and stays one across reloads.
+// This is the fallback path -- <input webkitdirectory>, an in-memory tree --
+// because the File System Access API opens a native dialog no test can click.
+// Both back ends are the same node shape by design, and this is the half that
+// can be driven.
+await test('a folder loads as one dashboard and reloads without doubling', async () => {
+  await setTail('');
+  await page.setInputFiles('#dirpicker', join(root, 'examples/live'));
+  await page.waitForTimeout(600);
+  await page.evaluate(() => [...document.querySelectorAll('#browser button')]
+    .find((b) => b.textContent.trim() === 'Load all').click());
+  await page.waitForTimeout(1200);
+
+  eq(await groupNames(), ['*.tsv'], 'the folder is the group, not each file in it');
+  const cards = await cardNames();
+  eq(cards.sort(), ['Gb/s', 'cpu %', 'loss %', 'retransmits', 'rtt'],
+     'every column of every file in the folder');
+  const before = await cardNames();
+  const rtt = await sampleCount('rtt');
+  ok(rtt > 0, `the metric two of the files share has rows  (${rtt})`);
+  ok(await page.evaluate(() => document.querySelector('#live').innerText.includes('3 matching')),
+     'and Live says how many files it is following');
+
+  await page.evaluate(() => [...document.querySelectorAll('#live button')]
+    .find((b) => b.textContent.trim() === 'Reload now').click());
+  await page.waitForTimeout(1200);
+  eq(await sampleCount('rtt'), rtt, 'reading the folder again does not count its rows twice');
+  // A dashboard that reorders its own cards every ten seconds is unusable:
+  // re-reading a file empties the metrics only it carries, and re-adding them
+  // used to put them at the end of the list.
+  eq(await cardNames(), before, 'and the cards stay where they were');
+});
+
 // module tests can prove the two source files agree; only this can prove the
 // number reaches the screen.
 await test('the About box shows the version', async () => {

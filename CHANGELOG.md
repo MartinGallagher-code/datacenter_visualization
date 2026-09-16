@@ -13,6 +13,46 @@ their shapes are not a promise.
 
 ## Unreleased
 
+- **A wide TSV table loads as it stands.** `Timestamp  host  var1  var2 …`,
+  tab-separated — the shape monitoring already writes — is read as a second
+  format, chosen per file and detected rather than declared. One column
+  becomes one metric; the header is optional (unnamed columns are `A`, `B`,
+  `C`…) and may be commented out; a bracketed or trailing-`%` unit in a
+  heading becomes the metric's unit; a blank cell is "not measured", never
+  zero. **The results format is untouched**: a file is only read as a table
+  when it could not be a results file — first field an instant, second a host,
+  and a real tab between them.
+  A table may carry the results format's own `!test` lines, checked exactly as
+  they are there, so a column can be given a unit, a palette or a range
+  without a second syntax for it.
+- **…including the floor plan.** With no `.dc` file loaded, the hosts are
+  placed by reading their names — `wr12r06u15` is room `wr12`, rack `r06`,
+  machine `u15`; `dc1-hall2-r03-u05` and `rack01-server05` the same way; a
+  domain the hosts share is dropped rather than read as racks. Loading a real
+  layout replaces it with every overlay still bound, and **Edit layout** →
+  **Download .dc** keeps the generated one to correct by hand.
+- **A host may be a flow.** `wr01r01u05 -> wr01r02u09` in the host column
+  measures the path between two machines: the sample belongs to where it
+  started, with the far end as its `peer=`, which is what **draw measured
+  flows** paints and `peer=` filters. `->`, `=>` and `→` all work.
+- **Tables in one folder are one dashboard.** One file per host, per metric or
+  per hour: a column of the same name in two of them is one metric carrying
+  the samples of both. Every other format still keeps a file's metrics to
+  itself, and two folders stay two dashboards.
+- **Live reload.** A new **Live** panel re-reads every loaded results file on a
+  timer, optionally only the **last N records** of each (`tail -n`, with
+  headers, comments and `!test` lines kept whatever their age). **Load all** in
+  the Files panel loads every file in the open folder matching the name filter
+  and then follows the folder, so a file written while the dashboard is up
+  joins it and one that disappears takes its samples with it. Nothing reads on
+  a timer until it is switched on.
+- **Every metric prints the name the filter box can take.** A metric is called
+  whatever wrote the file, and the filter reads a bare word — so `iperf Mb/s
+  (out)` was two terms and a glob, untypeable at the metric it names. Each card
+  now shows a **filter as** name (`iperf_mb_s_out`) above **combine**: click it
+  to filter by that metric, or type it into a comparison. The original name
+  still works where it can be typed; `slug=` on a `!test` line overrides the
+  derived one.
 - Releasing is one click. `release.yml`'s **Run workflow** button asked for a
   tag to build, which is a thing to get wrong at the one moment nobody wants
   a puzzle. It now takes no input at all: it reads the version out of the

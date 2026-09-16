@@ -275,6 +275,20 @@ export function renderBrowser(b, host, a) {
   controls.append(find, all);
   host.append(controls);
 
+  // One dashboard out of a folder: every results file the filter leaves
+  // showing, loaded together and then kept watched, so the folder is listed
+  // again on every refresh and a file that appears in it joins in.
+  const loadAll = el('div', 'btnrow');
+  const every = el('button', null, 'Load all');
+  const pattern = (b.filter || '').trim() || '*.tsv';
+  every.title = `Load every results file here matching ${pattern}, and follow this folder: `
+    + 'on each reload it is listed again, so a file written while the dashboard is up joins it. '
+    + 'Type a filter above first to narrow what that means.';
+  every.addEventListener('click', () => a.browseLoadAll());
+  loadAll.append(every);
+  loadAll.append(el('span', 'muted', pattern));
+  host.append(loadAll);
+
   if (b.error) host.append(el('p', 'warn', b.error));
   if (b.loading) { host.append(el('p', 'muted', 'Reading…')); return; }
 

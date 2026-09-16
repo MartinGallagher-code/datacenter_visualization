@@ -298,6 +298,18 @@ function overlayCard(state, overlay, actions) {
   const body = el('div', 'overlay-body');
   const grid = el('div', 'grid2');
 
+  // The name to type at it. A metric is called whatever wrote the file, and
+  // the filter box reads a bare word -- so `iperf Mb/s (out)` is untypeable
+  // there, and guessing what it folds to is not a thing anyone should have to
+  // do. Printed here, one click away from being in the box.
+  grid.append(el('label', null, 'filter as'));
+  const slug = el('button', 'overlay-slug', overlay.slug);
+  slug.title = `Add has:${overlay.slug} to the filter, showing only what this metric measured. `
+    + `The same name takes a comparison: ${overlay.slug}>10, ${overlay.slug}!=pass.`
+    + (overlay.slug === overlay.name.toLowerCase() ? '' : `  (the metric itself is "${overlay.name}")`);
+  slug.addEventListener('click', () => actions.appendFilter(`has:${overlay.slug}`));
+  grid.append(slug);
+
   grid.append(el('label', null, 'combine'));
   if (overlay.numeric) {
     const agg = el('select');
@@ -792,6 +804,100 @@ export function renderNotices(state, host, button, actions, onJump) {
       row.append(detail);
     }
     host.append(row);
+  }
+}
+
+// -------------------------------------------------------------------- live
+// The dashboard controls: reload the loaded files on a timer, read only the
+// end of each one, and follow a folder so a file that appears joins in. Every
+// one of these is off until it is switched on -- a viewer that starts reading
+// the disk on a timer because a file was once opened would be a surprise, and
+// this panel is where the surprise is traded for a switch.
+
+const clockTime = (at) => {
+  if (!at) return '';
+  try {
+    return new Date(at).toLocaleTimeString();
+  } catch {
+    return '';
+  }
+};
+
+export function renderLive(state, host, actions) {
+  if (!host) return;
+  host.textContent = '';
+  const live = state.live;
+
+  const row = el('div', 'live-row');
+  const auto = el('label', 'chk');
+  const box = el('input');
+  box.type = 'checkbox';
+  box.checked = !!live.on;
+  box.addEventListener('change', () => actions.setLive(box.checked));
+  auto.append(box, el('span', null, 'reload every'));
+  auto.title = 'Read every loaded results file again, on a timer. The same reader and the '
+    + 'same rules as opening it by hand: a file replaces what it brought last time, so a '
+    + 'log being appended to does not count its rows twice.';
+  row.append(auto);
+
+  const secs = el('input', 'live-num');
+  secs.type = 'number';
+  secs.min = '1';
+  secs.max = '3600';
+  secs.value = String(live.seconds);
+  secs.title = 'Seconds between passes. A pass still running when the next one is due is '
+    + 'simply the pass that is running: they never overlap.';
+  secs.addEventListener('change', () => actions.setLiveSeconds(secs.value));
+  row.append(secs, el('span', 'muted', 's'));
+  host.append(row);
+
+  const tailRow = el('div', 'live-row');
+  tailRow.append(el('span', null, 'last'));
+  const tail = el('input', 'live-num');
+  tail.type = 'number';
+  tail.min = '0';
+  tail.value = live.tail ? String(live.tail) : '';
+  tail.placeholder = 'all';
+  tail.title = 'Read only the last N rows of each file, the way tail -n does. Headers, '
+    + 'comments and !test lines are kept whatever their age, so the units and the column '
+    + 'names survive scrolling off the top. Empty means the whole file.';
+  tail.addEventListener('change', () => actions.setLiveTail(tail.value));
+  tailRow.append(tail, el('span', 'muted', 'records per file'));
+  host.append(tailRow);
+
+  const bar = el('div', 'btnrow');
+  const now = el('button', null, live.busy ? 'Reading…' : 'Reload now');
+  now.disabled = !!live.busy;
+  now.title = 'Read every loaded results file again, once';
+  now.addEventListener('click', () => actions.refreshNow());
+  bar.append(now);
+  host.append(bar);
+
+  if (state.watch) {
+    const watched = el('div', 'live-watch');
+    const where = [...state.watch.path].join('/') || 'the open folder';
+    watched.append(el('span', 'live-watch-name', `${where}/${state.watch.pattern}`));
+    const stop = el('button', 'overlay-x', '×');
+    stop.title = 'Stop following this folder. Nothing already loaded is unloaded.';
+    stop.addEventListener('click', () => actions.stopWatch());
+    watched.append(stop);
+    watched.title = `Every file here matching ${state.watch.pattern} is part of the dashboard. `
+      + 'The folder is listed again on every pass, so a file that appears joins it and one '
+      + 'that disappears takes its samples with it.';
+    host.append(watched);
+  }
+
+  const feeding = [...state.sources.values()].filter((s) => !s.layout).length;
+  const bits = [];
+  bits.push(feeding ? `${feeding} file${feeding === 1 ? '' : 's'}` : 'no files loaded');
+  if (state.watch) bits.push(`${state.watch.count} matching`);
+  if (live.at) bits.push(`read ${clockTime(live.at)}`);
+  host.append(el('p', 'muted live-status', bits.join(' · ')));
+
+  if (live.error) host.append(el('p', 'warn', live.error));
+  if (!feeding && !state.watch) {
+    host.append(el('p', 'muted',
+      'Load a results file, or open a folder in Files and use “Load all” there, and this reloads it.'));
   }
 }
 
