@@ -1,5 +1,6 @@
-// Datacenter Layout Viewer
-// Copyright (C) 2026 Martin J. Gallagher
+// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Martin J. Gallagher
+
 //
 // This program is free software: you can redistribute it and/or modify it under
 // the terms of the GNU General Public License as published by the Free Software
@@ -2772,7 +2773,8 @@ if (python.error) {
 
   // The licence badge, the LICENSE file and pyproject are three statements of
   // one fact, and the PyPI page renders the middle one.
-  ok(badge('License').includes('GPL--3.0--or--later'), 'the licence badge says GPLv3+');
+  ok(badge('License: GPL-3.0-or-later').includes('GPL--3.0--or--later'),
+     'the licence badge says GPL-3.0-or-later');
   ok(/^license = "GPL-3\.0-or-later"$/m.test(pyproject), 'and pyproject agrees');
 
   // The tests badge has to point at the workflow that exists, under the name
@@ -2783,7 +2785,7 @@ if (python.error) {
 
   // Every badge points somewhere a PyPI reader can follow. README is the
   // package's long description, where a relative href is a dead link.
-  eq(badges.size, 5, 'all five badges parse');
+  eq(badges.size, 6, 'all six badges parse');
   ok([...badges.values()].every((b) => b.href.startsWith('https://')),
      'and every badge links absolutely');
 
@@ -2803,9 +2805,12 @@ if (python.error) {
       const run = spawnSync(join(root, 'tools', tool), ['--version'], { encoding: 'utf8' });
       eq(run.status, 0, `tools/${tool} --version exits 0`);
       eq((run.stdout || '').split('\n')[0],
-         `${tool} (Datacenter Layout Viewer) ${VERSION}`,
+         `${tool} ${VERSION}`,
          `tools/${tool} reports the project version`);
-      ok((run.stdout || '').includes('GPLv3+'), `tools/${tool} --version states the licence`);
+      ok((run.stdout || '').includes('License: GPL-3.0-or-later'),
+         `tools/${tool} --version states the licence`);
+      ok((run.stdout || '').includes('Copyright (C) 2026 Martin J. Gallagher'),
+         `tools/${tool} --version names the copyright holder`);
     }
 
     // The dcviz CLI only exists once something is installed, so it is run out
@@ -2815,8 +2820,12 @@ if (python.error) {
                                        { encoding: 'utf8', env });
     const ver = cli('--version');
     eq(ver.status, 0, 'python3 -m dcviz --version exits 0');
-    eq((ver.stdout || '').split('\n')[0], `dcviz (Datacenter Layout Viewer) ${VERSION}`,
+    eq((ver.stdout || '').split('\n')[0], `dcviz ${VERSION}`,
        'dcviz reports the project version');
+    ok((ver.stdout || '').includes('License: GPL-3.0-or-later'),
+       'dcviz --version states the licence');
+    ok((ver.stdout || '').includes('Copyright (C) 2026 Martin J. Gallagher'),
+       'dcviz --version names the copyright holder');
 
     // `dcviz path` is how serve.py finds the viewer. From a checkout that is
     // the repository root; from a wheel it is dcviz/static/. Getting this

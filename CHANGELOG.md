@@ -90,6 +90,16 @@ their shapes are not a promise.
   to filter by that metric, or type it into a comparison. The original name
   still works where it can be typed; `slug=` on a `!test` line overrides the
   derived one.
+
+- **Licensing and attribution are identical across every repository in the
+  suite.** The notice said the same thing eleven slightly different ways —
+  different badge text, different `--version` wording, five styles of file
+  header, and in places a different holder. It is one form now: the holder is
+  `Martin J. Gallagher`, the licence `GPL-3.0-or-later`, `LICENSE` and
+  `LICENSES/GPL-3.0-or-later.txt` the same verbatim FSF text everywhere, every
+  source file carrying the two-line SPDX header in place of the ten-line
+  inline GPL notice, and `dcviz`/`dcadd`/`dcimport` printing the same
+  five-line block as every sibling tool. `reuse lint` passes.
 - Releasing is one click. `release.yml`'s **Run workflow** button asked for a
   tag to build, which is a thing to get wrong at the one moment nobody wants
   a puzzle. It now takes no input at all: it reads the version out of the

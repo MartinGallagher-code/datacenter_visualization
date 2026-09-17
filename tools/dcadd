@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
-# Datacenter Layout Viewer
-# Copyright (C) 2026 Martin J. Gallagher
-#
 # SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 Martin J. Gallagher
 """Run dcadd straight from a checkout, with nothing installed.
 
 The tool itself is python/dcviz/dcadd.py, so that the copy `pip install`

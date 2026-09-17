@@ -1,13 +1,5 @@
-// Datacenter Layout Viewer
-// Copyright (C) 2026 Martin J. Gallagher
-//
-// This program is free software: you can redistribute it and/or modify it under
-// the terms of the GNU General Public License as published by the Free Software
-// Foundation, either version 3 of the License, or (at your option) any later
-// version. This program is distributed WITHOUT ANY WARRANTY; see the GNU General
-// Public License (LICENSE, or <https://www.gnu.org/licenses/>) for details.
-//
 // SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Martin J. Gallagher
 
 // The version of the whole project -- the viewer, the tools and the Python
 // package are one thing and ship one number, so a bug report that says "1.0.0"
