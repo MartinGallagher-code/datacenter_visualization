@@ -26,6 +26,7 @@ output carrying every overlay that tool writes.
 | Link modes: `star`, `mesh`, `chain`, `ring`, `pair` | the six `link` lines |
 | Selectors: tag, non-inherited `^tag`, `kind=`, `attr=` glob, negation | `^switch,model=sn3700*,+hall-a,!+decom` |
 | `scope=` grouping | `scope=rack`, `scope=row`, `scope=dc` |
+| Hardware for other tools to read | `nic_gbps=25` on row A, `uplinks=4 uplink_gbps=100` on its racks — binnacle's `reckon` grades a run against them |
 
 168 elements and 321 cables from 76 lines, most of it comment.
 

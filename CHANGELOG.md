@@ -13,6 +13,20 @@ their shapes are not a promise.
 
 ## Unreleased
 
+- **A layout can carry the hardware a run is graded against.** Nothing new
+  in the format: `nic_gbps=` on servers and `uplinks=` / `uplink_gbps=` on
+  racks are ordinary attributes, inherited like any other, and the viewer
+  shows them in the inspector. binnacle's `reckon` reads them to work out
+  what each flow of an mx or iperf run should have reached, and writes its
+  `reckon_*` overlays in this project's results format.
+  `examples/mx/floor.dc` now declares 25 Gb/s NICs and four 100 Gb/s uplinks
+  per rack on its measured row, the speeds the run behind
+  `examples/mx/mx-results.tsv` was exported against, and the suite holds a
+  real `reckon` overlay of a loopback mx run to the same contract as `mx
+  export`'s: it parses clean, every target resolves, efficiency diverges
+  around 100%, and a host that never reported stays visible with its rack
+  collapsed.
+
 - **A wide TSV table loads as it stands.** `Timestamp  host  var1  var2 …`,
   tab-separated — the shape monitoring already writes — is read as a second
   format, chosen per file and detected rather than declared. One column

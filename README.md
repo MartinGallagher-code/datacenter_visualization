@@ -147,6 +147,11 @@ without appearing in the name — see `examples/hostnames.dc`.
 - `key=value` attributes are free-form and **inherit** downward (children see
   the parent's `region=us-east` unless they override it). Layout-only keys
   (`u`, `at`, `cols`, `dir`, `name`, …) do not inherit.
+- Attributes the viewer does not draw are still worth writing: they show in
+  the inspector, and other tools read the same file. `nic_gbps=` on servers
+  and `uplinks=` / `uplink_gbps=` on racks are the hardware binnacle's
+  [`reckon`](#reckon--binnacle-grades-a-run-against-the-hardware) grades a
+  test run against — one `nic_gbps=25` on a row covers every server in it.
 - `+tag` tags are free-form keywords; every element can carry many, and every
   element also carries its ancestors' tags. `+a,b,c` adds three at once.
 - Rack children: `u=4` gives a node 4 U of height, `at=42` pins it to a slot;
@@ -637,6 +642,45 @@ steady). Every sample carries `run=<run-id>`, so a nightly
 and `last` read as then-and-now. `--overlay-map` and `--overlay-prefix` rename
 hosts onto whatever the layout calls those nodes, and `--overlay-format ndjson`
 writes NDJSON instead.
+
+### `reckon` — binnacle grades a run against the hardware
+
+The overlays above are relative: `mx_achieved` to the target the run asked
+for, `mx_rel_median` and `iperf_rel_median` to the fleet's own median. A
+fleet running at half its NICs sits at 100% of both. The absolute reading
+needs the hardware, and the hardware can live in the layout as ordinary
+attributes:
+
+```text
+row A +compute nic_gbps=25
+  rack r[01..04] u=42 uplinks=4 uplink_gbps=100
+```
+
+[binnacle](https://github.com/MartinGallagher-code/binnacle)'s
+[`reckon`](https://binnacle.readthedocs.io/en/latest/tools/reckon.html) reads
+that, works out what every flow of an mx or iperf run could have had — its
+fair share of the NICs and rack uplinks it crosses, or its target if lower —
+and writes this format itself:
+
+```sh
+reckon floor.dc --mx reports/ --overlay reckon.tsv
+dcviz serve --layout floor.dc --results reckon.tsv
+```
+
+| Overlay | Per | What it is |
+|---|---|---|
+| `reckon_efficiency` | host | its flows' achieved vs expected, median, on a ramp pinned at 0–200% |
+| `reckon_expected` / `reckon_achieved` | host | pps for an mx run, Mb/s for iperf |
+| `reckon_limit` | host | what the hardware limits it to: `TARGET`, `NIC`, `UPLINK`, … |
+| `reckon_verdict` | host | `OK`, `WARN`, `FAIL`, or `NO-DATA` for a host that never reported |
+| `reckon_nic_gbps` | host | the speed it was graded against, `source=` layout, measured or flag |
+| `reckon_peer_efficiency` | flow | one flow, with `peer=`, so it draws as a measured flow |
+
+`reckon_efficiency` is the one to open beside `mx_rel_median`: the median
+overlay says which hosts are unlike the rest, and this one says whether the
+rest are where the hardware puts them. A host above 100% is a finding too —
+it means the layout's hardware is wrong. Every assumption the model made is
+written into the file's `#` header.
 
 ### `dcimport` — netmesh output, directly
 
