@@ -27,6 +27,17 @@ their shapes are not a promise.
   around 100%, and a host that never reported stays visible with its rack
   collapsed.
 
+- **`reckon --baseline`'s change layers are held to the same contract.**
+  `reckon_change` and `reckon_peer_change` are how far each host and flow
+  moved since an earlier run, in points of efficiency, on a diverging ramp
+  from −50 to +50. A second real loopback mx run, reckoned against the
+  first fixture as its baseline, is now a fixture too
+  (`tests/fixtures/reckon-change-overlay.tsv`), and the suite checks it
+  parses clean, resolves on the floor, names the run it is measured from,
+  carries `then=` on every sample, and paints a fall as a negative value
+  rather than dropping it. Nothing in the viewer changed: a negative
+  `min=` was already accepted.
+
 - **A wide TSV table loads as it stands.** `Timestamp  host  var1  var2 …`,
   tab-separated — the shape monitoring already writes — is read as a second
   format, chosen per file and detected rather than declared. One column

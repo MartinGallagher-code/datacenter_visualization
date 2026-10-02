@@ -1419,6 +1419,30 @@ if (python.error) {
      'every per-flow sample names its peer');
   for (const [name, ov] of overlays)
     ok(ov.samples.every((sm) => sm.meta.run === 'loopback'), `${name} is tagged with its run`);
+
+  // A second real run, reckoned with the one above as its --baseline: what
+  // changed, in points, centred on "no change". The host that never reported
+  // in the first run was still graded there on its peers' flows into it, so
+  // it has a change; a value is the difference of two efficiencies, so it
+  // can be negative, and a negative value has to paint, not be dropped.
+  const changeWarnings = [];
+  const changed = parseResults(
+    readFileSync(join(root, 'tests/fixtures/reckon-change-overlay.tsv'), 'utf8'), new Map(),
+    changeWarnings);
+  eq(changeWarnings, [], 'the reckon change overlay parses clean');
+  const change = bindOverlay(changed.get('reckon_change'), floor);
+  eq(change.unresolved, [], 'every change target resolves in the floor');
+  eq([change.unit, change.palette, change.min, change.max, change.agg],
+     ['points', 'rdbu', -50, 50, 'median'], 'the change diverges around no change');
+  eq(changed.get('reckon_change').meta.label, 'Efficiency change since run loopback',
+     'and names the run it is measured from');
+  ok(changed.get('reckon_change').samples.every((sm) => Number.isFinite(Number(sm.meta.then))),
+     'every change carries what it was then');
+  const fell = changed.get('reckon_change').samples.find((sm) => Number(sm.value) < 0);
+  ok(fell, 'the fixture holds a fall');
+  ok(overlayValue(change, floor.resolve(fell.target)).value < 0, 'and a fall paints as one');
+  ok(changed.get('reckon_peer_change').samples.every((sm) => sm.meta.peer),
+     'every per-flow change names its peer');
 }
 
 // ------------------------------------------------------------- examples/mx

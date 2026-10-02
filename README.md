@@ -675,12 +675,23 @@ dcviz serve --layout floor.dc --results reckon.tsv
 | `reckon_verdict` | host | `OK`, `WARN`, `FAIL`, or `NO-DATA` for a host that never reported |
 | `reckon_nic_gbps` | host | the speed it was graded against, `source=` layout, measured or flag |
 | `reckon_peer_efficiency` | flow | one flow, with `peer=`, so it draws as a measured flow |
+| `reckon_change` / `reckon_peer_change` | host / flow | with `--baseline`: efficiency now minus then, in points, on a ramp from −50 to +50 |
 
 `reckon_efficiency` is the one to open beside `mx_rel_median`: the median
 overlay says which hosts are unlike the rest, and this one says whether the
 rest are where the hardware puts them. A host above 100% is a finding too —
 it means the layout's hardware is wrong. Every assumption the model made is
 written into the file's `#` header.
+
+`reckon --baseline` takes an earlier run's reckoning — its `--json`, or the
+overlay you kept for the viewer — and adds `reckon_change`: how far each host
+moved since then. Efficiency compares across runs where raw rates cannot,
+because each run is graded against its own expectation, so the change layer
+shows a host slipping before any absolute layer turns red.
+
+```sh
+reckon floor.dc --mx reports/ --run wed --baseline tue.tsv --overlay wed.tsv
+```
 
 ### `dcimport` — netmesh output, directly
 
