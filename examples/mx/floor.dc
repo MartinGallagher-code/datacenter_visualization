@@ -18,8 +18,14 @@ dc MX1 name="Acme MX1" region=us-east tier=3 +prod
     # The mx fleet. name={room}{rack}{id} gives every server a flat hostname
     # like wr01r03u05: that is what `mx gen --servers` was fed and what the
     # results file targets, so the two agree with no mapping step in between.
-    row A +compute
-      rack r[01..04] u=42 +standard
+    #
+    # The hardware, as plain attributes: nic_gbps= reaches every server in
+    # the row by inheritance, and uplinks= / uplink_gbps= give each rack its
+    # four 100 Gb/s uplinks. The viewer shows them in the inspector and
+    # otherwise ignores them; binnacle's `reckon` reads them to work out
+    # what a run on this row should have reached.
+    row A +compute nic_gbps=25
+      rack r[01..04] u=42 +standard uplinks=4 uplink_gbps=100
         node tor at=42 role=tor model=sn3700 name={room}{rack}tor +switch,uplink
         node u[01..06] role=server name={room}{rack}{id} +x86
 

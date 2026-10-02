@@ -1,0 +1,43 @@
+# reckon 0.8.0 -- what each host and flow achieved against what its hardware allows
+# mx run, 64 B requests, 64 B replies, last 60s; 4 hosts, 9 flows, 9 compared
+# layout examples/mx/floor.dc
+# assumed: Each flow's expected rate is its max-min fair share: flows rise together until a link they cross is full or they reach their target.
+# assumed: A packet on the wire is its payload plus 66 B (preamble and SFD 8, MAC 14, FCS 4, IFG 12, IPv4 20, UDP 8) -- the figure mx itself uses.  Every request is answered by one reply, crossing the same links the other way.
+# assumed: A rack's uplinks carry uplinks x uplink_gbps each way, spread evenly; the layers above the racks are taken as non-blocking.
+!test	reckon_expected	unit=pps	higher=good	decimals=0	short=EXP	label="Expected from the hardware"
+!test	reckon_achieved	unit=pps	higher=good	decimals=0	short=ACH	label="Round trips completed"
+!test	reckon_efficiency	unit=%	higher=good	palette=rdbu	min=0	max=200	agg=median	decimals=0	short=EFF	label="Achieved vs what the hardware allows"
+!test	reckon_limit	short=LIM	label="What the hardware limits it to"
+!test	reckon_verdict	short=VERD	label="Against the hardware"
+!test	reckon_nic_gbps	unit=Gb/s	higher=good	agg=min	decimals=0	short=NIC	label="NIC speed the model used"
+!test	reckon_peer_efficiency	unit=%	higher=good	palette=rdbu	min=0	max=200	agg=median	decimals=0	short=EFF	label="Flow vs what the hardware allows"
+reckon_expected	wr01r01u01	18000	run=loopback
+reckon_achieved	wr01r01u01	17920	run=loopback
+reckon_efficiency	wr01r01u01	99.6	flows=5	short_flows=2	run=loopback
+reckon_limit	wr01r01u01	TARGET	run=loopback
+reckon_verdict	wr01r01u01	OK	run=loopback
+reckon_nic_gbps	wr01r01u01	25	source=layout	run=loopback
+reckon_expected	wr01r01u02	18000	run=loopback
+reckon_achieved	wr01r01u02	17895	run=loopback
+reckon_efficiency	wr01r01u02	99.6	flows=5	short_flows=2	run=loopback
+reckon_limit	wr01r01u02	TARGET	run=loopback
+reckon_verdict	wr01r01u02	OK	run=loopback
+reckon_nic_gbps	wr01r01u02	25	source=layout	run=loopback
+reckon_expected	wr01r02u01	18000	run=loopback
+reckon_achieved	wr01r02u01	17848	run=loopback
+reckon_efficiency	wr01r02u01	99.3	flows=5	short_flows=3	run=loopback
+reckon_limit	wr01r02u01	TARGET	run=loopback
+reckon_verdict	wr01r02u01	WARN	run=loopback
+reckon_nic_gbps	wr01r02u01	25	source=layout	run=loopback
+reckon_efficiency	wr01r02u02	99.0	flows=3	short_flows=3	run=loopback
+reckon_verdict	wr01r02u02	NO-DATA	run=loopback
+reckon_nic_gbps	wr01r02u02	25	source=layout	run=loopback
+reckon_peer_efficiency	wr01r01u01	99.8	limit="its target"	peer=wr01r01u02	run=loopback
+reckon_peer_efficiency	wr01r01u01	99.6	limit="its target"	peer=wr01r02u01	run=loopback
+reckon_peer_efficiency	wr01r01u01	99.2	limit="its target"	peer=wr01r02u02	run=loopback
+reckon_peer_efficiency	wr01r01u02	99.6	limit="its target"	peer=wr01r01u01	run=loopback
+reckon_peer_efficiency	wr01r01u02	99.6	limit="its target"	peer=wr01r02u01	run=loopback
+reckon_peer_efficiency	wr01r01u02	99.0	limit="its target"	peer=wr01r02u02	run=loopback
+reckon_peer_efficiency	wr01r02u01	99.3	limit="its target"	peer=wr01r01u01	run=loopback
+reckon_peer_efficiency	wr01r02u01	99.1	limit="its target"	peer=wr01r01u02	run=loopback
+reckon_peer_efficiency	wr01r02u01	99.0	limit="its target"	peer=wr01r02u02	run=loopback

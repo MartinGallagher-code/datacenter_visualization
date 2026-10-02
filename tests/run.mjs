@@ -1368,6 +1368,59 @@ if (python.error) {
   }
 }
 
+// ------------------------------------------------------------------- reckon
+// binnacle's `reckon` grades a run against the hardware a layout declares and
+// writes this format itself, the way `mx export` does. The fixture is reckon
+// over a real mx run on loopback, graded against examples/mx/floor.dc, so
+// what has to hold is that it parses, lands on the floor whose hardware it
+// read, and carries what each overlay needs to read on its own.
+{
+  const floor = parseLayout(readFileSync(join(root, 'examples/mx/floor.dc'), 'utf8'));
+  // The hardware is plain attributes: the viewer carries them, inherited, and
+  // asks nothing more of them -- no warning, no new syntax.
+  const server = floor.resolve('wr01r02u01');
+  eq([server.attrsEff.nic_gbps, server.parent.attrsEff.uplinks,
+      server.parent.attrsEff.uplink_gbps], ['25', '4', '100'],
+     'the demo floor declares its hardware by inheritance');
+
+  const warnings = [];
+  const overlays = parseResults(
+    readFileSync(join(root, 'tests/fixtures/reckon-overlay.tsv'), 'utf8'), new Map(), warnings);
+  eq(warnings, [], 'the reckon overlay parses clean');
+  for (const test of ['reckon_efficiency', 'reckon_expected', 'reckon_achieved',
+                      'reckon_limit', 'reckon_verdict', 'reckon_nic_gbps',
+                      'reckon_peer_efficiency'])
+    ok(overlays.has(test), `reckon declares ${test}`);
+
+  const eff = bindOverlay(overlays.get('reckon_efficiency'), floor);
+  eq(eff.unresolved, [], 'every reckon target resolves in the floor it was graded against');
+  eq([eff.unit, eff.palette, eff.min, eff.max, eff.agg], ['%', 'rdbu', 0, 200, 'median'],
+     'efficiency diverges around 100%, as mx_achieved does');
+  ok(overlayValue(eff, floor.resolve('wr01r01u01')).value > 90, 'and lands on its node');
+  eq(bindOverlay(overlays.get('reckon_expected'), floor).unit, 'pps',
+     'an mx run is expected in packets per second');
+
+  // A label overlay, and a rack reads as its worst host: the one whose report
+  // never arrived stays visible with the rack collapsed.
+  const verdict = bindOverlay(overlays.get('reckon_verdict'), floor);
+  ok(!verdict.numeric, 'reckon_verdict is a label overlay');
+  const silent = floor.resolve('wr01r02u02');
+  eq(overlayValue(verdict, silent).value, 'NO-DATA', 'a host that never reported says so');
+  eq(overlayValue(verdict, silent.parent).value, 'NO-DATA',
+     'and its rack still shows it, collapsed');
+
+  const nic = bindOverlay(overlays.get('reckon_nic_gbps'), floor);
+  eq(nic.unit, 'Gb/s', 'the NIC speed the model used carries its unit');
+  eq(overlayValue(nic, server).value, 25, "and is the layout's own figure");
+  ok(overlays.get('reckon_nic_gbps').samples.every((sm) => sm.meta.source === 'layout'),
+     'and says where it came from');
+
+  ok(overlays.get('reckon_peer_efficiency').samples.every((sm) => sm.meta && sm.meta.peer),
+     'every per-flow sample names its peer');
+  for (const [name, ov] of overlays)
+    ok(ov.samples.every((sm) => sm.meta.run === 'loopback'), `${name} is tagged with its run`);
+}
+
 // ------------------------------------------------------------- examples/mx
 // The demo pair is documentation that runs: floor.dc uses every construct the
 // format has, and mx-results.tsv is real `mx export` output over it. If either

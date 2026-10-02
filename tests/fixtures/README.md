@@ -28,6 +28,7 @@ binds against a layout, and carries the metadata each overlay needs.
 |---|---|
 | `iperf-overlay.tsv` | a run through `iperf_orchestrator`'s own `export-overlay`, which derives more than an importer could (relative-to-median, pair asymmetry, per-host success rate); the suite checks its overlays, metadata and aggregation behaviour against the layout |
 | `mx-export/` | `mx export` run against `matrix_orchestrator` agents on loopback, in both the tab-separated and NDJSON forms — including a host that never reported, which arrives as `mx_state NO-DATA` |
+| `reckon-overlay.tsv` | binnacle's `reckon --overlay`, grading a real four-host `mx run` over loopback against `examples/mx/floor.dc`'s declared hardware. One host's report was withheld, as a failed collect leaves it, so the file carries `reckon_verdict NO-DATA`; it was graded with `--short 99.5` so the verdicts are not all `OK`, and tagged `--run loopback` |
 
 `mx-export/` is also the contract for what that export leaves *out*. Because
 one host in the run behind it never reported, nobody can say how much of its
