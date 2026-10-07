@@ -1305,6 +1305,29 @@ link data role=server role=tor splice=4
   eq(folded.cables.map((c) => c.count), [8], 'their eight cables merge into one, as unspliced ones do');
 }
 
+// examples/dual-plane.dc is a topology written out in prose at the top of
+// the file. These pin the wiring to that prose, so a change to how rules
+// expand cannot quietly turn the example into a different fabric.
+{
+  const m = parseLayout(readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8'));
+  eq(m.warnings, [], 'dual-plane.dc parses clean');
+  const perNet = {};
+  for (const l of m.links) perNet[l.net] = (perNet[l.net] || 0) + 1;
+  eq(perNet, { nica: 32, nicb: 32, peer: 4, fabric: 16, plane1: 48, plane2: 48 },
+     'dual-plane: 32 servers per NIC, 4 TOR pairs, 4 TORs x 2 spines per pod, 2 x 6 x 4 per plane');
+  eq(m.splices.length, 16, 'dual-plane: two harnesses per NIC per rack');
+  const peers = (el) => el.links.map((l) => `${l.net}:${(l.a === el ? l.b : l.a).id}`).sort();
+  const tora = m.resolve('P2/A/R03/tora');
+  eq(peers(tora).filter((p) => !p.startsWith('nica:')), ['fabric:spine1', 'fabric:spine2', 'peer:torb'],
+     'dual-plane: TOR a takes NIC a, its TOR b, and both of its pod\u2019s spines');
+  ok(m.splices.every((sp) => sp.to.attrsEff.nic === (sp.net === 'nica' ? 'a' : 'b')),
+     'dual-plane: NIC a harnesses end at TOR a, NIC b at TOR b');
+  const spine1 = m.resolve('P1/S/SP1/spine1');
+  const up = spine1.links.filter((l) => l.net === 'plane1').map((l) => (l.a === spine1 ? l.b : l.a));
+  eq(up.length, 24, 'dual-plane: a spine 1 runs four cables to each of six superspines');
+  ok(up.every((x) => x.attrsEff.plane === '1'), 'dual-plane: all of them in plane 1');
+}
+
 // ------------------------------------------------------------------ palette
 ok(ramp('viridis', 0) !== ramp('viridis', 1), 'ramp varies');
 eq(ramp('viridis', -5), ramp('viridis', 0), 'ramp clamps');

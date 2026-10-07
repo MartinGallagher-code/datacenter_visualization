@@ -1101,6 +1101,8 @@ examples/small-results.tsv  two nightly runs of four tests
 examples/mega.dc          scale test (~256k elements on one page)
 examples/hostnames.dc     flat hostname naming (wr12r06u15 style)
 examples/splice.dc        four servers spliced into each cable to the ToR
+examples/dual-plane.dc    dual-homed servers, spliced to TOR a and TOR b,
+                          spines per pod and two planes of superspines
 examples/iperf/          a floor plan using every layout feature, with a real
                          export-overlay run painted over it (see its README)
 examples/hostnames-results.tsv  results addressed by flat name

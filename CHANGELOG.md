@@ -35,6 +35,12 @@ their shapes are not a promise.
   inspector and isolation work as before, and the inspector names the splice
   a server is in. `splice=` anywhere but a two-selector star, or outside
   2..1000, is reported and ignored. `examples/splice.dc` shows it.
+- **`examples/dual-plane.dc`: a dual-homed, two-plane fabric.** Four racks
+  of eight servers with two NICs each, every four servers spliced into one
+  cable per NIC — NIC a to TOR a, NIC b to TOR b — the two TORs joined, a
+  pair of spines for every two racks taking both TORs of both racks, and two
+  planes of six superspines with four cables from each spine to each
+  superspine in its plane. The suite pins its wiring to that description.
 
 - **A layout can carry the hardware a run is graded against.** Nothing new
   in the format: `nic_gbps=` on servers and `uplinks=` / `uplink_gbps=` on
