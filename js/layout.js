@@ -52,8 +52,13 @@ function measure(el, isVisible) {
 
   if (!kids.length) {
     const c = pick(COLLAPSED, el.kind);
-    // A leaf node keeps its true height in U so racks stay to scale.
-    const h = el.kind === 'node' && el.uSize ? el.uSize * U_PX : c.h;
+    // A leaf node keeps its true height in U so racks stay to scale, and a
+    // device anywhere else is as many U tall as its u= says. A collapsed
+    // container keeps its compact size: collapsing is how a floor is made
+    // smaller, and a declared height would undo it.
+    let h = c.h;
+    if (el.kind === 'node' && el.uSize) h = el.uSize * U_PX;
+    else if (!el.children.length && heightOf(el)) h = heightOf(el) * U_PX;
     el.box = { x: 0, y: 0, w: c.w, h };
     return;
   }
@@ -83,15 +88,18 @@ function measure(el, isVisible) {
   }
 
   if (el.kind === 'row' && el.attrsEff.dir !== 'y') {
-    // A row of racks: single line, bottom-aligned so rack floors line up.
+    // A row of racks: single line, bottom-aligned so rack floors line up --
+    // including when u= makes the row taller than its racks, where the room
+    // goes above them rather than under.
     let x = pad;
     let tallest = 0;
     for (const child of kids) tallest = Math.max(tallest, child.box.h);
+    const extra = Math.max(0, heightOf(el) * U_PX - (label + pad * 2 + tallest));
     for (const child of kids) {
-      child.rel = { x, y: label + pad + (tallest - child.box.h) };
+      child.rel = { x, y: label + pad + extra + (tallest - child.box.h) };
       x += child.box.w + gap;
     }
-    el.box = { x: 0, y: 0, w: Math.max(x - gap + pad, 90), h: label + pad * 2 + tallest };
+    el.box = { x: 0, y: 0, w: Math.max(x - gap + pad, 90), h: label + pad * 2 + tallest + extra };
     return;
   }
 
@@ -115,7 +123,21 @@ function measure(el, isVisible) {
     lineHeight = Math.max(lineHeight, child.box.h);
     col++;
   }
-  el.box = { x: 0, y: 0, w: Math.max(widest, 120), h: y + lineHeight + pad };
+  // u= is a floor, not a ceiling: what the children need always fits.
+  el.box = { x: 0, y: 0, w: Math.max(widest, 120), h: Math.max(y + lineHeight + pad, heightOf(el) * U_PX) };
+}
+
+/**
+ * The height u= asks of an element outside a rack, in U, or 0 for none.
+ * A rack's u= is how many slots it has and a rack child's is how many it
+ * fills, both handled where racks are laid out; everywhere else u= said
+ * nothing at all -- `node pdu u=4` in a cage drew the same box as one
+ * without it -- and now it is the height, on the scale the racks are drawn
+ * to.
+ */
+function heightOf(el) {
+  if (el.kind === 'rack' || el.uSize) return 0;
+  return intAttr(el.attrs.u, 0, NUMBERS.u);
 }
 
 function gridColumns(el, count) {

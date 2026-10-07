@@ -184,6 +184,14 @@ without appearing in the name — see `examples/hostnames.dc`.
   unplaced children auto-fill the lowest free run of slots. A node that lands
   above the rack's declared `u=` height is reported as a warning — `at=42`
   only fits a rack at least 42 U tall.
+- **`u=` is an element's height, in U, everywhere** — the scale racks are
+  drawn to, where one U is the height of a 1U server. On a rack it is how
+  many slots the rack has, and on a rack's child how many it fills, as
+  above. Outside a rack, a device is exactly that tall (`node pdu u=4` in a
+  cage) and a container is *at least* that tall (`cage C u=60`): what its
+  children need always fits. A row made taller than its racks keeps them
+  standing on the floor, with the room above. A collapsed container keeps
+  its compact size whatever its `u=`.
 - `cols=2` / `dir=x|y` / `gap=` shape generic containers — `gap=0` packs
   children with no gutter, and omitting it keeps the per-kind default.
 - The numbers are checked: `u`, `at`, `size` and `cols` must be whole and

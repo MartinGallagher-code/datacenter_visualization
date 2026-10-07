@@ -24,7 +24,7 @@ const KINDS = [
 const ELEMENT_KEYS = [
   ['name=', 'display name; {room}{rack}{id} builds hostnames'],
   ['id=', 'rename an expansion: id=u{id}'],
-  ['u=', 'height in U-slots (rack children)'],
+  ['u=', 'height in U: a rack’s slots, a device’s height, a container’s least'],
   ['at=', 'pin to a U-slot: at=42'],
   ['cols=', 'grid columns for a container'],
   ['dir=', 'layout direction: x or y'],

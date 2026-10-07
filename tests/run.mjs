@@ -26,7 +26,7 @@ import {
   valueWithUnit, NO_VALUE, recomputeDomain, readNumber, clearOverlayCache,
   readingText, offScale, tailIsOdd, NORMAL_BEYOND_2SD,
 } from '../js/results.js';
-import { layout } from '../js/layout.js';
+import { layout, U_PX } from '../js/layout.js';
 import { Renderer, linkSummary, sharesLineage, spliceSummary } from '../js/render.js';
 import { LANE, SPLICE_W } from '../js/route.js';
 import { compileQuery, applyFilter } from '../js/filter.js';
@@ -1058,6 +1058,34 @@ layout(small.root, () => true);
 eq(rack.shown.length, 0, 'collapsed rack hides children');
 rack.collapsed = false;
 layout(small.root, () => true);
+
+// u= is the height in U everywhere. In a rack it was already the slots a
+// device fills and the rack's own capacity; anywhere else it was silently
+// ignored, so a PDU in a cage drew the same box with u=4 as without.
+{
+  const tall = parseLayout(['dc D',
+    '  cage C', '    node pdu u=4', '    node plain',
+    '  cage room u=60', '    node x',
+    '  cage full u=2', '    node a', '    node b', '    node c',
+    '  row R u=60', '    rack r u=10', '      node n u=2',
+  ].join('\n'));
+  eq(tall.warnings, [], 'u= outside a rack parses clean');
+  layout(tall.root);
+  const box = (k) => tall.byKey.get(k).box;
+  eq(box('D/C/pdu').h, 4 * U_PX, 'a device outside a rack is as many U tall as its u= says');
+  eq(box('D/C/plain').h, 12, 'and one without u= keeps the default');
+  eq(box('D/room').h, 60 * U_PX, 'a container is at least its u= tall');
+  ok(box('D/full').h > 2 * U_PX, 'but never too short for what it holds');
+  const row = box('D/R');
+  const r = box('D/R/r');
+  eq(row.h, 60 * U_PX, 'a row takes its u= too');
+  eq(row.y + row.h - (r.y + r.h), 9, 'with its racks still standing on the floor, the room above them');
+  eq(r.h, 13 + 10 * U_PX + 2 * 5, 'a rack is still as tall as its slots');
+  eq(box('D/R/r/n').h, 2 * U_PX, 'and a device in it as tall as the slots it fills');
+  tall.byKey.get('D/room').collapsed = true;
+  layout(tall.root);
+  eq(box('D/room').h, 62, 'collapsed, a container keeps its compact size');
+}
 
 // ----------------------------------------------------------- cable routing
 // Cables used to run centre to centre, so a server's data and mgmt cables left

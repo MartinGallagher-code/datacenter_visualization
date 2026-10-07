@@ -13,6 +13,14 @@ their shapes are not a promise.
 
 ## Unreleased
 
+- **`u=` sets an element's height anywhere.** It was already the height in
+  U for a rack (its slots) and for a device in one (the slots it fills);
+  outside a rack it was silently ignored, so `node pdu u=4` in a cage drew
+  the same box as one without it. Now a device outside a rack is exactly
+  that many U tall, and a container is at least that tall — what its
+  children need always fits, and a row made taller keeps its racks on the
+  floor. A collapsed container keeps its compact size. Racks and their
+  children are unchanged.
 - **A kind's placeholder works on its own line.** `{dcm}` named only an
   enclosing dcm, so on a dcm's own line it matched nothing and reached the
   floor plan as literal text, with a warning: `dcm [1,2] name=dcm-{dcm}`
