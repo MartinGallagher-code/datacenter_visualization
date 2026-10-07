@@ -1305,6 +1305,29 @@ link data role=server role=tor splice=4
   eq(folded.cables.map((c) => c.count), [8], 'their eight cables merge into one, as unspliced ones do');
 }
 
+// examples/dual-plane.dc is a topology written out in prose at the top of
+// the file. These pin the wiring to that prose, so a change to how rules
+// expand cannot quietly turn the example into a different fabric.
+{
+  const m = parseLayout(readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8'));
+  eq(m.warnings, [], 'dual-plane.dc parses clean');
+  const perNet = {};
+  for (const l of m.links) perNet[l.net] = (perNet[l.net] || 0) + 1;
+  eq(perNet, { nica: 32, nicb: 32, peer: 4, fabric: 16, plane1: 48, plane2: 48 },
+     'dual-plane: 32 servers per NIC, 4 TOR pairs, 4 TORs x 2 spines per pod, 2 x 6 x 4 per plane');
+  eq(m.splices.length, 16, 'dual-plane: two harnesses per NIC per rack');
+  const peers = (el) => el.links.map((l) => `${l.net}:${(l.a === el ? l.b : l.a).id}`).sort();
+  const tora = m.resolve('P2/A/R03/tora');
+  eq(peers(tora).filter((p) => !p.startsWith('nica:')), ['fabric:spine1', 'fabric:spine2', 'peer:torb'],
+     'dual-plane: TOR a takes NIC a, its TOR b, and both of its pod\u2019s spines');
+  ok(m.splices.every((sp) => sp.to.attrsEff.nic === (sp.net === 'nica' ? 'a' : 'b')),
+     'dual-plane: NIC a harnesses end at TOR a, NIC b at TOR b');
+  const spine1 = m.resolve('P1/S/SP1/spine1');
+  const up = spine1.links.filter((l) => l.net === 'plane1').map((l) => (l.a === spine1 ? l.b : l.a));
+  eq(up.length, 24, 'dual-plane: a spine 1 runs four cables to each of six superspines');
+  ok(up.every((x) => x.attrsEff.plane === '1'), 'dual-plane: all of them in plane 1');
+}
+
 // ------------------------------------------------------------------ palette
 ok(ramp('viridis', 0) !== ramp('viridis', 1), 'ramp varies');
 eq(ramp('viridis', -5), ramp('viridis', 0), 'ramp clamps');
@@ -1875,10 +1898,53 @@ ok(!matchesFilter('mxrun.tsv', 'mx.*'), 'and that dot has to be there: it is not
   eq(warnsOf(['dc D', '  rack r[1..2] u=42', '    node [1..2] name={rak} +t{nope}'].join('\n')).length,
      2, 'two different mistakes on one line are two warnings');
 
+  // A kind names the nearest element of that kind, and on its own line that
+  // is the element itself: `{dcm}` on a dcm line used to reach the floor as
+  // literal text, so `name=dcm-{dcm}` named every dcm "dcm-{dcm}".
+  const own = parseLayout(['dc D', '  dcm [1,2] name=dcm-{dcm}', '    rack r1 name={dcm}-{rack}'].join('\n'));
+  eq(own.warnings, [], "a placeholder for the line's own kind resolves");
+  eq(own.all.filter((e) => e.kind === 'dcm').map((e) => e.name), ['dcm-1', 'dcm-2'],
+     'dcm [1,2] name=dcm-{dcm} names dcm-1 and dcm-2');
+  eq(own.all.filter((e) => e.kind === 'rack').map((e) => e.name), ['1-r1', '2-r1'],
+     'the lines below still see it, beside their own kind');
+  eq(parseLayout('dc D\n  dcm [1,2] name=dcm{dcm}\n').all.slice(1).map((e) => e.name), ['dcm1', 'dcm2'],
+     'nothing is added between the text and the id: the hyphen is written');
+  eq(parseLayout('dc D\n  pod A\n    pod B name={pod}\n      node n name={pod}\n').all.map((e) => e.name),
+     ['D', 'A', 'B', 'B'], 'the nearest pod is the line itself, then the closest one around it');
+  eq(parseLayout('dc D\n  parent P name={parent}\n').all[1].name, 'D',
+     'a kind called like a built-in placeholder does not hide it');
+  eq(warnsOf('dc D\n  dcm d{dcm}\n').length, 1, 'an id spec still cannot name the element it is creating');
+
+  // {seq} counts on across every copy of a line, where {i} restarts under
+  // each parent: racks numbered through the rows from one rack line, rather
+  // than one block per row with the numbers typed into each.
+  const rows = parseLayout(['dc D', '  room H', '    row [1..4]',
+    '      rack [1..5] id=R{seq} u=42', '        node u[01..02] name={rack}{id}'].join('\n'));
+  eq(rows.warnings, [], '{seq} resolves on an attribute');
+  eq(rows.all.filter((e) => e.kind === 'row').map((r) => r.children.map((c) => c.id).join(' ')),
+     ['R1 R2 R3 R4 R5', 'R6 R7 R8 R9 R10', 'R11 R12 R13 R14 R15', 'R16 R17 R18 R19 R20'],
+     'four rows of five racks are numbered 1-5, 6-10, 11-15, 16-20');
+  eq(rows.resolve('R12/u02') && rows.resolve('R12/u02').name, 'R12u02',
+     'and the lines below see the number the rack was given');
+  eq(parseLayout('dc D\n  row [1..2]\n    rack [1..3] id=R{seq:2}\n').all.filter((e) => e.kind === 'rack')
+    .map((e) => e.id), ['R01', 'R02', 'R03', 'R04', 'R05', 'R06'], '{seq:2} pads to two digits, as R[01..06] would');
+  eq(parseLayout('dc D\n  row [1..2]\n    rack [1..2] id=R{seq}\n    rack [1..2] id=S{seq}\n').all
+    .filter((e) => e.kind === 'rack').map((e) => e.id), ['R1', 'R2', 'S1', 'S2', 'R3', 'R4', 'S3', 'S4'],
+     'each line keeps its own count');
+  eq(parseLayout('dc D\n  room [A|B]\n    row [1..2]\n      rack [1..2] id=R{seq}\n').all
+    .filter((e) => e.kind === 'rack').map((e) => e.id).join(' '), 'R1 R2 R3 R4 R5 R6 R7 R8',
+     'and keeps counting however deep the repetition goes');
+  eq(parseLayout('dc D\n  rack r u=4\n    node [1..3] id=u{i:3}\n').all.slice(2).map((e) => e.id),
+     ['u001', 'u002', 'u003'], 'any whole-number placeholder pads the same way');
+  eq(parseLayout('dc D\n  room wr12\n    rack r1 name={room:6}\n').all[2].name, 'wr12',
+     'and one that is not a number is left as it is');
+  eq(warnsOf('dc D\n  rack R{seq}\n').length, 1, 'an id spec cannot count what it has not made yet');
+
   // Every layout the repo ships stays quiet, which is what makes the check
   // worth having: it has to fire on mistakes and not on the house style.
   for (const file of ['examples/small.dc', 'examples/mega.dc', 'examples/hostnames.dc',
-                      'examples/three-rows.dc', 'examples/mx/floor.dc', 'examples/iperf/floor.dc']) {
+                      'examples/three-rows.dc', 'examples/mx/floor.dc', 'examples/iperf/floor.dc',
+                      'examples/splice.dc', 'examples/dual-plane.dc']) {
     eq(parseLayout(readFileSync(join(root, file), 'utf8')).warnings, [],
        `${file} parses without a word`);
   }
@@ -2073,7 +2139,8 @@ ok(!matchesFilter('mxrun.tsv', 'mx.*'), 'and that dot has to be there: it is not
   // Every layout the repo ships stays quiet. A check that fires on the house
   // style is a check people learn to scroll past.
   for (const file of ['examples/small.dc', 'examples/mega.dc', 'examples/hostnames.dc',
-                      'examples/three-rows.dc', 'examples/mx/floor.dc', 'examples/iperf/floor.dc']) {
+                      'examples/three-rows.dc', 'examples/mx/floor.dc', 'examples/iperf/floor.dc',
+                      'examples/splice.dc', 'examples/dual-plane.dc']) {
     eq(parseLayout(readFileSync(join(root, file), 'utf8')).warnings, [],
        `${file} has no number it cannot read`);
   }
@@ -2320,7 +2387,8 @@ ok(!matchesFilter('mxrun.tsv', 'mx.*'), 'and that dot has to be there: it is not
 
   // Every layout the repo ships stays quiet under the colour check.
   for (const file of ['examples/small.dc', 'examples/mega.dc', 'examples/hostnames.dc',
-                      'examples/three-rows.dc', 'examples/mx/floor.dc', 'examples/iperf/floor.dc']) {
+                      'examples/three-rows.dc', 'examples/mx/floor.dc', 'examples/iperf/floor.dc',
+                      'examples/splice.dc', 'examples/dual-plane.dc']) {
     eq(parseLayout(readFileSync(join(root, file), 'utf8')).warnings, [],
        `${file} has no colour it cannot draw`);
   }
@@ -2806,7 +2874,8 @@ if (python.error) {
 
   // Every layout the repo ships stays quiet under the new link checks.
   for (const file of ['examples/small.dc', 'examples/mega.dc', 'examples/hostnames.dc',
-                      'examples/three-rows.dc', 'examples/mx/floor.dc', 'examples/iperf/floor.dc']) {
+                      'examples/three-rows.dc', 'examples/mx/floor.dc', 'examples/iperf/floor.dc',
+                      'examples/splice.dc', 'examples/dual-plane.dc']) {
     eq(parseLayout(readFileSync(join(root, file), 'utf8')).warnings, [],
        `${file} wires without a word`);
   }

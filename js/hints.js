@@ -344,7 +344,9 @@ const REFERENCE = [
     ['{id}', 'this element’s id', true],
     ['{i}', '1-based expansion index', true],
     ['{parent}', 'the parent’s id', true],
-    ['{room} {row} {rack}', 'any enclosing kind’s id', true],
+    ['{room} {row} {rack}', 'the nearest of that kind: an enclosing one, or this line’s own', true],
+    ['{seq}', 'counts on across every copy of the line: racks 1-5, 6-10, … through four rows', true],
+    ['{seq:2}', 'any whole number, zero-padded to two digits', true],
   ]],
   ['Attributes and tags', 'key=value inherits downward (layout keys like u=, at=, name= do not); +tag adds tags children also carry.', [
     ['model=r760 region=us-east', 'free-form, inherited'],

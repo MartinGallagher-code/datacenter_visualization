@@ -13,6 +13,27 @@ their shapes are not a promise.
 
 ## Unreleased
 
+- **A kind's placeholder works on its own line.** `{dcm}` named only an
+  enclosing dcm, so on a dcm's own line it matched nothing and reached the
+  floor plan as literal text, with a warning: `dcm [1,2] name=dcm-{dcm}`
+  named both of them `dcm-{dcm}`. A kind now names the nearest element of
+  that kind, the line itself included, so that line names `dcm-1` and
+  `dcm-2`. Nothing is inserted between text and id — `name=dcm{dcm}` is
+  `dcm1` — and the built-in placeholders (`{id}`, `{parent}`, …) keep their
+  meaning under a kind of the same name. Only lines that used to warn
+  change.
+- **`{seq}`: numbers that run on through every copy of a line.** `{i}`
+  restarts under each parent, so racks numbered uniquely across four rows
+  took four blocks with the numbers typed into each. `{seq}` counts every
+  element the line has made so far: `rack [1..5] id=R{seq}` under `row
+  [1..4]` is R1–R5, R6–R10, R11–R15, R16–R20. Each line keeps its own count.
+  Any whole-number placeholder now takes a width, `{seq:2}` → `07`, as a
+  range written `[01..20]` pads; anything else is left as it is.
+  `examples/dual-plane.dc` now makes its two pods from one block this way.
+- **The copyright line is off the main screen.** The status bar under the
+  floor plan repeated `© 2026 Martin J. Gallagher · GPL-3.0-or-later · no
+  warranty`; it now carries only the view's own figures. The notice stays
+  where it always was in full, in the About box in the left panel.
 - **Cables leave from the side of a device, into a lane beside it.** They
   used to run centre to centre, so a server's data and mgmt cables left from
   the same point and lay almost on top of each other to the ToR, told apart
@@ -35,6 +56,12 @@ their shapes are not a promise.
   inspector and isolation work as before, and the inspector names the splice
   a server is in. `splice=` anywhere but a two-selector star, or outside
   2..1000, is reported and ignored. `examples/splice.dc` shows it.
+- **`examples/dual-plane.dc`: a dual-homed, two-plane fabric.** Four racks
+  of eight servers with two NICs each, every four servers spliced into one
+  cable per NIC — NIC a to TOR a, NIC b to TOR b — the two TORs joined, a
+  pair of spines for every two racks taking both TORs of both racks, and two
+  planes of six superspines with four cables from each spine to each
+  superspine in its plane. The suite pins its wiring to that description.
 
 - **A layout can carry the hardware a run is graded against.** Nothing new
   in the format: `nic_gbps=` on servers and `uplinks=` / `uplink_gbps=` on

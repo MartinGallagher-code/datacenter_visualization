@@ -663,5 +663,3 @@ button.danger:hover { color: #ffbdbd; border-color: #8a3a3a; }
 .version { font-variant-numeric: tabular-nums; padding: 0 4px;
            border: 1px solid var(--line); border-radius: 3px; }
 .version:empty { display: none; }
-
-#statuslicense { margin-left: auto; white-space: nowrap; color: #6b7484; }

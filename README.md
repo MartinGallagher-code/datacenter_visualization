@@ -136,6 +136,32 @@ not exist yet — and the warning lists the names that line could have used.
 
 `{placeholders}` in attributes refer to enclosing elements:
 `name="Hall {id}"`, `power=grid-{i}`, `{room}`, `{row}`, `{parent}`.
+A kind names the nearest element of that kind, and on that kind's own line
+the nearest is the element itself — so `{dcm}` on a `dcm` line is its own
+id, the same as `{id}`: `dcm [1,2] name=dcm-{dcm}` names `dcm-1` and
+`dcm-2`. Nothing is inserted between the text and the id, so the hyphen is
+yours to write (`name=dcm{dcm}` is `dcm1`). The built-in names — `{id}`,
+`{i}`, `{i0}`, `{n}`, `{seq}`, `{kind}`, `{parent}`, `{path}` — always mean
+what they say here, even under a kind of the same name.
+
+**Numbers that run on through the rows.** `{i}` starts again under every
+parent; `{seq}` carries on, counting every element the line has made so far
+across all the copies of it. So racks numbered uniquely across a floor are
+one block, not one per row:
+
+```
+row [1..4]
+  rack [1..5] id=R{seq:2} u=42          # row 1: R01-R05, row 2: R06-R10, ...
+    node u[01..40] role=server name={rack}{id}     # R07u15
+```
+
+`[1..5]` says how many racks each row has, and `id=` gives each its number.
+`{seq:2}` pads to two digits, as a range written `R[01..20]` would — any
+whole-number placeholder takes a width, `{i:3}` is `001` — and a value that
+is not a number is left as it is. Each line keeps its own count, and it
+keeps counting however deep the repetition goes: under `room [A|B]` the same
+rack line runs on to R40. `examples/dual-plane.dc` numbers its pods' racks
+this way.
 
 This is how flat hostname-style names work: `node u[01..40]
 name={room}{rack}{id}` names every server like `wr12r06u15`, results files
@@ -1101,6 +1127,8 @@ examples/small-results.tsv  two nightly runs of four tests
 examples/mega.dc          scale test (~256k elements on one page)
 examples/hostnames.dc     flat hostname naming (wr12r06u15 style)
 examples/splice.dc        four servers spliced into each cable to the ToR
+examples/dual-plane.dc    dual-homed servers, spliced to TOR a and TOR b,
+                          spines per pod and two planes of superspines
 examples/iperf/          a floor plan using every layout feature, with a real
                          export-overlay run painted over it (see its README)
 examples/hostnames-results.tsv  results addressed by flat name
