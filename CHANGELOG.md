@@ -13,6 +13,14 @@ their shapes are not a promise.
 
 ## Unreleased
 
+- **The editor's Syntax panel covers everything the editor completes.** It
+  had fallen behind the parser: `{seq}`, `seq=`, `if=`, `align=`, `u=` as a
+  height anywhere, a row stacked over its racks, `cap=`, `color=` and
+  `show=` were all completed as you typed and none of them was in the
+  panel. They are now, under new Layout, Numbering and Conditions headings,
+  and the suite fails if an option the editor completes is missing from it.
+  The starter template names them too, and the README's layout section is
+  split into Ranges, Placeholders, `{seq}` and `if=`.
 - **`if=` on a line: make it only where a condition holds.** Every copy of a
   block was the same, so giving the first row's rack 12 something the other
   rows' rack 12 did not have meant writing the row out twice. `if={row}=1`

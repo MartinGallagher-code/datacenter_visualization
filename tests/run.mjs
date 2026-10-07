@@ -31,7 +31,7 @@ import { Renderer, linkSummary, sharesLineage, spliceSummary } from '../js/rende
 import { LANE, SPLICE_W } from '../js/route.js';
 import { compileQuery, applyFilter } from '../js/filter.js';
 import { ramp, categoricalColor, colorFor, contrastInk } from '../js/palette.js';
-import { suggestionsFor } from '../js/hints.js';
+import { referenceSnippets, suggestionsFor } from '../js/hints.js';
 import { VERSION } from '../js/version.js';
 import {
   classify, formatSize, matchesFilter, namedAsData, pathLabel, readable, sortEntries, treeFromFiles,
@@ -2733,6 +2733,16 @@ ok(!matchesFilter('mxrun.tsv', 'mx.*'), 'and that dot has to be there: it is not
   }
   for (const key of ['name', 'id', 'dir', 'color']) {
     ok(elementKeys.has(`${key}=`), `the editor offers ${key}=`);
+  }
+
+  // The Syntax panel teaches every option the editor completes. Options
+  // were added to the completions and the parser and never to the panel --
+  // the panel is what a person reads first, and it fell behind unnoticed.
+  const panel = referenceSnippets().join('\n');
+  const taught = [...elementKeys, ...offered('net data '), ...linkOpts].filter((t) => /=#?$/.test(t) && t !== 'kind=');
+  for (const key of new Set(taught)) ok(panel.includes(key), `the Syntax panel shows ${key}`);
+  for (const word of ['{seq}', '{seq:2}', 'seq=room', 'if=', 'align=center', 'splice=']) {
+    ok(panel.includes(word), `the Syntax panel shows ${word}`);
   }
 }
 

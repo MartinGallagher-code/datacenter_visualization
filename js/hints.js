@@ -173,7 +173,7 @@ export function suggestionsFor(text, caret) {
       }
     } else {
       if (key) {
-        options = valueOptions(key, { dir: DIRS, align: ALIGNS }, h);
+        options = valueOptions(key, { dir: DIRS, align: ALIGNS, seq: [...h.kinds] }, h);
       } else {
         options = [];
         if (idPosition) {
@@ -329,12 +329,22 @@ const REFERENCE = [
     ['dc DC1 name="My Datacenter"', 'the root'],
     ['room R1 name="Room 1" cols=2', 'cols= shapes its grid'],
     ['row A..D', 'letter range: four rows'],
-    ['rack R[01..12] u=42', 'padded range; u= is rack height'],
+    ['rack R[01..12] u=42', 'padded range; u= is the rack’s slots'],
     ['rack R[1..4,7..10] u=42', 'segments skip a numbering gap'],
     ['node tor at=42 role=tor +switch', 'pinned to U42'],
     ['node u[01..20] role=server +x86', 'auto-fills the lowest free slots'],
     ['node [7..15x2] id=u{id} at={id} role=server', 'every other U-slot, pinned'],
     ['node u[01..40] name={room}{rack}{id}', 'flat hostnames like wr12r06u15'],
+    ['dcm [1..2] name=dcm-{dcm}', 'a kind’s own placeholder: dcm-1, dcm-2'],
+  ]],
+  ['Layout', 'Shape a container; none of these inherit.', [
+    ['cols=1', 'one column: children stacked', true],
+    ['dir=x', 'one line, left to right', true],
+    ['align=center', 'centre each line (or right)', true],
+    ['gap=0', 'no gutter between children', true],
+    ['node pdu u=4', 'u= is height in U, anywhere'],
+    ['cage C u=60', 'a container at least 60U tall'],
+    ['row [1..4] cols=1 align=center', 'a row stacked: network layer over its racks'],
   ]],
   ['Ranges', 'Expand in the id position; children are created once per expansion.', [
     ['[01..20]', 'zero-padding kept', true],
@@ -352,17 +362,32 @@ const REFERENCE = [
     ['{seq}', 'counts on across every copy of the line, and the lines beside it: racks 1-5, 6-10, …', true],
     ['{seq:2}', 'any whole number, zero-padded to two digits', true],
   ]],
+  ['Numbering', '{seq} counts on through every copy of a line, and the lines of one kind beside it.', [
+    ['rack [1..20] id=R{seq:2} u=42', 'under row [1..4]: R01-R20, R21-R40, …'],
+    ['seq=room', 'start the count again in every room (any enclosing kind)', true],
+    ['seq=net', 'a count of its own, by name', true],
+  ]],
+  ['Conditions', 'if= makes a line only where it holds; an element not made gives its number back.', [
+    ['if={row}=1', 'only in the first row', true],
+    ['if={row}!=1', 'everywhere but the first row', true],
+    ['if={row}=1|3', 'rows 1 and 3', true],
+    ['if={room}=1,{row}=1', 'commas: all must hold', true],
+    ['rack 12 id=R{seq:2} seq=room u=42 if={row}=1', 'rack 12 filled in row 1 only'],
+  ]],
   ['Attributes and tags', 'key=value inherits downward (layout keys like u=, at=, name= do not); +tag adds tags children also carry.', [
     ['model=r760 region=us-east', 'free-form, inherited'],
+    ['color=#ff9f43', 'an element’s own fill colour', true],
     ['+prod,gpu', 'two tags at once', true],
   ]],
   ['Networks', 'Declare a fabric, then wire it by rule — cables are never enumerated.', [
     ['net data label="Data / east-west" color=#4fa3ff', 'a fabric'],
     ['net mgmt style=dashed width=2', 'dashed, thicker'],
+    ['net nica show=yes', 'start ticked, however many cables'],
     ['link data role=server role=tor scope=rack', 'star: per rack, servers to ToR'],
     ['link storage +storage,role=server scope=row mode=mesh', 'mesh within each row'],
     ['link uplink role=tor role=spine', 'every ToR to every spine'],
     ['link data role=server role=tor scope=rack splice=4', 'four servers per cable to the ToR'],
+    ['link data role=tor role=spine cap=1000', 'cap=: stop after this many cables'],
     ['mode=star mode=mesh mode=chain mode=ring mode=pair', 'the five modes', true],
   ]],
   ['Selectors', 'For link rules and the filter bar.', [
@@ -377,6 +402,9 @@ const REFERENCE = [
     ['+gpu,role=server', 'comma is AND', true],
   ]],
 ];
+
+/** Every snippet the syntax reference offers, for the suite to hold it to the parser. */
+export const referenceSnippets = () => REFERENCE.flatMap(([, , rows]) => rows.map(([snippet]) => snippet));
 
 /** Build the clickable syntax reference into `host`. */
 export function renderReference(host, insert) {

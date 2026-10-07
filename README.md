@@ -130,9 +130,7 @@ around a gap are `rack R[1..4,7..10]`, with the children written once instead
 of once per block — see `examples/three-rows.dc`, which also pins sparse
 U-slots the same way (`node [7..15x2,25..31x2] id=u{id} at={id}`).
 
-A placeholder naming something not in scope is reported rather than left in
-the text — `{rak}` for `{rack}`, or `{id}` in an id spec, where the id does
-not exist yet — and the warning lists the names that line could have used.
+### Placeholders
 
 `{placeholders}` in attributes refer to enclosing elements:
 `name="Hall {id}"`, `power=grid-{i}`, `{room}`, `{row}`, `{parent}`.
@@ -144,10 +142,24 @@ yours to write (`name=dcm{dcm}` is `dcm1`). The built-in names — `{id}`,
 `{i}`, `{i0}`, `{n}`, `{seq}`, `{kind}`, `{parent}`, `{path}` — always mean
 what they say here, even under a kind of the same name.
 
-**Numbers that run on through the rows.** `{i}` starts again under every
-parent; `{seq}` carries on, counting every element the line has made so far
-across all the copies of it. So racks numbered uniquely across a floor are
-one block, not one per row:
+This is how flat hostname-style names work: `node u[01..40]
+name={room}{rack}{id}` names every server like `wr12r06u15`, results files
+can then target that name directly, and the row stays expressed by nesting
+without appearing in the name — see `examples/hostnames.dc`.
+
+Any whole-number placeholder takes a width: `{i:3}` is `001` and `{seq:2}`
+is `07`, padded as a range written `R[01..20]` is. A value that is not a
+number is left as it is.
+
+A placeholder naming something not in scope is reported rather than left in
+the text — `{rak}` for `{rack}`, or `{id}` in an id spec, where the id does
+not exist yet — and the warning lists the names that line could have used.
+
+### Numbering through the floor: `{seq}`
+
+`{i}` starts again under every parent; `{seq}` carries on, counting every
+element the line has made so far across all the copies of it. So racks
+numbered uniquely across a floor are one block, not one per row:
 
 ```
 row [1..4]
@@ -155,12 +167,12 @@ row [1..4]
     node u[01..40] role=server name={rack}{id}     # R07u15
 ```
 
-`[1..5]` says how many racks each row has, and `id=` gives each its number.
-`{seq:2}` pads to two digits, as a range written `R[01..20]` would — any
-whole-number placeholder takes a width, `{i:3}` is `001` — and a value that
-is not a number is left as it is. The count keeps going however deep the
+`[1..5]` says how many racks each row has, `id=` gives each its number, and
+`{seq:2}` pads it to two digits. The count keeps going however deep the
 repetition goes: under `room [A|B]` the same rack line runs on to R40.
-`examples/dual-plane.dc` numbers its pods' racks this way.
+`examples/dual-plane.dc` numbers its pods' racks this way. `{seq}` belongs
+on an attribute (`id=`, `name=`): an id spec is expanded before anything is
+counted, so `rack R{seq}` is reported.
 
 **Lines side by side share the count.** Lines of one kind in the same block
 number as one, so a row can hold different racks in different places and
@@ -201,10 +213,11 @@ Any other word names a count instead: `seq=net` keeps network racks
 numbered N1, N2, … apart from the racks beside them, and lines anywhere with
 the same name share one count.
 
-**A line that only applies in some places.** `if=` on a line makes its
-elements only where the condition holds, so one block for four rows can
-still give the first row something the others do not have — here rack 12 is
-filled in row 1 and stands empty in rows 2–4:
+### Lines that apply only in some places: `if=`
+
+`if=` on a line makes its elements only where the condition holds, so one
+block for four rows can still give the first row something the others do
+not have — here rack 12 is filled in row 1 and stands empty in rows 2–4:
 
 ```
 row [1..4]
@@ -222,18 +235,15 @@ must all hold (`if={room}=1,{row}=1` is only the first row of room 1). A
 value may list alternatives (`{row}=1|3`) and use `*` and `?` as a selector
 does; matching ignores case. An element not made gives its `{seq}` number
 back, so the numbers stay in order, and anything indented under it is not
-made either. A condition that cannot be read is reported and ignored.
-
-This is how flat hostname-style names work: `node u[01..40]
-name={room}{rack}{id}` names every server like `wr12r06u15`, results files
-can then target that name directly, and the row stays expressed by nesting
-without appearing in the name — see `examples/hostnames.dc`.
+made either. A condition that cannot be read is reported and ignored, and
+`if=` is not kept among the attributes of what it made.
 
 ### Attributes and tags
 
 - `key=value` attributes are free-form and **inherit** downward (children see
   the parent's `region=us-east` unless they override it). Layout-only keys
-  (`u`, `at`, `cols`, `dir`, `name`, …) do not inherit.
+  — `id`, `name`, `u`, `at`, `cols`, `dir`, `gap`, `align`, `seq`, `if` — do
+  not inherit.
 - Attributes the viewer does not draw are still worth writing: they show in
   the inspector, and other tools read the same file. `nic_gbps=` on servers
   and `uplinks=` / `uplink_gbps=` on racks are the hardware binnacle's
@@ -244,7 +254,8 @@ without appearing in the name — see `examples/hostnames.dc`.
 - Rack children: `u=4` gives a node 4 U of height, `at=42` pins it to a slot;
   unplaced children auto-fill the lowest free run of slots. A node that lands
   above the rack's declared `u=` height is reported as a warning — `at=42`
-  only fits a rack at least 42 U tall.
+  only fits a rack at least 42 U tall. A rack with nothing in it is drawn as
+  an empty rack, as tall as its slots, rather than as a collapsed stub.
 - **`u=` is an element's height, in U, everywhere** — the scale racks are
   drawn to, where one U is the height of a 1U server. On a rack it is how
   many slots the rack has, and on a rack's child how many it fills, as

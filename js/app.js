@@ -1649,6 +1649,9 @@ const STARTER = `# <kind> <id> [key=value ...] [+tag ...]      indentation nests
 #
 # Ranges: R[01..12]   A..D   [1..40x2] (step)   [1..4,7..10] (segments)   [web|db]
 # Children of an expanded line are created once per expansion.
+# Names:  name={room}{rack}{id}   id=R{seq:2} numbers on through every copy
+#         (seq=room starts again per room)   if={row}=1 makes a line only there
+# Layout: u= height in U   cols=1 / dir=x / align=center shape a container
 
 dc DC1 name="My Datacenter"
 
