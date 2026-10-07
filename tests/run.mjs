@@ -1973,6 +1973,23 @@ ok(!matchesFilter('mxrun.tsv', 'mx.*'), 'and that dot has to be there: it is not
   eq(parseLayout('dc D\n  row A\n    rack [1..2] id=R{seq} seq=all\n  row B\n    rack [1..2] id=R{seq} seq=all\n')
     .all.filter((e) => e.kind === 'rack').map((e) => e.id), ['R1', 'R2', 'R3', 'R4'],
      'and lines in different blocks with the same seq= share one');
+  // seq=room names an enclosing kind: the count starts again in every room,
+  // as scope=room groups a link rule -- rooms whose ids repeat under
+  // different dcms included, which seq={room} would have run together.
+  const perRoom = parseLayout(['system S', '  dcm [1..2]', '    room [1..2]', '      row [1..2]',
+    '        rack [1..2] id=R{seq} seq=room', '        rack [1..1] id=R{seq} seq=room +mid',
+    '        rack [1..2] id=R{seq} seq=room', '          node u[1..2] name=s{seq} seq=room'].join('\n'));
+  eq(perRoom.warnings, [], 'seq= naming an enclosing kind parses clean');
+  eq(perRoom.all.filter((e) => e.kind === 'room').map((room) => room.children.flatMap((r) => r.children)
+    .map((k) => k.id).join(' ')), Array(4).fill('R1 R2 R3 R4 R5 R6 R7 R8 R9 R10'),
+     'seq=room numbers the racks of every room from 1, across its rows and its three rack lines');
+  // The server line sits under the third rack line only: two rows of two
+  // racks of two servers is eight to a room, counted apart from the racks.
+  eq(perRoom.byKey.get('S/2/2/2/R10/u2').name, 's8',
+     'and what it counts is kept per kind: servers numbered per room keep their own count');
+  eq(parseLayout('dc D\n  row [1..2]\n    rack [1..2] id=R{seq} seq=room\n').all
+    .filter((e) => e.kind === 'rack').map((e) => e.id), ['R1', 'R2', 'R3', 'R4'],
+     'with no room around it, seq=room is just a count called room');
   eq(parseLayout('dc D\n  row [1..2]\n    rack [1..2] id=R{seq} seq=r{row}\n').all
     .filter((e) => e.kind === 'rack').map((e) => e.id), ['R1', 'R2', 'R1', 'R2'],
      'a seq= with a placeholder counts per what it names: here, per row');

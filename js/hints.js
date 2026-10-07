@@ -30,7 +30,7 @@ const ELEMENT_KEYS = [
   ['dir=', 'layout direction: x or y'],
   ['gap=', 'space between children; 0 packs them'],
   ['color=', 'fill colour: #4fa3ff, teal, rgb(1,2,3)'],
-  ['seq=', 'which {seq} count this line takes from: seq=net, seq=r{row}'],
+  ['seq=', 'count per enclosing kind (seq=room) or by name (seq=net)'],
 ];
 
 const NET_KEYS = [

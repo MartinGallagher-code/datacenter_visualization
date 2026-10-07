@@ -13,6 +13,13 @@ their shapes are not a promise.
 
 ## Unreleased
 
+- **`seq=room`: numbering that starts again in every room.** `seq=` naming
+  an enclosing kind keeps one `{seq}` count per element of that kind, the
+  way `scope=room` groups a link rule: `rack [1..20] id=R{seq:2} seq=room`
+  under rows under rooms numbers R01–R80 in every room, however many dcms
+  repeat the rooms. What is counted is kept per kind, so racks and servers
+  numbered per room keep two counts. Any other word still names a shared
+  count.
 - **`u=` sets an element's height anywhere.** It was already the height in
   U for a rack (its slots) and for a device in one (the slots it fills);
   outside a rack it was silently ignored, so `node pdu u=4` in a cage drew

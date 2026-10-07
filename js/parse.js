@@ -346,13 +346,19 @@ const blockCounts = new WeakMap();   // syntax parent -> kind -> count
 const namedCounts = new WeakMap();   // model -> seq= name -> count
 const SEQ_USE = /\{seq(?::\d+)?\}/;
 
-function nextSeq(syn, attrs, model) {
+function nextSeq(syn, attrs, model, parent) {
   let counts;
   let key;
   if (attrs.seq) {
     counts = namedCounts.get(model);
     if (!counts) namedCounts.set(model, (counts = new Map()));
-    key = attrs.seq;
+    // seq=room names an enclosing kind: one count per room, starting again
+    // in each, the way scope=room groups a link rule. Kept per kind of what
+    // is counted, so racks and servers numbered per room keep two counts.
+    // Any other word is a count of that name, shared wherever it is used.
+    let scope = null;
+    for (let p = parent; p; p = p.parent) if (p.kind === attrs.seq) { scope = p; break; }
+    key = scope ? `\u0000${scope.key}\u0000${syn.kind}` : attrs.seq;
   } else {
     const block = syn.up || syn;
     counts = blockCounts.get(block);
@@ -457,7 +463,7 @@ function materialize(syn, parent, model) {
     Object.assign(ctx, { id: rawId, i: i + 1, i0: i, n: ids.length, seq: 0, kind: syn.kind });
     if (usesSeq) {
       const series = syn.attrs.seq !== undefined ? { seq: subst(syn.attrs.seq, ctx) } : {};
-      ctx.seq = nextSeq(syn, series, model);
+      ctx.seq = nextSeq(syn, series, model, parent);
     }
     let attrs = syn.attrs;
     let dynamic = false;

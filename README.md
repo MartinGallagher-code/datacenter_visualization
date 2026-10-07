@@ -178,10 +178,28 @@ row [1..4]
 ```
 
 Only lines that use `{seq}` take a number — a `node tor` line beside a
-numbered server line does not use one up. `seq=NAME` on a line gives it the
-count of that name instead: `seq=net` keeps network racks numbered N1, N2, …
-apart from the racks beside them, lines in different blocks with the same
-`seq=` share one count, and `seq=r{row}` starts the count again in every row.
+numbered server line does not use one up.
+
+**Starting again in every room.** `seq=room` on a line gives it one count
+per room: racks numbered R01–R80 in each room, however many dcms or systems
+repeat the rooms, the way `scope=room` groups a link rule. Any enclosing kind
+works — `seq=row`, `seq=dcm` — and what is counted is kept per kind, so racks
+and servers numbered per room keep two counts. Lines sharing a `seq=room`
+share the count within the room, so a row split into three rack lines still
+runs in order:
+
+```
+dcm [1..2] name=dcm-{dcm}
+  room [1..2] name="Room {room}"
+    row [1..4]
+      rack [1..8] id=R{seq:2} seq=room u=42           # R01-R08 ... in every room
+      rack [1..4] id=R{seq:2} seq=room u=42 +special  # R09-R12
+      rack [1..8] id=R{seq:2} seq=room u=42           # R13-R20, then R21- in row 2
+```
+
+Any other word names a count instead: `seq=net` keeps network racks
+numbered N1, N2, … apart from the racks beside them, and lines anywhere with
+the same name share one count.
 
 This is how flat hostname-style names work: `node u[01..40]
 name={room}{rack}{id}` names every server like `wr12r06u15`, results files
