@@ -1080,6 +1080,19 @@ quietly left stale.
 
 ## The viewer
 
+- **What connects these?** Shift-click (or Ctrl/⌘-click) elements on the
+  floor plan or in the tree to pick them; each pick gets a numbered tag.
+  With two or more picked, only the cables between them are drawn: for each
+  pair, every network that joins the two on its own, by its shortest routes
+  — and every equally short alternative, so two servers in different rows
+  show all the spines they could cross. The inspector lists the picks and,
+  per pair, each network and how many hops it takes (`u05 ↔ u07 · data: 4
+  hops`). A route crosses from one network to another only when no single
+  network joins the two, as in a layout that gives each tier its own net; it
+  never borrows a server's mgmt cable to reach the data fabric. A pick can be
+  a container — two racks show the uplinks between them. Untick a network to
+  route without it; Shift-click a pick again, or its chip, to drop it; **Clear**
+  or Esc forgets them all.
 - **Files** — the panel's **Open folder…** keeps a directory open beside the
   canvas, instead of a dialog that shows one and forgets it. Layouts and
   results are listed with their sizes (worth seeing before clicking a 300 MB

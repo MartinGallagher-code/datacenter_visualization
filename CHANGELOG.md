@@ -13,6 +13,14 @@ their shapes are not a promise.
 
 ## Unreleased
 
+- **Pick several elements and see what connects them.** Shift-click (or
+  Ctrl/⌘-click) on the floor plan or in the tree picks an element; with two
+  or more picked, only the cables between them are drawn — per pair, each
+  network that joins the two on its own, by every shortest route — and the
+  inspector says which networks and how many hops. A route crosses networks
+  only when no single one joins the pair. Picks are numbered on the floor,
+  follow their elements through a re-parse, and Esc or **Clear** forgets
+  them.
 - **The editor's Syntax panel covers everything the editor completes.** It
   had fallen behind the parser: `{seq}`, `seq=`, `if=`, `align=`, `u=` as a
   height anywhere, a row stacked over its racks, `cap=`, `color=` and

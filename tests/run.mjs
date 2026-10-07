@@ -27,6 +27,7 @@ import {
   readingText, offScale, tailIsOdd, NORMAL_BEYOND_2SD,
 } from '../js/results.js';
 import { layout, U_PX } from '../js/layout.js';
+import { routesBetween } from '../js/paths.js';
 import { Renderer, linkSummary, sharesLineage, spliceSummary } from '../js/render.js';
 import { LANE, SPLICE_W } from '../js/route.js';
 import { compileQuery, applyFilter } from '../js/filter.js';
@@ -1219,6 +1220,42 @@ const segsOf = (cache, net) => {
   const dataX = new Set(segsOf(cache, 'data').flatMap((sg) => [sg.x0, sg.x1]));
   ok(!segsOf(cache, 'mgmt').some((sg) => sg.x0 === sg.x1 && dataX.has(sg.x0) && sg.x0 > rack.box.x
      && sg.x0 < rack.box.x + rack.box.w), 'mgmt never runs in data’s lane');
+}
+
+// -------------------------------------------------------- routes between picks
+// Pick two or more elements and the viewer draws only what connects them:
+// each network that joins them on its own, by its shortest routes and every
+// equally short alternative. A route only crosses networks when no single
+// one joins the two -- a server's mgmt cable is not a way onto the data
+// fabric just because both reach the same ToR.
+{
+  const m = parseLayout(readFileSync(join(root, 'examples/small.dc'), 'utf8'));
+  const between = (...paths) => routesBetween(paths.map((p) => m.resolve(p)));
+  const summary = (r) => r.pairs.map((p) => p.routes.map((x) => `${x.net}:${x.hops}`).join(' '));
+
+  const rack = between('DH1/A/R01/u05', 'DH1/A/R01/u07');
+  eq(summary(rack), ['data:2 mgmt:2'], 'two servers in one rack: both networks meet at their ToR');
+  eq(rack.links.size, 4, 'four cables: each server to the ToR, on each net');
+
+  const rows = between('DH1/A/R01/u05', 'DH1/B/R03/u07');
+  eq(summary(rows), ['data:4'], 'in different rows: only data reaches, up to the spines and down');
+  eq(rows.nets.get('data'), 10, 'by every spine, since each gives an equally short route');
+  ok(![...rows.links].some((l) => l.net === 'mgmt'), 'and no route borrows a mgmt cable to reach the data fabric');
+
+  eq(summary(between('DH1/E/R01/d01', 'DH1/E/R02/d03')), ['data:4 storage:1'],
+     'every network that joins them is shown, each by its own shortest route');
+  eq(summary(between('DH1/A/R01', 'DH1/B/R03')), ['data:2'], 'a rack stands for everything in it: two racks, their uplinks');
+  eq(between('DH1/A/R01/u05', 'DH1/A/R01/tor', 'MDF/S1/SP1/spine').pairs.length, 3, 'three picks are three pairs');
+
+  const dataOff = routesBetween([m.resolve('DH1/A/R01/u05'), m.resolve('DH1/B/R03/u07')], (net) => net !== 'data');
+  eq([dataOff.pairs[0].routes.length, dataOff.links.size], [0, 0], 'with data unticked, the two have no route');
+
+  // A layout that gives each tier its own net is only connected across them.
+  const d = parseLayout(readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8'));
+  const tiers = routesBetween([d.resolve('P1/A/R01/s1'), d.resolve('P2/A/R04/s8')]);
+  eq([tiers.pairs[0].mixed, tiers.pairs[0].routes[0].hops], [true, 6],
+     'where no one net joins them, the route crosses networks: NIC, TOR uplink, plane, and back');
+  ok(['nica', 'fabric', 'plane1'].every((n) => tiers.nets.has(n)), 'over every tier it climbs');
 }
 
 // ------------------------------------------------------------------ splices
