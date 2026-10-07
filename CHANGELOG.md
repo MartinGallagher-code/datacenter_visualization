@@ -13,6 +13,29 @@ their shapes are not a promise.
 
 ## Unreleased
 
+- **Cables leave from the side of a device, into a lane beside it.** They
+  used to run centre to centre, so a server's data and mgmt cables left from
+  the same point and lay almost on top of each other to the ToR, told apart
+  only by a two-pixel offset. Now every cable leaves its device from the left
+  or right edge and follows a lane running beside the devices — the way
+  cables run up a rack's cable manager. A rack's servers and its ToR share
+  one lane per net, so twenty server cables draw as one line with a stub from
+  each server into it. A device with several nets has them leave **opposite
+  sides**, and a third net takes its own lane further out, so no two fabrics
+  ever draw on the same line. Nothing in the format changed.
+- **`splice=N` on a link rule: N cables gathered into one.** Every run of N
+  consecutive matches of the first selector — consecutive in the rack, from
+  the bottom, never across two racks — is spliced into one cable to each
+  element of the second: `link data role=server role=tor scope=rack
+  splice=4` is a rack of sixteen servers cabled as four harnesses to the ToR.
+  Each run is drawn with a slim marker beside it, in the net's colour, where
+  its stubs come together, and one heavier cable on to the ToR; the marker is
+  part of the cable layer, never a device. The links themselves are
+  unchanged — every server is still wired to its ToR — so counts, the
+  inspector and isolation work as before, and the inspector names the splice
+  a server is in. `splice=` anywhere but a two-selector star, or outside
+  2..1000, is reported and ignored. `examples/splice.dc` shows it.
+
 - **A layout can carry the hardware a run is graded against.** Nothing new
   in the format: `nic_gbps=` on servers and `uplinks=` / `uplink_gbps=` on
   racks are ordinary attributes, inherited like any other, and the viewer

@@ -10,9 +10,10 @@
 // by the topology version so cable geometry is only recomputed when the shape
 // of the view actually changes.
 
-import { centerOf, labelOf } from './layout.js';
+import { labelOf } from './layout.js';
 import { colorFor, contrastInk } from './palette.js';
 import { formatValue, isStandardized, overlayValue, zRangeOf, zScore } from './results.js';
+import { routeCables } from './route.js';
 
 const THEME = {
   bg: '#0d1117',
@@ -54,7 +55,7 @@ export class Renderer {
     this.state = state;
     this.camera = { x: 0, y: 0, scale: 1 };
     this.hover = null;
-    this.linkCache = { version: -1, nets: new Map() };
+    this.linkCache = { version: -1, nets: new Map(), total: 0 };
     this.stats = { drawn: 0, links: 0, flows: 0 };
   }
 
@@ -407,75 +408,145 @@ export class Renderer {
     this.stats.links = 0;
     if (!enabled.length) return;
 
-    // The cache depends on both the topology version and the zoom bucket: at a
-    // far zoom, links aggregate up to the blocks the LOD cutoff actually paints.
+    // The cache depends on the topology version and the zoom bucket -- at a
+    // far zoom, links aggregate up to the blocks the LOD cutoff actually
+    // paints -- and on the isolated element, since routes are laid out for
+    // the cables actually shown and sharing a lane is decided by which those
+    // are.
     const bucket = Math.round(Math.log2(this.camera.scale) * 2);
-    if (this.linkCache.version !== state.version || this.linkCache.bucket !== bucket) {
-      this.rebuildLinkCache(bucket);
+    const only = state.isolateLinks ? state.selected : null;
+    const cache = this.linkCache;
+    if (cache.version !== state.version || cache.bucket !== bucket || cache.only !== only) {
+      this.rebuildLinkCache(bucket, only);
     }
 
     const ctx = this.ctx;
     const scale = this.camera.scale;
+    // Round caps fill the corner where a stub turns into its lane.
     ctx.lineCap = 'round';
 
-    let totalEdges = 0;
-    for (const net of enabled) totalEdges += (this.linkCache.nets.get(net.name) || []).length;
     // Dense views fade automatically so a hyperscale fabric reads as a haze,
     // not a solid sheet; zooming in restores full opacity as edges drop out.
-    const density = Math.min(1, 1500 / Math.max(1, totalEdges));
-
-    // Fabrics that share a pair of endpoints would overdraw each other, so
-    // each enabled net rides a small perpendicular offset -- a couple of
-    // screen pixels, centred so a lone net stays exactly on the line and two
-    // nets straddle it, one either side, each colour visible.
-    const netIndex = new Map();
-    enabled.forEach((net, i) => netIndex.set(net.name, (i - (enabled.length - 1) / 2) * (2.5 / scale)));
-
-    // "Only this element's links": an edge survives when either end is the
-    // selection, inside it, or the collapsed block standing in for it.
-    const only = state.isolateLinks ? state.selected : null;
+    const density = Math.min(1, 1500 / Math.max(1, this.linkCache.total));
+    // Stubs, lanes and crossings are a few segments per cable, so the cap on
+    // what one frame strokes is a few times the cable cap.
+    const maxSegments = state.maxLinksDrawn * 4;
 
     for (const net of enabled) {
-      const edges = this.linkCache.nets.get(net.name);
-      if (!edges || !edges.length) continue;
-      const off = netIndex.get(net.name);
+      const routed = this.linkCache.nets.get(net.name);
+      if (!routed) continue;
+
+      // Counted per cable, not per segment, which is the number the status
+      // line has always meant.
+      let drawn = 0;
+      for (const cable of routed.cables) {
+        if (!this.cableVisible(cable)) continue;
+        drawn++;
+        if (!only) continue;
+        if (cable.members) {
+          // Through a splice: each member's own cable, end to end.
+          for (const m of cable.members) {
+            if (sharesLineage(m, only) || sharesLineage(cable.to, only)) {
+              this.markEndpoint(m, net.color);
+              this.markEndpoint(cable.to, net.color);
+            }
+          }
+        } else {
+          this.markEndpoint(cable.a, net.color);
+          this.markEndpoint(cable.b, net.color);
+        }
+      }
+      this.stats.links += drawn;
 
       ctx.strokeStyle = net.color;
       ctx.globalAlpha = Math.max(0.02, state.linkOpacity * density);
       if (net.style === 'dashed') ctx.setLineDash([5 / scale, 4 / scale]);
       else ctx.setLineDash([]);
 
-      // Group by count bucket so line width changes do not force a stroke per edge.
-      let drawn = 0;
-      for (const edge of edges) {
-        const a = edge.a.box;
-        const b = edge.b.box;
-        let ax = a.x + a.w / 2;
-        let ay = a.y + a.h / 2;
-        let bx = b.x + b.w / 2;
-        let by = b.y + b.h / 2;
-        if (!this.segmentVisible(ax, ay, bx, by)) continue;
-        if (only && !sharesLineage(edge.a, only) && !sharesLineage(edge.b, only)) continue;
-        if (only) { this.markEndpoint(edge.a, net.color); this.markEndpoint(edge.b, net.color); }
-        if (off) {
-          const len = Math.hypot(bx - ax, by - ay) || 1;
-          const ox = ((ay - by) / len) * off;
-          const oy = ((bx - ax) / len) * off;
-          ax += ox; ay += oy; bx += ox; by += oy;
-        }
-        ctx.lineWidth = (net.width * (edge.count > 1 ? Math.min(4, 1 + Math.log2(edge.count)) : 1)) / scale;
+      // Stroked a batch at a time per line width. Within a stroke,
+      // overlapping pieces paint once rather than piling up opacity where
+      // cables share a lane -- but one stroke over a whole hyperscale fabric
+      // is far slower to rasterise than the same lines in batches.
+      // A piece shorter than a pixel on screen is skipped: at a far zoom the
+      // stubs and lanes are fractions of a pixel beside their boxes, and
+      // stroking them draws nothing but the cost.
+      const tiny = 0.75 / scale;
+      let budget = maxSegments;
+      for (const [width, segs] of routed.segs) {
+        ctx.lineWidth = width / scale;
+        let batch = 0;
         ctx.beginPath();
-        ctx.moveTo(ax, ay);
-        ctx.lineTo(bx, by);
-        ctx.stroke();
-        drawn++;
-        if (drawn > state.maxLinksDrawn) break;
+        for (let i = 0; i < segs.length && budget > 0; i += 4) {
+          const x0 = segs[i];
+          const y0 = segs[i + 1];
+          const x1 = segs[i + 2];
+          const y1 = segs[i + 3];
+          if (Math.abs(x1 - x0) + Math.abs(y1 - y0) < tiny) continue;
+          if (!this.segmentVisible(x0, y0, x1, y1)) continue;
+          ctx.moveTo(x0, y0);
+          ctx.lineTo(x1, y1);
+          budget--;
+          if (++batch === STROKE_BATCH) {
+            ctx.stroke();
+            ctx.beginPath();
+            batch = 0;
+          }
+        }
+        if (batch) ctx.stroke();
       }
-      this.stats.links += drawn;
+
+      if (routed.markers.length) this.drawSplices(net, routed.markers);
     }
 
     ctx.setLineDash([]);
     ctx.globalAlpha = 1;
+  }
+
+  /**
+   * A splice marker: a slim, rounded, see-through bar in the net's own
+   * colour beside the cables it gathers, with those cables drawn converging
+   * inside it. It belongs to the cable layer -- it toggles with its net and
+   * carries no label -- and it is deliberately unlike a device, which is a
+   * filled grey box with a name.
+   */
+  drawSplices(net, markers) {
+    const ctx = this.ctx;
+    const scale = this.camera.scale;
+    ctx.setLineDash([]);
+    const alpha = Math.max(0.5, this.state.linkOpacity);
+
+    for (const m of markers) {
+      if (!this.boxVisible(m)) continue;
+      const w = m.x1 - m.x0;
+      const h = m.y1 - m.y0;
+
+      ctx.globalAlpha = alpha * 0.3;
+      ctx.fillStyle = net.color;
+      if (w * scale < 3) {
+        // Too narrow to draw inside: a solid bar says the same thing.
+        ctx.globalAlpha = alpha;
+        ctx.fillRect(m.x0, m.y0, Math.max(w, 1.5 / scale), h);
+        continue;
+      }
+      const r = Math.min(w / 2, h / 2);
+      ctx.beginPath();
+      if (ctx.roundRect) ctx.roundRect(m.x0, m.y0, w, h, r);
+      else ctx.rect(m.x0, m.y0, w, h);
+      ctx.fill();
+      ctx.globalAlpha = alpha;
+      ctx.strokeStyle = net.color;
+      ctx.lineWidth = 1 / scale;
+      ctx.stroke();
+
+      // The cables coming together, which is the whole point of the marker.
+      ctx.lineWidth = m.w / scale;
+      ctx.beginPath();
+      for (const y of m.entries) {
+        ctx.moveTo(m.inner, y);
+        ctx.lineTo(m.outer, m.exit);
+      }
+      ctx.stroke();
+    }
   }
 
   /**
@@ -592,16 +663,46 @@ export class Renderer {
            Math.max(ay, by) >= v.y0 && Math.min(ay, by) <= v.y1;
   }
 
+  /** The same test for anything carrying x0, y0, x1, y1 bounds. */
+  boxVisible(b) {
+    const v = this.view;
+    return b.x1 >= v.x0 && b.x0 <= v.x1 && b.y1 >= v.y0 && b.y0 <= v.y1;
+  }
+
+  /**
+   * Whether any of a cable can be on screen: the span of the boxes at its
+   * ends, widened by the lanes beside them. Loose on purpose -- it decides
+   * what is counted, not what is drawn.
+   */
+  cableVisible(cable) {
+    const ends = cable.members ? [cable.members[0], cable.members[cable.members.length - 1], cable.to]
+                               : [cable.a, cable.b];
+    let x0 = Infinity;
+    let y0 = Infinity;
+    let x1 = -Infinity;
+    let y1 = -Infinity;
+    for (const el of ends) {
+      const b = el.box;
+      if (b.x < x0) x0 = b.x;
+      if (b.y < y0) y0 = b.y;
+      if (b.x + b.w > x1) x1 = b.x + b.w;
+      if (b.y + b.h > y1) y1 = b.y + b.h;
+    }
+    const v = this.view;
+    return x1 + CABLE_REACH >= v.x0 && x0 - CABLE_REACH <= v.x1 && y1 >= v.y0 && y0 <= v.y1;
+  }
+
   /**
    * Collapse every link down to the pair of blocks actually painted, merging
    * duplicates into one counted edge, so a collapsed rack shows one thick cable
-   * rather than forty coincident thin ones.
+   * rather than forty coincident thin ones -- then lay every cable out along
+   * the lanes beside the blocks it joins.
    */
-  rebuildLinkCache(bucket) {
+  rebuildLinkCache(bucket, only = null) {
     const state = this.state;
     const scale = this.camera.scale;
-    const nets = new Map();
     const seen = new Map();
+    const edges = [];
     const lodCache = new Map();
 
     // The block actually painted for an endpoint: its outermost collapsed
@@ -621,24 +722,66 @@ export class Renderer {
       return block;
     };
 
+    const addEdge = (net, a, b) => {
+      const key = a.key < b.key ? `${net} ${a.key} ${b.key}` : `${net} ${b.key} ${a.key}`;
+      const existing = seen.get(key);
+      if (existing) { existing.count++; return; }
+      const edge = { net, a, b, count: 1 };
+      seen.set(key, edge);
+      edges.push(edge);
+    };
+
+    // Spliced cables are gathered per splice first: whether one still draws
+    // as a splice depends on what its members are painted as.
+    const spliced = new Map();
+
     for (const link of state.model.links) {
       const net = state.model.nets.get(link.net);
       if (!net || !net.enabled) continue;
       const a = paintedBlock(link.a);
       const b = paintedBlock(link.b);
       if (!a || !b || a === b) continue;
-      const key = a.key < b.key ? `${link.net} ${a.key} ${b.key}`
-                                : `${link.net} ${b.key} ${a.key}`;
-      const existing = seen.get(key);
-      if (existing) { existing.count++; continue; }
-      const edge = { a, b, count: 1 };
-      seen.set(key, edge);
-      let list = nets.get(link.net);
-      if (!list) nets.set(link.net, (list = []));
-      list.push(edge);
+      // "Only this element's links": an edge survives when either end is the
+      // selection, inside it, or the collapsed block standing in for it.
+      if (only && !sharesLineage(a, only) && !sharesLineage(b, only)) continue;
+      const sp = link.splice;
+      if (!sp) { addEdge(link.net, a, b); continue; }
+      const toIsA = sp.to === link.a;
+      let rec = spliced.get(sp);
+      if (!rec) spliced.set(sp, (rec = { sp, to: toIsA ? a : b, members: new Map() }));
+      const member = toIsA ? b : a;
+      rec.members.set(member, (rec.members.get(member) || 0) + 1);
     }
 
-    this.linkCache = { version: state.version, bucket, nets };
+    const splices = [];
+    for (const { sp, to, members } of spliced.values()) {
+      const blocks = [...members.keys()];
+      // Still a splice while its members are drawn as themselves. Once they
+      // are all inside one collapsed block, the splice is inside it too and
+      // what is left is that block's cable to the ToR.
+      const parent = blocks[0].parent;
+      const intact = blocks.every((m) => sp.members.includes(m) && m.parent === parent);
+      if (intact) {
+        splices.push({ net: sp.net, members: blocks, to, count: blocks.length });
+      } else {
+        for (const [m, n] of members) for (let i = 0; i < n; i++) addEdge(sp.net, m, to);
+      }
+    }
+
+    const order = new Map();
+    let i = 0;
+    for (const net of state.model.nets.values()) if (net.enabled) order.set(net.name, i++);
+    const widthOf = (name, count, trunk) => {
+      const net = state.model.nets.get(name);
+      const base = net ? net.width : 1;
+      if (trunk) return base * SPLICE_TRUNK;
+      return base * (count > 1 ? Math.min(4, 1 + Math.log2(count)) : 1);
+    };
+    const routed = routeCables(edges, splices, (name) => order.get(name) ?? 0, widthOf);
+
+    let total = 0;
+    for (const net of routed.nets.values()) total += net.cables.length;
+    this.linkCache = { version: state.version, bucket, only, nets: routed.nets, total, ports: routed.ports };
   }
 
   // ---------------------------------------------------------------- selection
@@ -660,6 +803,18 @@ export class Renderer {
 }
 
 const LOD_RECURSE = 9;   // stop descending once a container is this many px wide
+
+// The one cable on from a splice is drawn heavier than the ones gathered into
+// it: it is the same cable as each of them and stands for all of them.
+const SPLICE_TRUNK = 1.6;
+
+// Segments per stroke() call. Big enough that a rack's lanes go in one,
+// small enough that rasterising a stroke stays cheap.
+const STROKE_BATCH = 512;
+
+// How far beside its boxes a cable's lanes can reach, for deciding whether
+// it is on screen. Lanes sit a few world units out; this is generous.
+const CABLE_REACH = 24;
 
 /** True when `el` is `sel`, inside it, or an ancestor standing in for it. */
 export function sharesLineage(el, sel) {
@@ -688,6 +843,27 @@ export function linkSummary(el) {
       if (!rec) byNet.set(link.net, (rec = { inside: 0, out: 0 }));
       if (inside(link.a) && inside(link.b)) rec.inside++;
       else rec.out++;
+    }
+    for (const child of node.children) walk(child);
+  };
+  walk(el);
+  return byNet;
+}
+
+/**
+ * Every splice in an element's subtree, per net. A splice is a harness, not
+ * an element: each member's link carries the splice it runs through, so like
+ * the cables themselves they are found by walking down to the leaves.
+ */
+export function spliceSummary(el) {
+  const byNet = new Map();
+  const walk = (node) => {
+    for (const link of node.links) {
+      const sp = link.splice;
+      if (!sp) continue;
+      let set = byNet.get(sp.net);
+      if (!set) byNet.set(sp.net, (set = new Set()));
+      set.add(sp);
     }
     for (const child of node.children) walk(child);
   };
