@@ -22,6 +22,14 @@ their shapes are not a promise.
   `dcm1` — and the built-in placeholders (`{id}`, `{parent}`, …) keep their
   meaning under a kind of the same name. Only lines that used to warn
   change.
+- **`{seq}`: numbers that run on through every copy of a line.** `{i}`
+  restarts under each parent, so racks numbered uniquely across four rows
+  took four blocks with the numbers typed into each. `{seq}` counts every
+  element the line has made so far: `rack [1..5] id=R{seq}` under `row
+  [1..4]` is R1–R5, R6–R10, R11–R15, R16–R20. Each line keeps its own count.
+  Any whole-number placeholder now takes a width, `{seq:2}` → `07`, as a
+  range written `[01..20]` pads; anything else is left as it is.
+  `examples/dual-plane.dc` now makes its two pods from one block this way.
 - **The copyright line is off the main screen.** The status bar under the
   floor plan repeated `© 2026 Martin J. Gallagher · GPL-3.0-or-later · no
   warranty`; it now carries only the view's own figures. The notice stays

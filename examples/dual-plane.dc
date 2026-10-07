@@ -25,28 +25,20 @@ dc LAB name="Dual-plane fabric" cols=1
       rack SS2 u=12
         node ss[1..6] u=2 role=superspine +switch
 
-  # Two pods of two racks; each pod has its own spine 1 and spine 2.
+  # Two pods of two racks; each pod has its own spine 1 and spine 2. One
+  # block makes both: {seq} counts on across every copy of a line, so the
+  # rack line numbers R01-R02 in pod 1 and R03-R04 in pod 2, and the spine
+  # racks are SP1 and SP2 -- where {i} would start again in every pod.
   room DH1 name="Data Hall 1" cols=2
 
-    pod P1 name="Pod 1 (racks 1-2)"
+    pod [1..2] id=P{id} name="Pod {id}"
       row A
-        rack R[01..02] u=24
+        rack [1..2] id=R{seq:2} u=24
           node tora at=24 role=tor nic=a +switch
           node torb at=23 role=tor nic=b +switch
           node s[1..8] u=2 role=server +x86
       row S
-        rack SP1 u=8
-          node spine1 at=6 u=2 role=spine plane=1 +switch
-          node spine2 at=2 u=2 role=spine plane=2 +switch
-
-    pod P2 name="Pod 2 (racks 3-4)"
-      row A
-        rack R[03..04] u=24
-          node tora at=24 role=tor nic=a +switch
-          node torb at=23 role=tor nic=b +switch
-          node s[1..8] u=2 role=server +x86
-      row S
-        rack SP2 u=8
+        rack S id=SP{seq} u=8
           node spine1 at=6 u=2 role=spine plane=1 +switch
           node spine2 at=2 u=2 role=spine plane=2 +switch
 

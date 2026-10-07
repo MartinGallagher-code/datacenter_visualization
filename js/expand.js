@@ -106,8 +106,17 @@ export function expand(token) {
 
 // Substitute {name} placeholders from a context object. Unknown keys are left alone
 // so that literal braces in labels survive.
+//
+// {name:W} pads a whole-number value with zeros to W digits -- {seq:2} is 07 --
+// the way a range written R[01..20] pads its own. Anything that is not a whole
+// number is left as it is, since there is no sensible way to pad "wr12".
 export function subst(str, ctx) {
   if (typeof str !== 'string' || !str.includes('{')) return str;
-  return str.replace(/\{(\w+)\}/g, (all, key) =>
-    Object.prototype.hasOwnProperty.call(ctx, key) ? String(ctx[key]) : all);
+  return str.replace(/\{(\w+)(?::(\d+))?\}/g, (all, key, width) => {
+    if (!Object.prototype.hasOwnProperty.call(ctx, key)) return all;
+    const value = String(ctx[key]);
+    if (!width || !/^-?\d+$/.test(value)) return value;
+    const digits = value.replace('-', '');
+    return (value.startsWith('-') ? '-' : '') + digits.padStart(Number(width), '0');
+  });
 }

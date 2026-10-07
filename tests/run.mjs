@@ -1915,6 +1915,31 @@ ok(!matchesFilter('mxrun.tsv', 'mx.*'), 'and that dot has to be there: it is not
      'a kind called like a built-in placeholder does not hide it');
   eq(warnsOf('dc D\n  dcm d{dcm}\n').length, 1, 'an id spec still cannot name the element it is creating');
 
+  // {seq} counts on across every copy of a line, where {i} restarts under
+  // each parent: racks numbered through the rows from one rack line, rather
+  // than one block per row with the numbers typed into each.
+  const rows = parseLayout(['dc D', '  room H', '    row [1..4]',
+    '      rack [1..5] id=R{seq} u=42', '        node u[01..02] name={rack}{id}'].join('\n'));
+  eq(rows.warnings, [], '{seq} resolves on an attribute');
+  eq(rows.all.filter((e) => e.kind === 'row').map((r) => r.children.map((c) => c.id).join(' ')),
+     ['R1 R2 R3 R4 R5', 'R6 R7 R8 R9 R10', 'R11 R12 R13 R14 R15', 'R16 R17 R18 R19 R20'],
+     'four rows of five racks are numbered 1-5, 6-10, 11-15, 16-20');
+  eq(rows.resolve('R12/u02') && rows.resolve('R12/u02').name, 'R12u02',
+     'and the lines below see the number the rack was given');
+  eq(parseLayout('dc D\n  row [1..2]\n    rack [1..3] id=R{seq:2}\n').all.filter((e) => e.kind === 'rack')
+    .map((e) => e.id), ['R01', 'R02', 'R03', 'R04', 'R05', 'R06'], '{seq:2} pads to two digits, as R[01..06] would');
+  eq(parseLayout('dc D\n  row [1..2]\n    rack [1..2] id=R{seq}\n    rack [1..2] id=S{seq}\n').all
+    .filter((e) => e.kind === 'rack').map((e) => e.id), ['R1', 'R2', 'S1', 'S2', 'R3', 'R4', 'S3', 'S4'],
+     'each line keeps its own count');
+  eq(parseLayout('dc D\n  room [A|B]\n    row [1..2]\n      rack [1..2] id=R{seq}\n').all
+    .filter((e) => e.kind === 'rack').map((e) => e.id).join(' '), 'R1 R2 R3 R4 R5 R6 R7 R8',
+     'and keeps counting however deep the repetition goes');
+  eq(parseLayout('dc D\n  rack r u=4\n    node [1..3] id=u{i:3}\n').all.slice(2).map((e) => e.id),
+     ['u001', 'u002', 'u003'], 'any whole-number placeholder pads the same way');
+  eq(parseLayout('dc D\n  room wr12\n    rack r1 name={room:6}\n').all[2].name, 'wr12',
+     'and one that is not a number is left as it is');
+  eq(warnsOf('dc D\n  rack R{seq}\n').length, 1, 'an id spec cannot count what it has not made yet');
+
   // Every layout the repo ships stays quiet, which is what makes the check
   // worth having: it has to fire on mistakes and not on the house style.
   for (const file of ['examples/small.dc', 'examples/mega.dc', 'examples/hostnames.dc',

@@ -332,7 +332,12 @@ function contextFor(parent) {
 const PLACEHOLDER = /\{[^{}]*\}/;
 
 // The placeholders every line has, which a kind of the same name never hides.
-const CONTEXT_NAMES = new Set(['id', 'i', 'i0', 'n', 'kind', 'parent', 'path']);
+const CONTEXT_NAMES = new Set(['id', 'i', 'i0', 'n', 'seq', 'kind', 'parent', 'path']);
+
+// How many elements each line has made so far, across every parent it was
+// repeated under -- what {seq} counts. Keyed by the line's syntax node, which
+// is new on every parse, so the count starts again with each one.
+const madeBy = new WeakMap();
 
 /**
  * A `{placeholder}` that survived substitution named something not in scope --
@@ -416,7 +421,12 @@ function materialize(syn, parent, model) {
     // ({id}, {i}, {parent}, ...) still win over a kind that shares one.
     const ctx = { ...baseCtx };
     if (!CONTEXT_NAMES.has(syn.kind)) ctx[syn.kind] = rawId;
-    Object.assign(ctx, { id: rawId, i: i + 1, i0: i, n: ids.length, kind: syn.kind });
+    // {i} restarts under every parent; {seq} carries on. `rack [1..5]
+    // id=R{seq}` under `row [1..4]` is R1-R5, then R6-R10, ... -- numbers
+    // unique across the floor from one line, not one block per row.
+    const seq = (madeBy.get(syn) || 0) + 1;
+    madeBy.set(syn, seq);
+    Object.assign(ctx, { id: rawId, i: i + 1, i0: i, n: ids.length, seq, kind: syn.kind });
     let attrs = syn.attrs;
     let dynamic = false;
     for (const [, v] of attrEntries) if (v.includes('{')) { dynamic = true; break; }
