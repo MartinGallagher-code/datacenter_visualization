@@ -204,6 +204,9 @@ link storage +storage,role=server scope=row mode=mesh  # full mesh within a row
   turns out to match half the floor is kept from wiring all of it. A cap that
   is not a whole number between 1 and 100,000,000 is reported and ignored, and
   a rule that hits its cap says so.
+- `splice=N` gathers every N consecutive matches of the first selector into
+  one cable to each element of the second — a breakout harness, four servers
+  spliced into one cable to a ToR port. See [Splices](#splices) below.
 - A rule wires **two** selectors. A third token is reported rather than
   dropped, which is what catches a mistyped option — `scoope=rack` cannot be
   told apart from selecting on an attribute called `scoope`, but it can be
@@ -219,10 +222,66 @@ link storage +storage,role=server scope=row mode=mesh  # full mesh within a row
   and leaves the decision to the size rule.
 
 Networks toggle on and off in the UI, and modest fabrics start on (see
-above). Fabrics that run over the same pair of endpoints draw slightly
-offset from one another, so every enabled net's colour stays visible.
-Collapsed or zoomed-out regions merge their cables into one thicker line;
-very dense views fade automatically.
+above). Collapsed or zoomed-out regions merge their cables into one thicker
+line; very dense views fade automatically.
+
+### How cables are drawn
+
+A cable leaves its device from the **left or right edge**, never the middle,
+steps out into a **lane** running beside the devices, and follows it — the
+way cables run up a rack's cable manager. Everything in one rack (or any one
+container) puts a given net on the same side at the same distance, so a
+rack's twenty server-to-ToR cables share one line beside the servers, with a
+short stub from each server into it, rather than twenty lines fanning across
+the rack.
+
+When a device carries **several nets, they leave from opposite sides**: data
+on the right and mgmt on the left, say, so the two never draw on top of each
+other. A third net takes a lane of its own further out, on whichever side has
+fewer. The choice is made per container — each net goes to the side its
+devices have fewer nets on — and racks that carry the same nets make the same
+choice, so an uplink leaves its ToR on the side the spine's own lane is on.
+
+Two devices in the same column of the same container (a server and its ToR)
+are joined along their shared lane. Anything further apart steps out into its
+lane at each end and crosses straight between the two.
+
+### Splices
+
+In a rack of sixteen servers, every run of four is often cabled into a
+harness that splices the four into a single cable, and that one cable runs to
+the ToR. `splice=N` on a link rule says so:
+
+```
+link data role=server role=tor scope=rack splice=4
+```
+
+Each run of N servers gets a **slim marker** beside it, in the net's own
+colour, with the N stubs drawn coming together inside it; **one heavier
+cable** runs on from the marker to the ToR. The marker is part of the cable
+layer — it has no label, takes no rack space, and toggles with its net — so it
+never reads as a device.
+
+- Runs are **consecutive in the rack, from the bottom** — U1–4, U5–8, … — in U
+  order whatever order the lines were written in, and **never cross from one
+  rack into the next**, even with a wider `scope=`. Eighteen servers make four
+  runs of four and one of two; a run of one is simply a cable.
+- Every server is **still wired to its ToR**: the links are the same ones the
+  rule makes without `splice=`, and each carries the splice it runs through.
+  Link counts, the inspector, and *show only this element's cables* work as
+  before — isolating one server shows its own cable into the marker and on to
+  the ToR, and none of the other three on the harness.
+- The inspector names a server's splice (`data: 4 into one cable to tor`) and
+  counts the splices arriving at a ToR or below a container
+  (`data ×4 (16 cables into 4)`).
+- A splice gathers the first selector's matches onto cables to the second, so
+  it needs **two selectors and `mode=star`**; anywhere else it is reported and
+  ignored. N is a whole number from 2 to 1000.
+- Collapse the rack and its splices are inside it. A harness to a ToR in
+  another rack folds into the collapsed rack's one thicker cable, as unspliced
+  cables do.
+
+`examples/splice.dc` is a small floor wired this way.
 
 ## The results file (`.tsv`)
 
@@ -1041,6 +1100,7 @@ examples/small.dc         starter layout   (~1,200 elements)
 examples/small-results.tsv  two nightly runs of four tests
 examples/mega.dc          scale test (~256k elements on one page)
 examples/hostnames.dc     flat hostname naming (wr12r06u15 style)
+examples/splice.dc        four servers spliced into each cable to the ToR
 examples/iperf/          a floor plan using every layout feature, with a real
                          export-overlay run painted over it (see its README)
 examples/hostnames-results.tsv  results addressed by flat name

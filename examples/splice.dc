@@ -1,0 +1,40 @@
+# Spliced cabling: four servers share one cable to the ToR.
+#
+# In each 16-server rack below, every run of four consecutive servers (U1-4,
+# U5-8, ...) is cabled into a harness that splices the four into a single
+# cable, and that one cable runs up to the ToR. `splice=4` on the link rule
+# says so; the viewer draws a slim marker beside each run of four where the
+# cables come together, and one heavier cable on from it.
+#
+# The links themselves are unchanged -- every server is still wired to its
+# ToR, counted and isolated as before -- so the inspector's link counts and
+# "show only this element's cables" work exactly as they do without splices.
+#
+# The management network is not spliced: one cable per server, on the other
+# side of the rack, so the two fabrics never draw on top of each other.
+
+dc SPL name="Spliced racks"
+
+  room DH1 name="Data Hall 1"
+    row A
+      rack R[01..04] u=24
+        node tor at=24 role=tor +switch
+        node u[01..16] role=server +x86
+    row B
+      # 2U servers, 18 of them: the last run is two, still spliced.
+      rack R[01..02] u=42
+        node tor at=42 role=tor +switch
+        node u[01..18] u=2 role=server +gpu
+
+  room MDF name="Meet-Me Room" +network
+    row S1
+      rack SP[1..2] u=8
+        node spine at=4 u=2 role=spine +switch
+
+net data   label="Data"      color=#4fa3ff
+net mgmt   label="Out-of-band mgmt" color=#8b93a7 style=dashed
+
+# Four servers per cable, then on to the ToR in their own rack.
+link data  role=server role=tor   scope=rack splice=4
+link mgmt  role=server role=tor   scope=rack
+link data  role=tor    role=spine

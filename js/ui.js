@@ -10,7 +10,7 @@ import {
   AGGREGATIONS, invertedOf, isStandardized, NORMAL_BEYOND_2SD, overlayValue, paletteOf,
   readNumber, readingText, tailIsOdd, zRangeOf,
 } from './results.js';
-import { countDescendants, linkSummary } from './render.js';
+import { countDescendants, linkSummary, spliceSummary } from './render.js';
 
 const el = (tag, cls, text) => {
   const n = document.createElement(tag);
@@ -667,6 +667,25 @@ export function renderInspector(state, host, actions) {
         : `${net} ×${rec.inside + rec.out}` +
           (rec.out && rec.inside ? ` (${rec.out} leaving)` : rec.out ? ' (all leaving)' : ' (all internal)');
       dd.append(el('div', null, line));
+    }
+    structural.append(dd);
+  }
+  // A member names the run it is spliced into; a ToR or a container says how
+  // many splices arrive and how many cables they gather.
+  const splices = spliceSummary(node);
+  if (splices.size) {
+    structural.append(el('dt', null, 'spliced'));
+    const dd = el('dd');
+    for (const [net, set] of splices) {
+      const mine = [...set].filter((sp) => sp.members.includes(node));
+      for (const sp of mine) {
+        dd.append(el('div', null, `${net}: ${sp.members.length} into one cable to ${sp.to.name}`));
+      }
+      if (!mine.length) {
+        let cables = 0;
+        for (const sp of set) cables += sp.members.length;
+        dd.append(el('div', null, `${net} ×${set.size} (${cables} cables into ${set.size})`));
+      }
     }
     structural.append(dd);
   }

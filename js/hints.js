@@ -49,9 +49,11 @@ const LINK_KEYS = [
   ['scope=', 'group matches per rack/row/room/… before wiring'],
   ['mode=', 'star, mesh, chain, ring or pair'],
   ['cap=', 'stop after this many cables'],
+  ['splice=', 'gather every N consecutive matches into one cable'],
 ];
 
 const MODES = ['star', 'mesh', 'chain', 'ring', 'pair'];
+const SPLICES = ['4', '2', '8'];   // the usual breakout ratios
 const STYLES = ['solid', 'dashed'];
 const YES_NO = ['yes', 'no', 'true', 'false'];
 const DIRS = ['x', 'y'];
@@ -155,7 +157,7 @@ export function suggestionsFor(text, caret) {
       }
     } else if (kind === 'link') {
       if (key) {
-        options = valueOptions(key, { mode: MODES, scope: ['dc', ...h.kinds] }, h);
+        options = valueOptions(key, { mode: MODES, scope: ['dc', ...h.kinds], splice: SPLICES }, h);
       } else if (priorTokens.length === 1) {
         options = [...h.nets].map((n) => [n, 'fabric declared with net']);
       } else {
@@ -354,6 +356,7 @@ const REFERENCE = [
     ['link data role=server role=tor scope=rack', 'star: per rack, servers to ToR'],
     ['link storage +storage,role=server scope=row mode=mesh', 'mesh within each row'],
     ['link uplink role=tor role=spine', 'every ToR to every spine'],
+    ['link data role=server role=tor scope=rack splice=4', 'four servers per cable to the ToR'],
     ['mode=star mode=mesh mode=chain mode=ring mode=pair', 'the five modes', true],
   ]],
   ['Selectors', 'For link rules and the filter bar.', [

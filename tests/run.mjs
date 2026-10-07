@@ -27,7 +27,8 @@ import {
   readingText, offScale, tailIsOdd, NORMAL_BEYOND_2SD,
 } from '../js/results.js';
 import { layout } from '../js/layout.js';
-import { linkSummary, sharesLineage } from '../js/render.js';
+import { Renderer, linkSummary, sharesLineage, spliceSummary } from '../js/render.js';
+import { LANE, SPLICE_W } from '../js/route.js';
 import { compileQuery, applyFilter } from '../js/filter.js';
 import { ramp, categoricalColor, colorFor, contrastInk } from '../js/palette.js';
 import { suggestionsFor } from '../js/hints.js';
@@ -1057,6 +1058,252 @@ layout(small.root, () => true);
 eq(rack.shown.length, 0, 'collapsed rack hides children');
 rack.collapsed = false;
 layout(small.root, () => true);
+
+// ----------------------------------------------------------- cable routing
+// Cables used to run centre to centre, so a server's data and mgmt cables left
+// from one point and lay on top of each other all the way to the ToR. They
+// leave from a side now, into a lane beside the device, with a device's nets
+// on opposite sides. These go through the renderer's own cache rebuild, the
+// path the canvas uses, with a canvas that is never drawn on.
+const viewOf = (model) => ({
+  model, version: 1, isolateLinks: false, selected: null,
+  drawnEndpoint(node) {
+    let top = node;
+    for (let p = node.parent; p; p = p.parent) if (p.collapsed) top = p;
+    return top;
+  },
+});
+const routeOf = (model, only = null) => {
+  const r = new Renderer({ getContext: () => null }, viewOf(model));
+  r.camera.scale = 4;          // close enough that every device is drawn as itself
+  r.rebuildLinkCache(0, only);
+  return r.linkCache;
+};
+const segsOf = (cache, net) => {
+  const out = [];
+  const routed = cache.nets.get(net);
+  if (routed) {
+    for (const [w, flat] of routed.segs) {
+      for (let i = 0; i < flat.length; i += 4) out.push({ w, x0: flat[i], y0: flat[i + 1], x1: flat[i + 2], y1: flat[i + 3] });
+    }
+  }
+  return out;
+};
+{
+  const m = parseLayout(readFileSync(join(root, 'examples/small.dc'), 'utf8'));
+  layout(m.root);
+  const cache = routeOf(m);
+  const port = cache.ports;
+  const u05 = m.resolve('DH1/A/R01/u05');
+  const tor = m.resolve('DH1/A/R01/tor');
+  const rack = m.resolve('DH1/A/R01');
+  const b = u05.box;
+  const cx = b.x + b.w / 2;
+  const cy = b.y + b.h / 2;
+
+  const data = port(u05, 'data');
+  const mgmt = port(u05, 'mgmt');
+  ok(data && mgmt && data.side === -mgmt.side, 'a server with two nets has them leave opposite sides');
+  eq(data.edge, data.side > 0 ? b.x + b.w : b.x, 'and leaves from the edge of its box');
+  eq(data.y, cy, 'at its middle height');
+  eq(Math.min(data.lane, mgmt.lane), LANE, 'into a lane just beside it');
+
+  // Nothing leaves from the middle any more, and nothing crosses the box to
+  // get out of it.
+  const touching = [...segsOf(cache, 'data'), ...segsOf(cache, 'mgmt')]
+    .filter((sg) => (sg.y0 === cy || sg.y1 === cy) && sg.y0 === sg.y1);
+  ok(touching.length >= 2, 'both of its cables are drawn at its height');
+  ok(touching.every((sg) => Math.max(sg.x0, sg.x1) <= b.x || Math.min(sg.x0, sg.x1) >= b.x + b.w),
+     'every stub stays outside the box it leaves');
+  ok(!touching.some((sg) => sg.x0 === cx || sg.x1 === cx), 'no cable starts at the centre');
+
+  // The rack's servers and its ToR share one data lane: the bus beside them.
+  const torData = port(tor, 'data');
+  eq([torData.side, torData.lane], [data.side, data.lane], 'the ToR puts data on the same side, in the same lane');
+  const busX = data.side > 0 ? b.x + b.w + data.lane : b.x - data.lane;
+  const bus = segsOf(cache, 'data').filter((sg) => sg.x0 === busX && sg.x1 === busX
+    && sg.y0 >= rack.box.y && sg.y1 <= rack.box.y + rack.box.h);
+  eq(bus.length, 1, 'twenty servers to one ToR draw one lane, merged, not twenty overlapping ones');
+  const u01 = m.resolve('DH1/A/R01/u01');
+  ok(bus.length && Math.min(bus[0].y0, bus[0].y1) <= tor.box.y + tor.box.h / 2
+     && Math.max(bus[0].y0, bus[0].y1) >= u01.box.y + u01.box.h / 2,
+     'and it runs from the lowest server to the ToR');
+  ok(busX > rack.box.x && busX < rack.box.x + rack.box.w, 'inside the rack frame, beside the servers');
+
+  // A third net still gets a lane of its own: storage servers carry data,
+  // mgmt and storage, and no two of them may draw on the same line.
+  const d01 = m.resolve('DH1/E/R01/d01');
+  const three = ['data', 'mgmt', 'storage'].map((n) => port(d01, n));
+  ok(three.every(Boolean), 'a storage server has a port on each of its three nets');
+  const where = three.map((p) => p.side * p.lane);
+  eq(new Set(where).size, 3, 'each net in its own lane');
+  ok(three[0].side === -three[1].side, 'its first two nets still on opposite sides');
+
+  // Racks carrying the same nets agree with each other, so an uplink leaves
+  // its ToR on the side the spine's own lane is on.
+  const spine = m.resolve('MDF/S1/SP1/spine');
+  eq(port(spine, 'data').side, torData.side, 'a spine and a ToR put data on the same side');
+
+  // Two fabrics between the same pair of devices used to be told apart by a
+  // two-pixel offset; now they leave opposite sides and never coincide.
+  const dataX = new Set(segsOf(cache, 'data').flatMap((sg) => [sg.x0, sg.x1]));
+  ok(!segsOf(cache, 'mgmt').some((sg) => sg.x0 === sg.x1 && dataX.has(sg.x0) && sg.x0 > rack.box.x
+     && sg.x0 < rack.box.x + rack.box.w), 'mgmt never runs in data’s lane');
+}
+
+// ------------------------------------------------------------------ splices
+// `splice=N` gathers every N consecutive matches of the first selector onto
+// one cable to each element of the second: a breakout harness, four servers
+// to one ToR port. The links stay what they were; each carries its splice.
+{
+  const floor = (opts = '') => `dc D
+  room H
+    row A
+      rack R[1..2] u=42
+        node tor at=42 role=tor
+        node u[01..17] role=server
+net data
+net mgmt style=dashed
+link data role=server role=tor scope=rack ${opts}
+link mgmt role=server role=tor scope=rack
+`;
+  const plain = parseLayout(floor());
+  const spliced = parseLayout(floor('splice=4'));
+  eq(spliced.warnings, [], 'a splice parses clean');
+  eq(spliced.links.length, plain.links.length, 'splicing changes no link: every server is still wired to its ToR');
+  // 17 servers: four runs of four, and one left over -- a run of one is a
+  // cable, not a splice.
+  eq(spliced.splices.length, 8, 'four splices per rack of seventeen');
+  ok(spliced.splices.every((sp) => sp.members.length === 4 && sp.links.length === 4 && sp.net === 'data'),
+     'each gathering four cables of its own net');
+  const r1 = spliced.splices.filter((sp) => sp.to.parent.id === 'R1');
+  eq(r1.map((sp) => sp.members.map((x) => x.id).join(' ')),
+     ['u01 u02 u03 u04', 'u05 u06 u07 u08', 'u09 u10 u11 u12', 'u13 u14 u15 u16'],
+     'consecutive servers, from the bottom of the rack');
+  ok(spliced.splices.every((sp) => sp.links.every((l) => l.splice === sp)), 'each link knows its splice');
+  const u17 = spliced.resolve('R1/u17');
+  ok(u17.links.every((l) => !l.splice), 'the one left over is cabled on its own');
+  ok(spliced.links.filter((l) => l.net === 'mgmt').every((l) => !l.splice), 'and an unspliced net is untouched');
+
+  // Consecutive means physically: the runs follow the U slots, not the order
+  // the lines were written in.
+  const shuffled = parseLayout(`dc D
+  rack R u=42
+    node tor at=42 role=tor
+    node c at=3 role=server
+    node a at=1 role=server
+    node d at=4 role=server
+    node b at=2 role=server
+net data
+link data role=server role=tor splice=2
+`);
+  eq(shuffled.splices.map((sp) => sp.members.map((x) => x.id).join(' ')), ['a b', 'c d'],
+     'runs follow the U slots, not the declaration order');
+
+  // A harness is cut for one rack: with a scope wider than the rack, runs
+  // still never span two of them -- and a server wired to two ToRs gets a
+  // harness to each.
+  const wide = parseLayout(`dc D
+  row A
+    rack R[1..2] u=42
+      node tor at=42 role=tor
+      node u[1..6] role=server
+net data
+link data role=server role=tor scope=row splice=4
+`);
+  eq(wide.splices.length, 8, 'two racks x two runs x two ToRs');
+  ok(wide.splices.every((sp) => sp.members.every((x) => x.parent === sp.members[0].parent)),
+     'no run crosses from one rack into the next');
+  eq(wide.splices.map((sp) => sp.members.length).sort(), [2, 2, 2, 2, 4, 4, 4, 4],
+     'six servers make a run of four and a run of two');
+
+  // splice= means something only for a star between two selectors; anywhere
+  // else it would be silently dropped, which reads as a rule that worked.
+  const misuse = (rule) => parseLayout(`dc D\n  rack R\n    node u[1..8] role=server\n    node tor role=tor\nnet data\n${rule}\n`);
+  const meshed = misuse('link data role=server splice=4');
+  ok(meshed.warnings.some((w) => /splice= .* needs two selectors and mode=star -- ignored/.test(w)),
+     'one selector: splice= is reported and ignored');
+  eq(meshed.splices.length, 0, 'and nothing is spliced');
+  ok(misuse('link data role=server role=tor mode=pair splice=4').warnings.some((w) => /needs two selectors and mode=star/.test(w)),
+     'a mode other than star: reported too');
+  ok(misuse('link data role=server role=tor splice=1').warnings.some((w) => /splice=1 is outside 2\.\.1000 -- ignored/.test(w)),
+     'a splice of one is no splice, and says so');
+  ok(misuse('link data role=server role=tor splice=four').warnings.some((w) => /splice=four is not a number/.test(w)),
+     'a splice that is not a number says so');
+  eq(misuse('link data role=server role=tor splice=1').splices.length, 0, 'and splices nothing');
+
+  // The inspector's view of it.
+  const u05 = spliced.resolve('R1/u05');
+  const mine = spliceSummary(u05).get('data');
+  ok(mine && mine.size === 1 && [...mine][0].members.includes(u05), 'a member sees the splice it is in');
+  const atTor = spliceSummary(spliced.resolve('R1/tor')).get('data');
+  eq(atTor && atTor.size, 4, 'a ToR sees the four that arrive at it');
+  eq(spliceSummary(spliced.resolve('R1')).get('data').size, 4, 'and so does its rack');
+
+  // Drawn: a marker beside each run, the members' stubs ending at it, and one
+  // cable from it to the ToR along a lane beyond it.
+  layout(spliced.root);
+  const cache = routeOf(spliced);
+  const routed = cache.nets.get('data');
+  eq(routed.markers.length, 8, 'one marker per splice');
+  const run = r1[1];
+  const ys = run.members.map((x) => x.box.y + x.box.h / 2);
+  const right = Math.max(...run.members.map((x) => x.box.x + x.box.w));
+  const left = Math.min(...run.members.map((x) => x.box.x));
+  const marker = routed.markers.find((mk) => ys.every((y) => mk.entries.includes(y)));
+  ok(marker, 'the marker for u05-u08 carries their four cables');
+  if (marker) {
+    ok(marker.x0 >= right || marker.x1 <= left, 'it sits beside the servers, not on them');
+    ok(ys.every((y) => y > marker.y0 && y < marker.y1), 'spanning all four');
+    eq(Math.round((marker.x1 - marker.x0) * 100) / 100, SPLICE_W, 'and is slim: a marker, not a device');
+    const segs = segsOf(cache, 'data');
+    ok(ys.every((y) => segs.some((sg) => sg.y0 === y && sg.y1 === y
+       && Math.min(sg.x0, sg.x1) <= Math.min(marker.inner, marker.outer) + 1e-9
+       && Math.max(sg.x0, sg.x1) >= Math.min(marker.inner, marker.outer) - 1e-9)),
+       'each member’s stub runs to the marker');
+    // (The second rack's harnesses sit at the same heights, so only the
+    // segments leaving this marker count.)
+    const out = segs.filter((sg) => sg.y0 === marker.exit && sg.y1 === marker.exit
+      && (sg.x0 === marker.outer || sg.x1 === marker.outer));
+    ok(out.length === 1 && out[0].w > 1, 'one heavier cable leaves it');
+    const torPort = cache.ports(run.to, 'data');
+    const busX = torPort.side > 0 ? right + torPort.lane : left - torPort.lane;
+    ok(torPort.side > 0 ? busX > marker.x1 : busX < marker.x0, 'to a lane outside the markers');
+    ok(segs.some((sg) => sg.x0 === busX && sg.x1 === busX
+       && Math.min(sg.y0, sg.y1) <= run.to.box.y + run.to.box.h / 2), 'which runs up to the ToR');
+  }
+  eq(routed.cables.length, 10, 'eight spliced cables and the two left over');
+
+  // "Only this element's cables" through a splice: the one member's cable,
+  // its marker, and the ToR -- not the other three servers on the harness.
+  const alone = routeOf(spliced, u05).nets.get('data');
+  eq(alone.markers.length, 1, 'isolating a member keeps its splice');
+  eq(alone.markers[0].entries.length, 1, 'with only its own cable going in');
+
+  // Collapse the rack and the splices are inside it: nothing is left to
+  // draw between the rack and itself.
+  spliced.resolve('R1').collapsed = true;
+  layout(spliced.root);
+  eq(routeOf(spliced).nets.get('data').markers.length, 4, 'a collapsed rack draws none of its splices');
+  spliced.resolve('R1').collapsed = false;
+
+  // A harness to a ToR in another rack, with its servers' rack collapsed,
+  // folds into that rack's one thicker cable.
+  const eor = parseLayout(`dc D
+  row A
+    rack N u=42
+      node eor at=42 role=tor
+    rack R u=42
+      node u[1..8] role=server
+net data
+link data role=server role=tor splice=4
+`);
+  eor.resolve('A/R').collapsed = true;
+  layout(eor.root);
+  const folded = routeOf(eor).nets.get('data');
+  eq(folded.markers.length, 0, 'collapsed members draw no marker');
+  eq(folded.cables.map((c) => c.count), [8], 'their eight cables merge into one, as unspliced ones do');
+}
 
 // ------------------------------------------------------------------ palette
 ok(ramp('viridis', 0) !== ramp('viridis', 1), 'ramp varies');

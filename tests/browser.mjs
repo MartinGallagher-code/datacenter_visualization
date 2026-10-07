@@ -934,6 +934,35 @@ await test('append mode keeps what the tail scrolled past', async () => {
   await setTail('');
 }, { url: '?layout=examples/small.dc&results=fx/live/feed.tsv' });
 
+// Cables are laid out along lanes beside the devices, and the status line
+// counts the ones on screen off the boxes at their ends. While that count
+// read a bounding box the router no longer produced, it skipped every cable:
+// the floor drew its fabrics and the status line said 0 links. A splice is
+// one cable on screen however many it gathers, and isolating a server keeps
+// its own cable through the splice and nothing else on the harness.
+await test('routed and spliced cables are counted on screen', async () => {
+  const links = () => page.evaluate(() => {
+    const m = /([\d,]+) links/.exec(document.querySelector('#statusinfo').textContent);
+    return m ? Number(m[1].replace(/,/g, '')) : -1;
+  });
+  // 26 splices (four racks of four runs, two racks of five), 100 mgmt cables
+  // one per server, and 12 uplinks from six ToRs to two spines.
+  eq(await links(), 138, 'every cable on a fitted floor is counted, a splice as one');
+
+  await page.fill('#filter', 'DH1/A/R01/u05');
+  await page.waitForTimeout(400);
+  await page.evaluate(() => [...document.querySelectorAll('#tree .tree-row')]
+    .find((r) => /^u05/.test(r.innerText.trim())).click());
+  await page.waitForTimeout(200);
+  const inspector = await page.evaluate(() => document.querySelector('#inspector').innerText);
+  ok(/data: 4 into one cable to tor/.test(inspector), 'the inspector names the splice a server is in');
+  await page.fill('#filter', '');
+  await page.waitForTimeout(400);
+  await page.click('#inspector .isolate input');
+  await page.waitForTimeout(200);
+  eq(await links(), 2, "isolated, a server shows its spliced data cable and its mgmt cable");
+}, { url: '?layout=examples/splice.dc' });
+
 // module tests can prove the two source files agree; only this can prove the
 // number reaches the screen.
 await test('the About box shows the version', async () => {

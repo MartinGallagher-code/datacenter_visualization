@@ -17,6 +17,7 @@
 //
 //     net <name> [color=#rrggbb] [label="..."] [style=solid|dashed] [width=1]
 //     link <net> <selectorA> [<selectorB>] [scope=rack] [mode=star|mesh|chain|ring|pair]
+//          [cap=N] [splice=N]
 //
 // Scale notes: a hyperscale campus is a few hundred thousand elements, so the
 // element records lean on structural sharing -- inherited attributes live on the
@@ -30,8 +31,8 @@ import { compileSelector } from './select.js';
 // sorted key and drawn as one line, so there is no reverse to wire -- and a
 // per-rule label reached every link object and no part of the UI. Both are
 // gone rather than left looking like settings.
-export const LINK_OPTS = new Set(['scope', 'mode', 'cap']);
-const LINK_NUMBERS = { cap: [1, 100000000] };
+export const LINK_OPTS = new Set(['scope', 'mode', 'cap', 'splice']);
+const LINK_NUMBERS = { cap: [1, 100000000], splice: [2, 1000] };
 const DEFAULT_CAP = 2000000;
 // Attributes that describe *this* element only and must not cascade to children.
 const NON_INHERITED = new Set(['id', 'name', 'at', 'u', 'cols', 'dir', 'gap', 'label', 'size']);
@@ -497,9 +498,33 @@ function groupKeyFor(el, scope) {
 // there when the line is clicked.
 const at = (rule) => (rule.line ? `line ${rule.line}: ` : '');
 
+/**
+ * The runs a `splice=N` rule gathers: N consecutive matches at a time, and
+ * never across a parent -- a harness is cut for the servers in one rack, not
+ * for the last two of one rack and the first two of the next. Consecutive
+ * means physically, so rack children go in U order from the bottom, whatever
+ * order the lines declaring them were written in.
+ */
+function spliceRuns(els, size) {
+  const byParent = new Map();
+  for (const el of els) {
+    let list = byParent.get(el.parent);
+    if (!list) byParent.set(el.parent, (list = []));
+    list.push(el);
+  }
+  const runs = [];
+  for (const list of byParent.values()) {
+    list.sort((x, y) => ((x.uAt ?? Infinity) - (y.uAt ?? Infinity)) || x.n - y.n);
+    for (let i = 0; i < list.length; i += size) runs.push(list.slice(i, i + size));
+  }
+  return runs;
+}
+
 function buildLinks(rules, model) {
   const seen = new Set();
   const links = [];
+  const splices = [];
+  model.splices = splices;
   model.all.forEach((el, i) => { el.n = i; });
   let netIndex = 0;
 
@@ -509,6 +534,17 @@ function buildLinks(rules, model) {
     // attributes had: cap=abc was NaN, and `made >= NaN` is false forever, so
     // it meant no cap at all; cap=1e6 read as 1 and wired a single cable.
     const cap = intAttr(rule.cap, DEFAULT_CAP, LINK_NUMBERS.cap);
+    const mode = rule.mode || (rule.selB ? 'star' : 'mesh');
+    // A splice gathers the first selector's matches onto shared cables to the
+    // second, so it means something only for a star between two selectors.
+    // Anywhere else it would be quietly ignored, which reads as a rule that
+    // worked and a drawing that forgot.
+    let splice = intAttr(rule.splice, 0, LINK_NUMBERS.splice);
+    if (splice && (mode !== 'star' || !rule.selB)) {
+      model.warnings.push(`${at(rule)}net "${rule.net}": splice= gathers the first selector's `
+        + 'matches onto cables to the second, so it needs two selectors and mode=star -- ignored');
+      splice = 0;
+    }
     let made = 0;
     let unpaired = 0;
     let matchedA = 0;
@@ -532,10 +568,10 @@ function buildLinks(rules, model) {
     }
 
     const emit = (a, b) => {
-      if (!a || !b || a === b || made >= cap) return;
+      if (!a || !b || a === b || made >= cap) return null;
       const [x, y] = a.n < b.n ? [a, b] : [b, a];
       const sig = netIndex * 0x100000000000 + x.n * 0x100000 + y.n;
-      if (seen.has(sig)) return;
+      if (seen.has(sig)) return null;
       seen.add(sig);
       const link = { net: rule.net, a: x, b: y };
       links.push(link);
@@ -544,13 +580,32 @@ function buildLinks(rules, model) {
       x.links.push(link);
       y.links.push(link);
       made++;
+      return link;
     };
 
     for (const g of groups.values()) {
       const A = g.a;
       const B = matchB ? g.b : g.a;
-      const mode = rule.mode || (matchB ? 'star' : 'mesh');
-      if (mode === 'star') {
+      if (mode === 'star' && splice) {
+        // Each run of matches shares one cable to each element on the other
+        // side. The links stay what they are -- server to ToR, counted and
+        // isolated as before -- and carry the splice they travel through.
+        for (const group of spliceRuns(A, splice)) {
+          for (const b of B) {
+            const sp = { net: rule.net, to: b, members: [], links: [] };
+            for (const a of group) {
+              const link = emit(a, b);
+              if (!link) continue;
+              sp.members.push(a);
+              sp.links.push(link);
+            }
+            // One cable is not a splice; a run of one is just a cable.
+            if (sp.links.length < 2) continue;
+            for (const link of sp.links) link.splice = sp;
+            splices.push(sp);
+          }
+        }
+      } else if (mode === 'star') {
         for (const a of A) for (const b of B) emit(a, b);
       } else if (mode === 'mesh') {
         for (let i = 0; i < A.length; i++) for (let j = i + 1; j < A.length; j++) emit(A[i], A[j]);
@@ -634,6 +689,7 @@ export function parseLayout(text) {
     all: [],
     nets: new Map(),
     links: [],
+    splices: [],
     warnings,
     title: 'datacenter',
     rootTagCache: new Map(),
