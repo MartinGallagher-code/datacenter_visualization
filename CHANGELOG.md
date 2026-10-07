@@ -11,7 +11,19 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
-## Unreleased
+## 1.1.0 — 2026-10-07
+
+New layout syntax and new viewer features, all of them additive: every
+`.dc` and results file that loaded under 1.0.x loads under 1.1.0, and the
+tools take the same arguments. What a layout *looks like* can change —
+cables now leave from a device's side and crossings between containers
+curve, empty racks stand full height, and a row with `cols=` or a device
+outside a rack with `u=` is now laid out as those say instead of ignoring
+them. The only lines that read differently are ones 1.0.x warned about: a
+kind's placeholder on its own line (`dcm [1,2] name=dcm-{dcm}`) is filled
+in rather than left as literal text. Results tables are recognised by what
+is in them rather than by their extension, so files that were refused, or
+misread as the wrong format, now load as what they are.
 
 - **Cables between containers curve, and fan out where they meet.** A cable
   crossing from one rack or container to another used to run straight
