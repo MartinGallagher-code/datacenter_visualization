@@ -1956,9 +1956,29 @@ ok(!matchesFilter('mxrun.tsv', 'mx.*'), 'and that dot has to be there: it is not
      'and the lines below see the number the rack was given');
   eq(parseLayout('dc D\n  row [1..2]\n    rack [1..3] id=R{seq:2}\n').all.filter((e) => e.kind === 'rack')
     .map((e) => e.id), ['R01', 'R02', 'R03', 'R04', 'R05', 'R06'], '{seq:2} pads to two digits, as R[01..06] would');
-  eq(parseLayout('dc D\n  row [1..2]\n    rack [1..2] id=R{seq}\n    rack [1..2] id=S{seq}\n').all
-    .filter((e) => e.kind === 'rack').map((e) => e.id), ['R1', 'R2', 'S1', 'S2', 'R3', 'R4', 'S3', 'S4'],
-     'each line keeps its own count');
+  // A row's rack line split in three, so the middle four racks can hold
+  // something else, still numbers straight through: lines of one kind side
+  // by side in one block share their count.
+  const split = parseLayout(['dc D', '  row [1..2]', '    rack [1..8] id=R{seq:2}',
+    '    rack [1..4] id=R{seq:2} +network', '    rack [1..8] id=R{seq:2}'].join('\n'));
+  eq(split.all.filter((e) => e.kind === 'row').map((r) => r.children.map((c) => c.id).join(' ')),
+     ['R01 R02 R03 R04 R05 R06 R07 R08 R09 R10 R11 R12 R13 R14 R15 R16 R17 R18 R19 R20',
+      'R21 R22 R23 R24 R25 R26 R27 R28 R29 R30 R31 R32 R33 R34 R35 R36 R37 R38 R39 R40'],
+     'three rack lines in a row share one count: 1-20, then 21-40');
+  eq(split.all.filter((e) => e.tags.has('network')).map((e) => e.id), ['R09', 'R10', 'R11', 'R12',
+     'R29', 'R30', 'R31', 'R32'], 'with the middle four of each row the ones the middle line made');
+  eq(parseLayout('dc D\n  row [1..2]\n    rack [1..2] id=R{seq}\n    rack [1..2] id=N{seq} seq=net\n').all
+    .filter((e) => e.kind === 'rack').map((e) => e.id), ['R1', 'R2', 'N1', 'N2', 'R3', 'R4', 'N3', 'N4'],
+     'seq= gives a line a count of its own');
+  eq(parseLayout('dc D\n  row A\n    rack [1..2] id=R{seq} seq=all\n  row B\n    rack [1..2] id=R{seq} seq=all\n')
+    .all.filter((e) => e.kind === 'rack').map((e) => e.id), ['R1', 'R2', 'R3', 'R4'],
+     'and lines in different blocks with the same seq= share one');
+  eq(parseLayout('dc D\n  row [1..2]\n    rack [1..2] id=R{seq} seq=r{row}\n').all
+    .filter((e) => e.kind === 'rack').map((e) => e.id), ['R1', 'R2', 'R1', 'R2'],
+     'a seq= with a placeholder counts per what it names: here, per row');
+  eq(parseLayout('dc D\n  rack r u=42\n    node tor at=42\n    node u[1..3] name=s{seq}\n    node g[1..2] name=s{seq}\n')
+    .all.filter((e) => e.kind === 'node').map((e) => e.name), ['tor', 's1', 's2', 's3', 's4', 's5'],
+     'a line that does not number itself takes no number from the ones that do');
   eq(parseLayout('dc D\n  room [A|B]\n    row [1..2]\n      rack [1..2] id=R{seq}\n').all
     .filter((e) => e.kind === 'rack').map((e) => e.id).join(' '), 'R1 R2 R3 R4 R5 R6 R7 R8',
      'and keeps counting however deep the repetition goes');

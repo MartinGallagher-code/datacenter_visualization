@@ -34,7 +34,11 @@ their shapes are not a promise.
   restarts under each parent, so racks numbered uniquely across four rows
   took four blocks with the numbers typed into each. `{seq}` counts every
   element the line has made so far: `rack [1..5] id=R{seq}` under `row
-  [1..4]` is R1–R5, R6–R10, R11–R15, R16–R20. Each line keeps its own count.
+  [1..4]` is R1–R5, R6–R10, R11–R15, R16–R20. Lines of one kind side by
+  side in one block share the count, so a row split into three rack lines —
+  to put different racks in the middle — is still numbered straight
+  through; only lines that use `{seq}` take a number, and `seq=NAME` gives a
+  line the count of that name instead (`seq=r{row}` counts per row).
   Any whole-number placeholder now takes a width, `{seq:2}` → `07`, as a
   range written `[01..20]` pads; anything else is left as it is.
   `examples/dual-plane.dc` now makes its two pods from one block this way.
