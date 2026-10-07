@@ -24,7 +24,7 @@
 // prototype chain and tag sets are shared between siblings with identical tags.
 
 import { expand, subst } from './expand.js';
-import { compileSelector } from './select.js';
+import { compileSelector, globToRegExp, hasGlob } from './select.js';
 
 // What a link rule takes. `bidir` and `label` were in here and read by
 // nothing: cables in this model are undirected -- a pair is deduped by a
@@ -35,7 +35,7 @@ export const LINK_OPTS = new Set(['scope', 'mode', 'cap', 'splice']);
 const LINK_NUMBERS = { cap: [1, 100000000], splice: [2, 1000] };
 const DEFAULT_CAP = 2000000;
 // Attributes that describe *this* element only and must not cascade to children.
-const NON_INHERITED = new Set(['id', 'name', 'at', 'u', 'cols', 'dir', 'gap', 'label', 'size', 'seq', 'align']);
+const NON_INHERITED = new Set(['id', 'name', 'at', 'u', 'cols', 'dir', 'gap', 'label', 'size', 'seq', 'align', 'if']);
 
 const DEFAULT_NET_COLORS = ['#4fa3ff', '#ff9f43', '#4dd4ac', '#c986ff', '#ff6b8b', '#f5d442'];
 
@@ -378,7 +378,33 @@ function nextSeq(syn, attrs, model, parent) {
   }
   const n = (counts.get(key) || 0) + 1;
   counts.set(key, n);
-  return n;
+  // An element whose if= turns out false is not made, and gives its number
+  // back, so the next one made takes it and the numbers stay in order.
+  return { n, giveBack: () => counts.set(key, n - 1) };
+}
+
+/**
+ * Whether a line's if= holds for the element about to be made. Clauses are
+ * `{placeholder}=value` or `!=`, joined by commas, all of which must hold;
+ * a value may list alternatives with | and use the * and ? globs a selector
+ * does, and matching is case-insensitive like everywhere else. Each side is
+ * substituted on its own, so an id holding a comma cannot split a clause.
+ */
+function conditionHolds(raw, ctx, model, line) {
+  for (const clause of raw.split(',')) {
+    const neq = clause.indexOf('!=');
+    const at = neq >= 0 ? neq : clause.indexOf('=');
+    if (at <= 0) {
+      warnOnce(model, `if\u0000${line}\u0000${raw}`, `line ${line}: if=${raw}: each condition is `
+        + '{placeholder}=value or {placeholder}!=value, joined by commas -- ignored');
+      return true;
+    }
+    const left = subst(clause.slice(0, at), ctx);
+    const wanted = clause.slice(at + (neq >= 0 ? 2 : 1)).split('|').map((v) => subst(v, ctx));
+    const hit = wanted.some((v) => (hasGlob(v) ? globToRegExp(v).test(left) : left.toLowerCase() === v.toLowerCase()));
+    if (hit === (neq >= 0)) return false;
+  }
+  return true;
 }
 
 /**
@@ -472,9 +498,11 @@ function materialize(syn, parent, model) {
     // may itself carry a placeholder (seq=row{row} counts per row), so the
     // count is taken from it once it is substituted, below.
     Object.assign(ctx, { id: rawId, i: i + 1, i0: i, n: ids.length, seq: 0, kind: syn.kind });
+    let numbered = null;
     if (usesSeq) {
       const series = syn.attrs.seq !== undefined ? { seq: subst(syn.attrs.seq, ctx) } : {};
-      ctx.seq = nextSeq(syn, series, model, parent);
+      numbered = nextSeq(syn, series, model, parent);
+      ctx.seq = numbered.n;
     }
     let attrs = syn.attrs;
     let dynamic = false;
@@ -485,6 +513,18 @@ function materialize(syn, parent, model) {
         attrs[k] = subst(v, ctx);
         noteUnresolved(attrs[k], `${k}=`, ctx, model, syn.line);
       }
+    }
+    // if= makes the line's element only where it holds: one block for four
+    // rows, and the first row's rack 12 filled while the others stand empty.
+    // It is a decision about the line, not a fact about the element, so it
+    // is not kept among the element's attributes.
+    if (syn.attrs.if !== undefined) {
+      if (!conditionHolds(syn.attrs.if, ctx, model, syn.line)) {
+        if (numbered) numbered.giveBack();
+        continue;
+      }
+      if (attrs === syn.attrs) attrs = { ...attrs };
+      delete attrs.if;
     }
     const tags = syn.tags.some((t) => t.includes('{'))
       ? syn.tags.map((t) => {

@@ -2032,6 +2032,41 @@ ok(!matchesFilter('mxrun.tsv', 'mx.*'), 'and that dot has to be there: it is not
   eq(parseLayout('dc D\n  row [1..2]\n    rack [1..2] id=R{seq} seq=room\n').all
     .filter((e) => e.kind === 'rack').map((e) => e.id), ['R1', 'R2', 'R3', 'R4'],
      'with no room around it, seq=room is just a count called room');
+  // if= makes a line's element only where it holds, so one block can give
+  // the first row's rack 12 something the other rows' do not have. An
+  // element not made gives its number back, so the numbers stay in order.
+  const only = parseLayout(['dc D', '  room [1..2]', '    row [1..3]',
+    '      rack [1..11] id=R{seq:2} seq=room u=42',
+    '      rack 12 id=R{seq:2} seq=room u=42 if={row}=1', '        node g[1..3] role=server',
+    '      rack 12 id=R{seq:2} seq=room u=42 if={row}!=1',
+    '      rack [1..8] id=R{seq:2} seq=room u=42'].join('\n'));
+  eq(only.warnings, [], 'if= parses clean');
+  const rowsOf = (room) => only.all.filter((e) => e.kind === 'row' && e.parent.id === room);
+  eq(rowsOf('1').map((r) => `${r.children.length} ${r.children[0].id}-${r.children[19].id}`),
+     ['20 R01-R20', '20 R21-R40', '20 R41-R60'], 'every row still has twenty racks, numbered in order');
+  eq(rowsOf('1').map((r) => `${r.children[11].id}:${r.children[11].children.length}`), ['R12:3', 'R32:0', 'R52:0'],
+     'only the first row\u2019s rack 12 has anything in it');
+  eq(rowsOf('2')[0].children[11].children.length, 3, 'in every room');
+  layout(only.root);
+  // Row 1's rack 12 holds three servers; row 2's stands empty.
+  const [full, bare] = [rowsOf('1')[0].children[11], rowsOf('1')[1].children[11]];
+  eq(full.children.length > 0 && bare.children.length === 0, true, 'one rack 12 full, one empty');
+  eq(bare.box.h, full.box.h, 'an empty rack is drawn as tall as a full one');
+  full.collapsed = true;
+  layout(only.root);
+  eq(full.box.h, 44, 'while a rack collapsed by hand keeps its compact size');
+  full.collapsed = false;
+  ok(only.all.every((e) => e.attrs.if === undefined), 'if= is not kept as an attribute of what it made');
+  eq(parseLayout('dc D\n  row [1..4]\n    rack r if={row}=1|3\n').all.filter((e) => e.kind === 'rack')
+    .map((e) => e.parent.id), ['1', '3'], 'a value may list alternatives with |');
+  eq(parseLayout('dc D\n  row [1..4]\n    rack r if={row}=1,{rack}=r\n').all.filter((e) => e.kind === 'rack')
+    .length, 1, 'and conditions joined by commas must all hold');
+  eq(parseLayout('dc D\n  rack r u=12\n    node [1..12] id=u{id} if={id}=1*\n').all.filter((e) => e.kind === 'node')
+    .map((e) => e.id), ['u1', 'u10', 'u11', 'u12'], 'a value with * or ? is a glob, as in a selector');
+  ok(parseLayout('dc D\n  rack r\n    node [1..3] if=nonsense\n').warnings
+    .some((w) => /if=nonsense: each condition is \{placeholder\}=value/.test(w)), 'a condition it cannot read is reported');
+  eq(parseLayout('dc D\n  rack r\n    node [1..3] if=nonsense\n').all.filter((e) => e.kind === 'node').length, 3,
+     'and ignored, as it says');
   eq(parseLayout('dc D\n  row [1..2]\n    rack [1..2] id=R{seq} seq=r{row}\n').all
     .filter((e) => e.kind === 'rack').map((e) => e.id), ['R1', 'R2', 'R1', 'R2'],
      'a seq= with a placeholder counts per what it names: here, per row');

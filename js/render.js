@@ -186,7 +186,9 @@ export class Renderer {
     }
 
     const children = el.shown || [];
-    const isLeaf = children.length === 0;
+    // An empty rack is drawn as a rack -- its frame and the name in its band
+    // -- not as one solid device the height of forty-two of them.
+    const isLeaf = children.length === 0 && !(el.kind === 'rack' && !el.children.length);
 
     this.ctx.globalAlpha = dim ? 0.16 : 1;
 

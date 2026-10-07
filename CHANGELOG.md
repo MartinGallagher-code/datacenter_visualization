@@ -13,6 +13,18 @@ their shapes are not a promise.
 
 ## Unreleased
 
+- **`if=` on a line: make it only where a condition holds.** Every copy of a
+  block was the same, so giving the first row's rack 12 something the other
+  rows' rack 12 did not have meant writing the row out twice. `if={row}=1`
+  makes a line's elements only where the condition holds; `!=`, `|`
+  alternatives, globs and comma-joined conditions work as they do elsewhere.
+  An element not made gives its `{seq}` number back, so numbering stays in
+  order, and a condition that cannot be read is reported and ignored.
+- **An empty rack is drawn as a rack.** A rack with nothing in it drew as a
+  collapsed one, a stub a fifth the height of the racks beside it, which
+  reads as missing rather than empty. It now stands as tall as its slots,
+  drawn as a rack frame with its name in the band; a rack collapsed by hand
+  keeps its compact size.
 - **`align=center` (or `right`) on a container.** Children were always laid
   out from the left, so a network layer narrower than the racks below it sat
   against the left edge. `align=` places each line of a container's

@@ -59,6 +59,12 @@ function measure(el, isVisible) {
     let h = c.h;
     if (el.kind === 'node' && el.uSize) h = el.uSize * U_PX;
     else if (!el.children.length && heightOf(el)) h = heightOf(el) * U_PX;
+    // A rack with nothing in it is still a rack on the floor, as tall as its
+    // slots. It used to draw as a collapsed one -- a stub a fifth the height
+    // of the racks either side of it -- which reads as missing, not empty.
+    if (el.kind === 'rack' && !el.children.length) {
+      h = labelOf('rack') + (el.uHeight || 42) * U_PX + padOf('rack') * 2;
+    }
     el.box = { x: 0, y: 0, w: c.w, h };
     return;
   }

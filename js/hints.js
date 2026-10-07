@@ -30,6 +30,7 @@ const ELEMENT_KEYS = [
   ['dir=', 'layout direction: x or y'],
   ['gap=', 'space between children; 0 packs them'],
   ['align=', 'center, left or right: where each line of children sits'],
+  ['if=', 'make this line only where it holds: if={row}=1, if={row}!=1'],
   ['color=', 'fill colour: #4fa3ff, teal, rgb(1,2,3)'],
   ['seq=', 'count per enclosing kind (seq=room) or by name (seq=net)'],
 ];

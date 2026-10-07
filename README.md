@@ -201,6 +201,29 @@ Any other word names a count instead: `seq=net` keeps network racks
 numbered N1, N2, … apart from the racks beside them, and lines anywhere with
 the same name share one count.
 
+**A line that only applies in some places.** `if=` on a line makes its
+elements only where the condition holds, so one block for four rows can
+still give the first row something the others do not have — here rack 12 is
+filled in row 1 and stands empty in rows 2–4:
+
+```
+row [1..4]
+  rack [1..11] id=R{seq:2} seq=room u=42
+    node u[01..40] role=server
+  rack 12 id=R{seq:2} seq=room u=42 if={row}=1      # row 1: R12, filled
+    node g[01..10] u=4 role=server +gpu
+  rack 12 id=R{seq:2} seq=room u=42 if={row}!=1     # rows 2-4: R32, R52, R72, empty
+  rack [1..8] id=R{seq:2} seq=room u=42
+    node u[01..40] role=server
+```
+
+A condition is `{placeholder}=value` or `!=`, and several joined by commas
+must all hold (`if={room}=1,{row}=1` is only the first row of room 1). A
+value may list alternatives (`{row}=1|3`) and use `*` and `?` as a selector
+does; matching ignores case. An element not made gives its `{seq}` number
+back, so the numbers stay in order, and anything indented under it is not
+made either. A condition that cannot be read is reported and ignored.
+
 This is how flat hostname-style names work: `node u[01..40]
 name={room}{rack}{id}` names every server like `wr12r06u15`, results files
 can then target that name directly, and the row stays expressed by nesting
