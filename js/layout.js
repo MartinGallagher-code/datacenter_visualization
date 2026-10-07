@@ -87,7 +87,12 @@ function measure(el, isVisible) {
     return;
   }
 
-  if (el.kind === 'row' && el.attrsEff.dir !== 'y') {
+  // A row lays its racks out in one line -- unless it says otherwise. cols=
+  // on a row used to be ignored without a word, so a row holding a network
+  // layer above its racks (`row R cols=1` > network, servers) drew the two
+  // side by side however it was asked. Now cols= or dir=y makes a row a grid
+  // like any other container.
+  if (el.kind === 'row' && el.attrsEff.dir !== 'y' && !intAttr(el.attrsEff.cols, 0, NUMBERS.cols)) {
     // A row of racks: single line, bottom-aligned so rack floors line up --
     // including when u= makes the row taller than its racks, where the room
     // goes above them rather than under.

@@ -13,6 +13,11 @@ their shapes are not a promise.
 
 ## Unreleased
 
+- **`cols=` works on a row.** A row lays its racks out in one line, and
+  ignored `cols=` while doing it, so a row holding a network layer above its
+  racks (`row R cols=1` › `network`, `servers`) drew the two side by side.
+  `cols=` or `dir=y` now makes a row a grid like any other container. Rows
+  without either are unchanged.
 - **`seq=room`: numbering that starts again in every room.** `seq=` naming
   an enclosing kind keeps one `{seq}` count per element of that kind, the
   way `scope=room` groups a link rule: `rack [1..20] id=R{seq:2} seq=room`

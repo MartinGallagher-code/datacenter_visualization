@@ -1087,6 +1087,26 @@ layout(small.root, () => true);
   eq(box('D/room').h, 62, 'collapsed, a container keeps its compact size');
 }
 
+// A row lays its racks out in one line, and used to ignore cols= while doing
+// it: a row holding a network layer above its racks drew the two side by side
+// however it was asked. cols= (or dir=y) makes a row a grid like any other.
+{
+  const rows = parseLayout(['dc D',
+    '  row A cols=1', '    network dir=x', '      spine [1..2]', '    servers dir=x', '      rack [1..3] u=8',
+    '  row B', '    rack [1..3] u=8',
+  ].join('\n'));
+  eq(rows.warnings, [], 'a row with cols= parses clean');
+  layout(rows.root);
+  const box = (k) => rows.byKey.get(k).box;
+  ok(box('D/A/network').y + box('D/A/network').h <= box('D/A/servers').y
+     && box('D/A/network').x === box('D/A/servers').x, 'row cols=1 stacks its network layer above its racks');
+  eq(new Set(rows.byKey.get('D/A/servers').children.map((r) => r.box.y)).size, 1,
+     'and dir=x keeps the racks under it in one line');
+  eq(new Set(rows.byKey.get('D/B').children.map((r) => r.box.y)).size, 1,
+     'a row without cols= is still one line of racks');
+  ok(box('D/B/2').x > box('D/B/1').x, 'side by side, in order');
+}
+
 // ----------------------------------------------------------- cable routing
 // Cables used to run centre to centre, so a server's data and mgmt cables left
 // from one point and lay on top of each other all the way to the ToR. They

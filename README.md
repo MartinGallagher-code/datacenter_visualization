@@ -232,6 +232,19 @@ without appearing in the name — see `examples/hostnames.dc`.
   its compact size whatever its `u=`.
 - `cols=2` / `dir=x|y` / `gap=` shape generic containers — `gap=0` packs
   children with no gutter, and omitting it keeps the per-kind default.
+- A **row** lays its racks out in one line, until it says otherwise:
+  `cols=` or `dir=y` makes it a grid like any other container. That is how a
+  row carries a network layer above its racks — `cols=1` stacks the two, and
+  `dir=x` on each keeps its own contents in one line:
+
+  ```
+  row [1..4] name="Row {row}" cols=1
+    network dir=x
+      spine [1..4] name=spine-{spine} role=spine
+    servers dir=x
+      rack [1..20] id=R{seq:2} u=42
+        node u[01..40] role=server
+  ```
 - The numbers are checked: `u`, `at`, `size` and `cols` must be whole and
   between 1 and 1000 (`gap` from 0), and a net's `width` between 0.1 and 100. Anything else
   is reported and ignored rather than quietly coerced — `u=1e9` used to read
