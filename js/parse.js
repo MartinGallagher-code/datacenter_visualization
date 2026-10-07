@@ -331,6 +331,9 @@ function contextFor(parent) {
 
 const PLACEHOLDER = /\{[^{}]*\}/;
 
+// The placeholders every line has, which a kind of the same name never hides.
+const CONTEXT_NAMES = new Set(['id', 'i', 'i0', 'n', 'kind', 'parent', 'path']);
+
 /**
  * A `{placeholder}` that survived substitution named something not in scope --
  * a typo like `{rak}`, or `{id}` used in an id spec, where the id does not
@@ -406,7 +409,14 @@ function materialize(syn, parent, model) {
 
   for (let i = 0; i < ids.length; i++) {
     const rawId = ids[i];
-    const ctx = { ...baseCtx, id: rawId, i: i + 1, i0: i, n: ids.length, kind: syn.kind };
+    // `{rack}` means the nearest rack -- and on a rack's own line that is the
+    // rack itself, so `dcm [1,2] name=dcm-{dcm}` names dcm-1 and dcm-2. It
+    // used to name only the enclosing ones, so a placeholder for the line's
+    // own kind reached the floor plan as literal text. The built-in names
+    // ({id}, {i}, {parent}, ...) still win over a kind that shares one.
+    const ctx = { ...baseCtx };
+    if (!CONTEXT_NAMES.has(syn.kind)) ctx[syn.kind] = rawId;
+    Object.assign(ctx, { id: rawId, i: i + 1, i0: i, n: ids.length, kind: syn.kind });
     let attrs = syn.attrs;
     let dynamic = false;
     for (const [, v] of attrEntries) if (v.includes('{')) { dynamic = true; break; }

@@ -1898,10 +1898,28 @@ ok(!matchesFilter('mxrun.tsv', 'mx.*'), 'and that dot has to be there: it is not
   eq(warnsOf(['dc D', '  rack r[1..2] u=42', '    node [1..2] name={rak} +t{nope}'].join('\n')).length,
      2, 'two different mistakes on one line are two warnings');
 
+  // A kind names the nearest element of that kind, and on its own line that
+  // is the element itself: `{dcm}` on a dcm line used to reach the floor as
+  // literal text, so `name=dcm-{dcm}` named every dcm "dcm-{dcm}".
+  const own = parseLayout(['dc D', '  dcm [1,2] name=dcm-{dcm}', '    rack r1 name={dcm}-{rack}'].join('\n'));
+  eq(own.warnings, [], "a placeholder for the line's own kind resolves");
+  eq(own.all.filter((e) => e.kind === 'dcm').map((e) => e.name), ['dcm-1', 'dcm-2'],
+     'dcm [1,2] name=dcm-{dcm} names dcm-1 and dcm-2');
+  eq(own.all.filter((e) => e.kind === 'rack').map((e) => e.name), ['1-r1', '2-r1'],
+     'the lines below still see it, beside their own kind');
+  eq(parseLayout('dc D\n  dcm [1,2] name=dcm{dcm}\n').all.slice(1).map((e) => e.name), ['dcm1', 'dcm2'],
+     'nothing is added between the text and the id: the hyphen is written');
+  eq(parseLayout('dc D\n  pod A\n    pod B name={pod}\n      node n name={pod}\n').all.map((e) => e.name),
+     ['D', 'A', 'B', 'B'], 'the nearest pod is the line itself, then the closest one around it');
+  eq(parseLayout('dc D\n  parent P name={parent}\n').all[1].name, 'D',
+     'a kind called like a built-in placeholder does not hide it');
+  eq(warnsOf('dc D\n  dcm d{dcm}\n').length, 1, 'an id spec still cannot name the element it is creating');
+
   // Every layout the repo ships stays quiet, which is what makes the check
   // worth having: it has to fire on mistakes and not on the house style.
   for (const file of ['examples/small.dc', 'examples/mega.dc', 'examples/hostnames.dc',
-                      'examples/three-rows.dc', 'examples/mx/floor.dc', 'examples/iperf/floor.dc']) {
+                      'examples/three-rows.dc', 'examples/mx/floor.dc', 'examples/iperf/floor.dc',
+                      'examples/splice.dc', 'examples/dual-plane.dc']) {
     eq(parseLayout(readFileSync(join(root, file), 'utf8')).warnings, [],
        `${file} parses without a word`);
   }
@@ -2096,7 +2114,8 @@ ok(!matchesFilter('mxrun.tsv', 'mx.*'), 'and that dot has to be there: it is not
   // Every layout the repo ships stays quiet. A check that fires on the house
   // style is a check people learn to scroll past.
   for (const file of ['examples/small.dc', 'examples/mega.dc', 'examples/hostnames.dc',
-                      'examples/three-rows.dc', 'examples/mx/floor.dc', 'examples/iperf/floor.dc']) {
+                      'examples/three-rows.dc', 'examples/mx/floor.dc', 'examples/iperf/floor.dc',
+                      'examples/splice.dc', 'examples/dual-plane.dc']) {
     eq(parseLayout(readFileSync(join(root, file), 'utf8')).warnings, [],
        `${file} has no number it cannot read`);
   }
@@ -2343,7 +2362,8 @@ ok(!matchesFilter('mxrun.tsv', 'mx.*'), 'and that dot has to be there: it is not
 
   // Every layout the repo ships stays quiet under the colour check.
   for (const file of ['examples/small.dc', 'examples/mega.dc', 'examples/hostnames.dc',
-                      'examples/three-rows.dc', 'examples/mx/floor.dc', 'examples/iperf/floor.dc']) {
+                      'examples/three-rows.dc', 'examples/mx/floor.dc', 'examples/iperf/floor.dc',
+                      'examples/splice.dc', 'examples/dual-plane.dc']) {
     eq(parseLayout(readFileSync(join(root, file), 'utf8')).warnings, [],
        `${file} has no colour it cannot draw`);
   }
@@ -2829,7 +2849,8 @@ if (python.error) {
 
   // Every layout the repo ships stays quiet under the new link checks.
   for (const file of ['examples/small.dc', 'examples/mega.dc', 'examples/hostnames.dc',
-                      'examples/three-rows.dc', 'examples/mx/floor.dc', 'examples/iperf/floor.dc']) {
+                      'examples/three-rows.dc', 'examples/mx/floor.dc', 'examples/iperf/floor.dc',
+                      'examples/splice.dc', 'examples/dual-plane.dc']) {
     eq(parseLayout(readFileSync(join(root, file), 'utf8')).warnings, [],
        `${file} wires without a word`);
   }

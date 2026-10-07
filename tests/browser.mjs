@@ -976,6 +976,15 @@ await test('the About box shows the version', async () => {
     const el = document.querySelector('#version');
     return el && el.getBoundingClientRect().width > 0;
   }), 'and it is actually laid out, not an empty span');
+  // The copyright and licence notice lives in the About box; the status bar
+  // under the floor plan is for the view, and no longer repeats it.
+  const notice = await page.evaluate(() => ({
+    about: document.querySelector('.about').innerText,
+    status: document.querySelector('#statusbar').innerText,
+  }));
+  ok(/Copyright © 2026 Martin J\. Gallagher/.test(notice.about) && /GPL-3\.0-or-later/.test(notice.about)
+     && /NO WARRANTY/.test(notice.about), 'About carries the copyright, the licence and the warranty disclaimer');
+  ok(!/©|GPL|warranty/i.test(notice.status), 'and the status bar does not');
 });
 
 // ------------------------------------------------------------------ done

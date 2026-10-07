@@ -13,6 +13,19 @@ their shapes are not a promise.
 
 ## Unreleased
 
+- **A kind's placeholder works on its own line.** `{dcm}` named only an
+  enclosing dcm, so on a dcm's own line it matched nothing and reached the
+  floor plan as literal text, with a warning: `dcm [1,2] name=dcm-{dcm}`
+  named both of them `dcm-{dcm}`. A kind now names the nearest element of
+  that kind, the line itself included, so that line names `dcm-1` and
+  `dcm-2`. Nothing is inserted between text and id — `name=dcm{dcm}` is
+  `dcm1` — and the built-in placeholders (`{id}`, `{parent}`, …) keep their
+  meaning under a kind of the same name. Only lines that used to warn
+  change.
+- **The copyright line is off the main screen.** The status bar under the
+  floor plan repeated `© 2026 Martin J. Gallagher · GPL-3.0-or-later · no
+  warranty`; it now carries only the view's own figures. The notice stays
+  where it always was in full, in the About box in the left panel.
 - **Cables leave from the side of a device, into a lane beside it.** They
   used to run centre to centre, so a server's data and mgmt cables left from
   the same point and lay almost on top of each other to the ToR, told apart

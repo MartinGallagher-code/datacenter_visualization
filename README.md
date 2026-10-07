@@ -136,6 +136,13 @@ not exist yet — and the warning lists the names that line could have used.
 
 `{placeholders}` in attributes refer to enclosing elements:
 `name="Hall {id}"`, `power=grid-{i}`, `{room}`, `{row}`, `{parent}`.
+A kind names the nearest element of that kind, and on that kind's own line
+the nearest is the element itself — so `{dcm}` on a `dcm` line is its own
+id, the same as `{id}`: `dcm [1,2] name=dcm-{dcm}` names `dcm-1` and
+`dcm-2`. Nothing is inserted between the text and the id, so the hyphen is
+yours to write (`name=dcm{dcm}` is `dcm1`). The built-in names — `{id}`,
+`{i}`, `{i0}`, `{n}`, `{kind}`, `{parent}`, `{path}` — always mean what they
+say here, even under a kind of the same name.
 
 This is how flat hostname-style names work: `node u[01..40]
 name={room}{rack}{id}` names every server like `wr12r06u15`, results files
