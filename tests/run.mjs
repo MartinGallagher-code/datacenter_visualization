@@ -29,7 +29,7 @@ import {
 import { layout, U_PX } from '../js/layout.js';
 import { routesBetween } from '../js/paths.js';
 import { Renderer, linkSummary, sharesLineage, spliceSummary } from '../js/render.js';
-import { LANE, SPLICE_W } from '../js/route.js';
+import { CURVE_REACH, FAN_GAP, LANE, SPLICE_W } from '../js/route.js';
 import { compileQuery, applyFilter } from '../js/filter.js';
 import { ramp, categoricalColor, colorFor, contrastInk } from '../js/palette.js';
 import { referenceSnippets, suggestionsFor } from '../js/hints.js';
@@ -1217,6 +1217,26 @@ const segsOf = (cache, net) => {
 
   // Two fabrics between the same pair of devices used to be told apart by a
   // two-pixel offset; now they leave opposite sides and never coincide.
+  // Crossings between containers are curves: each leaves its port sideways,
+  // the way its stub points, and the cables sharing a port fan out along its
+  // lane instead of meeting in one spot.
+  const curves = [];
+  for (const [w, pts] of cache.nets.get('data').curves) {
+    for (let i = 0; i < pts.length; i += 8) curves.push({ w, p: pts.slice(i, i + 8) });
+  }
+  const torX = torData.edge + torData.side * torData.lane;
+  const uplinks = curves.filter(({ p }) => p[0] === torX && Math.abs(p[1] - torData.y) <= tor.box.h / 2);
+  eq(uplinks.length, 4, 'the ToR\u2019s four uplinks are drawn as curves from its lane');
+  ok(uplinks.every(({ p }) => p[1] === p[3] && Math.sign(p[2] - p[0]) === torData.side),
+     'each leaving sideways, the way the ToR\u2019s data stub points');
+  ok(uplinks.every(({ p }) => Math.abs(p[2] - p[0]) <= CURVE_REACH), 'and bending within a short reach of the lane');
+  const starts = uplinks.map(({ p }) => p[1]).sort((x, y) => x - y);
+  eq(new Set(starts).size, 4, 'fanned out: no two uplinks leave from the same point');
+  ok(starts.every((y, i) => i === 0 || Math.abs(y - starts[i - 1] - FAN_GAP) < 1e-9)
+     && starts[3] - starts[0] <= tor.box.h, 'spaced evenly within the ToR\u2019s height');
+  ok(!segsOf(cache, 'data').some((sg) => sg.x0 === torX && sg.x1 !== torX && sg.y0 !== sg.y1),
+     'and no straight crossing is left among the plain segments');
+
   const dataX = new Set(segsOf(cache, 'data').flatMap((sg) => [sg.x0, sg.x1]));
   ok(!segsOf(cache, 'mgmt').some((sg) => sg.x0 === sg.x1 && dataX.has(sg.x0) && sg.x0 > rack.box.x
      && sg.x0 < rack.box.x + rack.box.w), 'mgmt never runs in data’s lane');

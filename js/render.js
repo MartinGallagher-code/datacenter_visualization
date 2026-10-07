@@ -510,6 +510,38 @@ export class Renderer {
         if (batch) ctx.stroke();
       }
 
+      // Crossings between containers: curves, or straight lines when the
+      // Networks panel says so -- or when the view is so dense its cables
+      // fade to a haze, where a curve costs half as much again to stroke and
+      // cannot be told from a line. Culled by the box round their points.
+      const curved = state.curvedCables !== false && this.linkCache.total <= CURVE_LIMIT;
+      for (const [width, pts] of routed.curves || []) {
+        ctx.lineWidth = width / scale;
+        let batch = 0;
+        ctx.beginPath();
+        for (let i = 0; i < pts.length && budget > 0; i += 8) {
+          const x0 = pts[i];
+          const y0 = pts[i + 1];
+          const x1 = pts[i + 6];
+          const y1 = pts[i + 7];
+          const xs = curved ? [x0, pts[i + 2], pts[i + 4], x1] : [x0, x1];
+          const lo = Math.min(...xs);
+          const hi = Math.max(...xs);
+          if (hi - lo + Math.abs(y1 - y0) < tiny) continue;
+          if (!this.segmentVisible(lo, Math.min(y0, y1), hi, Math.max(y0, y1))) continue;
+          ctx.moveTo(x0, y0);
+          if (curved) ctx.bezierCurveTo(pts[i + 2], pts[i + 3], pts[i + 4], pts[i + 5], x1, y1);
+          else ctx.lineTo(x1, y1);
+          budget--;
+          if (++batch === STROKE_BATCH) {
+            ctx.stroke();
+            ctx.beginPath();
+            batch = 0;
+          }
+        }
+        if (batch) ctx.stroke();
+      }
+
       if (routed.markers.length) this.drawSplices(net, routed.markers);
     }
 
@@ -843,6 +875,10 @@ const LOD_RECURSE = 9;   // stop descending once a container is this many px wid
 // The one cable on from a splice is drawn heavier than the ones gathered into
 // it: it is the same cable as each of them and stands for all of them.
 const SPLICE_TRUNK = 1.6;
+
+// Past this many cables in view the crossings are drawn straight: dense
+// enough to fade to a haze, where curves cost and show nothing.
+const CURVE_LIMIT = 10000;
 
 // Segments per stroke() call. Big enough that a rack's lanes go in one,
 // small enough that rasterising a stroke stays cheap.

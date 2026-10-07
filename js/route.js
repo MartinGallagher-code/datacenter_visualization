@@ -24,6 +24,8 @@
 export const LANE = 1.5;        // box edge to the first lane, and lane to lane
 export const SPLICE_W = 1.6;    // a splice marker's width
 export const SPLICE_RUN = 1.2;  // marker to the lane its one cable runs in
+export const FAN_GAP = 1.2;     // between cables fanned out along one lane
+export const CURVE_REACH = 32;  // the furthest a curve runs out of its lane
 
 const ROOT = { key: '' };       // the group of a block with no parent
 const groupOf = (block) => block.parent || ROOT;
@@ -82,7 +84,7 @@ export function routeCables(edges, splices, order, widthOf) {
       const edge = edgeOf(b, lane.side);
       p = {
         group: groupOf(block), side: lane.side, edge, start: edge, y: midY(b),
-        lane: lane.lane, left: b.x, right: b.x + b.w, ends: [],
+        lane: lane.lane, left: b.x, right: b.x + b.w, ends: [], h: b.h, fan: null,
       };
     }
     byBlock.set(block, p);
@@ -92,7 +94,7 @@ export function routeCables(edges, splices, order, widthOf) {
   const nets = new Map();
   const out = (net) => {
     let o = nets.get(net);
-    if (!o) nets.set(net, (o = { h: [], v: new Map(), free: [], markers: [], cables: [] }));
+    if (!o) nets.set(net, (o = { h: [], v: new Map(), free: [], markers: [], cables: [], curves: null }));
     return o;
   };
 
@@ -148,13 +150,16 @@ export function routeCables(edges, splices, order, widthOf) {
     // outer side and is laid out like any other.
     const P = {
       group: groupOf(s.members[0]), side, edge, start: outer, y: yc,
-      lane: lane.lane, left, right, ends: [],
+      lane: lane.lane, left, right, ends: [], h: y1 - y0, fan: null,
     };
     run(o, P, Q, widthOf(s.net, 1, true));
     o.cables.push(s);
   }
 
-  for (const o of nets.values()) flatten(o);
+  for (const o of nets.values()) {
+    fanOut(o);
+    flatten(o);
+  }
   return {
     nets,
     ports: port,
@@ -230,9 +235,42 @@ function run(o, P, Q, w) {
   const qx = Q.edge + Q.side * Q.lane;
   stub(o, P, px, w);
   stub(o, Q, qx, w);
-  // Not deduplicated: the renderer has already merged cables between the
-  // same two blocks, and two different pairs never cross on the same line.
-  o.free.push(w, px, P.y, qx, Q.y);
+  // Laid out once every cable is known, so the ones sharing a port can be
+  // fanned out along its lane. Not deduplicated: the renderer has already
+  // merged cables between the same two blocks.
+  const cable = { P, Q, px, qx, w, offP: 0, offQ: 0 };
+  o.free.push(cable);
+  (P.fan || (P.fan = [])).push(cable);
+  (Q.fan || (Q.fan = [])).push(cable);
+}
+
+/**
+ * Spread the cables that leave one port along its lane, instead of starting
+ * them all from one point -- forty ToR uplinks arriving at a spine used to
+ * meet in a single spot and leave as one smear. Each port's cables are
+ * ordered by where their other end is, so neighbours do not cross on the
+ * way out, and spaced FAN_GAP apart within most of the device's height; a
+ * short run of lane joins them to the port's stub.
+ */
+function fanOut(o) {
+  const ports = new Set();
+  for (const cable of o.free) { ports.add(cable.P); ports.add(cable.Q); }
+  for (const port of ports) {
+    const fan = port.fan;
+    port.fan = null;
+    if (!fan || fan.length < 2) continue;
+    const far = (cable) => (cable.P === port ? cable.Q : cable.P);
+    fan.sort((a, b) => (far(a).y - far(b).y) || (far(a).edge - far(b).edge));
+    const spread = Math.min(port.h * 0.8, (fan.length - 1) * FAN_GAP);
+    const step = spread / (fan.length - 1);
+    const x = port.edge + port.side * port.lane;
+    fan.forEach((cable, i) => {
+      const off = -spread / 2 + i * step;
+      if (cable.P === port) cable.offP = off;
+      else cable.offQ = off;
+    });
+    if (spread > 0) vseg(o, x, port.y - spread / 2, port.y + spread / 2, fan[0].w);
+  }
 }
 
 // From a port out to its lane. Stubs are shared -- a ToR's data stub carries
@@ -290,10 +328,26 @@ function flatten(o) {
       list.push(x, lo, x, hi);
     }
   }
-  for (let i = 0; i < o.free.length; i += 5) {
-    listFor(o.free[i]).push(o.free[i + 1], o.free[i + 2], o.free[i + 3], o.free[i + 4]);
+  // The crossings between containers, as curves: each leaves its port
+  // sideways, the way its stub points, and bends round to arrive at the
+  // other end the same way -- so cables fanned out at a port stay apart
+  // instead of converging in straight lines. Stored as cubic Bezier points,
+  // [x0, y0, c1x, c1y, c2x, c2y, x1, y1, ...] per line width; a renderer
+  // asked for straight lines draws x0,y0 to x1,y1 and ignores the rest.
+  const curves = new Map();
+  for (const { P, Q, px, qx, w, offP, offQ } of o.free) {
+    const y0 = P.y + offP;
+    const y1 = Q.y + offQ;
+    // How far a curve runs out of its lane before it bends: enough to read as
+    // leaving sideways and to clear the lanes beside the device, not so much
+    // that two ports on one side join in a loop wider than the floor.
+    const reach = Math.min(CURVE_REACH, Math.max(4, Math.hypot(qx - px, y1 - y0) * 0.25));
+    let list = curves.get(w);
+    if (!list) curves.set(w, (list = []));
+    list.push(px, y0, px + P.side * reach, y0, qx + Q.side * reach, y1, qx, y1);
   }
   o.segs = segs;
+  o.curves = curves;
   o.h = undefined;
   o.v = undefined;
   o.free = undefined;

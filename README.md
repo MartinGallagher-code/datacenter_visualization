@@ -367,7 +367,16 @@ choice, so an uplink leaves its ToR on the side the spine's own lane is on.
 
 Two devices in the same column of the same container (a server and its ToR)
 are joined along their shared lane. Anything further apart steps out into its
-lane at each end and crosses straight between the two.
+lane at each end and crosses between the two **as a curve**: it leaves each
+device sideways, the way that device's lane runs, and bends round to arrive
+at the other end the same way. The cables sharing a port are **fanned out**
+along its lane — ordered by where their other end is, a little apart, within
+the device's height — so forty ToR uplinks arriving at a spine no longer meet
+in one spot. **curved cables** in the Networks panel switches the crossings
+back to straight lines (they stay fanned out), and a view dense enough to
+fade to a haze — more than 10,000 cables — draws them straight anyway, since
+there a curve costs half as much again to draw and cannot be told from a
+line.
 
 ### Splices
 

@@ -63,6 +63,7 @@ const state = {
   picked: [],
   betweenCache: null,
   linkOpacity: 0.45,
+  curvedCables: true,       // crossings between containers drawn as curves
   maxLinksDrawn: 60000,
   warnings: [],
   // What the last load actually did, one entry per file. The warnings list
@@ -1976,6 +1977,11 @@ $('dirpicker').addEventListener('change', (e) => {
   e.target.value = '';                    // so the same folder can be re-chosen
   if (files.length) openDirectory(treeFromFiles(files), { path: [] });
 });
+$('curved-cables').addEventListener('change', (e) => {
+  state.curvedCables = e.target.checked;
+  invalidate();
+});
+
 $('link-opacity').addEventListener('input', (e) => {
   state.linkOpacity = Number(e.target.value) / 100;
   invalidate();

@@ -13,6 +13,15 @@ their shapes are not a promise.
 
 ## Unreleased
 
+- **Cables between containers curve, and fan out where they meet.** A cable
+  crossing from one rack or container to another used to run straight
+  between the two lanes, so every uplink left its ToR from the same point
+  and every ToR's cable arrived at a spine on the same spot. Crossings are
+  now curves that leave each device sideways, the way its lane runs, and
+  arrive the same way, and the cables sharing a port are spread a little
+  along its lane, ordered by where they go. **curved cables** in the
+  Networks panel switches back to straight lines; views with more than
+  10,000 cables draw them straight regardless, where they fade to a haze.
 - **Pick several elements and see what connects them.** Shift-click (or
   Ctrl/⌘-click) on the floor plan or in the tree picks an element; with two
   or more picked, only the cables between them are drawn — per pair, each
