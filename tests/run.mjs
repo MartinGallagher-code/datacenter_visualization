@@ -1092,15 +1092,15 @@ layout(small.root, () => true);
 // however it was asked. cols= (or dir=y) makes a row a grid like any other.
 {
   const rows = parseLayout(['dc D',
-    '  row A cols=1', '    network dir=x', '      spine [1..2]', '    servers dir=x', '      rack [1..3] u=8',
+    '  row A cols=1', '    network net dir=x', '      spine [1..2]', '    servers srv dir=x', '      rack [1..3] u=8',
     '  row B', '    rack [1..3] u=8',
   ].join('\n'));
   eq(rows.warnings, [], 'a row with cols= parses clean');
   layout(rows.root);
   const box = (k) => rows.byKey.get(k).box;
-  ok(box('D/A/network').y + box('D/A/network').h <= box('D/A/servers').y
-     && box('D/A/network').x === box('D/A/servers').x, 'row cols=1 stacks its network layer above its racks');
-  eq(new Set(rows.byKey.get('D/A/servers').children.map((r) => r.box.y)).size, 1,
+  ok(box('D/A/net').y + box('D/A/net').h <= box('D/A/srv').y
+     && box('D/A/net').x === box('D/A/srv').x, 'row cols=1 stacks its network layer above its racks');
+  eq(new Set(rows.byKey.get('D/A/srv').children.map((r) => r.box.y)).size, 1,
      'and dir=x keeps the racks under it in one line');
   eq(new Set(rows.byKey.get('D/B').children.map((r) => r.box.y)).size, 1,
      'a row without cols= is still one line of racks');
