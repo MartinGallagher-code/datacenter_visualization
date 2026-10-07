@@ -130,9 +130,7 @@ around a gap are `rack R[1..4,7..10]`, with the children written once instead
 of once per block — see `examples/three-rows.dc`, which also pins sparse
 U-slots the same way (`node [7..15x2,25..31x2] id=u{id} at={id}`).
 
-A placeholder naming something not in scope is reported rather than left in
-the text — `{rak}` for `{rack}`, or `{id}` in an id spec, where the id does
-not exist yet — and the warning lists the names that line could have used.
+### Placeholders
 
 `{placeholders}` in attributes refer to enclosing elements:
 `name="Hall {id}"`, `power=grid-{i}`, `{room}`, `{row}`, `{parent}`.
@@ -144,10 +142,24 @@ yours to write (`name=dcm{dcm}` is `dcm1`). The built-in names — `{id}`,
 `{i}`, `{i0}`, `{n}`, `{seq}`, `{kind}`, `{parent}`, `{path}` — always mean
 what they say here, even under a kind of the same name.
 
-**Numbers that run on through the rows.** `{i}` starts again under every
-parent; `{seq}` carries on, counting every element the line has made so far
-across all the copies of it. So racks numbered uniquely across a floor are
-one block, not one per row:
+This is how flat hostname-style names work: `node u[01..40]
+name={room}{rack}{id}` names every server like `wr12r06u15`, results files
+can then target that name directly, and the row stays expressed by nesting
+without appearing in the name — see `examples/hostnames.dc`.
+
+Any whole-number placeholder takes a width: `{i:3}` is `001` and `{seq:2}`
+is `07`, padded as a range written `R[01..20]` is. A value that is not a
+number is left as it is.
+
+A placeholder naming something not in scope is reported rather than left in
+the text — `{rak}` for `{rack}`, or `{id}` in an id spec, where the id does
+not exist yet — and the warning lists the names that line could have used.
+
+### Numbering through the floor: `{seq}`
+
+`{i}` starts again under every parent; `{seq}` carries on, counting every
+element the line has made so far across all the copies of it. So racks
+numbered uniquely across a floor are one block, not one per row:
 
 ```
 row [1..4]
@@ -155,12 +167,12 @@ row [1..4]
     node u[01..40] role=server name={rack}{id}     # R07u15
 ```
 
-`[1..5]` says how many racks each row has, and `id=` gives each its number.
-`{seq:2}` pads to two digits, as a range written `R[01..20]` would — any
-whole-number placeholder takes a width, `{i:3}` is `001` — and a value that
-is not a number is left as it is. The count keeps going however deep the
+`[1..5]` says how many racks each row has, `id=` gives each its number, and
+`{seq:2}` pads it to two digits. The count keeps going however deep the
 repetition goes: under `room [A|B]` the same rack line runs on to R40.
-`examples/dual-plane.dc` numbers its pods' racks this way.
+`examples/dual-plane.dc` numbers its pods' racks this way. `{seq}` belongs
+on an attribute (`id=`, `name=`): an id spec is expanded before anything is
+counted, so `rack R{seq}` is reported.
 
 **Lines side by side share the count.** Lines of one kind in the same block
 number as one, so a row can hold different racks in different places and
@@ -178,21 +190,60 @@ row [1..4]
 ```
 
 Only lines that use `{seq}` take a number — a `node tor` line beside a
-numbered server line does not use one up. `seq=NAME` on a line gives it the
-count of that name instead: `seq=net` keeps network racks numbered N1, N2, …
-apart from the racks beside them, lines in different blocks with the same
-`seq=` share one count, and `seq=r{row}` starts the count again in every row.
+numbered server line does not use one up.
 
-This is how flat hostname-style names work: `node u[01..40]
-name={room}{rack}{id}` names every server like `wr12r06u15`, results files
-can then target that name directly, and the row stays expressed by nesting
-without appearing in the name — see `examples/hostnames.dc`.
+**Starting again in every room.** `seq=room` on a line gives it one count
+per room: racks numbered R01–R80 in each room, however many dcms or systems
+repeat the rooms, the way `scope=room` groups a link rule. Any enclosing kind
+works — `seq=row`, `seq=dcm` — and what is counted is kept per kind, so racks
+and servers numbered per room keep two counts. Lines sharing a `seq=room`
+share the count within the room, so a row split into three rack lines still
+runs in order:
+
+```
+dcm [1..2] name=dcm-{dcm}
+  room [1..2] name="Room {room}"
+    row [1..4]
+      rack [1..8] id=R{seq:2} seq=room u=42           # R01-R08 ... in every room
+      rack [1..4] id=R{seq:2} seq=room u=42 +special  # R09-R12
+      rack [1..8] id=R{seq:2} seq=room u=42           # R13-R20, then R21- in row 2
+```
+
+Any other word names a count instead: `seq=net` keeps network racks
+numbered N1, N2, … apart from the racks beside them, and lines anywhere with
+the same name share one count.
+
+### Lines that apply only in some places: `if=`
+
+`if=` on a line makes its elements only where the condition holds, so one
+block for four rows can still give the first row something the others do
+not have — here rack 12 is filled in row 1 and stands empty in rows 2–4:
+
+```
+row [1..4]
+  rack [1..11] id=R{seq:2} seq=room u=42
+    node u[01..40] role=server
+  rack 12 id=R{seq:2} seq=room u=42 if={row}=1      # row 1: R12, filled
+    node g[01..10] u=4 role=server +gpu
+  rack 12 id=R{seq:2} seq=room u=42 if={row}!=1     # rows 2-4: R32, R52, R72, empty
+  rack [1..8] id=R{seq:2} seq=room u=42
+    node u[01..40] role=server
+```
+
+A condition is `{placeholder}=value` or `!=`, and several joined by commas
+must all hold (`if={room}=1,{row}=1` is only the first row of room 1). A
+value may list alternatives (`{row}=1|3`) and use `*` and `?` as a selector
+does; matching ignores case. An element not made gives its `{seq}` number
+back, so the numbers stay in order, and anything indented under it is not
+made either. A condition that cannot be read is reported and ignored, and
+`if=` is not kept among the attributes of what it made.
 
 ### Attributes and tags
 
 - `key=value` attributes are free-form and **inherit** downward (children see
   the parent's `region=us-east` unless they override it). Layout-only keys
-  (`u`, `at`, `cols`, `dir`, `name`, …) do not inherit.
+  — `id`, `name`, `u`, `at`, `cols`, `dir`, `gap`, `align`, `seq`, `if` — do
+  not inherit.
 - Attributes the viewer does not draw are still worth writing: they show in
   the inspector, and other tools read the same file. `nic_gbps=` on servers
   and `uplinks=` / `uplink_gbps=` on racks are the hardware binnacle's
@@ -203,7 +254,8 @@ without appearing in the name — see `examples/hostnames.dc`.
 - Rack children: `u=4` gives a node 4 U of height, `at=42` pins it to a slot;
   unplaced children auto-fill the lowest free run of slots. A node that lands
   above the rack's declared `u=` height is reported as a warning — `at=42`
-  only fits a rack at least 42 U tall.
+  only fits a rack at least 42 U tall. A rack with nothing in it is drawn as
+  an empty rack, as tall as its slots, rather than as a collapsed stub.
 - **`u=` is an element's height, in U, everywhere** — the scale racks are
   drawn to, where one U is the height of a 1U server. On a rack it is how
   many slots the rack has, and on a rack's child how many it fills, as
@@ -214,6 +266,23 @@ without appearing in the name — see `examples/hostnames.dc`.
   its compact size whatever its `u=`.
 - `cols=2` / `dir=x|y` / `gap=` shape generic containers — `gap=0` packs
   children with no gutter, and omitting it keeps the per-kind default.
+- `align=center` (or `right`; `left` is the default) places each line of a
+  container's children across the room it has — a narrow network layer
+  centred over the racks below it. An `align=` that is not one of those is
+  reported and laid out from the left.
+- A **row** lays its racks out in one line, until it says otherwise:
+  `cols=` or `dir=y` makes it a grid like any other container. That is how a
+  row carries a network layer above its racks — `cols=1` stacks the two, and
+  `dir=x` on each keeps its own contents in one line:
+
+  ```
+  row [1..4] name="Row {row}" cols=1 align=center
+    network dir=x
+      spine [1..4] name=spine-{spine} role=spine
+    servers dir=x
+      rack [1..20] id=R{seq:2} u=42
+        node u[01..40] role=server
+  ```
 - The numbers are checked: `u`, `at`, `size` and `cols` must be whole and
   between 1 and 1000 (`gap` from 0), and a net's `width` between 0.1 and 100. Anything else
   is reported and ignored rather than quietly coerced — `u=1e9` used to read
@@ -298,7 +367,16 @@ choice, so an uplink leaves its ToR on the side the spine's own lane is on.
 
 Two devices in the same column of the same container (a server and its ToR)
 are joined along their shared lane. Anything further apart steps out into its
-lane at each end and crosses straight between the two.
+lane at each end and crosses between the two **as a curve**: it leaves each
+device sideways, the way that device's lane runs, and bends round to arrive
+at the other end the same way. The cables sharing a port are **fanned out**
+along its lane — ordered by where their other end is, a little apart, within
+the device's height — so forty ToR uplinks arriving at a spine no longer meet
+in one spot. **curved cables** in the Networks panel switches the crossings
+back to straight lines (they stay fanned out), and a view dense enough to
+fade to a haze — more than 10,000 cables — draws them straight anyway, since
+there a curve costs half as much again to draw and cannot be told from a
+line.
 
 ### Splices
 
@@ -1011,6 +1089,19 @@ quietly left stale.
 
 ## The viewer
 
+- **What connects these?** Shift-click (or Ctrl/⌘-click) elements on the
+  floor plan or in the tree to pick them; each pick gets a numbered tag.
+  With two or more picked, only the cables between them are drawn: for each
+  pair, every network that joins the two on its own, by its shortest routes
+  — and every equally short alternative, so two servers in different rows
+  show all the spines they could cross. The inspector lists the picks and,
+  per pair, each network and how many hops it takes (`u05 ↔ u07 · data: 4
+  hops`). A route crosses from one network to another only when no single
+  network joins the two, as in a layout that gives each tier its own net; it
+  never borrows a server's mgmt cable to reach the data fabric. A pick can be
+  a container — two racks show the uplinks between them. Untick a network to
+  route without it; Shift-click a pick again, or its chip, to drop it; **Clear**
+  or Esc forgets them all.
 - **Files** — the panel's **Open folder…** keeps a directory open beside the
   canvas, instead of a dialog that shows one and forgets it. Layouts and
   results are listed with their sizes (worth seeing before clicking a 300 MB

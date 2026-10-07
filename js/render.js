@@ -27,6 +27,7 @@ const THEME = {
   ink: '#c9d1d9',
   inkDim: '#8b949e',
   selected: '#f5d442',
+  picked: '#ff6bd5',
   hover: 'rgba(255,255,255,0.55)',
   match: '#4fa3ff',
 };
@@ -186,7 +187,9 @@ export class Renderer {
     }
 
     const children = el.shown || [];
-    const isLeaf = children.length === 0;
+    // An empty rack is drawn as a rack -- its frame and the name in its band
+    // -- not as one solid device the height of forty-two of them.
+    const isLeaf = children.length === 0 && !(el.kind === 'rack' && !el.children.length);
 
     this.ctx.globalAlpha = dim ? 0.16 : 1;
 
@@ -414,10 +417,15 @@ export class Renderer {
     // the cables actually shown and sharing a lane is decided by which those
     // are.
     const bucket = Math.round(Math.log2(this.camera.scale) * 2);
-    const only = state.isolateLinks ? state.selected : null;
+    // Picks win over "only this element's cables": with two or more picked,
+    // what is drawn is what runs between them.
+    const routes = state.between ? state.between() : null;
+    const keep = routes ? routes.links : null;
+    const only = !keep && state.isolateLinks ? state.selected : null;
     const cache = this.linkCache;
-    if (cache.version !== state.version || cache.bucket !== bucket || cache.only !== only) {
-      this.rebuildLinkCache(bucket, only);
+    if (cache.version !== state.version || cache.bucket !== bucket || cache.only !== only
+        || cache.keep !== keep) {
+      this.rebuildLinkCache(bucket, only, keep);
     }
 
     const ctx = this.ctx;
@@ -442,6 +450,13 @@ export class Renderer {
       for (const cable of routed.cables) {
         if (!this.cableVisible(cable)) continue;
         drawn++;
+        if (keep) {
+          // Between picks, every end is worth finding.
+          if (cable.members) for (const m of cable.members) this.markEndpoint(m, net.color);
+          else this.markEndpoint(cable.a, net.color);
+          this.markEndpoint(cable.members ? cable.to : cable.b, net.color);
+          continue;
+        }
         if (!only) continue;
         if (cable.members) {
           // Through a splice: each member's own cable, end to end.
@@ -485,6 +500,38 @@ export class Renderer {
           if (!this.segmentVisible(x0, y0, x1, y1)) continue;
           ctx.moveTo(x0, y0);
           ctx.lineTo(x1, y1);
+          budget--;
+          if (++batch === STROKE_BATCH) {
+            ctx.stroke();
+            ctx.beginPath();
+            batch = 0;
+          }
+        }
+        if (batch) ctx.stroke();
+      }
+
+      // Crossings between containers: curves, or straight lines when the
+      // Networks panel says so -- or when the view is so dense its cables
+      // fade to a haze, where a curve costs half as much again to stroke and
+      // cannot be told from a line. Culled by the box round their points.
+      const curved = state.curvedCables !== false && this.linkCache.total <= CURVE_LIMIT;
+      for (const [width, pts] of routed.curves || []) {
+        ctx.lineWidth = width / scale;
+        let batch = 0;
+        ctx.beginPath();
+        for (let i = 0; i < pts.length && budget > 0; i += 8) {
+          const x0 = pts[i];
+          const y0 = pts[i + 1];
+          const x1 = pts[i + 6];
+          const y1 = pts[i + 7];
+          const xs = curved ? [x0, pts[i + 2], pts[i + 4], x1] : [x0, x1];
+          const lo = Math.min(...xs);
+          const hi = Math.max(...xs);
+          if (hi - lo + Math.abs(y1 - y0) < tiny) continue;
+          if (!this.segmentVisible(lo, Math.min(y0, y1), hi, Math.max(y0, y1))) continue;
+          ctx.moveTo(x0, y0);
+          if (curved) ctx.bezierCurveTo(pts[i + 2], pts[i + 3], pts[i + 4], pts[i + 5], x1, y1);
+          else ctx.lineTo(x1, y1);
           budget--;
           if (++batch === STROKE_BATCH) {
             ctx.stroke();
@@ -698,7 +745,7 @@ export class Renderer {
    * rather than forty coincident thin ones -- then lay every cable out along
    * the lanes beside the blocks it joins.
    */
-  rebuildLinkCache(bucket, only = null) {
+  rebuildLinkCache(bucket, only = null, keep = null) {
     const state = this.state;
     const scale = this.camera.scale;
     const seen = new Map();
@@ -741,6 +788,7 @@ export class Renderer {
       const a = paintedBlock(link.a);
       const b = paintedBlock(link.b);
       if (!a || !b || a === b) continue;
+      if (keep && !keep.has(link)) continue;
       // "Only this element's links": an edge survives when either end is the
       // selection, inside it, or the collapsed block standing in for it.
       if (only && !sharesLineage(a, only) && !sharesLineage(b, only)) continue;
@@ -781,7 +829,7 @@ export class Renderer {
 
     let total = 0;
     for (const net of routed.nets.values()) total += net.cables.length;
-    this.linkCache = { version: state.version, bucket, only, nets: routed.nets, total, ports: routed.ports };
+    this.linkCache = { version: state.version, bucket, only, keep, nets: routed.nets, total, ports: routed.ports };
   }
 
   // ---------------------------------------------------------------- selection
@@ -789,6 +837,26 @@ export class Renderer {
   drawSelection() {
     const ctx = this.ctx;
     const scale = this.camera.scale;
+    // Picks: a solid outline and their number, so the inspector's list and
+    // the floor can be matched up.
+    const picked = this.state.picked || [];
+    picked.forEach((el, i) => {
+      if (!el.box || !this.intersects(el.box)) return;
+      const b = el.box;
+      ctx.setLineDash([]);
+      ctx.strokeStyle = THEME.picked;
+      ctx.lineWidth = 2.5 / scale;
+      ctx.strokeRect(b.x, b.y, b.w, b.h);
+      const px = 11 / scale;
+      ctx.font = `bold ${px}px ui-sans-serif, system-ui, sans-serif`;
+      const label = String(i + 1);
+      const w = ctx.measureText(label).width + 6 / scale;
+      ctx.fillStyle = THEME.picked;
+      ctx.fillRect(b.x, b.y - px * 1.3, w, px * 1.3);
+      ctx.fillStyle = '#0d1117';
+      ctx.textAlign = 'left';
+      ctx.fillText(label, b.x + 3 / scale, b.y - px * 0.62);
+    });
     for (const [el, color, width] of [
       [this.hover, THEME.hover, 1.5],
       [this.state.selected, THEME.selected, 2.5],
@@ -807,6 +875,10 @@ const LOD_RECURSE = 9;   // stop descending once a container is this many px wid
 // The one cable on from a splice is drawn heavier than the ones gathered into
 // it: it is the same cable as each of them and stands for all of them.
 const SPLICE_TRUNK = 1.6;
+
+// Past this many cables in view the crossings are drawn straight: dense
+// enough to fade to a haze, where curves cost and show nothing.
+const CURVE_LIMIT = 10000;
 
 // Segments per stroke() call. Big enough that a rack's lanes go in one,
 // small enough that rasterising a stroke stays cheap.

@@ -663,3 +663,12 @@ button.danger:hover { color: #ffbdbd; border-color: #8a3a3a; }
 .version { font-variant-numeric: tabular-nums; padding: 0 4px;
            border: 1px solid var(--line); border-radius: 3px; }
 .version:empty { display: none; }
+
+/* ------------------------------------------------------------------- picks */
+
+.picks { border: 1px solid #ff6bd566; border-radius: 4px; padding: 6px 8px; margin-bottom: 10px; }
+.picks-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.picks-list { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0; }
+.pick { font-size: 11px; padding: 1px 6px; border-radius: 3px; background: #ff6bd526;
+        border: 1px solid #ff6bd566; cursor: pointer; }
+.pick:hover { text-decoration: line-through; }

@@ -13,6 +13,60 @@ their shapes are not a promise.
 
 ## Unreleased
 
+- **Cables between containers curve, and fan out where they meet.** A cable
+  crossing from one rack or container to another used to run straight
+  between the two lanes, so every uplink left its ToR from the same point
+  and every ToR's cable arrived at a spine on the same spot. Crossings are
+  now curves that leave each device sideways, the way its lane runs, and
+  arrive the same way, and the cables sharing a port are spread a little
+  along its lane, ordered by where they go. **curved cables** in the
+  Networks panel switches back to straight lines; views with more than
+  10,000 cables draw them straight regardless, where they fade to a haze.
+- **Pick several elements and see what connects them.** Shift-click (or
+  Ctrl/⌘-click) on the floor plan or in the tree picks an element; with two
+  or more picked, only the cables between them are drawn — per pair, each
+  network that joins the two on its own, by every shortest route — and the
+  inspector says which networks and how many hops. A route crosses networks
+  only when no single one joins the pair. Picks are numbered on the floor,
+  follow their elements through a re-parse, and Esc or **Clear** forgets
+  them.
+- **The editor's Syntax panel covers everything the editor completes.** It
+  had fallen behind the parser: `{seq}`, `seq=`, `if=`, `align=`, `u=` as a
+  height anywhere, a row stacked over its racks, `cap=`, `color=` and
+  `show=` were all completed as you typed and none of them was in the
+  panel. They are now, under new Layout, Numbering and Conditions headings,
+  and the suite fails if an option the editor completes is missing from it.
+  The starter template names them too, and the README's layout section is
+  split into Ranges, Placeholders, `{seq}` and `if=`.
+- **`if=` on a line: make it only where a condition holds.** Every copy of a
+  block was the same, so giving the first row's rack 12 something the other
+  rows' rack 12 did not have meant writing the row out twice. `if={row}=1`
+  makes a line's elements only where the condition holds; `!=`, `|`
+  alternatives, globs and comma-joined conditions work as they do elsewhere.
+  An element not made gives its `{seq}` number back, so numbering stays in
+  order, and a condition that cannot be read is reported and ignored.
+- **An empty rack is drawn as a rack.** A rack with nothing in it drew as a
+  collapsed one, a stub a fifth the height of the racks beside it, which
+  reads as missing rather than empty. It now stands as tall as its slots,
+  drawn as a rack frame with its name in the band; a rack collapsed by hand
+  keeps its compact size.
+- **`align=center` (or `right`) on a container.** Children were always laid
+  out from the left, so a network layer narrower than the racks below it sat
+  against the left edge. `align=` places each line of a container's
+  children across the room it has; `left` stays the default, and an
+  `align=` that is none of these is reported and laid out from the left.
+- **`cols=` works on a row.** A row lays its racks out in one line, and
+  ignored `cols=` while doing it, so a row holding a network layer above its
+  racks (`row R cols=1` › `network`, `servers`) drew the two side by side.
+  `cols=` or `dir=y` now makes a row a grid like any other container. Rows
+  without either are unchanged.
+- **`seq=room`: numbering that starts again in every room.** `seq=` naming
+  an enclosing kind keeps one `{seq}` count per element of that kind, the
+  way `scope=room` groups a link rule: `rack [1..20] id=R{seq:2} seq=room`
+  under rows under rooms numbers R01–R80 in every room, however many dcms
+  repeat the rooms. What is counted is kept per kind, so racks and servers
+  numbered per room keep two counts. Any other word still names a shared
+  count.
 - **`u=` sets an element's height anywhere.** It was already the height in
   U for a rack (its slots) and for a device in one (the slots it fills);
   outside a rack it was silently ignored, so `node pdu u=4` in a cage drew

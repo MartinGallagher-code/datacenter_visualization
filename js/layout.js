@@ -59,6 +59,12 @@ function measure(el, isVisible) {
     let h = c.h;
     if (el.kind === 'node' && el.uSize) h = el.uSize * U_PX;
     else if (!el.children.length && heightOf(el)) h = heightOf(el) * U_PX;
+    // A rack with nothing in it is still a rack on the floor, as tall as its
+    // slots. It used to draw as a collapsed one -- a stub a fifth the height
+    // of the racks either side of it -- which reads as missing, not empty.
+    if (el.kind === 'rack' && !el.children.length) {
+      h = labelOf('rack') + (el.uHeight || 42) * U_PX + padOf('rack') * 2;
+    }
     el.box = { x: 0, y: 0, w: c.w, h };
     return;
   }
@@ -87,7 +93,12 @@ function measure(el, isVisible) {
     return;
   }
 
-  if (el.kind === 'row' && el.attrsEff.dir !== 'y') {
+  // A row lays its racks out in one line -- unless it says otherwise. cols=
+  // on a row used to be ignored without a word, so a row holding a network
+  // layer above its racks (`row R cols=1` > network, servers) drew the two
+  // side by side however it was asked. Now cols= or dir=y makes a row a grid
+  // like any other container.
+  if (el.kind === 'row' && el.attrsEff.dir !== 'y' && !intAttr(el.attrsEff.cols, 0, NUMBERS.cols)) {
     // A row of racks: single line, bottom-aligned so rack floors line up --
     // including when u= makes the row taller than its racks, where the room
     // goes above them rather than under.
@@ -110,22 +121,40 @@ function measure(el, isVisible) {
   let lineHeight = 0;
   let widest = 0;
   let col = 0;
+  const lines = [[]];
   for (const child of kids) {
     if (col === cols && cols > 0) {
       x = pad;
       y += lineHeight + gap;
       lineHeight = 0;
       col = 0;
+      lines.push([]);
     }
     child.rel = { x, y };
+    lines[lines.length - 1].push(child);
     x += child.box.w + gap;
     widest = Math.max(widest, x - gap + pad);
     lineHeight = Math.max(lineHeight, child.box.h);
     col++;
   }
+  const w = Math.max(widest, 120);
+  // align=center or right moves each line of children across the room the
+  // container has, so a narrow network layer sits centred over the racks
+  // below it rather than against the left edge.
+  const share = ALIGN_SHARE[el.attrsEff.align] || 0;
+  if (share) {
+    for (const line of lines) {
+      const last = line[line.length - 1];
+      const slack = w - pad - (last.rel.x + last.box.w);
+      for (const child of line) child.rel.x += slack * share;
+    }
+  }
   // u= is a floor, not a ceiling: what the children need always fits.
-  el.box = { x: 0, y: 0, w: Math.max(widest, 120), h: Math.max(y + lineHeight + pad, heightOf(el) * U_PX) };
+  el.box = { x: 0, y: 0, w, h: Math.max(y + lineHeight + pad, heightOf(el) * U_PX) };
 }
+
+// How much of the spare width goes to the left of each line, per align=.
+const ALIGN_SHARE = { left: 0, center: 0.5, centre: 0.5, right: 1 };
 
 /**
  * The height u= asks of an element outside a rack, in U, or 0 for none.

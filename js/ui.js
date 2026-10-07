@@ -61,7 +61,10 @@ export function renderTree(state, host, actions) {
     const meta = el('span', 'tree-kind', hasKids ? ` ${node.kind} ${countDescendants(node)}` : ` ${node.kind}`);
     row.append(meta);
 
-    row.addEventListener('click', () => actions.select(node));
+    row.addEventListener('click', (ev) => {
+      if (ev.ctrlKey || ev.metaKey || ev.shiftKey) actions.togglePick(node);
+      else actions.select(node);
+    });
     row.addEventListener('dblclick', () => actions.focus(node));
     host.append(row);
 
@@ -597,11 +600,56 @@ export function renderNets(state, host, actions) {
 
 // --------------------------------------------------------------- inspector
 
+/**
+ * The picks, and what connects them: per pair, each network that joins the
+ * two on its own and how many hops its shortest route takes.
+ */
+function renderPicks(state, host, actions) {
+  const box = el('div', 'picks');
+  const head = el('div', 'picks-head');
+  head.append(el('strong', null, `${state.picked.length} picked`));
+  const clear = el('button', null, 'Clear');
+  clear.title = 'Forget the picks and show every cable again (Esc)';
+  clear.addEventListener('click', () => actions.clearPicks());
+  head.append(clear);
+  box.append(head);
+
+  const list = el('div', 'picks-list');
+  state.picked.forEach((node, i) => {
+    const chip = el('span', 'pick', `${i + 1} ${node.name}`);
+    chip.title = `${node.path} — click to take it out of the picks`;
+    chip.addEventListener('click', () => actions.togglePick(node));
+    list.append(chip);
+  });
+  box.append(list);
+
+  const routes = state.between ? state.between() : null;
+  if (!routes) {
+    box.append(el('p', 'muted', 'Ctrl/⌘- or Shift-click another element: the view then shows only the cables between them.'));
+  } else {
+    const dl = el('dl', 'kv');
+    for (const pair of routes.pairs) {
+      dl.append(el('dt', null, `${pair.a.name} ↔ ${pair.b.name}`));
+      const dd = el('dd');
+      if (!pair.routes.length) dd.append(el('div', 'muted', 'no route over the ticked networks'));
+      for (const r of pair.routes) {
+        dd.append(el('div', null, `${r.net}: ${r.hops} hop${r.hops === 1 ? '' : 's'}${pair.mixed ? ' across networks' : ''}`));
+      }
+      dl.append(dd);
+    }
+    box.append(dl);
+    const shown = [...routes.nets].map(([net, n]) => `${net} ×${n}`).join(', ');
+    box.append(el('p', 'muted', shown ? `showing ${shown}` : 'nothing between them to show'));
+  }
+  host.append(box);
+}
+
 export function renderInspector(state, host, actions) {
   host.textContent = '';
+  if (state.picked && state.picked.length) renderPicks(state, host, actions);
   const node = state.selected;
   if (!node) {
-    host.append(el('p', 'muted', 'Click an element on the map or in the tree.'));
+    host.append(el('p', 'muted', 'Click an element on the map or in the tree; Ctrl/⌘- or Shift-click several to see what connects them.'));
     return;
   }
 

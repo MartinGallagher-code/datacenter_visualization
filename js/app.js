@@ -20,6 +20,7 @@ import {
 } from './report.js';
 import { attachHints, renderReference } from './hints.js';
 import { layoutFromHosts, matchesPattern, recordsSince, tailRecords } from './tsv.js';
+import { routesBetween } from './paths.js';
 import { VERSION } from './version.js';
 import {
   classify, directoryFromDataTransfer, ensureRead, getFile, pathLabel, pickDirectory,
@@ -57,7 +58,12 @@ const state = {
   selected: null,
   version: 0,
   isolateLinks: false,      // draw only the selected element's cables
+  // Elements picked with Ctrl/⌘/Shift-click. With two or more, only the
+  // cables on the routes between them are drawn.
+  picked: [],
+  betweenCache: null,
   linkOpacity: 0.45,
+  curvedCables: true,       // crossings between containers drawn as curves
   maxLinksDrawn: 60000,
   warnings: [],
   // What the last load actually did, one entry per file. The warnings list
@@ -114,6 +120,22 @@ const state = {
 
   offScale(overlay) {
     return offScale(overlay, state.model);
+  },
+
+  // The routes between the picks, worked out once per topology version and
+  // set of picks -- a net ticked or unticked changes what can be travelled,
+  // and bumps the version with it.
+  between() {
+    if (state.picked.length < 2) return null;
+    const key = `${state.version}\u0000${state.picked.map((p) => p.key).join('\u0000')}`;
+    if (!state.betweenCache || state.betweenCache.key !== key) {
+      const value = routesBetween(state.picked, (name) => {
+        const net = state.model.nets.get(name);
+        return !!(net && net.enabled);
+      });
+      state.betweenCache = { key, value };
+    }
+    return state.betweenCache.value;
   },
 
   isVisible(node) {
@@ -232,6 +254,22 @@ const actions = {
     renderInspector(state, $('inspector'), actions);
     renderTree(state, $('tree'), actions);
     if (state.isolateLinks) state.version++;   // the isolated set changed
+    invalidate();
+  },
+
+  // Ctrl/⌘/Shift-click: add an element to the picks, or take it back out.
+  togglePick(node) {
+    const at = state.picked.indexOf(node);
+    if (at >= 0) state.picked.splice(at, 1);
+    else state.picked.push(node);
+    state.selected = node;
+    refreshPanels();
+    invalidate();
+  },
+
+  clearPicks() {
+    state.picked = [];
+    refreshPanels();
     invalidate();
   },
 
@@ -519,6 +557,7 @@ const actions = {
     state.notices = [];
     state.noticesOpen = false;
     state.selected = null;
+    state.picked = [];
     state.isolateLinks = false;
     state.standardizeAll = 'off';
     // Nothing left to reload, so nothing is being followed or re-read. The
@@ -575,6 +614,9 @@ function loadLayoutText(text, { keepCamera = false, name = '', generated = false
     else state.netOverrides.delete(netName);
   }
   state.selected = null;
+  // Picks follow their paths through a re-parse -- every keystroke in the
+  // editor is one -- and the ones whose element is gone drop out.
+  state.picked = state.picked.map((p) => state.model.byKey.get(p.key)).filter(Boolean);
   state.warnings = [...state.model.warnings];
   // An empty model has the parser's placeholder title, which is not a name
   // for anything -- an emptied viewer reads as the viewer, as it does before
@@ -1649,6 +1691,9 @@ const STARTER = `# <kind> <id> [key=value ...] [+tag ...]      indentation nests
 #
 # Ranges: R[01..12]   A..D   [1..40x2] (step)   [1..4,7..10] (segments)   [web|db]
 # Children of an expanded line are created once per expansion.
+# Names:  name={room}{rack}{id}   id=R{seq:2} numbers on through every copy
+#         (seq=room starts again per room)   if={row}=1 makes a line only there
+# Layout: u= height in U   cols=1 / dir=x / align=center shape a container
 
 dc DC1 name="My Datacenter"
 
@@ -1932,6 +1977,11 @@ $('dirpicker').addEventListener('change', (e) => {
   e.target.value = '';                    // so the same folder can be re-chosen
   if (files.length) openDirectory(treeFromFiles(files), { path: [] });
 });
+$('curved-cables').addEventListener('change', (e) => {
+  state.curvedCables = e.target.checked;
+  invalidate();
+});
+
 $('link-opacity').addEventListener('input', (e) => {
   state.linkOpacity = Number(e.target.value) / 100;
   invalidate();
@@ -2001,7 +2051,8 @@ canvas.addEventListener('pointerup', (e) => {
   const hit = renderer.pick(e.clientX - rect.left, e.clientY - rect.top);
   if (!hit) return;
   if (e.altKey) actions.toggleCollapse(hit);
-  actions.select(hit);
+  if (e.ctrlKey || e.metaKey || e.shiftKey) actions.togglePick(hit);
+  else actions.select(hit);
 });
 
 canvas.addEventListener('dblclick', (e) => {
@@ -2045,7 +2096,7 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === '0') { renderer.fit(); invalidate(); }
   else if (e.key === '+' || e.key === '=') { renderer.zoomAt(cx, cy, 1.25); invalidate(); }
   else if (e.key === '-') { renderer.zoomAt(cx, cy, 0.8); invalidate(); }
-  else if (e.key === 'Escape') { state.selected = null; refreshPanels(); invalidate(); }
+  else if (e.key === 'Escape') { state.selected = null; state.picked = []; refreshPanels(); invalidate(); }
   else if (e.key === '/') { e.preventDefault(); $('filter').focus(); }
   else if (e.key === ' ' && state.selected) { e.preventDefault(); actions.toggleCollapse(state.selected); }
 });

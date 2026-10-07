@@ -27,11 +27,12 @@ import {
   readingText, offScale, tailIsOdd, NORMAL_BEYOND_2SD,
 } from '../js/results.js';
 import { layout, U_PX } from '../js/layout.js';
+import { routesBetween } from '../js/paths.js';
 import { Renderer, linkSummary, sharesLineage, spliceSummary } from '../js/render.js';
-import { LANE, SPLICE_W } from '../js/route.js';
+import { CURVE_REACH, FAN_GAP, LANE, SPLICE_W } from '../js/route.js';
 import { compileQuery, applyFilter } from '../js/filter.js';
 import { ramp, categoricalColor, colorFor, contrastInk } from '../js/palette.js';
-import { suggestionsFor } from '../js/hints.js';
+import { referenceSnippets, suggestionsFor } from '../js/hints.js';
 import { VERSION } from '../js/version.js';
 import {
   classify, formatSize, matchesFilter, namedAsData, pathLabel, readable, sortEntries, treeFromFiles,
@@ -1087,6 +1088,48 @@ layout(small.root, () => true);
   eq(box('D/room').h, 62, 'collapsed, a container keeps its compact size');
 }
 
+// A row lays its racks out in one line, and used to ignore cols= while doing
+// it: a row holding a network layer above its racks drew the two side by side
+// however it was asked. cols= (or dir=y) makes a row a grid like any other.
+{
+  const rows = parseLayout(['dc D',
+    '  row A cols=1', '    network net dir=x', '      spine [1..2]', '    servers srv dir=x', '      rack [1..3] u=8',
+    '  row B', '    rack [1..3] u=8',
+  ].join('\n'));
+  eq(rows.warnings, [], 'a row with cols= parses clean');
+  layout(rows.root);
+  const box = (k) => rows.byKey.get(k).box;
+  ok(box('D/A/net').y + box('D/A/net').h <= box('D/A/srv').y
+     && box('D/A/net').x === box('D/A/srv').x, 'row cols=1 stacks its network layer above its racks');
+  eq(new Set(rows.byKey.get('D/A/srv').children.map((r) => r.box.y)).size, 1,
+     'and dir=x keeps the racks under it in one line');
+  eq(new Set(rows.byKey.get('D/B').children.map((r) => r.box.y)).size, 1,
+     'a row without cols= is still one line of racks');
+  ok(box('D/B/2').x > box('D/B/1').x, 'side by side, in order');
+
+  // align= places each line of a container's children: a narrow network
+  // layer centred over the racks below it, instead of against the left.
+  const placed = (align) => {
+    const m = parseLayout(['dc D', `  row A cols=1 ${align}`, '    network net dir=x', '      spine [1..2]',
+      '    servers srv dir=x', '      rack [1..8] u=8'].join('\n'));
+    layout(m.root);
+    return { warnings: m.warnings, net: m.byKey.get('D/A/net').box, srv: m.byKey.get('D/A/srv').box };
+  };
+  const mid = (b) => b.x + b.w / 2;
+  const left = placed('');
+  ok(left.net.x === left.srv.x, 'with no align=, a line starts at the left');
+  const centred = placed('align=center');
+  eq(centred.warnings, [], 'align=center parses clean');
+  eq(mid(centred.net), mid(centred.srv), 'align=center puts the network layer over the middle of the racks');
+  eq(mid(placed('align=centre').net), mid(centred.net), 'and centre is the same word');
+  const right = placed('align=right');
+  eq(right.net.x + right.net.w, right.srv.x + right.srv.w, 'align=right lines up the right edges');
+  const odd = placed('align=middle');
+  ok(odd.warnings.some((w) => /align=middle is not left, center or right -- laid out from the left/.test(w)),
+     'an align= it does not know is reported');
+  eq(odd.net.x, left.net.x, 'and laid out from the left, as it says');
+}
+
 // ----------------------------------------------------------- cable routing
 // Cables used to run centre to centre, so a server's data and mgmt cables left
 // from one point and lay on top of each other all the way to the ToR. They
@@ -1174,9 +1217,65 @@ const segsOf = (cache, net) => {
 
   // Two fabrics between the same pair of devices used to be told apart by a
   // two-pixel offset; now they leave opposite sides and never coincide.
+  // Crossings between containers are curves: each leaves its port sideways,
+  // the way its stub points, and the cables sharing a port fan out along its
+  // lane instead of meeting in one spot.
+  const curves = [];
+  for (const [w, pts] of cache.nets.get('data').curves) {
+    for (let i = 0; i < pts.length; i += 8) curves.push({ w, p: pts.slice(i, i + 8) });
+  }
+  const torX = torData.edge + torData.side * torData.lane;
+  const uplinks = curves.filter(({ p }) => p[0] === torX && Math.abs(p[1] - torData.y) <= tor.box.h / 2);
+  eq(uplinks.length, 4, 'the ToR\u2019s four uplinks are drawn as curves from its lane');
+  ok(uplinks.every(({ p }) => p[1] === p[3] && Math.sign(p[2] - p[0]) === torData.side),
+     'each leaving sideways, the way the ToR\u2019s data stub points');
+  ok(uplinks.every(({ p }) => Math.abs(p[2] - p[0]) <= CURVE_REACH), 'and bending within a short reach of the lane');
+  const starts = uplinks.map(({ p }) => p[1]).sort((x, y) => x - y);
+  eq(new Set(starts).size, 4, 'fanned out: no two uplinks leave from the same point');
+  ok(starts.every((y, i) => i === 0 || Math.abs(y - starts[i - 1] - FAN_GAP) < 1e-9)
+     && starts[3] - starts[0] <= tor.box.h, 'spaced evenly within the ToR\u2019s height');
+  ok(!segsOf(cache, 'data').some((sg) => sg.x0 === torX && sg.x1 !== torX && sg.y0 !== sg.y1),
+     'and no straight crossing is left among the plain segments');
+
   const dataX = new Set(segsOf(cache, 'data').flatMap((sg) => [sg.x0, sg.x1]));
   ok(!segsOf(cache, 'mgmt').some((sg) => sg.x0 === sg.x1 && dataX.has(sg.x0) && sg.x0 > rack.box.x
      && sg.x0 < rack.box.x + rack.box.w), 'mgmt never runs in data’s lane');
+}
+
+// -------------------------------------------------------- routes between picks
+// Pick two or more elements and the viewer draws only what connects them:
+// each network that joins them on its own, by its shortest routes and every
+// equally short alternative. A route only crosses networks when no single
+// one joins the two -- a server's mgmt cable is not a way onto the data
+// fabric just because both reach the same ToR.
+{
+  const m = parseLayout(readFileSync(join(root, 'examples/small.dc'), 'utf8'));
+  const between = (...paths) => routesBetween(paths.map((p) => m.resolve(p)));
+  const summary = (r) => r.pairs.map((p) => p.routes.map((x) => `${x.net}:${x.hops}`).join(' '));
+
+  const rack = between('DH1/A/R01/u05', 'DH1/A/R01/u07');
+  eq(summary(rack), ['data:2 mgmt:2'], 'two servers in one rack: both networks meet at their ToR');
+  eq(rack.links.size, 4, 'four cables: each server to the ToR, on each net');
+
+  const rows = between('DH1/A/R01/u05', 'DH1/B/R03/u07');
+  eq(summary(rows), ['data:4'], 'in different rows: only data reaches, up to the spines and down');
+  eq(rows.nets.get('data'), 10, 'by every spine, since each gives an equally short route');
+  ok(![...rows.links].some((l) => l.net === 'mgmt'), 'and no route borrows a mgmt cable to reach the data fabric');
+
+  eq(summary(between('DH1/E/R01/d01', 'DH1/E/R02/d03')), ['data:4 storage:1'],
+     'every network that joins them is shown, each by its own shortest route');
+  eq(summary(between('DH1/A/R01', 'DH1/B/R03')), ['data:2'], 'a rack stands for everything in it: two racks, their uplinks');
+  eq(between('DH1/A/R01/u05', 'DH1/A/R01/tor', 'MDF/S1/SP1/spine').pairs.length, 3, 'three picks are three pairs');
+
+  const dataOff = routesBetween([m.resolve('DH1/A/R01/u05'), m.resolve('DH1/B/R03/u07')], (net) => net !== 'data');
+  eq([dataOff.pairs[0].routes.length, dataOff.links.size], [0, 0], 'with data unticked, the two have no route');
+
+  // A layout that gives each tier its own net is only connected across them.
+  const d = parseLayout(readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8'));
+  const tiers = routesBetween([d.resolve('P1/A/R01/s1'), d.resolve('P2/A/R04/s8')]);
+  eq([tiers.pairs[0].mixed, tiers.pairs[0].routes[0].hops], [true, 6],
+     'where no one net joins them, the route crosses networks: NIC, TOR uplink, plane, and back');
+  ok(['nica', 'fabric', 'plane1'].every((n) => tiers.nets.has(n)), 'over every tier it climbs');
 }
 
 // ------------------------------------------------------------------ splices
@@ -1973,6 +2072,58 @@ ok(!matchesFilter('mxrun.tsv', 'mx.*'), 'and that dot has to be there: it is not
   eq(parseLayout('dc D\n  row A\n    rack [1..2] id=R{seq} seq=all\n  row B\n    rack [1..2] id=R{seq} seq=all\n')
     .all.filter((e) => e.kind === 'rack').map((e) => e.id), ['R1', 'R2', 'R3', 'R4'],
      'and lines in different blocks with the same seq= share one');
+  // seq=room names an enclosing kind: the count starts again in every room,
+  // as scope=room groups a link rule -- rooms whose ids repeat under
+  // different dcms included, which seq={room} would have run together.
+  const perRoom = parseLayout(['system S', '  dcm [1..2]', '    room [1..2]', '      row [1..2]',
+    '        rack [1..2] id=R{seq} seq=room', '        rack [1..1] id=R{seq} seq=room +mid',
+    '        rack [1..2] id=R{seq} seq=room', '          node u[1..2] name=s{seq} seq=room'].join('\n'));
+  eq(perRoom.warnings, [], 'seq= naming an enclosing kind parses clean');
+  eq(perRoom.all.filter((e) => e.kind === 'room').map((room) => room.children.flatMap((r) => r.children)
+    .map((k) => k.id).join(' ')), Array(4).fill('R1 R2 R3 R4 R5 R6 R7 R8 R9 R10'),
+     'seq=room numbers the racks of every room from 1, across its rows and its three rack lines');
+  // The server line sits under the third rack line only: two rows of two
+  // racks of two servers is eight to a room, counted apart from the racks.
+  eq(perRoom.byKey.get('S/2/2/2/R10/u2').name, 's8',
+     'and what it counts is kept per kind: servers numbered per room keep their own count');
+  eq(parseLayout('dc D\n  row [1..2]\n    rack [1..2] id=R{seq} seq=room\n').all
+    .filter((e) => e.kind === 'rack').map((e) => e.id), ['R1', 'R2', 'R3', 'R4'],
+     'with no room around it, seq=room is just a count called room');
+  // if= makes a line's element only where it holds, so one block can give
+  // the first row's rack 12 something the other rows' do not have. An
+  // element not made gives its number back, so the numbers stay in order.
+  const only = parseLayout(['dc D', '  room [1..2]', '    row [1..3]',
+    '      rack [1..11] id=R{seq:2} seq=room u=42',
+    '      rack 12 id=R{seq:2} seq=room u=42 if={row}=1', '        node g[1..3] role=server',
+    '      rack 12 id=R{seq:2} seq=room u=42 if={row}!=1',
+    '      rack [1..8] id=R{seq:2} seq=room u=42'].join('\n'));
+  eq(only.warnings, [], 'if= parses clean');
+  const rowsOf = (room) => only.all.filter((e) => e.kind === 'row' && e.parent.id === room);
+  eq(rowsOf('1').map((r) => `${r.children.length} ${r.children[0].id}-${r.children[19].id}`),
+     ['20 R01-R20', '20 R21-R40', '20 R41-R60'], 'every row still has twenty racks, numbered in order');
+  eq(rowsOf('1').map((r) => `${r.children[11].id}:${r.children[11].children.length}`), ['R12:3', 'R32:0', 'R52:0'],
+     'only the first row\u2019s rack 12 has anything in it');
+  eq(rowsOf('2')[0].children[11].children.length, 3, 'in every room');
+  layout(only.root);
+  // Row 1's rack 12 holds three servers; row 2's stands empty.
+  const [full, bare] = [rowsOf('1')[0].children[11], rowsOf('1')[1].children[11]];
+  eq(full.children.length > 0 && bare.children.length === 0, true, 'one rack 12 full, one empty');
+  eq(bare.box.h, full.box.h, 'an empty rack is drawn as tall as a full one');
+  full.collapsed = true;
+  layout(only.root);
+  eq(full.box.h, 44, 'while a rack collapsed by hand keeps its compact size');
+  full.collapsed = false;
+  ok(only.all.every((e) => e.attrs.if === undefined), 'if= is not kept as an attribute of what it made');
+  eq(parseLayout('dc D\n  row [1..4]\n    rack r if={row}=1|3\n').all.filter((e) => e.kind === 'rack')
+    .map((e) => e.parent.id), ['1', '3'], 'a value may list alternatives with |');
+  eq(parseLayout('dc D\n  row [1..4]\n    rack r if={row}=1,{rack}=r\n').all.filter((e) => e.kind === 'rack')
+    .length, 1, 'and conditions joined by commas must all hold');
+  eq(parseLayout('dc D\n  rack r u=12\n    node [1..12] id=u{id} if={id}=1*\n').all.filter((e) => e.kind === 'node')
+    .map((e) => e.id), ['u1', 'u10', 'u11', 'u12'], 'a value with * or ? is a glob, as in a selector');
+  ok(parseLayout('dc D\n  rack r\n    node [1..3] if=nonsense\n').warnings
+    .some((w) => /if=nonsense: each condition is \{placeholder\}=value/.test(w)), 'a condition it cannot read is reported');
+  eq(parseLayout('dc D\n  rack r\n    node [1..3] if=nonsense\n').all.filter((e) => e.kind === 'node').length, 3,
+     'and ignored, as it says');
   eq(parseLayout('dc D\n  row [1..2]\n    rack [1..2] id=R{seq} seq=r{row}\n').all
     .filter((e) => e.kind === 'rack').map((e) => e.id), ['R1', 'R2', 'R1', 'R2'],
      'a seq= with a placeholder counts per what it names: here, per row');
@@ -2639,6 +2790,16 @@ ok(!matchesFilter('mxrun.tsv', 'mx.*'), 'and that dot has to be there: it is not
   }
   for (const key of ['name', 'id', 'dir', 'color']) {
     ok(elementKeys.has(`${key}=`), `the editor offers ${key}=`);
+  }
+
+  // The Syntax panel teaches every option the editor completes. Options
+  // were added to the completions and the parser and never to the panel --
+  // the panel is what a person reads first, and it fell behind unnoticed.
+  const panel = referenceSnippets().join('\n');
+  const taught = [...elementKeys, ...offered('net data '), ...linkOpts].filter((t) => /=#?$/.test(t) && t !== 'kind=');
+  for (const key of new Set(taught)) ok(panel.includes(key), `the Syntax panel shows ${key}`);
+  for (const word of ['{seq}', '{seq:2}', 'seq=room', 'if=', 'align=center', 'splice=']) {
+    ok(panel.includes(word), `the Syntax panel shows ${word}`);
   }
 }
 

@@ -963,6 +963,38 @@ await test('routed and spliced cables are counted on screen', async () => {
   eq(await links(), 2, "isolated, a server shows its spliced data cable and its mgmt cable");
 }, { url: '?layout=examples/splice.dc' });
 
+// Picks: Shift-click (or Ctrl/⌘) a second element and only the cables on
+// the routes between them are drawn; Esc gives the floor back.
+await test('shift-click picks show only the cables between them', async () => {
+  const links = () => page.evaluate(() => {
+    const m = /([\d,]+) links/.exec(document.querySelector('#statusinfo').textContent);
+    return m ? Number(m[1].replace(/,/g, '')) : -1;
+  });
+  const all = await links();
+  const pick = async (name, nth) => {
+    await page.fill('#filter', name);
+    await page.waitForTimeout(400);
+    await page.locator('#tree .tree-row:not(.nomatch)', {
+      has: page.locator('.tree-name', { hasText: new RegExp(`^${name}$`) }),
+    }).nth(nth).click({ modifiers: ['Shift'] });
+    await page.waitForTimeout(200);
+  };
+  await pick('u05', 0);           // DH1/A/R01/u05
+  await pick('u07', 8);           // DH1/B/R03/u07
+  await page.fill('#filter', '');
+  await page.waitForTimeout(400);
+  const inspector = await page.evaluate(() => document.querySelector('#inspector').innerText);
+  ok(/2 picked/.test(inspector) && /u05 ↔ u07/.test(inspector) && /data: 4 hops/.test(inspector),
+     `the inspector names the pair and the route  (${inspector.slice(0, 80).replace(/\n/g, ' | ')})`);
+  eq(await links(), 10, 'and only the ten cables on it are drawn');
+  // The first Esc leaves the filter box, as it always has; the next one
+  // reaches the floor plan.
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(300);
+  eq(await links(), all, 'Esc forgets the picks and every cable comes back');
+}, { url: '?layout=examples/small.dc' });
+
 // module tests can prove the two source files agree; only this can prove the
 // number reaches the screen.
 await test('the About box shows the version', async () => {
