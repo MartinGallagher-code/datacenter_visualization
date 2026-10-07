@@ -35,7 +35,7 @@ export const LINK_OPTS = new Set(['scope', 'mode', 'cap', 'splice']);
 const LINK_NUMBERS = { cap: [1, 100000000], splice: [2, 1000] };
 const DEFAULT_CAP = 2000000;
 // Attributes that describe *this* element only and must not cascade to children.
-const NON_INHERITED = new Set(['id', 'name', 'at', 'u', 'cols', 'dir', 'gap', 'label', 'size']);
+const NON_INHERITED = new Set(['id', 'name', 'at', 'u', 'cols', 'dir', 'gap', 'label', 'size', 'seq']);
 
 const DEFAULT_NET_COLORS = ['#4fa3ff', '#ff9f43', '#4dd4ac', '#c986ff', '#ff6b8b', '#f5d442'];
 
@@ -119,7 +119,9 @@ function buildSyntaxTree(text, warnings) {
 
     // `rest` is kept verbatim too: link rules are positional and may repeat a
     // key (`role=server role=tor`), which the attribute object cannot hold.
-    const node = { kind, idSpec, attrs, tags, tokens: rest, children: [], indent, line: lineNo + 1 };
+    const node = {
+      kind, idSpec, attrs, tags, tokens: rest, children: [], indent, line: lineNo + 1, up: parent,
+    };
     parent.children.push(node);
     stack.push(node);
 
@@ -334,10 +336,33 @@ const PLACEHOLDER = /\{[^{}]*\}/;
 // The placeholders every line has, which a kind of the same name never hides.
 const CONTEXT_NAMES = new Set(['id', 'i', 'i0', 'n', 'seq', 'kind', 'parent', 'path']);
 
-// How many elements each line has made so far, across every parent it was
-// repeated under -- what {seq} counts. Keyed by the line's syntax node, which
-// is new on every parse, so the count starts again with each one.
-const madeBy = new WeakMap();
+// What {seq} counts. Lines of one kind side by side in one block share a
+// count -- a row's rack line split in three, so the middle four racks can
+// hold something else, still numbers its racks 1-20, then 21-40 in the next
+// row -- and a line with seq=NAME joins the count of that name instead,
+// wherever it sits. Keyed by syntax nodes, which are new on every parse, so
+// every count starts again with each one.
+const blockCounts = new WeakMap();   // syntax parent -> kind -> count
+const namedCounts = new WeakMap();   // model -> seq= name -> count
+const SEQ_USE = /\{seq(?::\d+)?\}/;
+
+function nextSeq(syn, attrs, model) {
+  let counts;
+  let key;
+  if (attrs.seq) {
+    counts = namedCounts.get(model);
+    if (!counts) namedCounts.set(model, (counts = new Map()));
+    key = attrs.seq;
+  } else {
+    const block = syn.up || syn;
+    counts = blockCounts.get(block);
+    if (!counts) blockCounts.set(block, (counts = new Map()));
+    key = syn.kind;
+  }
+  const n = (counts.get(key) || 0) + 1;
+  counts.set(key, n);
+  return n;
+}
 
 /**
  * A `{placeholder}` that survived substitution named something not in scope --
@@ -394,6 +419,9 @@ function materialize(syn, parent, model) {
   }
 
   const attrEntries = Object.entries(syn.attrs);
+  // Only lines that number themselves take a number: a ToR line beside the
+  // server line it shares a block with does not use one up.
+  const usesSeq = attrEntries.some(([, v]) => SEQ_USE.test(v)) || syn.tags.some((t) => SEQ_USE.test(t));
 
   // A node holding other elements is almost always a slipped indent: a line at
   // the same depth as its rack becomes the rack's sibling, and everything below
@@ -423,10 +451,14 @@ function materialize(syn, parent, model) {
     if (!CONTEXT_NAMES.has(syn.kind)) ctx[syn.kind] = rawId;
     // {i} restarts under every parent; {seq} carries on. `rack [1..5]
     // id=R{seq}` under `row [1..4]` is R1-R5, then R6-R10, ... -- numbers
-    // unique across the floor from one line, not one block per row.
-    const seq = (madeBy.get(syn) || 0) + 1;
-    madeBy.set(syn, seq);
-    Object.assign(ctx, { id: rawId, i: i + 1, i0: i, n: ids.length, seq, kind: syn.kind });
+    // unique across the floor from one line, not one block per row. seq=
+    // may itself carry a placeholder (seq=row{row} counts per row), so the
+    // count is taken from it once it is substituted, below.
+    Object.assign(ctx, { id: rawId, i: i + 1, i0: i, n: ids.length, seq: 0, kind: syn.kind });
+    if (usesSeq) {
+      const series = syn.attrs.seq !== undefined ? { seq: subst(syn.attrs.seq, ctx) } : {};
+      ctx.seq = nextSeq(syn, series, model);
+    }
     let attrs = syn.attrs;
     let dynamic = false;
     for (const [, v] of attrEntries) if (v.includes('{')) { dynamic = true; break; }

@@ -158,10 +158,30 @@ row [1..4]
 `[1..5]` says how many racks each row has, and `id=` gives each its number.
 `{seq:2}` pads to two digits, as a range written `R[01..20]` would — any
 whole-number placeholder takes a width, `{i:3}` is `001` — and a value that
-is not a number is left as it is. Each line keeps its own count, and it
-keeps counting however deep the repetition goes: under `room [A|B]` the same
-rack line runs on to R40. `examples/dual-plane.dc` numbers its pods' racks
-this way.
+is not a number is left as it is. The count keeps going however deep the
+repetition goes: under `room [A|B]` the same rack line runs on to R40.
+`examples/dual-plane.dc` numbers its pods' racks this way.
+
+**Lines side by side share the count.** Lines of one kind in the same block
+number as one, so a row can hold different racks in different places and
+still be numbered straight through — here the middle four racks of each row
+are network racks:
+
+```
+row [1..4]
+  rack [1..8] id=R{seq:2} u=42              # R01-R08
+    node u[01..40] role=server
+  rack [1..4] id=R{seq:2} u=42 +network     # R09-R12, the middle four
+    node agg[1..4] u=2 role=agg
+  rack [1..8] id=R{seq:2} u=42              # R13-R20; row 2 is R21-R40
+    node u[01..40] role=server
+```
+
+Only lines that use `{seq}` take a number — a `node tor` line beside a
+numbered server line does not use one up. `seq=NAME` on a line gives it the
+count of that name instead: `seq=net` keeps network racks numbered N1, N2, …
+apart from the racks beside them, lines in different blocks with the same
+`seq=` share one count, and `seq=r{row}` starts the count again in every row.
 
 This is how flat hostname-style names work: `node u[01..40]
 name={room}{rack}{id}` names every server like `wr12r06u15`, results files
@@ -184,6 +204,14 @@ without appearing in the name — see `examples/hostnames.dc`.
   unplaced children auto-fill the lowest free run of slots. A node that lands
   above the rack's declared `u=` height is reported as a warning — `at=42`
   only fits a rack at least 42 U tall.
+- **`u=` is an element's height, in U, everywhere** — the scale racks are
+  drawn to, where one U is the height of a 1U server. On a rack it is how
+  many slots the rack has, and on a rack's child how many it fills, as
+  above. Outside a rack, a device is exactly that tall (`node pdu u=4` in a
+  cage) and a container is *at least* that tall (`cage C u=60`): what its
+  children need always fits. A row made taller than its racks keeps them
+  standing on the floor, with the room above. A collapsed container keeps
+  its compact size whatever its `u=`.
 - `cols=2` / `dir=x|y` / `gap=` shape generic containers — `gap=0` packs
   children with no gutter, and omitting it keeps the per-kind default.
 - The numbers are checked: `u`, `at`, `size` and `cols` must be whole and

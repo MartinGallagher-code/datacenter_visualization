@@ -13,6 +13,14 @@ their shapes are not a promise.
 
 ## Unreleased
 
+- **`u=` sets an element's height anywhere.** It was already the height in
+  U for a rack (its slots) and for a device in one (the slots it fills);
+  outside a rack it was silently ignored, so `node pdu u=4` in a cage drew
+  the same box as one without it. Now a device outside a rack is exactly
+  that many U tall, and a container is at least that tall — what its
+  children need always fits, and a row made taller keeps its racks on the
+  floor. A collapsed container keeps its compact size. Racks and their
+  children are unchanged.
 - **A kind's placeholder works on its own line.** `{dcm}` named only an
   enclosing dcm, so on a dcm's own line it matched nothing and reached the
   floor plan as literal text, with a warning: `dcm [1,2] name=dcm-{dcm}`
@@ -26,7 +34,11 @@ their shapes are not a promise.
   restarts under each parent, so racks numbered uniquely across four rows
   took four blocks with the numbers typed into each. `{seq}` counts every
   element the line has made so far: `rack [1..5] id=R{seq}` under `row
-  [1..4]` is R1–R5, R6–R10, R11–R15, R16–R20. Each line keeps its own count.
+  [1..4]` is R1–R5, R6–R10, R11–R15, R16–R20. Lines of one kind side by
+  side in one block share the count, so a row split into three rack lines —
+  to put different racks in the middle — is still numbered straight
+  through; only lines that use `{seq}` take a number, and `seq=NAME` gives a
+  line the count of that name instead (`seq=r{row}` counts per row).
   Any whole-number placeholder now takes a width, `{seq:2}` → `07`, as a
   range written `[01..20]` pads; anything else is left as it is.
   `examples/dual-plane.dc` now makes its two pods from one block this way.

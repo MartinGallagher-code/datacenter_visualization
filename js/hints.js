@@ -24,12 +24,13 @@ const KINDS = [
 const ELEMENT_KEYS = [
   ['name=', 'display name; {room}{rack}{id} builds hostnames'],
   ['id=', 'rename an expansion: id=u{id}'],
-  ['u=', 'height in U-slots (rack children)'],
+  ['u=', 'height in U: a rack’s slots, a device’s height, a container’s least'],
   ['at=', 'pin to a U-slot: at=42'],
   ['cols=', 'grid columns for a container'],
   ['dir=', 'layout direction: x or y'],
   ['gap=', 'space between children; 0 packs them'],
   ['color=', 'fill colour: #4fa3ff, teal, rgb(1,2,3)'],
+  ['seq=', 'which {seq} count this line takes from: seq=net, seq=r{row}'],
 ];
 
 const NET_KEYS = [
@@ -345,7 +346,7 @@ const REFERENCE = [
     ['{i}', '1-based expansion index', true],
     ['{parent}', 'the parent’s id', true],
     ['{room} {row} {rack}', 'the nearest of that kind: an enclosing one, or this line’s own', true],
-    ['{seq}', 'counts on across every copy of the line: racks 1-5, 6-10, … through four rows', true],
+    ['{seq}', 'counts on across every copy of the line, and the lines beside it: racks 1-5, 6-10, …', true],
     ['{seq:2}', 'any whole number, zero-padded to two digits', true],
   ]],
   ['Attributes and tags', 'key=value inherits downward (layout keys like u=, at=, name= do not); +tag adds tags children also carry.', [
