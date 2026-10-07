@@ -29,6 +29,7 @@ const ELEMENT_KEYS = [
   ['cols=', 'grid columns for a container'],
   ['dir=', 'layout direction: x or y'],
   ['gap=', 'space between children; 0 packs them'],
+  ['align=', 'center, left or right: where each line of children sits'],
   ['color=', 'fill colour: #4fa3ff, teal, rgb(1,2,3)'],
   ['seq=', 'count per enclosing kind (seq=room) or by name (seq=net)'],
 ];
@@ -58,6 +59,7 @@ const SPLICES = ['4', '2', '8'];   // the usual breakout ratios
 const STYLES = ['solid', 'dashed'];
 const YES_NO = ['yes', 'no', 'true', 'false'];
 const DIRS = ['x', 'y'];
+const ALIGNS = ['center', 'left', 'right'];
 
 const IDENT = /^[a-z_][\w-]*$/i;
 
@@ -170,7 +172,7 @@ export function suggestionsFor(text, caret) {
       }
     } else {
       if (key) {
-        options = valueOptions(key, { dir: DIRS }, h);
+        options = valueOptions(key, { dir: DIRS, align: ALIGNS }, h);
       } else {
         options = [];
         if (idPosition) {

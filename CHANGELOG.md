@@ -13,6 +13,11 @@ their shapes are not a promise.
 
 ## Unreleased
 
+- **`align=center` (or `right`) on a container.** Children were always laid
+  out from the left, so a network layer narrower than the racks below it sat
+  against the left edge. `align=` places each line of a container's
+  children across the room it has; `left` stays the default, and an
+  `align=` that is none of these is reported and laid out from the left.
 - **`cols=` works on a row.** A row lays its racks out in one line, and
   ignored `cols=` while doing it, so a row holding a network layer above its
   racks (`row R cols=1` › `network`, `servers`) drew the two side by side.

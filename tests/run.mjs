@@ -1105,6 +1105,28 @@ layout(small.root, () => true);
   eq(new Set(rows.byKey.get('D/B').children.map((r) => r.box.y)).size, 1,
      'a row without cols= is still one line of racks');
   ok(box('D/B/2').x > box('D/B/1').x, 'side by side, in order');
+
+  // align= places each line of a container's children: a narrow network
+  // layer centred over the racks below it, instead of against the left.
+  const placed = (align) => {
+    const m = parseLayout(['dc D', `  row A cols=1 ${align}`, '    network net dir=x', '      spine [1..2]',
+      '    servers srv dir=x', '      rack [1..8] u=8'].join('\n'));
+    layout(m.root);
+    return { warnings: m.warnings, net: m.byKey.get('D/A/net').box, srv: m.byKey.get('D/A/srv').box };
+  };
+  const mid = (b) => b.x + b.w / 2;
+  const left = placed('');
+  ok(left.net.x === left.srv.x, 'with no align=, a line starts at the left');
+  const centred = placed('align=center');
+  eq(centred.warnings, [], 'align=center parses clean');
+  eq(mid(centred.net), mid(centred.srv), 'align=center puts the network layer over the middle of the racks');
+  eq(mid(placed('align=centre').net), mid(centred.net), 'and centre is the same word');
+  const right = placed('align=right');
+  eq(right.net.x + right.net.w, right.srv.x + right.srv.w, 'align=right lines up the right edges');
+  const odd = placed('align=middle');
+  ok(odd.warnings.some((w) => /align=middle is not left, center or right -- laid out from the left/.test(w)),
+     'an align= it does not know is reported');
+  eq(odd.net.x, left.net.x, 'and laid out from the left, as it says');
 }
 
 // ----------------------------------------------------------- cable routing

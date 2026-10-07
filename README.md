@@ -232,13 +232,17 @@ without appearing in the name — see `examples/hostnames.dc`.
   its compact size whatever its `u=`.
 - `cols=2` / `dir=x|y` / `gap=` shape generic containers — `gap=0` packs
   children with no gutter, and omitting it keeps the per-kind default.
+- `align=center` (or `right`; `left` is the default) places each line of a
+  container's children across the room it has — a narrow network layer
+  centred over the racks below it. An `align=` that is not one of those is
+  reported and laid out from the left.
 - A **row** lays its racks out in one line, until it says otherwise:
   `cols=` or `dir=y` makes it a grid like any other container. That is how a
   row carries a network layer above its racks — `cols=1` stacks the two, and
   `dir=x` on each keeps its own contents in one line:
 
   ```
-  row [1..4] name="Row {row}" cols=1
+  row [1..4] name="Row {row}" cols=1 align=center
     network dir=x
       spine [1..4] name=spine-{spine} role=spine
     servers dir=x

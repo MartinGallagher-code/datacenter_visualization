@@ -35,7 +35,7 @@ export const LINK_OPTS = new Set(['scope', 'mode', 'cap', 'splice']);
 const LINK_NUMBERS = { cap: [1, 100000000], splice: [2, 1000] };
 const DEFAULT_CAP = 2000000;
 // Attributes that describe *this* element only and must not cascade to children.
-const NON_INHERITED = new Set(['id', 'name', 'at', 'u', 'cols', 'dir', 'gap', 'label', 'size', 'seq']);
+const NON_INHERITED = new Set(['id', 'name', 'at', 'u', 'cols', 'dir', 'gap', 'label', 'size', 'seq', 'align']);
 
 const DEFAULT_NET_COLORS = ['#4fa3ff', '#ff9f43', '#4dd4ac', '#c986ff', '#ff6b8b', '#f5d442'];
 
@@ -232,6 +232,17 @@ function checkDir(attrs, what, model, line) {
   if (dir !== undefined && dir !== 'x' && dir !== 'y') {
     warnOnce(model, `dir\u0000${line}\u0000${dir}`,
       `line ${line}: ${what}: dir=${dir} is neither x nor y -- laid out along x`);
+  }
+}
+
+// align= places each line of a container's children; anything else would be
+// read as left without a word, which is the complaint that started it.
+const ALIGNS = new Set(['left', 'center', 'centre', 'right']);
+function checkAlign(attrs, what, model, line) {
+  const align = attrs.align;
+  if (align !== undefined && !ALIGNS.has(align)) {
+    warnOnce(model, `align\u0000${line}\u0000${align}`,
+      `line ${line}: ${what}: align=${align} is not left, center or right -- laid out from the left`);
   }
 }
 
@@ -488,6 +499,7 @@ function materialize(syn, parent, model) {
     // spec so a range of forty racks reads as the one line that needs editing.
     const wrote = `"${syn.idSpec ?? syn.kind}"`;
     checkDir(attrs, wrote, model, syn.line);
+    checkAlign(attrs, wrote, model, syn.line);
     checkNumbers(attrs, wrote, model, syn.line);
     checkColor(attrs, wrote, model, syn.line);
 

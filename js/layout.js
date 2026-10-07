@@ -115,22 +115,40 @@ function measure(el, isVisible) {
   let lineHeight = 0;
   let widest = 0;
   let col = 0;
+  const lines = [[]];
   for (const child of kids) {
     if (col === cols && cols > 0) {
       x = pad;
       y += lineHeight + gap;
       lineHeight = 0;
       col = 0;
+      lines.push([]);
     }
     child.rel = { x, y };
+    lines[lines.length - 1].push(child);
     x += child.box.w + gap;
     widest = Math.max(widest, x - gap + pad);
     lineHeight = Math.max(lineHeight, child.box.h);
     col++;
   }
+  const w = Math.max(widest, 120);
+  // align=center or right moves each line of children across the room the
+  // container has, so a narrow network layer sits centred over the racks
+  // below it rather than against the left edge.
+  const share = ALIGN_SHARE[el.attrsEff.align] || 0;
+  if (share) {
+    for (const line of lines) {
+      const last = line[line.length - 1];
+      const slack = w - pad - (last.rel.x + last.box.w);
+      for (const child of line) child.rel.x += slack * share;
+    }
+  }
   // u= is a floor, not a ceiling: what the children need always fits.
-  el.box = { x: 0, y: 0, w: Math.max(widest, 120), h: Math.max(y + lineHeight + pad, heightOf(el) * U_PX) };
+  el.box = { x: 0, y: 0, w, h: Math.max(y + lineHeight + pad, heightOf(el) * U_PX) };
 }
+
+// How much of the spare width goes to the left of each line, per align=.
+const ALIGN_SHARE = { left: 0, center: 0.5, centre: 0.5, right: 1 };
 
 /**
  * The height u= asks of an element outside a rack, in U, or 0 for none.
