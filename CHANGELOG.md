@@ -11,8 +11,83 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
-## Unreleased
+## 1.2.0 — 2026-10-09
 
+Three more ways to put load on the cables, all additive: a metric measured
+per host, switch port counters, and taking things out of service. No file
+that loaded under 1.1.0 reads differently, and no tool changed. 1.1.0 was
+never published on its own; this release carries its changes too.
+
+- **Per-host totals load the cables, as an estimate.** A metric with no
+  `peer=` — how much each host sent, not to whom — offers **load the cables
+  (estimated)**. Each host's total is sent to the other hosts measured, in
+  proportion to their own totals (the gravity model) or evenly, and routed
+  like flows. Every host sends exactly its total; the panel says the load is
+  estimated and from how many hosts. `examples/dual-plane-hosts.tsv` is a
+  set for `examples/dual-plane.dc`.
+- **Switch counters go straight onto their cables.** A sample tagged
+  `link=<neighbour>` is an interface counter: what the device sent towards
+  that neighbour, or with `dir=in` received from it, with `net=` to pick
+  between nets. Its card offers **draw on the cables**: measured load, in the
+  same colours as the model. Parallel cables share a port's value by
+  capacity, and both ends' readings of one direction are averaged rather
+  than added. Beside a routed metric the panel can show the model, the
+  counters, or **measured − model** — red where a cable carried more than the
+  model said, blue where less — with the biggest disagreements listed.
+  `examples/dual-plane-counters.tsv` is the example run as hashing really
+  placed it.
+- **What-if: take an element or a cable out.** **Take out** in the inspector,
+  or ✕ on a cable in the panel's lists, puts it out of service — an element
+  with everything inside it. The model routes round what is left and the
+  cables show the change since: red where load moved to, blue where it left,
+  with how many flows lost their route and how many cables are now past
+  full. What is out is drawn crossed through, routes between picks avoid it,
+  and it survives editing the layout; **Put all back** undoes it.
+- Every change to the project now moves the version: `CLAUDE.md` says so for
+  whoever works on it next, `docs/releasing.md` says how, and a pull request
+  that leaves the version where `main` has it fails the new **version**
+  check.
+
+## 1.1.0 — 2026-10-09
+
+New layout syntax and new viewer features, all of them additive — `gbps=`,
+`weight=` and `traffic=` included: every
+`.dc` and results file that loaded under 1.0.x loads under 1.1.0, and the
+tools take the same arguments. What a layout *looks like* can change —
+cables now leave from a device's side and crossings between containers
+curve, empty racks stand full height, and a row with `cols=` or a device
+outside a rack with `u=` is now laid out as those say instead of ignoring
+them. The only lines that read differently are ones 1.0.x warned about: a
+kind's placeholder on its own line (`dcm [1,2] name=dcm-{dcm}`) is filled
+in rather than left as literal text. Results tables are recognised by what
+is in them rather than by their extension, so files that were refused, or
+misread as the wrong format, now load as what they are.
+
+- **Cables say what they carry: `gbps=`.** On a `net` line it is the
+  capacity of every cable in the net, in Gb/s; on a `link` rule, of that
+  rule's cables, over the net's. The Networks panel prints each net's speed,
+  the inspector gives every element's cables with their capacity — a rack's
+  servers' cables inside against its uplinks leaving, which is its
+  oversubscription — and each route between picks says the most the two
+  could move over it, the capacity of its narrowest hop. **width by
+  capacity** in the Networks panel draws every cable as wide as what it
+  carries, one step wider per step of port speed, with a key. A cable with
+  no `gbps=` has no capacity, which is not zero, and is shown as such.
+- **A flow metric can load the cables.** Tick **load the cables** on a card
+  whose samples are flows (`peer=`) and every flow is routed over the
+  fabric — shortest routes, through elements tagged `+switch` only, over
+  every net but those with `traffic=no` — and summed onto each cable it
+  crosses, per direction. Each piece of cable is then drawn as wide as the
+  traffic through it and coloured by how full its fullest cable is, green to
+  red at 100% and magenta beyond. Where routes fork a flow is shared evenly
+  (ECMP), in proportion to capacity, or **hashed** — one path per flow,
+  picked pseudo-randomly, as ECMP really does it, with **Re-roll** for
+  another seed — and `weight=` on a link rule scales its cables' share. The
+  panel lists the busiest cables and anything it could not route; the
+  inspector gives an element's traffic out and in against its capacity.
+  `examples/dual-plane.dc` now carries capacities, and
+  `examples/dual-plane-flows.tsv` loads it with an incast past 100%. The
+  routing is in the new `js/traffic.js`.
 - **Cables between containers curve, and fan out where they meet.** A cable
   crossing from one rack or container to another used to run straight
   between the two lanes, so every uplink left its ToR from the same point

@@ -1,0 +1,104 @@
+# Switch port counters for examples/dual-plane.dc, for "draw on the cables".
+#
+# Each line is one switch port: what the switch sent towards the neighbour
+# link= names (dir=out), or received from it (dir=in), in Gb/s, on the net
+# net= names. A cable between two switches is reported by one end.
+#
+# They were taken while examples/dual-plane-flows.tsv ran -- the same flows,
+# but hashed onto their paths the way ECMP really does it, not shared evenly,
+# plus two flows that file never mentions (R03/s7 and s8 to R04). Load both,
+# tick "load the cables" on the flows and "draw on the cables" here, and pick
+# "measured − model". Hashing put six of R01's eight servers on NIC b, and
+# five of those flows up one uplink: 200 Gb/s on a 100G cable, where the model
+# shares every R01 uplink evenly at 80%. Its other three uplinks carry 40.
+# And the cables the background flows crossed, in R03 and R04, carry what the
+# model never knew about.
+!test	port_gbps	unit=Gb/s	decimals=1	short=PORT	label="Switch port counters"
+port_gbps	R01/tora	40.0	link=R01/s1	net=nica	dir=in
+port_gbps	R01/tora	40.0	link=R01/s2	net=nica	dir=in
+port_gbps	R01/tora	40.0	link=SP1/spine1	net=fabric	dir=out
+port_gbps	R01/tora	40.0	link=SP1/spine2	net=fabric	dir=out
+port_gbps	R01/torb	40.0	link=R01/s3	net=nicb	dir=in
+port_gbps	R01/torb	40.0	link=R01/s4	net=nicb	dir=in
+port_gbps	R01/torb	40.0	link=R01/s5	net=nicb	dir=in
+port_gbps	R01/torb	40.0	link=R01/s6	net=nicb	dir=in
+port_gbps	R01/torb	40.0	link=R01/s7	net=nicb	dir=in
+port_gbps	R01/torb	40.0	link=R01/s8	net=nicb	dir=in
+port_gbps	R01/torb	200.0	link=SP1/spine1	net=fabric	dir=out
+port_gbps	R01/torb	40.0	link=SP1/spine2	net=fabric	dir=out
+port_gbps	R02/tora	15.0	link=R02/s1	net=nica	dir=in
+port_gbps	R02/tora	15.0	link=R02/s2	net=nica	dir=out
+port_gbps	R02/tora	20.0	link=R02/s5	net=nica	dir=out
+port_gbps	R02/tora	20.0	link=SP1/spine1	net=fabric	dir=in
+port_gbps	R02/torb	60.0	link=R02/s5	net=nicb	dir=out
+port_gbps	R02/torb	30.0	link=SP1/spine1	net=fabric	dir=in
+port_gbps	R02/torb	30.0	link=SP1/spine2	net=fabric	dir=in
+port_gbps	R03/tora	40.0	link=R03/s3	net=nica	dir=out
+port_gbps	R03/tora	40.0	link=R03/s4	net=nica	dir=out
+port_gbps	R03/tora	9.0	link=R03/s7	net=nica	dir=in
+port_gbps	R03/tora	40.0	link=R03/s7	net=nica	dir=out
+port_gbps	R03/tora	9.0	link=R03/s8	net=nica	dir=in
+port_gbps	R03/tora	40.0	link=R03/s8	net=nica	dir=out
+port_gbps	R03/tora	160.0	link=SP2/spine1	net=fabric	dir=in
+port_gbps	R03/tora	9.0	link=SP2/spine1	net=fabric	dir=out
+port_gbps	R03/tora	9.0	link=SP2/spine2	net=fabric	dir=out
+port_gbps	R03/torb	40.0	link=R03/s1	net=nicb	dir=out
+port_gbps	R03/torb	40.0	link=R03/s2	net=nicb	dir=out
+port_gbps	R03/torb	40.0	link=R03/s5	net=nicb	dir=out
+port_gbps	R03/torb	40.0	link=R03/s6	net=nicb	dir=out
+port_gbps	R03/torb	9.0	link=R03/s7	net=nicb	dir=in
+port_gbps	R03/torb	9.0	link=R03/s8	net=nicb	dir=in
+port_gbps	R03/torb	80.0	link=SP2/spine1	net=fabric	dir=in
+port_gbps	R03/torb	9.0	link=SP2/spine1	net=fabric	dir=out
+port_gbps	R03/torb	80.0	link=SP2/spine2	net=fabric	dir=in
+port_gbps	R03/torb	9.0	link=SP2/spine2	net=fabric	dir=out
+port_gbps	R04/tora	10.0	link=R04/s1	net=nica	dir=in
+port_gbps	R04/tora	10.0	link=R04/s3	net=nica	dir=in
+port_gbps	R04/tora	10.0	link=R04/s5	net=nica	dir=in
+port_gbps	R04/tora	9.0	link=R04/s7	net=nica	dir=out
+port_gbps	R04/tora	10.0	link=R04/s8	net=nica	dir=in
+port_gbps	R04/tora	9.0	link=R04/s8	net=nica	dir=out
+port_gbps	R04/tora	9.0	link=SP2/spine1	net=fabric	dir=in
+port_gbps	R04/tora	30.0	link=SP2/spine1	net=fabric	dir=out
+port_gbps	R04/tora	9.0	link=SP2/spine2	net=fabric	dir=in
+port_gbps	R04/tora	10.0	link=SP2/spine2	net=fabric	dir=out
+port_gbps	R04/torb	10.0	link=R04/s2	net=nicb	dir=in
+port_gbps	R04/torb	10.0	link=R04/s4	net=nicb	dir=in
+port_gbps	R04/torb	10.0	link=R04/s6	net=nicb	dir=in
+port_gbps	R04/torb	10.0	link=R04/s7	net=nicb	dir=in
+port_gbps	R04/torb	9.0	link=R04/s7	net=nicb	dir=out
+port_gbps	R04/torb	9.0	link=R04/s8	net=nicb	dir=out
+port_gbps	R04/torb	9.0	link=SP2/spine1	net=fabric	dir=in
+port_gbps	R04/torb	20.0	link=SP2/spine1	net=fabric	dir=out
+port_gbps	R04/torb	9.0	link=SP2/spine2	net=fabric	dir=in
+port_gbps	R04/torb	20.0	link=SP2/spine2	net=fabric	dir=out
+port_gbps	SS1/ss1	80.0	link=SP1/spine1	net=plane1	dir=in
+port_gbps	SS1/ss1	10.0	link=SP1/spine1	net=plane1	dir=out
+port_gbps	SS1/ss1	10.0	link=SP2/spine1	net=plane1	dir=in
+port_gbps	SS1/ss1	80.0	link=SP2/spine1	net=plane1	dir=out
+port_gbps	SS1/ss2	40.0	link=SP1/spine1	net=plane1	dir=in
+port_gbps	SS1/ss2	10.0	link=SP1/spine1	net=plane1	dir=out
+port_gbps	SS1/ss2	10.0	link=SP2/spine1	net=plane1	dir=in
+port_gbps	SS1/ss2	40.0	link=SP2/spine1	net=plane1	dir=out
+port_gbps	SS1/ss3	10.0	link=SP1/spine1	net=plane1	dir=out
+port_gbps	SS1/ss3	10.0	link=SP2/spine1	net=plane1	dir=in
+port_gbps	SS1/ss4	40.0	link=SP1/spine1	net=plane1	dir=in
+port_gbps	SS1/ss4	10.0	link=SP1/spine1	net=plane1	dir=out
+port_gbps	SS1/ss4	10.0	link=SP2/spine1	net=plane1	dir=in
+port_gbps	SS1/ss4	40.0	link=SP2/spine1	net=plane1	dir=out
+port_gbps	SS1/ss5	40.0	link=SP1/spine1	net=plane1	dir=in
+port_gbps	SS1/ss5	40.0	link=SP2/spine1	net=plane1	dir=out
+port_gbps	SS1/ss6	40.0	link=SP1/spine1	net=plane1	dir=in
+port_gbps	SS1/ss6	10.0	link=SP1/spine1	net=plane1	dir=out
+port_gbps	SS1/ss6	10.0	link=SP2/spine1	net=plane1	dir=in
+port_gbps	SS1/ss6	40.0	link=SP2/spine1	net=plane1	dir=out
+port_gbps	SS2/ss1	40.0	link=SP1/spine2	net=plane2	dir=in
+port_gbps	SS2/ss1	10.0	link=SP1/spine2	net=plane2	dir=out
+port_gbps	SS2/ss1	10.0	link=SP2/spine2	net=plane2	dir=in
+port_gbps	SS2/ss1	40.0	link=SP2/spine2	net=plane2	dir=out
+port_gbps	SS2/ss2	10.0	link=SP1/spine2	net=plane2	dir=out
+port_gbps	SS2/ss2	10.0	link=SP2/spine2	net=plane2	dir=in
+port_gbps	SS2/ss3	10.0	link=SP1/spine2	net=plane2	dir=out
+port_gbps	SS2/ss3	10.0	link=SP2/spine2	net=plane2	dir=in
+port_gbps	SS2/ss5	40.0	link=SP1/spine2	net=plane2	dir=in
+port_gbps	SS2/ss5	40.0	link=SP2/spine2	net=plane2	dir=out

@@ -39,6 +39,25 @@ in `js/` is not a major bump.
 - **Major** — an old file no longer loads the way it did, or a tool flag
   changes meaning.
 
+## Every change moves the version
+
+A pull request into `main` carries its own version bump — the four edits
+below, at the size the table above gives its change — and its own
+`CHANGELOG.md` section. Nothing waits under an "Unreleased" heading for
+somebody to remember to number it: that is how ten pull requests once
+reached `main` while the About box, `--version` and PyPI all still said
+1.0.1.
+
+The **version** job in `.github/workflows/tests.yml` holds pull requests to
+it: it fails when the version in the pull request is not greater than the
+one on its base branch. A change that is only documentation or tests is
+still a change, and takes a patch.
+
+A number that is in `main` but not yet tagged is fine — several can pass
+before anyone runs the release workflow, which publishes whatever `main`
+says. One that is never published on its own says so in its successor's
+changelog entry.
+
 ## Cutting a release
 
 1. Bump both files, the `README.md` "Current version" line, and add the

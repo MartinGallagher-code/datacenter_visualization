@@ -11,7 +11,7 @@
 // of the view actually changes.
 
 import { labelOf } from './layout.js';
-import { colorFor, contrastInk } from './palette.js';
+import { colorFor, contrastInk, ramp } from './palette.js';
 import { formatValue, isStandardized, overlayValue, zRangeOf, zScore } from './results.js';
 import { routeCables } from './route.js';
 
@@ -154,6 +154,7 @@ export class Renderer {
     const root = this.state.model.root;
     if (root && root.box) this.drawElement(root);
     this.drawLinks();
+    this.drawTakenOut();
     this.drawFlows();
     this.drawEndpoints();
     this.drawSelection();
@@ -422,10 +423,15 @@ export class Renderer {
     const routes = state.between ? state.between() : null;
     const keep = routes ? routes.links : null;
     const only = !keep && state.isolateLinks ? state.selected : null;
+    // Traffic on the cables, or failing that their capacity, redraws every
+    // piece by what passes through it -- a different layout of the same
+    // cables, so the cache is keyed by it too.
+    const load = state.cableView ? state.cableView() : null;
+    const capacity = !load && !!state.capacityView;
     const cache = this.linkCache;
     if (cache.version !== state.version || cache.bucket !== bucket || cache.only !== only
-        || cache.keep !== keep) {
-      this.rebuildLinkCache(bucket, only, keep);
+        || cache.keep !== keep || cache.load !== load || cache.capacity !== capacity) {
+      this.rebuildLinkCache(bucket, only, keep, load, capacity);
     }
 
     const ctx = this.ctx;
@@ -473,10 +479,20 @@ export class Renderer {
       }
       this.stats.links += drawn;
 
+      const alpha = Math.max(0.02, state.linkOpacity * density);
       ctx.strokeStyle = net.color;
-      ctx.globalAlpha = Math.max(0.02, state.linkOpacity * density);
+      ctx.globalAlpha = alpha;
       if (net.style === 'dashed') ctx.setLineDash([5 / scale, 4 / scale]);
       else ctx.setLineDash([]);
+      // Drawn by traffic or capacity, a piece's key is its style rather than
+      // a bare width: its own colour (or the net's), and idle pieces quieter
+      // than busy ones, which must not fade to a haze with the rest.
+      const styled = (key) => {
+        if (typeof key === 'number') return key;
+        ctx.strokeStyle = key.color || net.color;
+        ctx.globalAlpha = key.idle ? alpha * 0.6 : Math.max(0.75, alpha);
+        return key.width;
+      };
 
       // Stroked a batch at a time per line width. Within a stroke,
       // overlapping pieces paint once rather than piling up opacity where
@@ -487,8 +503,8 @@ export class Renderer {
       // stroking them draws nothing but the cost.
       const tiny = 0.75 / scale;
       let budget = maxSegments;
-      for (const [width, segs] of routed.segs) {
-        ctx.lineWidth = width / scale;
+      for (const [key, segs] of routed.segs) {
+        ctx.lineWidth = styled(key) / scale;
         let batch = 0;
         ctx.beginPath();
         for (let i = 0; i < segs.length && budget > 0; i += 4) {
@@ -515,8 +531,8 @@ export class Renderer {
       // fade to a haze, where a curve costs half as much again to stroke and
       // cannot be told from a line. Culled by the box round their points.
       const curved = state.curvedCables !== false && this.linkCache.total <= CURVE_LIMIT;
-      for (const [width, pts] of routed.curves || []) {
-        ctx.lineWidth = width / scale;
+      for (const [key, pts] of routed.curves || []) {
+        ctx.lineWidth = styled(key) / scale;
         let batch = 0;
         ctx.beginPath();
         for (let i = 0; i < pts.length && budget > 0; i += 8) {
@@ -547,6 +563,67 @@ export class Renderer {
 
     ctx.setLineDash([]);
     ctx.globalAlpha = 1;
+  }
+
+  /**
+   * What-if: what is taken out stays on the floor, marked as out. A cable is
+   * a dashed red line between the two ends it joined; an element is crossed
+   * through. Drawn whatever the cable view, so taking something out always
+   * shows.
+   */
+  drawTakenOut() {
+    const state = this.state;
+    if (!state.takenOut || !state.down || !(state.down.els.size || state.down.links.size)) return;
+    const { els, links } = state.takenOut();
+    const ctx = this.ctx;
+    const scale = this.camera.scale;
+    ctx.save();
+    ctx.strokeStyle = TAKEN_OUT;
+    ctx.globalAlpha = 0.9;
+    ctx.lineWidth = 2 / scale;
+    ctx.setLineDash([5 / scale, 4 / scale]);
+    for (const link of links) {
+      const a = state.drawnEndpoint(link.a);
+      const b = state.drawnEndpoint(link.b);
+      if (!a || !b || a === b || !a.box || !b.box) continue;
+      const ax = a.box.x + a.box.w / 2;
+      const ay = a.box.y + a.box.h / 2;
+      const bx = b.box.x + b.box.w / 2;
+      const by = b.box.y + b.box.h / 2;
+      if (!this.segmentVisible(ax, ay, bx, by)) continue;
+      ctx.beginPath();
+      ctx.moveTo(ax, ay);
+      ctx.lineTo(bx, by);
+      ctx.stroke();
+      const mx = (ax + bx) / 2;
+      const my = (ay + by) / 2;
+      const r = 4 / scale;
+      ctx.setLineDash([]);
+      ctx.beginPath();
+      ctx.moveTo(mx - r, my - r);
+      ctx.lineTo(mx + r, my + r);
+      ctx.moveTo(mx + r, my - r);
+      ctx.lineTo(mx - r, my + r);
+      ctx.stroke();
+      ctx.setLineDash([5 / scale, 4 / scale]);
+    }
+    ctx.setLineDash([]);
+    for (const el of els) {
+      // Inside a collapsed rack it is the rack that shows; crossing that out
+      // would say the whole rack was taken out.
+      if (state.drawnEndpoint(el) !== el) continue;
+      const b = el.box;
+      if (!b || !this.intersects(b)) continue;
+      ctx.lineWidth = 2 / scale;
+      ctx.strokeRect(b.x, b.y, b.w, b.h);
+      ctx.beginPath();
+      ctx.moveTo(b.x, b.y);
+      ctx.lineTo(b.x + b.w, b.y + b.h);
+      ctx.moveTo(b.x + b.w, b.y);
+      ctx.lineTo(b.x, b.y + b.h);
+      ctx.stroke();
+    }
+    ctx.restore();
   }
 
   /**
@@ -745,12 +822,25 @@ export class Renderer {
    * rather than forty coincident thin ones -- then lay every cable out along
    * the lanes beside the blocks it joins.
    */
-  rebuildLinkCache(bucket, only = null, keep = null) {
+  rebuildLinkCache(bucket, only = null, keep = null, load = null, capacity = false) {
     const state = this.state;
     const scale = this.camera.scale;
     const seen = new Map();
     const edges = [];
     const lodCache = new Map();
+
+    // What one link adds to the piece it is drawn in, a to b and b to a: its
+    // routed traffic and utilization -- or, drawing capacity, its gbps= both
+    // ways, and again in the slot the utilization takes, which keeps the
+    // largest along a piece: a lane is as wide as the fastest cable in it.
+    const measured = !!(load || capacity);
+    const share = (link) => {
+      if (capacity) return [link.gbps || 0, link.gbps || 0, link.gbps || null];
+      return load.share(link);
+    };
+    // The value kept along a piece is the one furthest from nothing: the
+    // fullest cable, or the biggest change either way.
+    const worse = (a, b) => (b === null ? a : a === null || Math.abs(b) > Math.abs(a) ? b : a);
 
     // The block actually painted for an endpoint: its outermost collapsed
     // ancestor, or the container the LOD cutoff stopped recursing at.
@@ -769,22 +859,36 @@ export class Renderer {
       return block;
     };
 
-    const addEdge = (net, a, b) => {
+    // a and b are the blocks painted for link.a and link.b, in that order,
+    // which is what orients the link's two directions onto the edge's.
+    const addEdge = (net, a, b, link) => {
       const key = a.key < b.key ? `${net} ${a.key} ${b.key}` : `${net} ${b.key} ${a.key}`;
-      const existing = seen.get(key);
-      if (existing) { existing.count++; return; }
-      const edge = { net, a, b, count: 1 };
-      seen.set(key, edge);
-      edges.push(edge);
+      let edge = seen.get(key);
+      if (edge) edge.count++;
+      else {
+        edge = { net, a, b, count: 1, t: measured ? { ab: 0, ba: 0, worst: null } : undefined };
+        seen.set(key, edge);
+        edges.push(edge);
+      }
+      if (!measured) return;
+      const [x, y, u] = share(link);
+      const fwd = a === edge.a;
+      edge.t.ab += fwd ? x : y;
+      edge.t.ba += fwd ? y : x;
+      edge.t.worst = worse(edge.t.worst, u);
     };
 
     // Spliced cables are gathered per splice first: whether one still draws
     // as a splice depends on what its members are painted as.
     const spliced = new Map();
 
+    // What-if: a cable taken out is not drawn as a cable; drawTakenOut marks
+    // where it was.
+    const down = state.isDown && (state.down && (state.down.els.size || state.down.links.size));
     for (const link of state.model.links) {
       const net = state.model.nets.get(link.net);
       if (!net || !net.enabled) continue;
+      if (down && state.isDown(link)) continue;
       const a = paintedBlock(link.a);
       const b = paintedBlock(link.b);
       if (!a || !b || a === b) continue;
@@ -793,16 +897,17 @@ export class Renderer {
       // selection, inside it, or the collapsed block standing in for it.
       if (only && !sharesLineage(a, only) && !sharesLineage(b, only)) continue;
       const sp = link.splice;
-      if (!sp) { addEdge(link.net, a, b); continue; }
+      if (!sp) { addEdge(link.net, a, b, link); continue; }
       const toIsA = sp.to === link.a;
       let rec = spliced.get(sp);
-      if (!rec) spliced.set(sp, (rec = { sp, to: toIsA ? a : b, members: new Map() }));
+      if (!rec) spliced.set(sp, (rec = { sp, to: toIsA ? a : b, members: new Map(), links: [] }));
       const member = toIsA ? b : a;
       rec.members.set(member, (rec.members.get(member) || 0) + 1);
+      rec.links.push({ link, a, b, member, toIsA });
     }
 
     const splices = [];
-    for (const { sp, to, members } of spliced.values()) {
+    for (const { sp, to, members, links } of spliced.values()) {
       const blocks = [...members.keys()];
       // Still a splice while its members are drawn as themselves. Once they
       // are all inside one collapsed block, the splice is inside it too and
@@ -810,9 +915,30 @@ export class Renderer {
       const parent = blocks[0].parent;
       const intact = blocks.every((m) => sp.members.includes(m) && m.parent === parent);
       if (intact) {
-        splices.push({ net: sp.net, members: blocks, to, count: blocks.length });
+        const splice = { net: sp.net, members: blocks, to, count: blocks.length };
+        if (measured) {
+          // Each member's own cable into the marker, and the one trunk on from
+          // it, which carries all of theirs.
+          const ends = new Map();
+          const trunk = { ab: 0, ba: 0, worst: null };
+          for (const { link, member, toIsA } of links) {
+            const [x, y, u] = share(link);
+            const sent = toIsA ? y : x;
+            const got = toIsA ? x : y;
+            let end = ends.get(member);
+            if (!end) ends.set(member, (end = { out: 0, in: 0, worst: null }));
+            end.out += sent;
+            end.in += got;
+            end.worst = worse(end.worst, u);
+            trunk.ab += sent;
+            trunk.ba += got;
+            trunk.worst = worse(trunk.worst, u);
+          }
+          splice.t = { members: ends, trunk };
+        }
+        splices.push(splice);
       } else {
-        for (const [m, n] of members) for (let i = 0; i < n; i++) addEdge(sp.net, m, to);
+        for (const { link, a, b } of links) addEdge(sp.net, a, b, link);
       }
     }
 
@@ -825,11 +951,14 @@ export class Renderer {
       if (trunk) return base * SPLICE_TRUNK;
       return base * (count > 1 ? Math.min(4, 1 + Math.log2(count)) : 1);
     };
-    const routed = routeCables(edges, splices, (name) => order.get(name) ?? 0, widthOf);
+    const styleOf = measured ? cableStyler(load, capacity) : null;
+    const routed = routeCables(edges, splices, (name) => order.get(name) ?? 0, widthOf, styleOf);
 
     let total = 0;
     for (const net of routed.nets.values()) total += net.cables.length;
-    this.linkCache = { version: state.version, bucket, only, keep, nets: routed.nets, total, ports: routed.ports };
+    this.linkCache = {
+      version: state.version, bucket, only, keep, load, capacity, nets: routed.nets, total, ports: routed.ports,
+    };
   }
 
   // ---------------------------------------------------------------- selection
@@ -872,6 +1001,69 @@ export class Renderer {
 
 const LOD_RECURSE = 9;   // stop descending once a container is this many px wide
 
+// Cable load colours. Utilization runs green to red across 0-100%; past 100%
+// is its own colour, since demand above what the cable carries is a different
+// finding from a cable that is merely full. Loaded cables with no gbps= are
+// grey, beside ones that have one; with no capacity anywhere, the colour is
+// the load against the busiest piece instead.
+export const LOAD_COLORS = { over: '#ff40ff', unknown: '#9aa4b2' };
+const TAKEN_OUT = '#ff5c5c';
+export const loadColor = (util) => (util > 1.0005 ? LOAD_COLORS.over : ramp('health', util));
+// A change, -1..1 of the scale: red where more is carried than before (or
+// than the model said), blue where less, pale where nothing moved.
+export const changeColor = (v) => ramp('rdbu', 0.5 - Math.max(-1, Math.min(1, v)) / 2);
+const MIN_LOAD_W = 1.25;
+const MAX_LOAD_W = 7;
+
+/**
+ * How wide a cable of this capacity is drawn: on a log scale, because port
+ * speeds come in steps of 2.5 to 4 -- 1G, 10G, 25G, 100G, 400G -- and each
+ * step should read as one step wider, not swamp the one below.
+ */
+export const capacityWidth = (gbps) => Math.round(
+  Math.min(8.5, Math.max(MIN_LOAD_W, MIN_LOAD_W + 0.85 * Math.log2(Math.max(1, gbps)))) * 2) / 2;
+
+/**
+ * The style for each piece of cable drawn by traffic or capacity, interned so
+ * the router can group pieces by it: a few dozen distinct styles, however
+ * many pieces. Width is the traffic (or capacity) on a square-root scale
+ * against the busiest piece in view, so a lane that gathers sixteen cables
+ * reads heavier than one, without one trunk flattening everything else.
+ */
+function cableStyler(load, capacity) {
+  const styles = new Map();
+  // rank orders the strokes: idle first, then the fuller (or faster) on top,
+  // so a full cable is never painted over by a quiet one beside it.
+  const intern = (width, color, idle, rank) => {
+    const key = `${width}|${color}|${idle ? 1 : 0}`;
+    let style = styles.get(key);
+    if (!style) styles.set(key, (style = { width, color, idle, rank }));
+    return style;
+  };
+  const anyCapacity = !!(load && load.anyCapacity);
+  const colour = load ? load.colour : 'capacity';
+  const span = (load && load.span) || 1;
+  return (amount, worst, max) => {
+    // Drawing capacity, `worst` is the fastest cable along the piece.
+    if (capacity) return worst ? intern(capacityWidth(worst), null, false, worst) : intern(1, null, true, -1);
+    if (!(amount > 0) || !(max > 0)) return intern(1, null, true, -1);
+    const f = Math.min(1, amount / max);
+    const width = Math.round((MIN_LOAD_W + (MAX_LOAD_W - MIN_LOAD_W) * Math.sqrt(f)) * 2) / 2;
+    if (colour === 'diff') {
+      if (worst === null) return intern(width, LOAD_COLORS.unknown, false, 0);
+      const v = Math.round(Math.max(-1, Math.min(1, worst / span)) * 20) / 20;
+      return intern(width, changeColor(v), false, Math.abs(v));
+    }
+    if (worst !== null) {
+      const u = worst > 1.0005 ? 2 : Math.round(worst * 20) / 20;
+      return intern(width, u > 1 ? LOAD_COLORS.over : ramp('health', u), false, u);
+    }
+    if (anyCapacity) return intern(width, LOAD_COLORS.unknown, false, 0);
+    const step = Math.round(f * 10) / 10;
+    return intern(width, ramp('plasma', 0.3 + 0.7 * step), false, step);
+  };
+}
+
 // The one cable on from a splice is drawn heavier than the ones gathered into
 // it: it is the same cable as each of them and stands for all of them.
 const SPLICE_TRUNK = 1.6;
@@ -912,9 +1104,18 @@ export function linkSummary(el) {
       if (seen.has(link)) continue;
       seen.add(link);
       let rec = byNet.get(link.net);
-      if (!rec) byNet.set(link.net, (rec = { inside: 0, out: 0 }));
-      if (inside(link.a) && inside(link.b)) rec.inside++;
+      if (!rec) byNet.set(link.net, (rec = { inside: 0, out: 0, gbpsIn: 0, gbpsOut: 0, unknown: 0, speeds: new Set() }));
+      const internal = inside(link.a) && inside(link.b);
+      if (internal) rec.inside++;
       else rec.out++;
+      // What the cables can carry, kept apart the same way: for a rack, its
+      // servers' cables against its uplinks is the oversubscription.
+      if (!link.gbps) rec.unknown++;
+      else {
+        rec.speeds.add(link.gbps);
+        if (internal) rec.gbpsIn += link.gbps;
+        else rec.gbpsOut += link.gbps;
+      }
     }
     for (const child of node.children) walk(child);
   };

@@ -127,6 +127,10 @@ Insert template (above) drops in a commented starting point."></textarea>
       <label class="chk" title="Cables between racks and containers drawn as curves that leave each device sideways, or as straight lines">
         <input type="checkbox" id="curved-cables" checked> curved cables
       </label>
+      <label class="chk" title="Draw each cable as thick as what it can carry (gbps= on its net or link rule), when no traffic is loaded onto the cables">
+        <input type="checkbox" id="cable-capacity"> width by capacity
+      </label>
+      <div id="cable-load"></div>
     </section>
 
     <section class="block">

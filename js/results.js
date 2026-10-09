@@ -582,6 +582,11 @@ export function bindOverlay(overlay, model) {
   // of one. Those are kept whole, alongside the aggregate, so the pair can be
   // read back: which peer, and what the number was for that peer.
   const flowsByEl = new Map();
+  // A sample tagged `link=` measured a cable instead: an interface counter on
+  // the target's port towards that neighbour -- what a switch says it sent
+  // (or, with dir=in, received). Kept whole the same way, to be drawn on the
+  // cable it names.
+  const cablesByEl = new Map();
 
   for (const sample of overlay.samples) {
     // resolveWhere rather than resolve: a target that names several elements
@@ -606,6 +611,20 @@ export function bindOverlay(overlay, model) {
       const bucket = flowsByEl.get(el.key);
       if (bucket) bucket.push(flow);
       else flowsByEl.set(el.key, [flow]);
+    }
+    const toward = sample.meta && sample.meta.link;
+    if (toward) {
+      const counter = {
+        to: toward,
+        toEl: model.resolve(toward),
+        net: sample.meta.net || '',
+        received: String(sample.meta.dir || '').toLowerCase() === 'in',
+        value: sample.value,
+        numeric: sample.numeric,
+      };
+      const bucket = cablesByEl.get(el.key);
+      if (bucket) bucket.push(counter);
+      else cablesByEl.set(el.key, [counter]);
     }
   }
 
@@ -638,6 +657,8 @@ export function bindOverlay(overlay, model) {
     source: overlay.source || '',
     flowsByEl,
     hasFlows: flowsByEl.size > 0,
+    cablesByEl,
+    hasCables: cablesByEl.size > 0,
     sampleCount: overlay.samples.length,
     unresolved: [...unresolved],
     // Targets that named more than one element. The reading went to the

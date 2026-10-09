@@ -16,8 +16,9 @@
 // Two directives are not elements:
 //
 //     net <name> [color=#rrggbb] [label="..."] [style=solid|dashed] [width=1]
+//         [gbps=N] [traffic=no]
 //     link <net> <selectorA> [<selectorB>] [scope=rack] [mode=star|mesh|chain|ring|pair]
-//          [cap=N] [splice=N]
+//          [cap=N] [splice=N] [gbps=N] [weight=N]
 //
 // Scale notes: a hyperscale campus is a few hundred thousand elements, so the
 // element records lean on structural sharing -- inherited attributes live on the
@@ -31,8 +32,12 @@ import { compileSelector, globToRegExp, hasGlob } from './select.js';
 // sorted key and drawn as one line, so there is no reverse to wire -- and a
 // per-rule label reached every link object and no part of the UI. Both are
 // gone rather than left looking like settings.
-export const LINK_OPTS = new Set(['scope', 'mode', 'cap', 'splice']);
+export const LINK_OPTS = new Set(['scope', 'mode', 'cap', 'splice', 'gbps', 'weight']);
 const LINK_NUMBERS = { cap: [1, 100000000], splice: [2, 1000] };
+// What a cable can carry, and its share of the traffic at a fork. Both may be
+// fractional: a 100 Mb/s mgmt port is gbps=0.1.
+export const GBPS_RANGE = [0.001, 1000000];
+const LINK_REALS = { gbps: GBPS_RANGE, weight: [0.01, 1000] };
 const DEFAULT_CAP = 2000000;
 // Attributes that describe *this* element only and must not cascade to children.
 const NON_INHERITED = new Set(['id', 'name', 'at', 'u', 'cols', 'dir', 'gap', 'label', 'size', 'seq', 'align', 'if']);
@@ -146,7 +151,7 @@ export const NUMBERS = {
   u: [1, 1000], at: [1, 1000], size: [1, 1000], cols: [1, 1000], gap: [0, 1000],
 };
 // A net's line width is the one number that may be fractional.
-const NET_NUMBERS = { width: [0.1, 100] };
+const NET_NUMBERS = { width: [0.1, 100], gbps: GBPS_RANGE };
 
 /**
  * One reading of a number attribute, so the check and the use cannot drift
@@ -655,6 +660,12 @@ function buildLinks(rules, model) {
         + 'matches onto cables to the second, so it needs two selectors and mode=star -- ignored');
       splice = 0;
     }
+    // A cable's capacity is its rule's gbps=, or else its net's; a rule that
+    // gives none and a net that gives none leave it unknown, which is not
+    // zero -- the cable-load view says so rather than painting it full.
+    const net = model.nets.get(rule.net);
+    const gbps = numAttr(rule.gbps, null, LINK_REALS.gbps) ?? (net ? net.gbps : null);
+    const weight = numAttr(rule.weight, 1, LINK_REALS.weight);
     let made = 0;
     let unpaired = 0;
     let matchedA = 0;
@@ -683,7 +694,7 @@ function buildLinks(rules, model) {
       const sig = netIndex * 0x100000000000 + x.n * 0x100000 + y.n;
       if (seen.has(sig)) return null;
       seen.add(sig);
-      const link = { net: rule.net, a: x, b: y };
+      const link = { net: rule.net, a: x, b: y, gbps, weight };
       links.push(link);
       if (x.links === NO_LINKS) x.links = [];
       if (y.links === NO_LINKS) y.links = [];
@@ -847,12 +858,26 @@ const truthy = (value) => {
         }
         checkNumbers(child.attrs, `net "${name}"`, model, child.line, NET_NUMBERS, false);
         checkColor(child.attrs, `net "${name}"`, model, child.line);
+        // traffic=no: the net is there to be drawn, not to carry what the
+        // cable-load view routes -- out-of-band mgmt beside a data fabric,
+        // which would otherwise take an equal share of every flow it ties with.
+        let traffic = true;
+        if (child.attrs.traffic !== undefined) {
+          traffic = truthy(child.attrs.traffic);
+          if (traffic === null) {
+            model.warnings.push(`line ${child.line}: net "${name}": `
+              + `traffic=${child.attrs.traffic} is neither yes nor no -- it carries traffic`);
+            traffic = true;
+          }
+        }
         model.nets.set(name, {
           name,
           label: child.attrs.label || name,
           color: child.attrs.color || DEFAULT_NET_COLORS[model.nets.size % DEFAULT_NET_COLORS.length],
           style: child.attrs.style || 'solid',
           width: numAttr(child.attrs.width, 1, NET_NUMBERS.width),
+          gbps: numAttr(child.attrs.gbps, null, NET_NUMBERS.gbps),
+          traffic,
           enabled,
         });
       } else if (child.kind === 'link') {
@@ -865,6 +890,7 @@ const truthy = (value) => {
           else positional.push(tok);
         }
         checkNumbers(opts, `net "${child.idSpec}"`, model, child.line, LINK_NUMBERS);
+        checkNumbers(opts, `net "${child.idSpec}"`, model, child.line, LINK_REALS, false);
         const selA = positional.shift();
         const selB = positional.shift();
         // A rule wires at most two selectors and dropped the rest without a
@@ -917,6 +943,8 @@ const truthy = (value) => {
         color: DEFAULT_NET_COLORS[model.nets.size % DEFAULT_NET_COLORS.length],
         style: 'solid',
         width: 1,
+        gbps: null,
+        traffic: true,
         enabled: null,
       });
     }

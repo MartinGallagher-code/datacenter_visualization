@@ -1,0 +1,39 @@
+# Per-host totals for examples/dual-plane.dc: how much each server sent, in
+# Gb/s, with no word on where to. Tick "load the cables (estimated)": each
+# host's total is sent to the others in proportion to their own totals (the
+# gravity model planners use to guess a traffic matrix), routed over the
+# fabric, and drawn on the cables. R01 is the busy rack, and R02/s5 the one
+# hot server in a quiet one.
+!test	egress_gbps	unit=Gb/s	decimals=1	short=EGR	label="Egress per server"
+egress_gbps	R01/s1	30
+egress_gbps	R01/s2	32
+egress_gbps	R01/s3	29
+egress_gbps	R01/s4	31
+egress_gbps	R01/s5	28
+egress_gbps	R01/s6	30
+egress_gbps	R01/s7	32
+egress_gbps	R01/s8	29
+egress_gbps	R02/s1	8
+egress_gbps	R02/s2	10
+egress_gbps	R02/s3	7
+egress_gbps	R02/s4	9
+egress_gbps	R02/s5	45
+egress_gbps	R02/s6	8
+egress_gbps	R02/s7	10
+egress_gbps	R02/s8	7
+egress_gbps	R03/s1	22
+egress_gbps	R03/s2	24
+egress_gbps	R03/s3	21
+egress_gbps	R03/s4	23
+egress_gbps	R03/s5	20
+egress_gbps	R03/s6	22
+egress_gbps	R03/s7	24
+egress_gbps	R03/s8	21
+egress_gbps	R04/s1	12
+egress_gbps	R04/s2	14
+egress_gbps	R04/s3	11
+egress_gbps	R04/s4	13
+egress_gbps	R04/s5	10
+egress_gbps	R04/s6	12
+egress_gbps	R04/s7	14
+egress_gbps	R04/s8	11

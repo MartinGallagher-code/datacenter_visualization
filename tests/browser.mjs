@@ -995,6 +995,94 @@ await test('shift-click picks show only the cables between them', async () => {
   eq(await links(), all, 'Esc forgets the picks and every cable comes back');
 }, { url: '?layout=examples/small.dc' });
 
+// Cable load: a flow metric routed over the fabric and drawn on the cables it
+// crosses. The example's incast lands 160% on two NICs.
+await test('a flow metric loads the cables', async () => {
+  const panel = () => page.evaluate(() => document.querySelector('#cable-load').innerText);
+  eq(await panel(), '', 'nothing is loaded until asked');
+  await page.locator('#overlays .overlay-head input[type=checkbox]').first().check();
+  await page.waitForTimeout(200);
+  const box = page.locator('#overlays label', { hasText: 'load the cables' }).locator('input');
+  ok(await box.isEnabled(), 'a flow metric in Gb/s offers to load the cables');
+  await box.check();
+  await page.waitForTimeout(400);
+  const text = await panel();
+  ok(/17 of 17 flows routed/.test(text), `every flow is routed  (${text.slice(0, 120).replace(/\n/g, ' | ')})`);
+  ok(/R02\/tor[ab] → R02\/s5\s+40G\/25G · 160%/.test(text), 'the busiest cable is the incast, past full');
+  ok(/forwarded only by the 24 elements tagged \+switch/.test(text), 'and it says what forwards');
+
+  await page.locator('#cable-load select').selectOption('hashed');
+  await page.waitForTimeout(300);
+  ok(await page.locator('#cable-load button', { hasText: 'Re-roll' }).count() === 1, 'hashed routing can be rolled again');
+
+  // Its inspector: a rack's uplinks, against what they carry.
+  await page.fill('#filter', 'R01');
+  await page.waitForTimeout(400);
+  await page.locator('#tree .tree-row:not(.nomatch) .tree-name', { hasText: /^R01$/ }).first().click();
+  await page.fill('#filter', '');
+  await page.waitForTimeout(300);
+  const inspector = await page.evaluate(() => document.querySelector('#inspector').innerText);
+  ok(/fabric ×4 \(all leaving\) · 400G leaving/.test(inspector), 'the inspector gives a rack’s uplink capacity');
+  ok(/CABLE LOAD|Cable load/.test(inspector) && /out 320Gb\/s/.test(inspector.replace(/\s+/g, ' ')),
+     'and what they carry out of it');
+
+  await page.locator('#overlays .overlay-head input[type=checkbox]').first().uncheck();
+  await page.waitForTimeout(300);
+  eq(await panel(), '', 'unticking the metric takes its load off the cables');
+  await page.check('#cable-capacity');
+  await page.waitForTimeout(300);
+  ok(/25G\s+100G/.test(await panel()), 'width by capacity has a key of the speeds in the layout');
+}, { url: '?layout=examples/dual-plane.dc&results=examples/dual-plane-flows.tsv' });
+
+// Counters beside the model, measured against it, and what-if: take a spine
+// out and see where its traffic goes.
+await test('counters, the model, and taking a spine out', async () => {
+  const panel = () => page.evaluate(() => document.querySelector('#cable-load').innerText);
+  const ticks = page.locator('#overlays .overlay-head input[type=checkbox]');
+  await ticks.nth(0).check();
+  await page.waitForTimeout(200);
+  await page.locator('#overlays label', { hasText: /^load the cables$/ }).locator('input').check();
+  await ticks.nth(1).check();
+  await page.waitForTimeout(200);
+  await page.locator('#overlays label', { hasText: 'draw on the cables' }).locator('input').check();
+  await page.waitForTimeout(400);
+  const options = await page.locator('#cable-load select.cable-view option').allTextContents();
+  eq(options, ['Offered load', 'Switch port counters (measured)', 'measured − model'],
+     'with flows and counters loaded, the cables can show either, or one against the other');
+  ok(/127 cables measured/.test(await panel()), 'the counters land on their cables');
+  await page.locator('#cable-load select.cable-view').selectOption('diff');
+  await page.waitForTimeout(400);
+  ok(/Biggest differences from the model\s+R01\/torb → SP1\/spine1\s+\+120G · \+120%/.test(await panel()),
+     'measured against the model, the hashed uplink stands out');
+
+  await page.locator('#cable-load select.cable-view').selectOption('model');
+  await page.fill('#filter', 'spine1');
+  await page.waitForTimeout(400);
+  await page.locator('#tree .tree-row:not(.nomatch) .tree-name', { hasText: /^spine1$/ }).first().click();
+  await page.fill('#filter', '');
+  await page.waitForTimeout(300);
+  await page.locator('#inspector button', { hasText: 'Take out' }).click();
+  await page.waitForTimeout(400);
+  const after = await panel();
+  ok(/What-if: 1 taken out/.test(after) && /every flow still has a route/.test(after),
+     `the what-if names what is out and what it cost  (${after.slice(0, 160).replace(/\n/g, ' | ')})`);
+  ok(/Biggest changes\s+R01\/tor[ab] → SP1\/spine2\s+\+80G/.test(after), 'and shows where the traffic went');
+  ok(await page.locator('#inspector button', { hasText: 'Put back' }).count() === 1, 'the inspector offers to put it back');
+  await page.locator('#cable-load button', { hasText: 'Put all back' }).click();
+  await page.waitForTimeout(300);
+  ok(!/What-if/.test(await panel()), 'and Put all back does');
+}, { url: '?layout=examples/dual-plane.dc&results=examples/dual-plane-flows.tsv,examples/dual-plane-counters.tsv' });
+
+await test('per-host totals load the cables as an estimate', async () => {
+  await page.locator('#overlays .overlay-head input[type=checkbox]').first().check();
+  await page.waitForTimeout(200);
+  await page.locator('#overlays label', { hasText: 'load the cables (estimated)' }).locator('input').check();
+  await page.waitForTimeout(400);
+  const text = await page.evaluate(() => document.querySelector('#cable-load').innerText);
+  ok(/estimated from 32 hosts’ totals/.test(text), 'the panel says it is an estimate, and from how many hosts');
+  ok(/R02\/s5 → R02\/tor[ab]\s+22\.5G\/25G · 90%/.test(text), 'the hot server’s NICs are the busiest cables');
+}, { url: '?layout=examples/dual-plane.dc&results=examples/dual-plane-hosts.tsv' });
+
 // module tests can prove the two source files agree; only this can prove the
 // number reaches the screen.
 await test('the About box shows the version', async () => {

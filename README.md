@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.0.1** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.2.0** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -249,8 +249,12 @@ made either. A condition that cannot be read is reported and ignored, and
   and `uplinks=` / `uplink_gbps=` on racks are the hardware binnacle's
   [`reckon`](#reckon--binnacle-grades-a-run-against-the-hardware) grades a
   test run against — one `nic_gbps=25` on a row covers every server in it.
+  What the viewer itself draws as capacity is `gbps=` on a net or a link
+  rule — see [Capacity](#capacity-what-a-cable-carries).
 - `+tag` tags are free-form keywords; every element can carry many, and every
-  element also carries its ancestors' tags. `+a,b,c` adds three at once.
+  element also carries its ancestors' tags. `+a,b,c` adds three at once. One
+  tag means something to the viewer: [cable load](#cable-load-where-a-flow-metric-lands)
+  forwards traffic only through elements tagged `+switch`.
 - Rack children: `u=4` gives a node 4 U of height, `at=42` pins it to a slot;
   unplaced children auto-fill the lowest free run of slots. A node that lands
   above the rack's declared `u=` height is reported as a warning — `at=42`
@@ -414,6 +418,187 @@ never reads as a device.
   cables do.
 
 `examples/splice.dc` is a small floor wired this way.
+
+### Capacity: what a cable carries
+
+`gbps=` says how much a cable can carry, in Gb/s. On a `net` line it covers
+every cable in the net; on a `link` rule it covers that rule's cables and wins
+over the net's:
+
+```
+net nica    gbps=25                            # 25G NICs
+net fabric  gbps=100                           # 100G above
+net mgmt    gbps=1 traffic=no                  # drawn, but carries no load
+link nica   role=server role=tor scope=rack splice=4
+link fabric role=tor role=spine
+link fabric role=tor role=spine,model=new* gbps=400   # these uplinks are 400G
+```
+
+- Fractions are fine: a 100 Mb/s console port is `gbps=0.1`. A value that is
+  not a number from 0.001 to 1,000,000 is reported and ignored.
+- A cable with no `gbps=` from its rule or its net has **no capacity**, which
+  is not zero: the views below say so rather than painting it full.
+- A splice is a breakout: four 25G cables into one marker are a 100G trunk.
+- Parallel cables are rules written twice (as in `examples/dual-plane.dc`,
+  four cables from every spine to every superspine); each carries its own
+  `gbps=`, and they add up.
+
+Where the capacity shows:
+
+- **The Networks panel** puts each net's speed beside its name (`25G`, or
+  `25G–400G` where rules differ), and marks a `traffic=no` net.
+- **The inspector** gives every element's cables with what they carry: a
+  server's `nica ×1 · 25G each`; a rack's `nica ×8 (all internal) · 200G
+  inside` against `fabric ×4 (all leaving) · 400G leaving` — its
+  oversubscription, at a glance.
+- **Between picks**, each route says the most the two could move over it —
+  the capacity of its narrowest hop, all that hop's cables together (`data: 4
+  hops · up to 25Gb/s` for two servers; a rack's uplinks for two racks).
+- **width by capacity** in the Networks panel draws every cable as wide as
+  what it carries, on a scale where each step of port speed — 1G, 10G, 25G,
+  100G, 400G — is one step wider, with a key of the speeds in the layout. A
+  lane beside a rack is as wide as the fastest cable in it.
+
+### Cable load: where a flow metric lands
+
+A flow metric (samples tagged `peer=` — what `iperf_orchestrator`, `mx export
+--peers` and any `a -> b` table write) says how much one host sent to another.
+Tick **load the cables** on its card and the viewer works out which cables
+that traffic crossed and draws each one by what it carries:
+
+- **Width** is the traffic through that piece of cable. A rack's lane
+  thickens on its way to the ToR, as it gathers its servers' cables.
+- **Colour** is how full the fullest cable at that point is: its busier
+  direction against its `gbps=`, green through yellow to red at 100%, and
+  **magenta past 100%** — more offered than the cable can take. Cables
+  carrying traffic with no `gbps=` are grey; idle ones stay, faint, in their
+  net's colour. With no capacity anywhere, colour is the load against the
+  busiest cable.
+- **The panel** names the busiest cables (`R02/torb → R02/s5 40G/25G ·
+  160%`; click one to go to it), how many flows were routed, and any that
+  could not be and why. **The inspector** gives the selected element's
+  traffic out and in against its capacity, per net — for a rack, over its
+  uplinks — and its busiest cables.
+
+How a flow is routed, which is a model, not a measurement — the measurement
+is end to end, and only switch counters see the cables themselves:
+
+- Each flow takes the **shortest routes**, in hops, from the sample's target
+  to its peer: the target is the sender. Over `examples/dual-plane.dc` that is
+  NIC, ToR, spine, plane and back down.
+- **Only switches forward.** A server with two NICs is not a path between its
+  two ToRs. Switches are the elements tagged `+switch`; a layout that tags
+  nothing that way forwards through everything, and the panel says which. A
+  flow with no way through switches — between servers cabled only to each
+  other in a ring — is listed as not routed; tag the hosts that do forward
+  `+switch` and it goes.
+- **`traffic=no`** on a net keeps it out: out-of-band mgmt beside the data
+  fabric would otherwise take an equal share of every flow it ties with.
+- Where several cables continue a shortest route the flow is **shared**, by
+  the panel's choice:
+  - **even split (ECMP)** — an equal share per cable, as a fluid;
+  - **split by capacity** — shares in proportion to `gbps=`, as weighted ECMP
+    spreads over unequal links;
+  - **hashed: one path per flow** — each flow takes *one* cable at every
+    fork, picked pseudo-randomly per flow, which is what ECMP hashing really
+    does: a handful of big flows can land on the same uplink and overload it
+    while its neighbour idles. **Re-roll** hashes again with another seed.
+- **`weight=`** on a link rule scales its cables' share in every mode —
+  `weight=3` takes three times what a weight-1 cable beside it does.
+- A pair's samples are reduced by the card's own aggregation (the mean of a
+  run's passes, by default). The metric must be a rate (`unit=Gb/s`, `Mb/s`,
+  `MB/s`, `pps`, … — or a name like `iperf_mbps_out`) or a volume; a bit or
+  byte rate is set against capacity, anything else loads without one. A
+  percentage or a latency does not add up along a path, and is not offered.
+- Loads are kept per direction: a cable is full duplex, so 20 Gb/s each way
+  on a 25G cable is 80%, not 160%.
+
+`examples/dual-plane-flows.tsv` loads `examples/dual-plane.dc`: one rack's
+servers sending 40 Gb/s each across the planes — 80% of their NICs and their
+rack's uplinks — and an incast of eight servers into one, 160% of the two
+NICs it lands on. Switch to **hashed** and each 40 Gb/s flow takes one NIC,
+not two.
+
+#### Per-host totals: an estimate
+
+A metric measured per host, with no `peer=` — `mx_egress_gbps`, or any
+`egress_gbps <host> 30` — says how much each host sent but not to whom. Its
+card offers **load the cables (estimated)**: each host's total is sent to the
+other hosts measured, then routed like flows.
+
+- **to each host by its own total** (the default) sends more to the hosts
+  that are busy themselves — the *gravity model*, the standard first guess at
+  a traffic matrix from per-host volumes. A host sending 10 among hosts
+  totalling 10 and 20 sends them a third and two thirds.
+- **evenly to every other host** sends each the same share.
+- Every host still sends exactly its total; what is a guess is only where it
+  goes. The panel says the load is estimated and from how many hosts, and an
+  estimate is always shared as a fluid — **hashed** routes it as an even
+  split, since one path per guessed flow would read as a measurement.
+- Only devices count as hosts: a reading on a rack or a room is left out,
+  and the panel says how many were.
+- The metric must be a rate (`unit=Gb/s`, `pps`, …, or a name like
+  `mx_egress_gbps`). A temperature or a bare count is not offered.
+
+`examples/dual-plane-hosts.tsv` gives each server of `examples/dual-plane.dc`
+a total: a busy rack, and one hot server in a quiet one.
+
+#### Switch counters: measured, on the cable
+
+Interface counters say what each cable actually carried. Write one sample per
+switch port, naming the neighbour the port faces with `link=`:
+
+```
+!test port_gbps unit=Gb/s label="Switch port counters"
+port_gbps  R01/torb  200  link=SP1/spine1  net=fabric            # sent towards spine1
+port_gbps  R01/torb   40  link=R01/s3      net=nicb    dir=in    # received from s3
+```
+
+- The value is what the device **sent** towards that neighbour; `dir=in`
+  makes it what it **received** from it.
+- `net=` picks the net when two cables of different nets join the same two
+  elements (a server's data and mgmt to one ToR). Parallel cables of one net —
+  four uplinks to the same spine — share the port's value in proportion to
+  their capacity.
+- Both ends of a cable often report it, one as sent and one as received:
+  those are two readings of the same traffic, and are averaged, not added.
+- Samples over time reduce by the card's aggregation, as everywhere.
+- A counter naming two elements with no cable between them is listed in the
+  panel rather than drawn somewhere wrong.
+
+The card offers **draw on the cables**: the counters, measured rather than
+routed, drawn in the same colours and widths as the model. With a routed
+metric loaded too, the panel's **Show** choice offers the model, the
+counters, and **measured − model**: each cable coloured by how far the
+measurement is from what the model said — red where it carried more, blue
+where less, as a share of the cable's capacity — with the biggest
+disagreements listed. That is where hashing put more than its share, or where
+traffic runs that the flow metric never mentioned.
+
+`examples/dual-plane-counters.tsv` is the counters for the run in
+`examples/dual-plane-flows.tsv`, as ECMP hashing really placed it plus two
+flows the flows file does not know about: one R01 uplink carries 200 Gb/s
+where the model has 80.
+
+#### What-if: take something out
+
+Select an element and press **Take out** in the inspector, or press the ✕ on
+a cable in the panel's lists, and it is out of service:
+
+- A cable taken out carries nothing; an element taken out carries nothing
+  and neither does anything inside it — take out a rack and its servers'
+  flows go with it, listed as *taken out*.
+- The model routes round what is left, and the **Show** choice switches to
+  **change since taking out**: every cable coloured by how its load moved —
+  red where it took more, blue where it lost it — with the biggest changes
+  listed. The panel says how many flows lost their route and how many cables
+  are now past full against before.
+- What is out stays on the floor, marked: an element crossed through, a cable
+  as a dashed red line between its two ends. Routes between picks go round it
+  too.
+- Each is a chip in the panel's what-if box; click one to put it back, or
+  **Put all back**. Taken-out cables and elements are remembered by name, so
+  editing the layout keeps the what-if.
 
 ## The results file (`.tsv`)
 
@@ -1203,9 +1388,18 @@ quietly left stale.
   filter bar selects the hosts that measured a flow to that host, globs
   included. **A flow is not a cable**: mx and iperf measure end to end, so a
   flow between two servers in one rack really crossed server → ToR → server,
-  and neither tool can say how the traffic divided across the hops. For
-  per-cable numbers you need switch interface counters, which are a different
-  measurement entirely.
+  and neither tool can say how the traffic divided across the hops. **load
+  the cables** models it — routes every flow over the fabric and draws each
+  cable by what lands on it (see [Cable load](#cable-load-where-a-flow-metric-lands));
+  measured per-cable numbers still need switch interface counters.
+- **Cable load and capacity** — with a metric loaded onto the cables, the
+  Networks panel holds what the cables show (model, counters, the two
+  compared, or the change since taking something out), the colour key, the
+  split (even, by capacity, or hashed with **Re-roll**), the spread for an
+  estimate, the what-if, and the busiest cables or biggest changes; **width
+  by capacity** draws each cable by its `gbps=` instead. See
+  [Capacity](#capacity-what-a-cable-carries) and
+  [Cable load](#cable-load-where-a-flow-metric-lands).
 - **Inspector** — click an element for its tags (click a tag to filter by
   it), attributes, U-slot, link counts, and all its readings. Cables hang off
   the leaf devices, so a rack, row or room reports **links below** instead:
@@ -1247,13 +1441,24 @@ examples/mega.dc          scale test (~256k elements on one page)
 examples/hostnames.dc     flat hostname naming (wr12r06u15 style)
 examples/splice.dc        four servers spliced into each cable to the ToR
 examples/dual-plane.dc    dual-homed servers, spliced to TOR a and TOR b,
-                          spines per pod and two planes of superspines
+                          spines per pod and two planes of superspines, with
+                          every net's capacity
+examples/dual-plane-flows.tsv  flows for it: one rack across the planes at 80%,
+                          and an incast at 160% -- tick "load the cables"
+examples/dual-plane-counters.tsv  switch port counters for the same run, as
+                          hashing placed it: compare them with the model
+examples/dual-plane-hosts.tsv  per-server totals, for the estimated load
 examples/iperf/          a floor plan using every layout feature, with a real
                          export-overlay run painted over it (see its README)
 examples/hostnames-results.tsv  results addressed by flat name
 examples/mx/              every layout construct, painted by a real mx run
 examples/live/            three wide TSV tables in one folder: the format that
                           needs no layout file, and what "Load all" loads
+js/traffic.js             cable load: flows routed over the fabric (shortest
+                          routes, through +switch elements, shared evenly, by
+                          capacity, or hashed), per-host totals estimated by
+                          the gravity model, switch counters onto their
+                          cables, comparisons, and what-if
 js/tsv.js                 the wide-table reader: detection, the arrow that
                           makes a host a flow, tail -n, and the floor plan
                           read out of hostnames
