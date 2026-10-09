@@ -11,6 +11,11 @@
 #
 # The two NICs are two nets, so each server's a and b cables leave from
 # opposite sides of it and never draw on top of each other.
+#
+# Every net says what its cables carry (gbps=): 25G NICs, so each four-way
+# splice is a 100G breakout, and 100G everywhere above. Load
+# examples/dual-plane-flows.tsv with it and tick "load the cables" on its
+# metric to see where that traffic lands.
 
 dc LAB name="Dual-plane fabric" cols=1
 
@@ -44,12 +49,12 @@ dc LAB name="Dual-plane fabric" cols=1
 
 # ---- networks -------------------------------------------------------------
 
-net nica    label="NIC a"              color=#4fa3ff
-net nicb    label="NIC b"              color=#ff9f43
-net peer    label="TOR a - TOR b"      color=#f5d442
-net fabric  label="TOR to spine"       color=#4dd4ac
-net plane1  label="Plane 1"            color=#c986ff
-net plane2  label="Plane 2"            color=#ff6b8b
+net nica    label="NIC a"              color=#4fa3ff  gbps=25
+net nicb    label="NIC b"              color=#ff9f43  gbps=25
+net peer    label="TOR a - TOR b"      color=#f5d442  gbps=100
+net fabric  label="TOR to spine"       color=#4dd4ac  gbps=100
+net plane1  label="Plane 1"            color=#c986ff  gbps=100
+net plane2  label="Plane 2"            color=#ff6b8b  gbps=100
 
 # Servers to their own rack's TORs, four servers spliced into each cable.
 link nica   role=server role=tor,nic=a  scope=rack splice=4

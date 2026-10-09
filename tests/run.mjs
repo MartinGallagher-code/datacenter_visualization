@@ -28,7 +28,12 @@ import {
 } from '../js/results.js';
 import { layout, U_PX } from '../js/layout.js';
 import { routesBetween } from '../js/paths.js';
-import { Renderer, linkSummary, sharesLineage, spliceSummary } from '../js/render.js';
+import {
+  Renderer, capacityWidth, LOAD_COLORS, linkSummary, loadColor, sharesLineage, spliceSummary,
+} from '../js/render.js';
+import {
+  bitRate, busiest, cablesOf, flowsOf, formatGbps, loadable, loadUnit, routeTraffic, utilOf,
+} from '../js/traffic.js';
 import { CURVE_REACH, FAN_GAP, LANE, SPLICE_W } from '../js/route.js';
 import { compileQuery, applyFilter } from '../js/filter.js';
 import { ramp, categoricalColor, colorFor, contrastInk } from '../js/palette.js';
@@ -997,8 +1002,9 @@ ok(matchesPattern('room-wr01.tsv', 'room'), 'a bare word is a substring, as in t
   const rack = linkSummary(small.resolve('DH1/A/R01'));
   // 20 servers x (data + mgmt) to their own ToR stay inside; the ToR's four
   // spine uplinks leave.
-  eq(rack.get('data'), { inside: 20, out: 4 }, 'rack data cables, inside vs leaving');
-  eq(rack.get('mgmt'), { inside: 20, out: 0 }, 'mgmt stays within the rack');
+  const counted = (rec) => ({ inside: rec.inside, out: rec.out });
+  eq(counted(rack.get('data')), { inside: 20, out: 4 }, 'rack data cables, inside vs leaving');
+  eq(counted(rack.get('mgmt')), { inside: 20, out: 0 }, 'mgmt stays within the rack');
 
   // A room rolls its racks up, and the storage mesh that spans a row is
   // internal at room level though it leaves each rack.
@@ -1276,6 +1282,190 @@ const segsOf = (cache, net) => {
   eq([tiers.pairs[0].mixed, tiers.pairs[0].routes[0].hops], [true, 6],
      'where no one net joins them, the route crosses networks: NIC, TOR uplink, plane, and back');
   ok(['nica', 'fabric', 'plane1'].every((n) => tiers.nets.has(n)), 'over every tier it climbs');
+}
+
+// ------------------------------------------------------- capacity and traffic
+// gbps= says what a cable carries; a flow metric loaded onto the cables is
+// routed over the fabric the way it would travel -- shortest routes, shared
+// where they fork, through switches only -- and summed onto every cable.
+{
+  const text = [
+    'dc D',
+    '  rack R1 u=10',
+    '    node tor role=tor +switch',
+    '    node s[1..2] role=server',
+    '  rack R2 u=10',
+    '    node tor role=tor +switch',
+    '    node s[1..2] role=server',
+    '  rack SP u=10',
+    '    node spine[1..2] role=spine +switch',
+    'net data gbps=25',
+    'net up gbps=100',
+    'net mgmt gbps=1 traffic=no',
+    'link data role=server role=tor scope=rack',
+    'link mgmt role=server role=tor scope=rack',
+    'link up role=tor spine1',
+    'link up role=tor spine2 gbps=300 weight=3',
+  ].join('\n');
+  const m = parseLayout(text);
+  eq(m.warnings, [], 'capacity, weight and traffic= parse without a word');
+  eq([m.nets.get('data').gbps, m.nets.get('up').gbps, m.nets.get('mgmt').traffic], [25, 100, false],
+     'a net carries its gbps= and traffic=no');
+  const up1 = m.links.find((l) => l.net === 'up' && l.b.name === 'spine1');
+  const up2 = m.links.find((l) => l.net === 'up' && l.b.name === 'spine2');
+  eq([up1.gbps, up1.weight, up2.gbps, up2.weight], [100, 1, 300, 3],
+     'a link rule’s gbps= and weight= override the net’s, and default to it and to 1');
+  const bad = parseLayout('dc D\n  node a\n  node b\nnet x gbps=fast traffic=sometimes\nlink x a b gbps=-1 weight=0');
+  eq(bad.warnings.length, 4, 'a gbps=, weight= or traffic= that is not one is reported');
+  eq([bad.nets.get('x').gbps, bad.nets.get('x').traffic, bad.links[0].gbps, bad.links[0].weight], [null, true, null, 1],
+     'and falls back: no capacity, carries traffic, weight 1');
+
+  // Units: the factor to Gb/s, from unit= or else the metric's name.
+  eq([bitRate('Gb/s'), bitRate('Mbps'), bitRate('MB/s'), bitRate('kbit/s'), bitRate('bps'), bitRate('pps')],
+     [1, 0.001, 0.008, 1e-6, 1e-9, null], 'bit and byte rates read as Gb/s, and pps does not');
+  eq(loadUnit({ unit: '', name: 'iperf_mbps_out' }).toGbps, 0.001, 'a unit can come from the metric’s name');
+  eq(loadUnit({ unit: '', name: 'Gb/s' }).toGbps, 1, 'or be the whole name, as a wide TSV column is');
+  const pps = loadUnit({ unit: 'pps', name: 'mx_pps' });
+  eq([pps.ok, pps.toGbps], [true, null], 'packets a second load the cables, but against no capacity');
+  ok(!loadUnit({ unit: '%', name: 'iperf_rel_median' }).ok, 'a percentage does not add up along a path');
+  ok(!loadUnit({ unit: 'us', name: 'rtt' }).ok, 'nor does a latency');
+
+  const overlayOf = (results) => bindOverlay([...parseResults(results).values()][0], m);
+  const ov = overlayOf([
+    '!test gbps unit=Gb/s',
+    'gbps R1/s1 18 peer=R2/s1',
+    'gbps R1/s1 22 peer=R2/s1',
+    'gbps R1/s2 5 peer=nowhere',
+  ].join('\n'));
+  ok(loadable(ov), 'a flow metric in Gb/s can load the cables');
+  const { flows, unresolved } = flowsOf(ov, m);
+  eq(flows.map((f) => [f.src.name, f.dst.path, f.value]), [['s1', 'D/R2/s1', 20]],
+     'one flow per pair, its samples reduced by the metric’s aggregation');
+  eq(unresolved, 1, 'a peer the layout does not have is counted');
+
+  const at = (r, link) => r.loads.get(link) || [0, 0];
+  const s1 = m.resolve('R1/s1');
+  const nic = s1.links.find((l) => l.net === 'data');
+  const mgmt = s1.links.find((l) => l.net === 'mgmt');
+  const r1tor = m.resolve('R1/tor');
+  const upOf = (spine) => r1tor.links.find((l) => l.net === 'up' && l.b.name === spine);
+
+  const even = routeTraffic(m, flows, { split: 'even' });
+  eq([even.routed, even.delivered, even.unrouted.length], [1, 20, 0], 'the flow is routed whole');
+  const sent = nic.a === s1 ? at(even, nic)[0] : at(even, nic)[1];
+  eq(sent, 20, 'its NIC cable carries all of it, in the direction it was sent');
+  eq(Math.min(...at(even, nic)), 0, 'and nothing the other way: a cable is full duplex');
+  eq(utilOf(nic, at(even, nic), 1), 0.8, '20 Gb/s on a 25G cable is 80% used');
+  eq(at(even, mgmt), [0, 0], 'a traffic=no net carries none of it, though it reaches the same ToR');
+  eq([Math.max(...at(even, upOf('spine1'))), Math.max(...at(even, upOf('spine2')))], [5, 15],
+     'where routes fork it is shared by weight=: one share to spine1, three to spine2');
+
+  const byCap = routeTraffic(m, flows, { split: 'capacity' });
+  eq([Math.max(...at(byCap, upOf('spine1'))), Math.max(...at(byCap, upOf('spine2')))], [2, 18],
+     'split by capacity, the 300G uplink at weight 3 takes nine shares to the 100G one’s one');
+
+  const rolls = new Set();
+  for (let seed = 1; seed <= 24; seed++) {
+    const r = routeTraffic(m, flows, { split: 'hashed', seed });
+    const a = Math.max(...at(r, upOf('spine1')));
+    const b = Math.max(...at(r, upOf('spine2')));
+    ok((a === 20 && b === 0) || (a === 0 && b === 20), `hashed, seed ${seed}: the whole flow takes one uplink`);
+    rolls.add(a ? 'spine1' : 'spine2');
+  }
+  eq(rolls.size, 2, 'and another seed can put it on the other');
+  const again = routeTraffic(m, flows, { split: 'hashed', seed: 7 });
+  eq([...again.loads].map(([l, x]) => x), [...routeTraffic(m, flows, { split: 'hashed', seed: 7 }).loads].map(([l, x]) => x),
+     'the same seed always rolls the same way');
+
+  // Not routed, and why.
+  const lonely = parseLayout('dc D\n  node a +switch\n  node b +switch\n  node c\nnet x\nlink x a b');
+  const ab = routeTraffic(lonely, [
+    { id: 0, src: lonely.resolve('a'), dst: lonely.resolve('c'), value: 1 },
+    { id: 1, src: lonely.resolve('a'), dst: lonely.resolve('a'), value: 1 },
+  ]);
+  eq(ab.unrouted.map((u) => u.why), ['c has no cables', 'from an element to itself'], 'a flow that cannot go says why');
+
+  // Only switches forward: a dual-homed server is not a path between its two
+  // ToRs, even where it ties with the one through a spine.
+  const dual = parseLayout([
+    'dc D',
+    '  node tora +switch',
+    '  node torb +switch',
+    '  node spine +switch',
+    '  node x',
+    '  node y',
+    '  node h',
+    'net n gbps=10',
+    'link n x tora',
+    'link n y torb',
+    'link n h tora',
+    'link n h torb',
+    'link n tora spine',
+    'link n torb spine',
+  ].join('\n'));
+  const xy = routeTraffic(dual, [{ id: 0, src: dual.resolve('x'), dst: dual.resolve('y'), value: 8 }]);
+  const h = dual.resolve('h');
+  eq(h.links.map((l) => Math.max(...(xy.loads.get(l) || [0, 0]))), [0, 0],
+     'nothing passes through a host, however short the way through it');
+  eq(xy.switches, 3, 'the switches are the elements tagged +switch');
+  const ring = parseLayout('dc D\n  node sw +switch\n  node p\n  node q\n  node r\nnet n\nlink n p q\nlink n q r\nlink n p sw');
+  eq(routeTraffic(ring, [{ id: 0, src: ring.resolve('p'), dst: ring.resolve('r'), value: 1 }]).unrouted.map((u) => u.why),
+     ['no route through +switch elements'], 'servers cabled only to each other do not forward, and it says so');
+  const untagged = parseLayout('dc D\n  node a\n  node b\n  node c\nnet n\nlink n a b\nlink n b c');
+  const abc = routeTraffic(untagged, [{ id: 0, src: untagged.resolve('a'), dst: untagged.resolve('c'), value: 1 }]);
+  eq([abc.switches, abc.routed], [0, 1], 'a layout that tags nothing +switch forwards through everything');
+
+  // What an element's cables carry: a rack's are its uplinks.
+  const rack = cablesOf(m.resolve('R1'), even, 1);
+  eq([...rack.keys()], ['up'], 'a container’s cables are the ones leaving it');
+  const upRec = rack.get('up');
+  eq([upRec.cables, upRec.gbps, upRec.out, upRec.in], [2, 400, 20, 0], 'with their capacity and the traffic out and in');
+  ok(busiest(even, 1, 1)[0].link === nic, 'the busiest cable is the fullest one');
+  eq([formatGbps(25), formatGbps(1600), formatGbps(0.1), formatGbps(2.5)], ['25G', '1.6T', '100M', '2.5G'],
+     'capacities print the way they are written');
+
+  // Between picks: the narrowest hop's capacity bounds what two can move.
+  const pick = routesBetween([m.resolve('R1/s1'), m.resolve('R2/s2')], (net) => net === 'data' || net === 'up');
+  eq(pick.pairs[0].routes.map((r) => [r.net, r.hops, r.gbps]), [['data + up', 4, 25]],
+     'two servers can move at most what one NIC carries');
+  const racks = routesBetween([m.resolve('R1'), m.resolve('R2')], (net) => net === 'up');
+  eq(racks.pairs[0].routes.map((r) => r.gbps), [400], 'two racks: their uplinks, all together');
+
+  // Drawn: a lane carries every cable along it, and is coloured by the
+  // fullest of them.
+  layout(m.root);
+  const rerouted = routeTraffic(m, [
+    { id: 0, src: m.resolve('R1/s1'), dst: m.resolve('R1/s2'), value: 10 },
+    { id: 1, src: m.resolve('R1/s2'), dst: m.resolve('R2/s1'), value: 25 },
+  ]);
+  const r = new Renderer({ getContext: () => null }, viewOf(m));
+  r.camera.scale = 4;
+  r.rebuildLinkCache(0, null, null, { result: rerouted, toGbps: 1, anyCapacity: true }, false);
+  const styles = [...r.linkCache.nets.get('data').segs.keys()];
+  ok(styles.every((s) => typeof s === 'object' && s.width >= 1), 'drawn by traffic, every piece has a style');
+  const busy = styles.filter((s) => !s.idle);
+  ok(busy.some((s) => s.color === LOAD_COLORS.over || s.color === loadColor(1)), 'a full cable is drawn full');
+  ok(busy.some((s) => s.color === loadColor(0.4)), 'a 40% one as 40%');
+  const widest = Math.max(...busy.map((s) => s.width));
+  ok(widest > Math.min(...busy.map((s) => s.width)), 'and what carries more is drawn wider');
+  ok(styles.some((s) => s.idle), 'idle cables stay, quieter');
+  ok(![...r.linkCache.nets.get('mgmt').segs.keys()].some((s) => !s.idle), 'traffic=no draws idle');
+
+  r.rebuildLinkCache(0, null, null, null, true);
+  const capStyles = [...r.linkCache.nets.get('up').segs.keys(), ...r.linkCache.nets.get('data').segs.keys()];
+  eq(Math.max(...capStyles.map((s) => s.width)), capacityWidth(300), 'drawing capacity, the fastest cable is the widest');
+  ok(capacityWidth(25) < capacityWidth(100) && capacityWidth(100) < capacityWidth(400), 'each step of port speed one step wider');
+
+  // The example pair: an incast past what two NICs can take.
+  const d = parseLayout(readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8'));
+  eq(d.warnings, [], 'examples/dual-plane.dc parses clean with its capacities');
+  const dov = bindOverlay([...parseResults(readFileSync(join(root, 'examples/dual-plane-flows.tsv'), 'utf8')).values()][0], d);
+  const dflows = flowsOf(dov, d).flows;
+  const dr = routeTraffic(d, dflows, { split: 'even' });
+  eq([dr.routed, dr.unrouted.length], [17, 0], 'its flows all route');
+  const top = busiest(dr, 1, 3);
+  eq(top.map((row) => Math.round(row.util * 100)), [160, 160, 80], 'the incast is 160% of the NICs it lands on');
+  eq(top[0].link.b.path.endsWith('R02/s5') || top[0].link.a.path.endsWith('R02/s5'), true, 'at R02/s5');
 }
 
 // ------------------------------------------------------------------ splices

@@ -70,15 +70,23 @@ function shortestRoutes(from, to, netOk) {
   const links = new Set();
   if (hops === 0) return { hops, links };
   const { dist: fromB } = distances(to, netOk, hops);
+  // What each hop can carry, all its cables together: the narrowest hop is
+  // the most the two sides could move over these routes. Unknown as soon as
+  // one cable on them has no gbps=.
+  const layer = new Array(hops).fill(0);
+  let known = true;
   for (const [node, d] of fromA) {
     if (d >= hops) continue;
     for (const link of node.links) {
       if (!netOk(link.net)) continue;
       const rest = fromB.get(otherEnd(link, node));
-      if (rest !== undefined && d + 1 + rest === hops) links.add(link);
+      if (rest === undefined || d + 1 + rest !== hops || links.has(link)) continue;
+      links.add(link);
+      if (link.gbps) layer[d] += link.gbps;
+      else known = false;
     }
   }
-  return { hops, links };
+  return { hops, links, gbps: known ? Math.min(...layer) : null };
 }
 
 /**
@@ -94,14 +102,14 @@ function routesForPair(from, to, netOk) {
   for (const name of names) {
     const found = shortestRoutes(from, to, (net) => net === name);
     if (!found) continue;
-    routes.push({ net: name, hops: found.hops });
+    routes.push({ net: name, hops: found.hops, gbps: found.gbps });
     for (const link of found.links) links.add(link);
   }
   if (routes.length) return { routes, links, mixed: false };
   const across = shortestRoutes(from, to, netOk);
   if (!across) return null;
   const nets = [...new Set([...across.links].map((link) => link.net))];
-  return { routes: [{ net: nets.join(' + '), hops: across.hops }], links: across.links, mixed: true };
+  return { routes: [{ net: nets.join(' + '), hops: across.hops, gbps: across.gbps }], links: across.links, mixed: true };
 }
 
 /**
@@ -110,9 +118,10 @@ function routesForPair(from, to, netOk) {
  * @param picks  elements, in the order they were picked
  * @param netOk  (net name) => whether cables of that net may be travelled
  * @returns      { links: Set of every cable shown, nets: Map(net -> count),
- *                 pairs: [{ a, b, routes: [{ net, hops }], mixed }] } --
+ *                 pairs: [{ a, b, routes: [{ net, hops, gbps }], mixed }] } --
  *                 routes is empty where the two have no route over the nets
- *                 allowed, and mixed says the one route crosses networks
+ *                 allowed, mixed says the one route crosses networks, and
+ *                 gbps is the narrowest hop's capacity (null if unknown)
  */
 export function routesBetween(picks, netOk = () => true) {
   const groups = picks.map(endpointsOf);

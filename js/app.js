@@ -12,8 +12,8 @@ import {
   readingText, recomputeDomain, recomputeStats,
 } from './results.js';
 import {
-  fillWarnings, renderBuild, renderInspector, renderLive, renderNets, renderNotices, renderOverlays,
-  renderTree, renderWarnings,
+  fillWarnings, renderBuild, renderCableLoad, renderInspector, renderLive, renderNets, renderNotices,
+  renderOverlays, renderTree, renderWarnings,
 } from './ui.js';
 import {
   droppedLayoutsNotice, layoutNotice, plural, prefixed, resultsFileNotice,
@@ -21,6 +21,7 @@ import {
 import { attachHints, renderReference } from './hints.js';
 import { layoutFromHosts, matchesPattern, recordsSince, tailRecords } from './tsv.js';
 import { routesBetween } from './paths.js';
+import { flowsOf, loadable, loadUnit, routeTraffic } from './traffic.js';
 import { VERSION } from './version.js';
 import {
   classify, directoryFromDataTransfer, ensureRead, getFile, pathLabel, pickDirectory,
@@ -64,6 +65,11 @@ const state = {
   betweenCache: null,
   linkOpacity: 0.45,
   curvedCables: true,       // crossings between containers drawn as curves
+  // Traffic on the cables: one flow metric, routed over the fabric by
+  // traffic.js and drawn on the cables it crossed. `key` names the overlay.
+  traffic: { key: null, split: 'even', seed: 1 },
+  trafficCache: null,
+  capacityView: false,      // with no traffic shown, cable widths by gbps=
   maxLinksDrawn: 60000,
   warnings: [],
   // What the last load actually did, one entry per file. The warnings list
@@ -136,6 +142,31 @@ const state = {
       state.betweenCache = { key, value };
     }
     return state.betweenCache.value;
+  },
+
+  // The flow metric routed onto the cables, worked out once per layout,
+  // metric, aggregation and split. Null while none is: no metric chosen, or
+  // the chosen one unticked or gone in a reload.
+  cableLoad() {
+    const t = state.traffic;
+    if (!t.key) return null;
+    const overlay = state.overlays.get(t.key);
+    if (!overlay || !overlay.enabled || !loadable(overlay)) return null;
+    const c = state.trafficCache;
+    if (c && c.overlay === overlay && c.model === state.model && c.agg === overlay.agg
+        && c.split === t.split && c.seed === t.seed) {
+      return c.value;
+    }
+    const unit = loadUnit(overlay);
+    const { flows, unresolved } = flowsOf(overlay, state.model);
+    const result = routeTraffic(state.model, flows, { split: t.split, seed: t.seed });
+    let anyCapacity = false;
+    for (const link of state.model.links) if (link.gbps) { anyCapacity = true; break; }
+    const value = {
+      overlay, result, toGbps: unit.toGbps, unit: unit.unit, anyCapacity, flows: flows.length, unresolved,
+    };
+    state.trafficCache = { overlay, model: state.model, agg: overlay.agg, split: t.split, seed: t.seed, value };
+    return value;
   },
 
   isVisible(node) {
@@ -240,6 +271,7 @@ function refreshPanels() {
   renderTree(state, $('tree'), actions);
   renderOverlays(state, $('overlays'), actions);
   renderNets(state, $('nets'), actions);
+  renderCableLoad(state, $('cable-load'), actions);
   renderInspector(state, $('inspector'), actions);
   $('overlay-hint').textContent = state.activeOverlays.length > 1
     ? `— ${state.activeOverlays.length} shown side by side`
@@ -312,6 +344,8 @@ const actions = {
     // hang off the `else` above, so whether a flow layer survived being
     // re-ticked depended on whether the metric happened to be standardized.)
     if (!enabled) overlay.drawFlows = false;
+    // Its cable load goes too, for the same reason.
+    if (!enabled && state.traffic.key === overlay.key) state.traffic.key = null;
     refreshPanels();
     invalidate();
   },
@@ -434,6 +468,33 @@ const actions = {
 
   setOverlayFlows(overlay, on) {
     overlay.drawFlows = on;
+    refreshPanels();
+    invalidate();
+  },
+
+  // One metric loads the cables at a time: ticking another moves the load.
+  setOverlayTraffic(overlay, on) {
+    if (on) state.traffic.key = overlay.key;
+    else if (state.traffic.key === overlay.key) state.traffic.key = null;
+    refreshPanels();
+    invalidate();
+  },
+
+  setTrafficSplit(split) {
+    state.traffic.split = split;
+    refreshPanels();
+    invalidate();
+  },
+
+  // Hashed routing again with a different roll of the dice.
+  rerollTraffic() {
+    state.traffic.seed = (state.traffic.seed + 1) >>> 0 || 1;
+    refreshPanels();
+    invalidate();
+  },
+
+  setCapacityView(on) {
+    state.capacityView = on;
     refreshPanels();
     invalidate();
   },
@@ -1707,7 +1768,9 @@ dc DC1 name="My Datacenter"
         node u[01..20] role=server +x86
 
 # Logical fabrics: rules match elements, so cables are never enumerated.
-net data label="Data / east-west" color=#4fa3ff
+# gbps= is what each cable carries; flows loaded onto the cables are routed
+# through +switch elements and drawn by how full each cable is.
+net data label="Data / east-west" color=#4fa3ff gbps=25
 link data role=server role=tor scope=rack
 `;
 
@@ -1981,6 +2044,7 @@ $('curved-cables').addEventListener('change', (e) => {
   state.curvedCables = e.target.checked;
   invalidate();
 });
+$('cable-capacity').addEventListener('change', (e) => actions.setCapacityView(e.target.checked));
 
 $('link-opacity').addEventListener('input', (e) => {
   state.linkOpacity = Number(e.target.value) / 100;

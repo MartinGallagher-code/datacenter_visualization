@@ -1,0 +1,29 @@
+# Offered load for examples/dual-plane.dc, for "load the cables".
+#
+# Each line is one flow: the target sends to its peer, at that many Gb/s.
+#
+#   R01 -> R03   every server in rack R01 sends 40 Gb/s to its namesake in
+#                R03, in the other pod: 20 Gb/s down each of its two NICs,
+#                80% of their 25G, and 80% of R01's four 100G uplinks too
+#   R04 -> R02   all eight servers in R04 send 10 Gb/s to one server, R02/s5:
+#                an incast of 80 Gb/s into two 25G NICs, 160% of what they
+#                can take -- the cables past 100% are their own colour
+#   R02          s1 sends to s2, in its own rack: it never leaves the ToRs
+!test	offered_gbps	unit=Gb/s	decimals=1	short=GBPS	label="Offered load"
+offered_gbps	R01/s1	40	peer=R03/s1
+offered_gbps	R01/s2	40	peer=R03/s2
+offered_gbps	R01/s3	40	peer=R03/s3
+offered_gbps	R01/s4	40	peer=R03/s4
+offered_gbps	R01/s5	40	peer=R03/s5
+offered_gbps	R01/s6	40	peer=R03/s6
+offered_gbps	R01/s7	40	peer=R03/s7
+offered_gbps	R01/s8	40	peer=R03/s8
+offered_gbps	R04/s1	10	peer=R02/s5
+offered_gbps	R04/s2	10	peer=R02/s5
+offered_gbps	R04/s3	10	peer=R02/s5
+offered_gbps	R04/s4	10	peer=R02/s5
+offered_gbps	R04/s5	10	peer=R02/s5
+offered_gbps	R04/s6	10	peer=R02/s5
+offered_gbps	R04/s7	10	peer=R02/s5
+offered_gbps	R04/s8	10	peer=R02/s5
+offered_gbps	R02/s1	15	peer=R02/s2

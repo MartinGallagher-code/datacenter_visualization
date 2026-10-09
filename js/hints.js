@@ -41,6 +41,8 @@ const NET_KEYS = [
   ['style=', 'solid or dashed'],
   ['width=', 'line width'],
   ['show=', 'true/false: start visible or unticked'],
+  ['gbps=', 'what each cable carries, in Gb/s: gbps=100'],
+  ['traffic=', 'no: drawn, but carries no routed traffic (mgmt)'],
 ];
 
 // Every option a link rule takes, and only those. The parser's own LINK_OPTS
@@ -53,6 +55,8 @@ const LINK_KEYS = [
   ['mode=', 'star, mesh, chain, ring or pair'],
   ['cap=', 'stop after this many cables'],
   ['splice=', 'gather every N consecutive matches into one cable'],
+  ['gbps=', 'what each of these cables carries, in Gb/s, over the net’s'],
+  ['weight=', 'share of a flow at a fork, against the other cables (default 1)'],
 ];
 
 const MODES = ['star', 'mesh', 'chain', 'ring', 'pair'];
@@ -61,6 +65,7 @@ const STYLES = ['solid', 'dashed'];
 const YES_NO = ['yes', 'no', 'true', 'false'];
 const DIRS = ['x', 'y'];
 const ALIGNS = ['center', 'left', 'right'];
+const SPEEDS = ['1', '10', '25', '40', '100', '200', '400', '800'];   // common port speeds, Gb/s
 
 const IDENT = /^[a-z_][\w-]*$/i;
 
@@ -149,7 +154,7 @@ export function suggestionsFor(text, caret) {
 
     if (kind === 'net') {
       if (key) {
-        options = valueOptions(key, { style: STYLES, show: YES_NO }, h);
+        options = valueOptions(key, { style: STYLES, show: YES_NO, traffic: YES_NO, gbps: SPEEDS }, h);
       } else {
         options = [];
         if (idPosition) {
@@ -161,7 +166,9 @@ export function suggestionsFor(text, caret) {
       }
     } else if (kind === 'link') {
       if (key) {
-        options = valueOptions(key, { mode: MODES, scope: ['dc', ...h.kinds], splice: SPLICES }, h);
+        options = valueOptions(key, {
+          mode: MODES, scope: ['dc', ...h.kinds], splice: SPLICES, gbps: SPEEDS,
+        }, h);
       } else if (priorTokens.length === 1) {
         options = [...h.nets].map((n) => [n, 'fabric declared with net']);
       } else {
@@ -389,6 +396,14 @@ const REFERENCE = [
     ['link data role=server role=tor scope=rack splice=4', 'four servers per cable to the ToR'],
     ['link data role=tor role=spine cap=1000', 'cap=: stop after this many cables'],
     ['mode=star mode=mesh mode=chain mode=ring mode=pair', 'the five modes', true],
+  ]],
+  ['Capacity and traffic', 'What each cable carries, in Gb/s, and how a flow metric loaded onto the cables is shared out.', [
+    ['net fabric gbps=100', 'every cable of the net carries 100 Gb/s'],
+    ['link nica role=server role=tor scope=rack gbps=25', 'this rule’s cables, over the net’s'],
+    ['net mgmt gbps=1 traffic=no', 'drawn, but carries none of the routed traffic'],
+    ['link fabric role=tor role=spine weight=2', 'twice the share of a flow where routes fork'],
+    ['+switch', 'only elements tagged switch forward traffic', true],
+    ['gbps=1 gbps=10 gbps=25 gbps=40 gbps=100 gbps=200 gbps=400 gbps=800', 'common port speeds', true],
   ]],
   ['Selectors', 'For link rules and the filter bar.', [
     ['+tag', 'tag (inherited too)', true],

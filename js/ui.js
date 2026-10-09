@@ -10,7 +10,10 @@ import {
   AGGREGATIONS, invertedOf, isStandardized, NORMAL_BEYOND_2SD, overlayValue, paletteOf,
   readNumber, readingText, tailIsOdd, zRangeOf,
 } from './results.js';
-import { countDescendants, linkSummary, spliceSummary } from './render.js';
+import {
+  capacityWidth, countDescendants, LOAD_COLORS, loadColor, linkSummary, spliceSummary,
+} from './render.js';
+import { busiest, cablesOf, formatGbps, loadable, loadUnit, SPLITS, utilOf } from './traffic.js';
 
 const el = (tag, cls, text) => {
   const n = document.createElement(tag);
@@ -471,6 +474,23 @@ function overlayCard(state, overlay, actions) {
     row.title = 'Draw each measured host-to-host pair as a curve. These are flows, '
       + 'not cables: the traffic crossed every hop between the two ends.';
     body.append(row);
+
+    // The same flows, routed over the fabric and summed onto every cable
+    // they cross -- which is where their impact on the network shows.
+    const ok = loadable(overlay);
+    const lrow = el('label', 'chk flowchk');
+    const lbox = el('input');
+    lbox.type = 'checkbox';
+    lbox.checked = ok && state.traffic && state.traffic.key === overlay.key;
+    lbox.disabled = !ok;
+    lbox.addEventListener('change', () => actions.setOverlayTraffic(overlay, lbox.checked));
+    lrow.append(lbox, el('span', null, 'load the cables'));
+    lrow.title = ok
+      ? 'Route each flow over the shortest paths between its two hosts and add it to every '
+        + 'cable it crosses: each cable is then drawn by its load, and coloured by how full it is '
+        + 'where its capacity (gbps=) is known.'
+      : `Not a metric that adds up along a path: ${loadUnit(overlay).why || 'not numeric'}.`;
+    body.append(lrow);
   }
 
   const stats = el('div', 'overlay-stats');
@@ -564,7 +584,14 @@ export function renderNets(state, host, actions) {
     return;
   }
   const counts = new Map();
-  for (const link of state.model.links) counts.set(link.net, (counts.get(link.net) || 0) + 1);
+  const speeds = new Map();   // net -> [slowest, fastest] of the cables that say
+  for (const link of state.model.links) {
+    counts.set(link.net, (counts.get(link.net) || 0) + 1);
+    if (!link.gbps) continue;
+    const s = speeds.get(link.net);
+    if (!s) speeds.set(link.net, [link.gbps, link.gbps]);
+    else { s[0] = Math.min(s[0], link.gbps); s[1] = Math.max(s[1], link.gbps); }
+  }
 
   // All / none, for a floor with more fabrics than it is worth clicking one
   // at a time -- and the way back after isolating down to one.
@@ -593,9 +620,244 @@ export function renderNets(state, host, actions) {
     row.append(bar);
 
     row.append(el('span', null, net.label));
+    const speed = speeds.get(net.name);
+    if (speed) {
+      const text = speed[0] === speed[1] ? formatGbps(speed[0]) : `${formatGbps(speed[0])}–${formatGbps(speed[1])}`;
+      const chip = el('span', 'netspeed', text);
+      chip.title = `What each cable of this net can carry, in Gb/s (gbps=)`;
+      row.append(chip);
+    }
+    if (net.traffic === false) {
+      const chip = el('span', 'netspeed muted', 'no traffic');
+      chip.title = 'traffic=no: drawn, but carries none of the traffic loaded onto the cables';
+      row.append(chip);
+    }
     row.append(el('span', 'netcount', String(counts.get(net.name) || 0)));
     host.append(row);
   }
+}
+
+// -------------------------------------------------------------- cable load
+
+/** A load in the metric's own unit, or in b/s when it is a bit rate. */
+export function formatLoad(load, value) {
+  if (load.toGbps !== null) return `${formatGbps(value * load.toGbps)}b/s`;
+  return `${formatNum(value)}${load.unit ? ` ${load.unit}` : ''}`;
+}
+
+const SPLIT_LABELS = {
+  even: 'even split (ECMP)',
+  capacity: 'split by capacity',
+  hashed: 'hashed: one path per flow',
+};
+
+const BUSIEST_SHOWN = 8;
+
+// "40G/25G · 160%": a load against a capacity, short enough for a list row.
+function loadAgainst(load, value, gbps, util) {
+  const amount = load.toGbps !== null && gbps ? formatGbps(value * load.toGbps) : formatLoad(load, value);
+  const cap = gbps ? `/${formatGbps(gbps)}` : '';
+  return `${amount}${cap}${util !== null ? ` · ${pct(util)}` : ''}`;
+}
+
+const shortPath = (node) => node.path.split('/').slice(-2).join('/');
+const pct = (u) => `${Math.round(u * 100)}%`;
+
+/**
+ * What the cable view is showing: with a flow metric loaded onto the cables,
+ * how it was routed, the colour key, and the busiest cables; with capacity
+ * shown instead, what the widths mean.
+ */
+export function renderCableLoad(state, host, actions) {
+  host.textContent = '';
+  const load = state.cableLoad ? state.cableLoad() : null;
+  if (!load) {
+    if (state.capacityView) renderCapacityKey(state, host);
+    return;
+  }
+  const box = el('div', 'cable-load');
+  const head = el('div', 'picks-head');
+  head.append(el('strong', null, `Cable load: ${load.overlay.label}`));
+  const off = el('button', null, 'Off');
+  off.title = 'Draw the cables plainly again';
+  off.addEventListener('click', () => actions.setOverlayTraffic(load.overlay, false));
+  head.append(off);
+  box.append(head);
+
+  const row = el('div', 'btnrow');
+  const select = el('select');
+  for (const split of SPLITS) {
+    const opt = el('option', null, SPLIT_LABELS[split]);
+    opt.value = split;
+    opt.selected = state.traffic.split === split;
+    select.append(opt);
+  }
+  select.title = 'Where several cables continue a shortest route, how a flow is shared between them';
+  select.addEventListener('change', () => actions.setTrafficSplit(select.value));
+  row.append(select);
+  if (state.traffic.split === 'hashed') {
+    const roll = el('button', null, 'Re-roll');
+    roll.title = 'Hash every flow onto its paths again, with a different seed';
+    roll.addEventListener('click', () => actions.rerollTraffic());
+    row.append(roll);
+  }
+  box.append(row);
+
+  // The key: what colour and width mean here.
+  const key = el('div', 'load-key');
+  if (load.anyCapacity && load.toGbps !== null) {
+    const bar = el('span', 'load-ramp');
+    bar.style.background = `linear-gradient(90deg, ${[0, 0.25, 0.5, 0.75, 1].map((u) => loadColor(u)).join(', ')})`;
+    key.append(el('span', null, '0%'), bar, el('span', null, '100%'));
+    const over = el('span', 'load-chip');
+    over.style.background = LOAD_COLORS.over;
+    over.title = 'More offered than the cable can carry';
+    key.append(over, el('span', null, 'over'));
+    const unknown = el('span', 'load-chip');
+    unknown.style.background = LOAD_COLORS.unknown;
+    unknown.title = 'Carrying traffic, but its capacity (gbps=) is not given';
+    key.append(unknown, el('span', null, 'no gbps='));
+    box.append(key);
+    box.append(el('p', 'muted cable-note',
+      'Colour: the fullest cable at that point, busier direction against its gbps=. '
+      + 'Width: the traffic carried there.'));
+  } else {
+    box.append(el('p', 'muted cable-note', load.toGbps === null
+      ? `Width and colour: the load, against the busiest cable. ${load.unit || 'These values'} `
+        + 'cannot be set against a capacity in Gb/s, so nothing reads as full.'
+      : 'Width and colour: the load, against the busiest cable. No cable has a gbps=, so nothing reads as full.'));
+  }
+
+  const r = load.result;
+  const lines = el('div', 'cable-summary');
+  lines.append(el('div', null, `${r.routed} of ${load.flows} flows routed · ${formatLoad(load, r.delivered)}`));
+  lines.append(el('div', 'muted', r.switches
+    ? `forwarded only by the ${r.switches} elements tagged +switch`
+    : 'nothing is tagged +switch, so every element forwards'));
+  if (r.unrouted.length) {
+    const why = new Map();
+    for (const u of r.unrouted) why.set(u.why, (why.get(u.why) || 0) + 1);
+    const text = [...why].map(([w, n]) => `${n} ${w}`).join(', ');
+    const miss = el('div', 'bad', `${r.unrouted.length} not routed: ${text}`);
+    miss.title = r.unrouted.slice(0, 20).map((u) => `${u.flow.src.path} → ${u.flow.dst.path}: ${u.why}`).join('\n');
+    lines.append(miss);
+  }
+  if (load.unresolved) lines.append(el('div', 'bad', `${load.unresolved} samples name a peer not in the layout`));
+  box.append(lines);
+
+  const top = busiest(r, load.toGbps, BUSIEST_SHOWN);
+  if (top.length) {
+    box.append(el('div', 'load-title', 'Busiest cables'));
+    const list = el('div', 'load-list');
+    for (const row of top) {
+      const { link, load: l, util } = row;
+      const [from, to] = l[0] >= l[1] ? [link.a, link.b] : [link.b, link.a];
+      const item = el('div', 'load-row');
+      const dot = el('span', 'dot');
+      dot.style.background = util !== null ? loadColor(util) : LOAD_COLORS.unknown;
+      item.append(dot);
+      item.append(el('span', 'load-ends', `${shortPath(from)} → ${shortPath(to)}`));
+      item.append(el('span', 'val', loadAgainst(load, row.peak, link.gbps, util)));
+      item.title = `${link.net}: ${from.path} → ${to.path}\n`
+        + `${formatLoad(load, Math.max(l[0], l[1]))} the busier way, ${formatLoad(load, Math.min(l[0], l[1]))} the other`
+        + '\nClick to select its sending end';
+      item.addEventListener('click', () => { actions.select(from); actions.focus(from); });
+      list.append(item);
+    }
+    box.append(list);
+  }
+  host.append(box);
+}
+
+/** The width each capacity in the layout is drawn at, smallest first. */
+function renderCapacityKey(state, host) {
+  const speeds = new Set();
+  let unknown = 0;
+  for (const link of state.model.links) {
+    if (link.gbps) speeds.add(link.gbps);
+    else unknown++;
+  }
+  const key = el('div', 'cap-key');
+  for (const gbps of [...speeds].sort((a, b) => a - b).slice(0, 8)) {
+    const item = el('span', 'cap-item');
+    const bar = el('span', 'cap-bar');
+    bar.style.height = `${capacityWidth(gbps)}px`;
+    item.append(bar, el('span', null, formatGbps(gbps)));
+    key.append(item);
+  }
+  if (speeds.size) host.append(key);
+  host.append(el('p', 'muted cable-note', speeds.size
+    ? `Each cable drawn as wide as what it carries (gbps=); a lane as wide as the fastest cable in it.${
+      unknown ? ` ${unknown} cables give no gbps= and stay thin.` : ''}`
+    : 'No cable says what it carries yet: give a net or a link rule gbps=, as in net data gbps=100.'));
+}
+
+/**
+ * The selected element's share of the cable load: per net, what its cables
+ * (a container's: the ones leaving it) send and receive against what they
+ * can carry, then its busiest cables.
+ */
+function renderElementLoad(state, host, node, actions) {
+  const load = state.cableLoad ? state.cableLoad() : null;
+  if (!load) return;
+  const byNet = cablesOf(node, load.result, load.toGbps);
+  if (!byNet.size) return;
+  const leaf = !node.children.length;
+  host.append(el('h2', null, 'Cable load'));
+  const dl = el('dl', 'kv');
+  for (const [net, rec] of byNet) {
+    if (!rec.out && !rec.in && !rec.gbps) continue;
+    dl.append(el('dt', null, leaf ? net : `${net} leaving`));
+    const dd = el('dd');
+    const dot = el('span', 'dot');
+    dot.style.background = rec.worst !== null ? loadColor(rec.worst) : LOAD_COLORS.unknown;
+    dd.append(dot);
+    const of = rec.gbps ? ` of ${formatGbps(rec.gbps)}` : '';
+    const worst = rec.worst !== null ? ` · fullest ${pct(rec.worst)}` : '';
+    dd.append(el('span', null, `out ${formatLoad(load, rec.out)} · in ${formatLoad(load, rec.in)}${of}${worst}`));
+    dl.append(dd);
+  }
+  host.append(dl);
+
+  // Its own busiest cables, so the one that is full can be found.
+  const rows = [];
+  const seen = new Set();
+  const inside = (x) => {
+    for (let p = x; p; p = p.parent) if (p === node) return true;
+    return false;
+  };
+  const walk = (n) => {
+    for (const link of n.links) {
+      if (seen.has(link)) continue;
+      seen.add(link);
+      if (!leaf && inside(link.a) === inside(link.b)) continue;
+      const l = load.result.loads.get(link);
+      if (!l || !(Math.max(l[0], l[1]) > 0)) continue;
+      const mine = leaf ? n : (inside(link.a) ? link.a : link.b);
+      rows.push({ link, l, mine, util: utilOf(link, l, load.toGbps) });
+    }
+    for (const child of n.children) walk(child);
+  };
+  walk(node);
+  rows.sort((x, y) => ((y.util ?? -1) - (x.util ?? -1)) || (Math.max(...y.l) - Math.max(...x.l)));
+  const list = el('div', 'load-list');
+  for (const { link, l, mine, util } of rows.slice(0, 6)) {
+    const far = link.a === mine ? link.b : link.a;
+    const sent = link.a === mine ? l[0] : l[1];
+    const got = link.a === mine ? l[1] : l[0];
+    const item = el('div', 'load-row');
+    const dot = el('span', 'dot');
+    dot.style.background = util !== null ? loadColor(util) : LOAD_COLORS.unknown;
+    item.append(dot);
+    item.append(el('span', 'load-ends', `${leaf ? '' : `${mine.name} `}↔ ${shortPath(far)}`));
+    const short = (v) => (load.toGbps !== null ? formatGbps(v * load.toGbps) : formatNum(v));
+    item.append(el('span', 'val', `↑${short(sent)} ↓${short(got)}`
+      + `${link.gbps ? ` /${formatGbps(link.gbps)}` : ''}${util !== null ? ` · ${pct(util)}` : ''}`));
+    item.title = `${link.net}: ${mine.path} ↔ ${far.path}\n↑ sent from ${mine.name}, ↓ received\nClick to select ${far.name}`;
+    item.addEventListener('click', () => actions.select(far));
+    list.append(item);
+  }
+  if (rows.length) host.append(list);
 }
 
 // --------------------------------------------------------------- inspector
@@ -633,7 +895,15 @@ function renderPicks(state, host, actions) {
       const dd = el('dd');
       if (!pair.routes.length) dd.append(el('div', 'muted', 'no route over the ticked networks'));
       for (const r of pair.routes) {
-        dd.append(el('div', null, `${r.net}: ${r.hops} hop${r.hops === 1 ? '' : 's'}${pair.mixed ? ' across networks' : ''}`));
+        // The narrowest hop's total capacity bounds what the two can move.
+        const upTo = r.gbps ? ` · up to ${formatGbps(r.gbps)}b/s` : '';
+        const line = el('div', null,
+          `${r.net}: ${r.hops} hop${r.hops === 1 ? '' : 's'}${pair.mixed ? ' across networks' : ''}${upTo}`);
+        if (upTo) {
+          line.title = 'The capacity of the narrowest hop on these routes, all its cables together: '
+            + 'the most the two could move between them over this network';
+        }
+        dd.append(line);
       }
       dl.append(dd);
     }
@@ -710,11 +980,23 @@ export function renderInspector(state, host, actions) {
     structural.append(el('dt', null, leaf ? 'links' : 'links below'));
     const dd = el('dd');
     for (const [net, rec] of cables) {
-      const line = leaf
+      let line = leaf
         ? `${net} ×${rec.inside + rec.out}`
         : `${net} ×${rec.inside + rec.out}` +
           (rec.out && rec.inside ? ` (${rec.out} leaving)` : rec.out ? ' (all leaving)' : ' (all internal)');
-      dd.append(el('div', null, line));
+      // What they can carry: each, for a device's own; for a container, the
+      // total inside against the total leaving, which is its oversubscription.
+      const each = rec.speeds.size === 1 ? formatGbps([...rec.speeds][0]) : null;
+      if (rec.speeds.size && leaf) line += each ? ` · ${each} each` : ` · ${formatGbps(rec.gbpsOut)} in all`;
+      else if (rec.speeds.size) {
+        const parts = [];
+        if (rec.gbpsIn) parts.push(`${formatGbps(rec.gbpsIn)} inside`);
+        if (rec.gbpsOut) parts.push(`${formatGbps(rec.gbpsOut)} leaving`);
+        line += ` · ${parts.join(', ')}`;
+      }
+      const row = el('div', null, line);
+      if (rec.unknown && rec.speeds.size) row.title = `${rec.unknown} of these have no gbps=`;
+      dd.append(row);
     }
     structural.append(dd);
   }
@@ -771,6 +1053,7 @@ export function renderInspector(state, host, actions) {
     host.append(readings);
   }
 
+  renderElementLoad(state, host, node, actions);
   renderFlows(state, host, node);
 }
 

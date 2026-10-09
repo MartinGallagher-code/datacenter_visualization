@@ -18,6 +18,13 @@
 // A splice (`splice=N` on a link rule) gathers N cables into one: the
 // members' stubs end in a marker beside them, and one cable runs on from it.
 //
+// With traffic on the cables (`styleOf` given), each piece is drawn by what
+// passes through it instead of in one width per net: a stub by everything its
+// port sends and receives, a stretch of lane by every cable running along that
+// stretch -- so a rack's lane thickens on its way to the ToR -- and a crossing
+// by its own cables. Width is the traffic, colour the busiest single cable's
+// utilization, so one full cable is never averaged away by idle ones beside it.
+//
 // Everything here is in world units and depends only on the boxes, so the
 // renderer computes it once per layout and zoom bucket, not once per frame.
 
@@ -40,12 +47,19 @@ const midY = (box) => box.y + box.h / 2;
  * @param splices  [{ net, members: [blocks], to: block, count }]
  * @param order    (net name) => its position among the enabled nets
  * @param widthOf  (net name, count, trunk) => line width in screen pixels
+ * @param styleOf  optional (load, worst, max) => style object, for drawing by
+ *                 traffic: each edge then carries t = { ab, ba, worst } (load
+ *                 from a to b, from b to a, the busiest cable's utilization or
+ *                 null) and each splice t = { members: Map(block -> { out,
+ *                 in, worst }), trunk: { ab, ba, worst } }, and segs and
+ *                 curves are keyed by the style objects styleOf returns.
  * @returns        { nets: Map(net -> { segs: Map(width -> [x0,y0,x1,y1,...]),
  *                   markers, cables }), ports: (block, net) => port | null }
  *                 where `cables` is the edges and splices that were laid out,
  *                 as given.
  */
-export function routeCables(edges, splices, order, widthOf) {
+export function routeCables(edges, splices, order, widthOf, styleOf = null) {
+  const traffic = !!styleOf;
   const groups = new Map();
   const use = (block, net, spliced) => {
     const g = groupOf(block);
@@ -94,7 +108,12 @@ export function routeCables(edges, splices, order, widthOf) {
   const nets = new Map();
   const out = (net) => {
     let o = nets.get(net);
-    if (!o) nets.set(net, (o = { h: [], v: new Map(), free: [], markers: [], cables: [], curves: null }));
+    if (!o) {
+      nets.set(net, (o = {
+        h: [], v: new Map(), free: [], markers: [], cables: [], curves: null,
+        traffic, tstubs: [], tv: new Map(), tsegs: [], tstubsegs: [], tcurves: [],
+      }));
+    }
     return o;
   };
 
@@ -103,7 +122,7 @@ export function routeCables(edges, splices, order, widthOf) {
     const Q = port(e.b, e.net);
     if (!P || !Q) continue;
     const o = out(e.net);
-    run(o, P, Q, widthOf(e.net, e.count, false));
+    run(o, P, Q, widthOf(e.net, e.count, false), e.t || IDLE);
     o.cables.push(e);
   }
 
@@ -139,7 +158,10 @@ export function routeCables(edges, splices, order, widthOf) {
 
     for (const m of s.members) {
       const P = port(m, s.net);
-      if (P) stub(o, P, inner, w);
+      if (!P) continue;
+      if (!traffic) { stub(o, P, inner, w); continue; }
+      const mt = (s.t && s.t.members.get(m)) || IDLE_END;
+      tstub(o, P, inner, mt.out, mt.in, mt.worst);
     }
     o.markers.push({
       x0: Math.min(inner, outer), x1: Math.max(inner, outer), y0, y1,
@@ -152,7 +174,7 @@ export function routeCables(edges, splices, order, widthOf) {
       group: groupOf(s.members[0]), side, edge, start: outer, y: yc,
       lane: lane.lane, left, right, ends: [], h: y1 - y0, fan: null,
     };
-    run(o, P, Q, widthOf(s.net, 1, true));
+    run(o, P, Q, widthOf(s.net, 1, true), (s.t && s.t.trunk) || IDLE);
     o.cables.push(s);
   }
 
@@ -160,6 +182,7 @@ export function routeCables(edges, splices, order, widthOf) {
     fanOut(o);
     flatten(o);
   }
+  if (traffic) styleAll(nets, styleOf);
   return {
     nets,
     ports: port,
@@ -222,10 +245,18 @@ function assignLanes(rec, order) {
  * the lane, and in. Anything else steps out into its own lane at each end and
  * crosses straight between the two.
  */
-function run(o, P, Q, w) {
+function run(o, P, Q, w, t) {
   const column = P.group === Q.group && P.side === Q.side && P.left < Q.right && Q.left < P.right;
   if (column) {
     const x = P.side > 0 ? Math.max(P.edge, Q.edge) + P.lane : Math.min(P.edge, Q.edge) - P.lane;
+    if (o.traffic) {
+      tstub(o, P, x, t.ab, t.ba, t.worst);
+      tstub(o, Q, x, t.ba, t.ab, t.worst);
+      // Down the lane is towards larger y: P to Q runs down when P is above.
+      const down = P.y < Q.y;
+      tspan(o, x, P.y, Q.y, down ? t.ab : t.ba, down ? t.ba : t.ab, t.worst);
+      return;
+    }
     stub(o, P, x, w);
     stub(o, Q, x, w);
     vseg(o, x, P.y, Q.y, w);
@@ -233,12 +264,17 @@ function run(o, P, Q, w) {
   }
   const px = P.edge + P.side * P.lane;
   const qx = Q.edge + Q.side * Q.lane;
-  stub(o, P, px, w);
-  stub(o, Q, qx, w);
+  if (o.traffic) {
+    tstub(o, P, px, t.ab, t.ba, t.worst);
+    tstub(o, Q, qx, t.ba, t.ab, t.worst);
+  } else {
+    stub(o, P, px, w);
+    stub(o, Q, qx, w);
+  }
   // Laid out once every cable is known, so the ones sharing a port can be
   // fanned out along its lane. Not deduplicated: the renderer has already
   // merged cables between the same two blocks.
-  const cable = { P, Q, px, qx, w, offP: 0, offQ: 0 };
+  const cable = { P, Q, px, qx, w, offP: 0, offQ: 0, t };
   o.free.push(cable);
   (P.fan || (P.fan = [])).push(cable);
   (Q.fan || (Q.fan = [])).push(cable);
@@ -269,7 +305,139 @@ function fanOut(o) {
       if (cable.P === port) cable.offP = off;
       else cable.offQ = off;
     });
-    if (spread > 0) vseg(o, x, port.y - spread / 2, port.y + spread / 2, fan[0].w);
+    if (!(spread > 0)) continue;
+    if (!o.traffic) {
+      vseg(o, x, port.y - spread / 2, port.y + spread / 2, fan[0].w);
+      continue;
+    }
+    // The stretch of lane the fan spreads along carries every cable in it.
+    let sent = 0;
+    let got = 0;
+    let worst = null;
+    for (const cable of fan) {
+      const t = cable.t;
+      sent += cable.P === port ? t.ab : t.ba;
+      got += cable.P === port ? t.ba : t.ab;
+      if (t.worst !== null && (worst === null || t.worst > worst)) worst = t.worst;
+    }
+    o.tsegs.push(x, port.y - spread / 2, x, port.y + spread / 2, Math.max(sent, got), worst);
+  }
+}
+
+const IDLE = { ab: 0, ba: 0, worst: null };
+const IDLE_END = { out: 0, in: 0, worst: null };
+const worse = (a, b) => (b === null ? a : a === null || b > a ? b : a);
+
+// A stub drawn by traffic: one per port and lane, carrying everything the
+// port sends and receives along it, so it is summed before it is drawn.
+function tstub(o, P, x, sent, got, worst) {
+  if (P.start === x) return;
+  if (!P.tends) P.tends = new Map();
+  let rec = P.tends.get(x);
+  if (!rec) {
+    P.tends.set(x, (rec = { P, x, out: 0, in: 0, worst: null }));
+    o.tstubs.push(rec);
+  }
+  rec.out += sent;
+  rec.in += got;
+  rec.worst = worse(rec.worst, worst);
+}
+
+// One cable's run along a lane, with what it carries each way.
+function tspan(o, x, ya, yb, down, up, worst) {
+  if (ya === yb) return;
+  let spans = o.tv.get(x);
+  if (!spans) o.tv.set(x, (spans = []));
+  spans.push(Math.min(ya, yb), Math.max(ya, yb), down, up, worst);
+}
+
+/**
+ * A lane drawn by traffic: cut wherever a cable joins or leaves it, and each
+ * stretch given the sum of the cables along it (in its busier direction) and
+ * the worst of their utilizations. A rack's lane thickens towards its ToR.
+ */
+function sweepLane(o, x, spans) {
+  const ys = [];
+  for (let i = 0; i < spans.length; i += 5) ys.push(spans[i], spans[i + 1]);
+  ys.sort((a, b) => a - b);
+  const cuts = [];
+  for (const y of ys) if (!cuts.length || cuts[cuts.length - 1] !== y) cuts.push(y);
+  const n = cuts.length - 1;
+  if (n < 1) return;
+  const at = (y) => {
+    let lo = 0;
+    let hi = cuts.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (cuts[mid] < y) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo;
+  };
+  const down = new Float64Array(n);
+  const up = new Float64Array(n);
+  const worst = new Array(n).fill(null);
+  const used = new Uint8Array(n);
+  for (let i = 0; i < spans.length; i += 5) {
+    const hi = at(spans[i + 1]);
+    for (let k = at(spans[i]); k < hi; k++) {
+      down[k] += spans[i + 2];
+      up[k] += spans[i + 3];
+      worst[k] = worse(worst[k], spans[i + 4]);
+      used[k] = 1;
+    }
+  }
+  let start = -1;
+  for (let k = 0; k <= n; k++) {
+    const same = k < n && start >= 0 && used[k]
+      && down[k] === down[start] && up[k] === up[start] && worst[k] === worst[start];
+    if (same) continue;
+    if (start >= 0) o.tsegs.push(x, cuts[start], x, cuts[k], Math.max(down[start], up[start]), worst[start]);
+    start = k < n && used[k] ? k : -1;
+  }
+}
+
+/**
+ * Give every piece drawn by traffic its style, now that the busiest piece in
+ * the whole view is known: widths are relative to it. Stubs do not count
+ * towards that: a spine's stub carries every cable it has, and scaling to it
+ * would draw everything else as a hairline. A stub busier than the busiest
+ * lane or crossing is simply drawn at the widest.
+ */
+function styleAll(nets, styleOf) {
+  let max = 0;
+  for (const o of nets.values()) {
+    for (let i = 4; i < o.tsegs.length; i += 6) if (o.tsegs[i] > max) max = o.tsegs[i];
+    for (let i = 8; i < o.tcurves.length; i += 10) if (o.tcurves[i] > max) max = o.tcurves[i];
+  }
+  if (!(max > 0)) {
+    for (const o of nets.values()) for (let i = 4; i < o.tstubsegs.length; i += 6) max = Math.max(max, o.tstubsegs[i]);
+  }
+  for (const o of nets.values()) {
+    const segs = new Map();
+    const curves = new Map();
+    const into = (map, style) => {
+      let list = map.get(style);
+      if (!list) map.set(style, (list = []));
+      return list;
+    };
+    for (const s of [o.tstubsegs, o.tsegs]) {
+      for (let i = 0; i < s.length; i += 6) {
+        into(segs, styleOf(s[i + 4], s[i + 5], max)).push(s[i], s[i + 1], s[i + 2], s[i + 3]);
+      }
+    }
+    const c = o.tcurves;
+    for (let i = 0; i < c.length; i += 10) {
+      into(curves, styleOf(c[i + 8], c[i + 9], max)).push(
+        c[i], c[i + 1], c[i + 2], c[i + 3], c[i + 4], c[i + 5], c[i + 6], c[i + 7]);
+    }
+    // Quiet pieces first, the fullest last, so nothing busy is painted over.
+    const ranked = (map) => new Map([...map].sort((x, y) => (x[0].rank ?? 0) - (y[0].rank ?? 0)));
+    o.segs = ranked(segs);
+    o.curves = ranked(curves);
+    o.tsegs = undefined;
+    o.tstubsegs = undefined;
+    o.tcurves = undefined;
   }
 }
 
@@ -300,6 +468,12 @@ function vseg(o, x, ya, yb, w) {
 
 /** Every segment of a net, grouped by line width: [x0, y0, x1, y1, ...]. */
 function flatten(o) {
+  if (o.traffic) {
+    for (const rec of o.tstubs) {
+      o.tstubsegs.push(rec.P.start, rec.P.y, rec.x, rec.P.y, Math.max(rec.out, rec.in), rec.worst);
+    }
+    for (const [x, spans] of o.tv) sweepLane(o, x, spans);
+  }
   const segs = new Map();
   const listFor = (w) => {
     let list = segs.get(w);
@@ -335,13 +509,18 @@ function flatten(o) {
   // [x0, y0, c1x, c1y, c2x, c2y, x1, y1, ...] per line width; a renderer
   // asked for straight lines draws x0,y0 to x1,y1 and ignores the rest.
   const curves = new Map();
-  for (const { P, Q, px, qx, w, offP, offQ } of o.free) {
+  for (const { P, Q, px, qx, w, offP, offQ, t } of o.free) {
     const y0 = P.y + offP;
     const y1 = Q.y + offQ;
     // How far a curve runs out of its lane before it bends: enough to read as
     // leaving sideways and to clear the lanes beside the device, not so much
     // that two ports on one side join in a loop wider than the floor.
     const reach = Math.min(CURVE_REACH, Math.max(4, Math.hypot(qx - px, y1 - y0) * 0.25));
+    if (o.traffic) {
+      o.tcurves.push(px, y0, px + P.side * reach, y0, qx + Q.side * reach, y1, qx, y1,
+        Math.max(t.ab, t.ba), t.worst);
+      continue;
+    }
     let list = curves.get(w);
     if (!list) curves.set(w, (list = []));
     list.push(px, y0, px + P.side * reach, y0, qx + Q.side * reach, y1, qx, y1);
@@ -351,4 +530,6 @@ function flatten(o) {
   o.h = undefined;
   o.v = undefined;
   o.free = undefined;
+  o.tstubs = undefined;
+  o.tv = undefined;
 }
