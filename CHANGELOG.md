@@ -11,6 +11,43 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.2.0 — 2026-10-09
+
+Three more ways to put load on the cables, all additive: a metric measured
+per host, switch port counters, and taking things out of service. No file
+that loaded under 1.1.0 reads differently, and no tool changed. 1.1.0 was
+never published on its own; this release carries its changes too.
+
+- **Per-host totals load the cables, as an estimate.** A metric with no
+  `peer=` — how much each host sent, not to whom — offers **load the cables
+  (estimated)**. Each host's total is sent to the other hosts measured, in
+  proportion to their own totals (the gravity model) or evenly, and routed
+  like flows. Every host sends exactly its total; the panel says the load is
+  estimated and from how many hosts. `examples/dual-plane-hosts.tsv` is a
+  set for `examples/dual-plane.dc`.
+- **Switch counters go straight onto their cables.** A sample tagged
+  `link=<neighbour>` is an interface counter: what the device sent towards
+  that neighbour, or with `dir=in` received from it, with `net=` to pick
+  between nets. Its card offers **draw on the cables**: measured load, in the
+  same colours as the model. Parallel cables share a port's value by
+  capacity, and both ends' readings of one direction are averaged rather
+  than added. Beside a routed metric the panel can show the model, the
+  counters, or **measured − model** — red where a cable carried more than the
+  model said, blue where less — with the biggest disagreements listed.
+  `examples/dual-plane-counters.tsv` is the example run as hashing really
+  placed it.
+- **What-if: take an element or a cable out.** **Take out** in the inspector,
+  or ✕ on a cable in the panel's lists, puts it out of service — an element
+  with everything inside it. The model routes round what is left and the
+  cables show the change since: red where load moved to, blue where it left,
+  with how many flows lost their route and how many cables are now past
+  full. What is out is drawn crossed through, routes between picks avoid it,
+  and it survives editing the layout; **Put all back** undoes it.
+- Every change to the project now moves the version: `CLAUDE.md` says so for
+  whoever works on it next, `docs/releasing.md` says how, and a pull request
+  that leaves the version where `main` has it fails the new **version**
+  check.
+
 ## 1.1.0 — 2026-10-09
 
 New layout syntax and new viewer features, all of them additive — `gbps=`,

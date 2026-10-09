@@ -26,6 +26,33 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Every pull request moves the version (docs/releasing.md): one that leaves
+  # it where its base branch has it fails here, so a change cannot reach main
+  # unnumbered. Only on pull requests -- a push to main has nothing to
+  # compare against but itself.
+  version:
+    name: version
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: The version moved past the base branch's
+        env:
+          BASE: ${{ github.base_ref }}
+        run: |
+          git fetch --depth=1 origin "$BASE"
+          read_version() { sed -n "s/^export const VERSION = '\(.*\)';$/\1/p"; }
+          head=$(read_version < js/version.js)
+          base=$(git show FETCH_HEAD:js/version.js | read_version)
+          echo "base $BASE: $base, this pull request: $head"
+          if [ -z "$head" ] || [ -z "$base" ]; then
+            echo "::error file=js/version.js::could not read VERSION"; exit 1
+          fi
+          if [ "$head" = "$base" ] || [ "$(printf '%s\n%s\n' "$base" "$head" | sort -V | tail -n1)" != "$head" ]; then
+            echo "::error file=js/version.js::the version is $head, and $BASE has $base -- every change moves the version (docs/releasing.md)"
+            exit 1
+          fi
+
   modules:
     name: module tests
     runs-on: ubuntu-latest

@@ -1034,6 +1034,55 @@ await test('a flow metric loads the cables', async () => {
   ok(/25G\s+100G/.test(await panel()), 'width by capacity has a key of the speeds in the layout');
 }, { url: '?layout=examples/dual-plane.dc&results=examples/dual-plane-flows.tsv' });
 
+// Counters beside the model, measured against it, and what-if: take a spine
+// out and see where its traffic goes.
+await test('counters, the model, and taking a spine out', async () => {
+  const panel = () => page.evaluate(() => document.querySelector('#cable-load').innerText);
+  const ticks = page.locator('#overlays .overlay-head input[type=checkbox]');
+  await ticks.nth(0).check();
+  await page.waitForTimeout(200);
+  await page.locator('#overlays label', { hasText: /^load the cables$/ }).locator('input').check();
+  await ticks.nth(1).check();
+  await page.waitForTimeout(200);
+  await page.locator('#overlays label', { hasText: 'draw on the cables' }).locator('input').check();
+  await page.waitForTimeout(400);
+  const options = await page.locator('#cable-load select.cable-view option').allTextContents();
+  eq(options, ['Offered load', 'Switch port counters (measured)', 'measured − model'],
+     'with flows and counters loaded, the cables can show either, or one against the other');
+  ok(/127 cables measured/.test(await panel()), 'the counters land on their cables');
+  await page.locator('#cable-load select.cable-view').selectOption('diff');
+  await page.waitForTimeout(400);
+  ok(/Biggest differences from the model\s+R01\/torb → SP1\/spine1\s+\+120G · \+120%/.test(await panel()),
+     'measured against the model, the hashed uplink stands out');
+
+  await page.locator('#cable-load select.cable-view').selectOption('model');
+  await page.fill('#filter', 'spine1');
+  await page.waitForTimeout(400);
+  await page.locator('#tree .tree-row:not(.nomatch) .tree-name', { hasText: /^spine1$/ }).first().click();
+  await page.fill('#filter', '');
+  await page.waitForTimeout(300);
+  await page.locator('#inspector button', { hasText: 'Take out' }).click();
+  await page.waitForTimeout(400);
+  const after = await panel();
+  ok(/What-if: 1 taken out/.test(after) && /every flow still has a route/.test(after),
+     `the what-if names what is out and what it cost  (${after.slice(0, 160).replace(/\n/g, ' | ')})`);
+  ok(/Biggest changes\s+R01\/tor[ab] → SP1\/spine2\s+\+80G/.test(after), 'and shows where the traffic went');
+  ok(await page.locator('#inspector button', { hasText: 'Put back' }).count() === 1, 'the inspector offers to put it back');
+  await page.locator('#cable-load button', { hasText: 'Put all back' }).click();
+  await page.waitForTimeout(300);
+  ok(!/What-if/.test(await panel()), 'and Put all back does');
+}, { url: '?layout=examples/dual-plane.dc&results=examples/dual-plane-flows.tsv,examples/dual-plane-counters.tsv' });
+
+await test('per-host totals load the cables as an estimate', async () => {
+  await page.locator('#overlays .overlay-head input[type=checkbox]').first().check();
+  await page.waitForTimeout(200);
+  await page.locator('#overlays label', { hasText: 'load the cables (estimated)' }).locator('input').check();
+  await page.waitForTimeout(400);
+  const text = await page.evaluate(() => document.querySelector('#cable-load').innerText);
+  ok(/estimated from 32 hosts’ totals/.test(text), 'the panel says it is an estimate, and from how many hosts');
+  ok(/R02\/s5 → R02\/tor[ab]\s+22\.5G\/25G · 90%/.test(text), 'the hot server’s NICs are the busiest cables');
+}, { url: '?layout=examples/dual-plane.dc&results=examples/dual-plane-hosts.tsv' });
+
 // module tests can prove the two source files agree; only this can prove the
 // number reaches the screen.
 await test('the About box shows the version', async () => {

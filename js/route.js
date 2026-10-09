@@ -326,7 +326,9 @@ function fanOut(o) {
 
 const IDLE = { ab: 0, ba: 0, worst: null };
 const IDLE_END = { out: 0, in: 0, worst: null };
-const worse = (a, b) => (b === null ? a : a === null || b > a ? b : a);
+// The value a piece keeps from its cables: the one furthest from nothing --
+// the fullest, or the biggest change either way.
+const worse = (a, b) => (b === null ? a : a === null || Math.abs(b) > Math.abs(a) ? b : a);
 
 // A stub drawn by traffic: one per port and lane, carrying everything the
 // port sends and receives along it, so it is summed before it is drawn.

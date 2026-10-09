@@ -698,3 +698,10 @@ button.danger:hover { color: #ffbdbd; border-color: #8a3a3a; }
 .cap-key { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin: 6px 0 2px; }
 .cap-item { display: inline-flex; align-items: center; gap: 4px; font-family: var(--mono); font-size: 10.5px; color: var(--ink-dim); }
 .cap-bar { display: inline-block; width: 22px; background: var(--ink); border-radius: 2px; }
+.cable-view, .cable-source { width: 100%; margin: 4px 0 6px; font-size: 11.5px; }
+.cable-source { color: var(--ink-dim); }
+.whatif { border: 1px solid #ff5c5c66; border-radius: 4px; padding: 6px 8px; margin: 6px 0; font-size: 11px; }
+.pick.out { background: #ff5c5c26; border-color: #ff5c5c66; }
+.row-act { flex: none; font-size: 10px; line-height: 1; padding: 1px 4px; margin-left: 4px; opacity: 0.55; }
+.row-act:hover { opacity: 1; }
+.btnrow button.active { border-color: #ff5c5c; color: #ff8a8a; }

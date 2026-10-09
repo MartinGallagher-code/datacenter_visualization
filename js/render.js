@@ -14,7 +14,6 @@ import { labelOf } from './layout.js';
 import { colorFor, contrastInk, ramp } from './palette.js';
 import { formatValue, isStandardized, overlayValue, zRangeOf, zScore } from './results.js';
 import { routeCables } from './route.js';
-import { utilOf } from './traffic.js';
 
 const THEME = {
   bg: '#0d1117',
@@ -155,6 +154,7 @@ export class Renderer {
     const root = this.state.model.root;
     if (root && root.box) this.drawElement(root);
     this.drawLinks();
+    this.drawTakenOut();
     this.drawFlows();
     this.drawEndpoints();
     this.drawSelection();
@@ -426,7 +426,7 @@ export class Renderer {
     // Traffic on the cables, or failing that their capacity, redraws every
     // piece by what passes through it -- a different layout of the same
     // cables, so the cache is keyed by it too.
-    const load = state.cableLoad ? state.cableLoad() : null;
+    const load = state.cableView ? state.cableView() : null;
     const capacity = !load && !!state.capacityView;
     const cache = this.linkCache;
     if (cache.version !== state.version || cache.bucket !== bucket || cache.only !== only
@@ -563,6 +563,67 @@ export class Renderer {
 
     ctx.setLineDash([]);
     ctx.globalAlpha = 1;
+  }
+
+  /**
+   * What-if: what is taken out stays on the floor, marked as out. A cable is
+   * a dashed red line between the two ends it joined; an element is crossed
+   * through. Drawn whatever the cable view, so taking something out always
+   * shows.
+   */
+  drawTakenOut() {
+    const state = this.state;
+    if (!state.takenOut || !state.down || !(state.down.els.size || state.down.links.size)) return;
+    const { els, links } = state.takenOut();
+    const ctx = this.ctx;
+    const scale = this.camera.scale;
+    ctx.save();
+    ctx.strokeStyle = TAKEN_OUT;
+    ctx.globalAlpha = 0.9;
+    ctx.lineWidth = 2 / scale;
+    ctx.setLineDash([5 / scale, 4 / scale]);
+    for (const link of links) {
+      const a = state.drawnEndpoint(link.a);
+      const b = state.drawnEndpoint(link.b);
+      if (!a || !b || a === b || !a.box || !b.box) continue;
+      const ax = a.box.x + a.box.w / 2;
+      const ay = a.box.y + a.box.h / 2;
+      const bx = b.box.x + b.box.w / 2;
+      const by = b.box.y + b.box.h / 2;
+      if (!this.segmentVisible(ax, ay, bx, by)) continue;
+      ctx.beginPath();
+      ctx.moveTo(ax, ay);
+      ctx.lineTo(bx, by);
+      ctx.stroke();
+      const mx = (ax + bx) / 2;
+      const my = (ay + by) / 2;
+      const r = 4 / scale;
+      ctx.setLineDash([]);
+      ctx.beginPath();
+      ctx.moveTo(mx - r, my - r);
+      ctx.lineTo(mx + r, my + r);
+      ctx.moveTo(mx + r, my - r);
+      ctx.lineTo(mx - r, my + r);
+      ctx.stroke();
+      ctx.setLineDash([5 / scale, 4 / scale]);
+    }
+    ctx.setLineDash([]);
+    for (const el of els) {
+      // Inside a collapsed rack it is the rack that shows; crossing that out
+      // would say the whole rack was taken out.
+      if (state.drawnEndpoint(el) !== el) continue;
+      const b = el.box;
+      if (!b || !this.intersects(b)) continue;
+      ctx.lineWidth = 2 / scale;
+      ctx.strokeRect(b.x, b.y, b.w, b.h);
+      ctx.beginPath();
+      ctx.moveTo(b.x, b.y);
+      ctx.lineTo(b.x + b.w, b.y + b.h);
+      ctx.moveTo(b.x + b.w, b.y);
+      ctx.lineTo(b.x, b.y + b.h);
+      ctx.stroke();
+    }
+    ctx.restore();
   }
 
   /**
@@ -775,11 +836,11 @@ export class Renderer {
     const measured = !!(load || capacity);
     const share = (link) => {
       if (capacity) return [link.gbps || 0, link.gbps || 0, link.gbps || null];
-      const l = load.result.loads.get(link);
-      if (!l) return [0, 0, null];
-      return [l[0], l[1], utilOf(link, l, load.toGbps)];
+      return load.share(link);
     };
-    const worse = (a, b) => (b === null ? a : a === null || b > a ? b : a);
+    // The value kept along a piece is the one furthest from nothing: the
+    // fullest cable, or the biggest change either way.
+    const worse = (a, b) => (b === null ? a : a === null || Math.abs(b) > Math.abs(a) ? b : a);
 
     // The block actually painted for an endpoint: its outermost collapsed
     // ancestor, or the container the LOD cutoff stopped recursing at.
@@ -821,9 +882,13 @@ export class Renderer {
     // as a splice depends on what its members are painted as.
     const spliced = new Map();
 
+    // What-if: a cable taken out is not drawn as a cable; drawTakenOut marks
+    // where it was.
+    const down = state.isDown && (state.down && (state.down.els.size || state.down.links.size));
     for (const link of state.model.links) {
       const net = state.model.nets.get(link.net);
       if (!net || !net.enabled) continue;
+      if (down && state.isDown(link)) continue;
       const a = paintedBlock(link.a);
       const b = paintedBlock(link.b);
       if (!a || !b || a === b) continue;
@@ -942,7 +1007,11 @@ const LOD_RECURSE = 9;   // stop descending once a container is this many px wid
 // grey, beside ones that have one; with no capacity anywhere, the colour is
 // the load against the busiest piece instead.
 export const LOAD_COLORS = { over: '#ff40ff', unknown: '#9aa4b2' };
+const TAKEN_OUT = '#ff5c5c';
 export const loadColor = (util) => (util > 1.0005 ? LOAD_COLORS.over : ramp('health', util));
+// A change, -1..1 of the scale: red where more is carried than before (or
+// than the model said), blue where less, pale where nothing moved.
+export const changeColor = (v) => ramp('rdbu', 0.5 - Math.max(-1, Math.min(1, v)) / 2);
 const MIN_LOAD_W = 1.25;
 const MAX_LOAD_W = 7;
 
@@ -972,12 +1041,19 @@ function cableStyler(load, capacity) {
     return style;
   };
   const anyCapacity = !!(load && load.anyCapacity);
+  const colour = load ? load.colour : 'capacity';
+  const span = (load && load.span) || 1;
   return (amount, worst, max) => {
     // Drawing capacity, `worst` is the fastest cable along the piece.
     if (capacity) return worst ? intern(capacityWidth(worst), null, false, worst) : intern(1, null, true, -1);
     if (!(amount > 0) || !(max > 0)) return intern(1, null, true, -1);
     const f = Math.min(1, amount / max);
     const width = Math.round((MIN_LOAD_W + (MAX_LOAD_W - MIN_LOAD_W) * Math.sqrt(f)) * 2) / 2;
+    if (colour === 'diff') {
+      if (worst === null) return intern(width, LOAD_COLORS.unknown, false, 0);
+      const v = Math.round(Math.max(-1, Math.min(1, worst / span)) * 20) / 20;
+      return intern(width, changeColor(v), false, Math.abs(v));
+    }
     if (worst !== null) {
       const u = worst > 1.0005 ? 2 : Math.round(worst * 20) / 20;
       return intern(width, u > 1 ? LOAD_COLORS.over : ramp('health', u), false, u);
