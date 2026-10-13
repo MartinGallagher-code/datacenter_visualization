@@ -1627,6 +1627,76 @@ const segsOf = (cache, net) => {
      'and its counters disagree with the model most on one R01 uplink: 200 measured, 80 modelled');
 }
 
+// ------------------------------------------- a snippet that routed nothing
+// Traffic reached the ToRs and went no further. Three slips on four lines:
+// `gpbs=` for `gbps=`, a stray quote that took the rest of a line into the
+// label, and `scope=rw` for `scope=row` -- and only the last one said
+// anything, and then only that the rule wired nothing.
+{
+  const floor = [
+    'dc D',
+    '  row A',
+    '    rack R[1..2] u=10',
+    '      node tor nic=a role=tor +switch',
+    '      node s[1..4] role=server',
+    '  row S',
+    '    rack SP u=10',
+    '      node spine1 role=spine +switch',
+  ];
+  const typed = parseLayout([...floor,
+    'net nica label="NIC a" show=yes gpbs=100',
+    'net spine-a "label="spine-nic_a" show=yes gpbs=400',
+    'link nica scope=rack role=server role=tor,nic=a splice=4',
+    'link spine-a scope=rw role=tor,nic=a role=spine*',
+  ].join('\n'));
+  eq(typed.warnings.length, 3, 'three slips, three warnings');
+  ok(/line 10: a " is never closed, so the rest of the line became one value: label=spine-nic_a show=yes gpbs=400/
+    .test(typed.warnings[0]), 'a quote left open says what it swallowed');
+  ok(/line 9: net "nica": gpbs= is not a net setting -- did you mean gbps=\?/.test(typed.warnings[1]),
+     'a mistyped net setting is named, with what it was meant to be');
+  ok(/line 12: net "spine-a": scope=rw is not a kind in this layout -- did you mean scope=row\? The kinds here are dc, row, rack, node/
+    .test(typed.warnings[2]), 'a scope that names no kind says which kinds there are');
+  ok(!typed.warnings.some((w) => /wired nothing/.test(w)), 'and the same slip is not reported twice');
+
+  // Spelled right, scope=row still pairs nothing: the ToRs are in row A and
+  // the spine in row S, and each row is wired on its own.
+  const spelled = parseLayout([...floor,
+    'net nica label="NIC a" show=yes gbps=100',
+    'net spine-a label="spine-nic_a" show=yes gbps=400',
+    'link nica scope=rack role=server role=tor,nic=a splice=4',
+    'link spine-a scope=row role=tor,nic=a role=spine*',
+  ].join('\n'));
+  eq([spelled.nets.get('nica').gbps, spelled.nets.get('spine-a').gbps], [100, 400], 'gbps= spelled right is a capacity');
+  eq(spelled.warnings.length, 1, 'one thing left to say');
+  ok(/scope=row wires each row on its own, and no row holds both "role=tor,nic=a" and "role=spine\*" .* use no scope= at all/
+    .test(spelled.warnings[0]), 'that the scope keeps the two sides apart, and what to use instead');
+  const lost = routeTraffic(spelled, [{ id: 0, src: spelled.resolve('R1/s1'), dst: spelled.resolve('R2/s1'), value: 50 }]);
+  eq(lost.unrouted.map((u) => u.why), ['no route through +switch elements'], 'with no uplinks, the flow stops at the ToR');
+
+  const fixed = parseLayout([...floor,
+    'net nica label="NIC a" show=yes gbps=100',
+    'net spine-a label="spine-nic_a" show=yes gbps=400',
+    'link nica scope=rack role=server role=tor,nic=a splice=4',
+    'link spine-a role=tor,nic=a role=spine*',
+  ].join('\n'));
+  eq(fixed.warnings, [], 'without the scope, nothing to report');
+  const up = routeTraffic(fixed, [{ id: 0, src: fixed.resolve('R1/s1'), dst: fixed.resolve('R2/s1'), value: 50 }]);
+  const uplink = [...up.loads.keys()].find((l) => l.net === 'spine-a');
+  eq([up.routed, uplink && utilOf(uplink, up.loads.get(uplink), 1)], [1, 0.125],
+     'and the flow climbs to the spine: 50G on a 400G uplink');
+
+  // A room in common is offered as the scope that holds both.
+  const rooms = parseLayout(['dc D', '  room H', '    row A', '      rack R u=4',
+    '        node tor role=tor +switch', '    row S', '      rack SP u=4', '        node spine role=spine +switch',
+    'net up', 'link up role=tor role=spine scope=row'].join('\n'));
+  ok(/use scope=room, or no scope= at all/.test(rooms.warnings[0] || ''), 'where a room holds both, it says so');
+
+  // Close is close: nothing is guessed for a word that is nothing like a setting.
+  const far = parseLayout('dc D\n  node a\nnet x speed=100');
+  ok(far.warnings.length === 1 && !/did you mean/.test(far.warnings[0]) && /speed= is not a net setting/.test(far.warnings[0]),
+     'an unknown setting with no near match is named without a guess');
+}
+
 // ------------------------------------------------------------------ splices
 // `splice=N` gathers every N consecutive matches of the first selector onto
 // one cable to each element of the second: a breakout harness, four servers

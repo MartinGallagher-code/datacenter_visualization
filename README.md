@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.2.0** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.2.1** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -340,7 +340,16 @@ link storage +storage,role=server scope=row mode=mesh  # full mesh within a row
   counted.
 - A rule that wires nothing says so: a selector that matched no elements (the
   shape a typo makes) and a rule whose matches produced no cables are both
-  reported as warnings rather than left as a silently empty fabric.
+  reported as warnings rather than left as a silently empty fabric. A
+  `scope=` that names no kind in the layout says which kinds there are
+  (`scope=rw` — did you mean `scope=row`?), and one that keeps the two sides
+  apart — ToRs in the rack rows, spines in a row of their own, `scope=row` —
+  says so and names the scope that holds both, or none.
+- A `net` line takes `label=`, `color=`, `style=`, `width=`, `show=`, `gbps=`
+  and `traffic=`; anything else is reported with the setting it was most
+  likely meant to be (`gpbs=` — did you mean `gbps=`?). A quote left open
+  anywhere is reported too: it runs to the end of the line, so
+  `"label="x" gbps=400` is a label reading `x gbps=400` and no capacity.
 - Declared nets **start visible** on a modest floor (up to 20,000 cables in
   total), so wiring something draws something. Past that they start unticked —
   a hyperscale floor's first render should be the floor. `show=` on a `net`
