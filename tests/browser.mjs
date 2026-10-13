@@ -1083,6 +1083,73 @@ await test('per-host totals load the cables as an estimate', async () => {
   ok(/R02\/s5 → R02\/tor[ab]\s+22\.5G\/25G · 90%/.test(text), 'the hot server’s NICs are the busiest cables');
 }, { url: '?layout=examples/dual-plane.dc&results=examples/dual-plane-hosts.tsv' });
 
+// Picks narrow the traffic too: only the flows between them, and a test flow
+// from the first to the second.
+await test('traffic between the picks', async () => {
+  const panel = () => page.evaluate(() => document.querySelector('#cable-load').innerText);
+  await page.locator('#overlays .overlay-head input[type=checkbox]').first().check();
+  await page.waitForTimeout(200);
+  await page.locator('#overlays label', { hasText: /^load the cables$/ }).locator('input').check();
+  await page.waitForTimeout(300);
+  const pick = async (name, nth) => {
+    await page.fill('#filter', name);
+    await page.waitForTimeout(400);
+    await page.locator('#tree .tree-row:not(.nomatch)', {
+      has: page.locator('.tree-name', { hasText: new RegExp(`^${name}$`) }),
+    }).nth(nth).click({ modifiers: ['Shift'] });
+    await page.waitForTimeout(200);
+  };
+  await pick('s1', 0);   // R01/s1
+  await pick('s1', 2);   // R03/s1
+  await page.fill('#filter', '');
+  await page.waitForTimeout(300);
+  ok(/17 of 17 flows routed/.test(await panel()), 'every flow counts until asked otherwise');
+  await page.locator('#inspector .picks-traffic label', { hasText: 'count only' }).locator('input').check();
+  await page.waitForTimeout(300);
+  ok(/only the 1 of 17 flows between the picks/.test(await panel()), 'then only the one between the picks');
+
+  await page.fill('#inspector .test-flow input', '50');
+  await page.locator('#inspector .test-flow input').dispatchEvent('change');
+  await page.waitForTimeout(200);
+  await page.locator('#inspector .test-flow button', { hasText: 'Send' }).click();
+  await page.waitForTimeout(300);
+  const sent = await panel();
+  ok(/Offered load, between the picks \+ test flow 50 Gb\/s/.test(sent), 'a test flow rides on top, in the metric’s unit');
+  ok(/test flow: 50 Gb\/s from R01\/s1 to R03\/s1/.test(sent), 'from the first pick to the second');
+  ok(/R01\/s1 → R01\/tor[ab]\s+45G\/25G · 180%/.test(sent), 'and adds to what the metric put on the same cable');
+
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(300);
+  ok(/17 of 17 flows routed/.test(await panel()) && !/test flow/.test(await panel()),
+     'Esc forgets the picks, and the test flow with them');
+}, { url: '?layout=examples/dual-plane.dc&results=examples/dual-plane-flows.tsv' });
+
+await test('a test flow on its own', async () => {
+  const pick = async (name, nth) => {
+    await page.fill('#filter', name);
+    await page.waitForTimeout(400);
+    await page.locator('#tree .tree-row:not(.nomatch)', {
+      has: page.locator('.tree-name', { hasText: new RegExp(`^${name}$`) }),
+    }).nth(nth).click({ modifiers: ['Shift'] });
+    await page.waitForTimeout(200);
+  };
+  await pick('s1', 0);
+  await pick('s1', 2);
+  await page.fill('#filter', '');
+  await page.waitForTimeout(300);
+  await page.locator('#inspector .test-flow select').selectOption('pps');
+  await page.waitForTimeout(200);
+  await page.fill('#inspector .test-flow input', '1000');
+  await page.locator('#inspector .test-flow input').dispatchEvent('change');
+  await page.waitForTimeout(200);
+  await page.locator('#inspector .test-flow button', { hasText: 'Send' }).click();
+  await page.waitForTimeout(300);
+  const text = await page.evaluate(() => document.querySelector('#cable-load').innerText);
+  ok(/Test flow 1000 pps/.test(text), 'with no metric loaded, a test flow is the whole load, in its own unit');
+  ok(/pps cannot be set against a capacity/.test(text), 'and pps is drawn by load, not against capacity');
+}, { url: '?layout=examples/dual-plane.dc' });
+
 // module tests can prove the two source files agree; only this can prove the
 // number reaches the screen.
 await test('the About box shows the version', async () => {

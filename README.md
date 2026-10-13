@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.2.1** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.3.0** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -527,6 +527,30 @@ servers sending 40 Gb/s each across the planes — 80% of their NICs and their
 rack's uplinks — and an incast of eight servers into one, 160% of the two
 NICs it lands on. Switch to **hashed** and each 40 Gb/s flow takes one NIC,
 not two.
+
+#### Between picks: only their flows, and a test flow
+
+Picking two or more elements decides which cables are drawn — the routes
+between them — but not which traffic is counted on those cables: every flow
+in the metric that crosses them still adds to their width. With two or more
+picks the picks box offers two things more:
+
+- **count only the flows between the picks** loads the cables with just the
+  metric's flows that start in one pick and end in another (either way; a
+  rack picked holds everything in it). The panel says how many of the
+  metric's flows that is. For per-host totals it keeps only the host pairs
+  between the picks, each at the share it has in the whole estimate.
+- **test flow [N] [unit] 1 → 2 · Send** routes N from the first pick to the
+  second and draws it like any metric — with nothing loaded, on its own and
+  in Gb/s, Mb/s or pps; with a metric loaded, on top of it and in its unit,
+  so you can see whether one more flow fits. A rack picked sends (or
+  receives) it shared evenly over its devices. **Stop**, Esc or Clear ends
+  it.
+
+For a single test flow, **hashed: one path per flow** is usually what you
+want: it puts the whole flow on one uplink, so every cable from server to
+server is drawn the same width, where even split shares it over every
+uplink — four spines, a quarter each.
 
 #### Per-host totals: an estimate
 
@@ -1295,7 +1319,9 @@ quietly left stale.
   never borrows a server's mgmt cable to reach the data fabric. A pick can be
   a container — two racks show the uplinks between them. Untick a network to
   route without it; Shift-click a pick again, or its chip, to drop it; **Clear**
-  or Esc forgets them all.
+  or Esc forgets them all. With cable load on, the picks box can also count
+  only the flows between the picks, and send a test flow from the first to
+  the second — see [Between picks](#between-picks-only-their-flows-and-a-test-flow).
 - **Files** — the panel's **Open folder…** keeps a directory open beside the
   canvas, instead of a dialog that shows one and forgets it. Layouts and
   results are listed with their sizes (worth seeing before clicking a 300 MB

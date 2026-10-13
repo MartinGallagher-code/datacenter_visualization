@@ -32,8 +32,9 @@ import {
   Renderer, capacityWidth, changeColor, LOAD_COLORS, linkSummary, loadColor, sharesLineage, spliceSummary,
 } from '../js/render.js';
 import {
-  biggestChanges, bitRate, busiest, cableKeys, cablesOf, compareLoads, countersOf, flowsOf, formatGbps,
-  hostsOf, loadable, loadUnit, routeEstimate, routeTraffic, trafficKind, utilOf, viewOf as cableView,
+  betweenPicks, biggestChanges, bitRate, busiest, cableKeys, cablesOf, compareLoads, countersOf, devicesOf,
+  flowsOf, formatGbps, hostsOf, loadable, loadUnit, mergeResults, routeEstimate, routeTraffic, testFlows,
+  trafficKind, utilOf, viewOf as cableView,
 } from '../js/traffic.js';
 import { CURVE_REACH, FAN_GAP, LANE, SPLICE_W } from '../js/route.js';
 import { compileQuery, applyFilter } from '../js/filter.js';
@@ -1695,6 +1696,73 @@ const segsOf = (cache, net) => {
   const far = parseLayout('dc D\n  node a\nnet x speed=100');
   ok(far.warnings.length === 1 && !/did you mean/.test(far.warnings[0]) && /speed= is not a net setting/.test(far.warnings[0]),
      'an unknown setting with no near match is named without a guess');
+}
+
+// ------------------------------------------- traffic between the picks
+// Picks decide which cables are drawn; these decide which traffic is counted
+// on them: only a metric's flows between the picks, or a test flow sent from
+// the first pick to the second.
+{
+  const m = parseLayout([
+    'dc D',
+    '  row A cols=2',
+    '    rack R[1..2] u=24',
+    '      node tor at=24 role=tor +switch',
+    '      node s[1..8] u=2 role=server',
+    '  row S',
+    '    rack SP u=10',
+    '      node spine[1..4] role=spine +switch',
+    'net nic gbps=100',
+    'net up gbps=400',
+    'link nic scope=rack role=server role=tor splice=4',
+    'link up role=tor role=spine',
+  ].join('\n'));
+  const r1s1 = m.resolve('R1/s1');
+  const r2s1 = m.resolve('R2/s1');
+  const r1 = m.resolve('R1');
+
+  // Which flows are between the picks: from inside one to inside another.
+  const only = betweenPicks([r1s1, r2s1]);
+  eq([only(r1s1, r2s1), only(r2s1, r1s1), only(r1s1, m.resolve('R2/s2')), only(r1s1, r1s1)], [true, true, false, false],
+     'a flow is between the picks when it runs from one to another, either way');
+  const racks = betweenPicks([r1, m.resolve('R2')]);
+  ok(racks(m.resolve('R1/s5'), m.resolve('R2/s8')) && !racks(m.resolve('R1/s5'), m.resolve('R1/s6')),
+     'a rack picked holds everything in it, and a flow inside one rack is not between two');
+
+  // A test flow from one server to another is one flow; from a rack, shared.
+  const one = testFlows([r1s1, r2s1], 100);
+  eq(one.map((f) => [f.src.path, f.dst.path, f.value]), [['D/A/R1/s1', 'D/A/R2/s1', 100]], 'server to server: one flow');
+  eq(devicesOf(r1).length, 9, 'a rack stands for its ToR and its servers');
+  const spread = testFlows([r1, r2s1], 90);
+  eq([spread.length, Math.round(spread.reduce((sum, f) => sum + f.value, 0))], [9, 90],
+     'from a rack, the test flow is shared over its devices, and still adds up');
+  eq(testFlows([r1s1], 100), [], 'one pick sends nothing');
+
+  // Even split shares the uplinks; hashed keeps the flow whole on every cable,
+  // so the server's cable and the uplink it takes carry the same.
+  const peak = (r, net) => Math.max(...[...r.loads].filter(([l]) => l.net === net).map(([, x]) => Math.max(...x)));
+  const even = routeTraffic(m, one, { split: 'even' });
+  eq([peak(even, 'nic'), peak(even, 'up')], [100, 25], 'even split: a quarter on each of four uplinks');
+  const hashed = routeTraffic(m, one, { split: 'hashed', seed: 2 });
+  eq([peak(hashed, 'nic'), peak(hashed, 'up')], [100, 100], 'hashed: the same on every cable of its one path');
+
+  // On top of a metric: the two add up, cable by cable.
+  const other = routeTraffic(m, [{ id: 0, src: m.resolve('R1/s2'), dst: m.resolve('R2/s2'), value: 40 }], { split: 'hashed', seed: 2 });
+  const both = mergeResults(other, hashed);
+  eq([both.routed, both.delivered], [2, 140], 'two routings merge their counts');
+  ok([...both.loads].every(([l, x]) => {
+    const a = other.loads.get(l) || [0, 0];
+    const b = hashed.loads.get(l) || [0, 0];
+    return x[0] === a[0] + b[0] && x[1] === a[1] + b[1];
+  }), 'and their loads add up on every cable');
+  eq(mergeResults(null, hashed), hashed, 'merging into nothing is the routing itself');
+
+  // A per-host estimate narrowed to the picks keeps only their pairs.
+  const hosts = [r1s1, r2s1, m.resolve('R1/s2')].map((el) => ({ el, value: 30 }));
+  const all = routeEstimate(m, hosts, {});
+  const picked = routeEstimate(m, hosts, { only });
+  ok(picked.delivered < all.delivered && picked.routed === 2, 'narrowed, an estimate routes only the pairs between the picks');
+  ok(Math.abs(picked.delivered - 2 * (30 * 30 / 60)) < 1e-9, 'each at the share it has in the whole estimate');
 }
 
 // ------------------------------------------------------------------ splices

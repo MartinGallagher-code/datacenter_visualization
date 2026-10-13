@@ -14,7 +14,8 @@ import {
   capacityWidth, changeColor, countDescendants, LOAD_COLORS, loadColor, linkSummary, spliceSummary,
 } from './render.js';
 import {
-  biggestChanges, busiest, cablesOf, formatGbps, loadUnit, SPLITS, SPREADS, trafficKind, utilOf,
+  biggestChanges, busiest, cablesOf, formatGbps, loadable, loadUnit, SPLITS, SPREADS, TEST_UNITS, trafficKind,
+  utilOf,
 } from './traffic.js';
 
 const el = (tag, cls, text) => {
@@ -704,7 +705,13 @@ function takeOutButton(link, actions) {
 }
 
 function viewLabel(view, name) {
-  if (name === 'model') return `${view.model.overlay.label}${view.model.kind === 'hosts' ? ' (estimated)' : ''}`;
+  if (name === 'model') {
+    const m = view.model;
+    const test = m.test ? `test flow ${trimNum(m.test.value)} ${m.test.unit}` : '';
+    if (!m.overlay) return `${test[0].toUpperCase()}${test.slice(1)}`;
+    return `${m.overlay.label}${m.kind === 'hosts' ? ' (estimated)' : ''}${m.between ? ', between the picks' : ''}`
+      + `${test ? ` + ${test}` : ''}`;
+  }
   if (name === 'change') return 'change since taking out';
   if (name === 'measured') return `${view.counters.overlay.label} (measured)`;
   return 'measured − model';
@@ -772,7 +779,7 @@ export function renderCableLoad(state, host, actions) {
     select.title = 'Where several cables continue a shortest route, how a flow is shared between them';
     select.addEventListener('change', () => actions.setTrafficSplit(select.value));
     row.append(select);
-    if (state.traffic.split === 'hashed' && model.kind === 'flows') {
+    if (state.traffic.split === 'hashed' && model.kind !== 'hosts') {
       const roll = el('button', null, 'Re-roll');
       roll.title = 'Hash every flow onto its paths again, with a different seed';
       roll.addEventListener('click', () => actions.rerollTraffic());
@@ -798,7 +805,14 @@ export function renderCableLoad(state, host, actions) {
   const lines = el('div', 'cable-summary');
   if (model) {
     const r = model.result;
-    if (model.kind === 'hosts') {
+    if (model.test) {
+      const t = model.test;
+      lines.append(el('div', null, `test flow: ${trimNum(t.value)} ${t.unit} from ${shortPath(t.from)} to ${shortPath(t.to)}`
+        + `${t.flows > 1 ? `, shared over ${t.flows} device pairs` : ''}`));
+    }
+    if (!model.overlay) {
+      // A test flow on its own: nothing more to say about a metric.
+    } else if (model.kind === 'hosts') {
       lines.append(el('div', null, `estimated from ${model.count} hosts’ totals, sent `
         + `${SPREAD_LABELS[state.traffic.spread] || SPREAD_LABELS.gravity} · ${formatLoad(model, r.delivered)}`));
       if (state.traffic.split === 'hashed') {
@@ -806,7 +820,12 @@ export function renderCableLoad(state, host, actions) {
       }
       if (model.skipped) lines.append(el('div', 'muted', `${model.skipped} readings on racks or rooms left out`));
     } else {
-      lines.append(el('div', null, `${r.routed} of ${model.count} flows routed · ${formatLoad(model, r.delivered)}`));
+      lines.append(el('div', null, model.between
+        ? `only the ${model.count} of ${model.total} flows between the picks`
+        : `${r.routed} of ${model.count} flows routed · ${formatLoad(model, r.delivered)}`));
+    }
+    if (model.between && model.kind === 'hosts') {
+      lines.append(el('div', null, 'only the host pairs between the picks'));
     }
     lines.append(el('div', 'muted', r.switches
       ? `forwarded only by the ${r.switches} elements tagged +switch`
@@ -1120,8 +1139,71 @@ function renderPicks(state, host, actions) {
     box.append(dl);
     const shown = [...routes.nets].map(([net, n]) => `${net} ×${n}`).join(', ');
     box.append(el('p', 'muted', shown ? `showing ${shown}` : 'nothing between them to show'));
+    renderPickTraffic(state, box, actions);
   }
   host.append(box);
+}
+
+/**
+ * Traffic between the picks: count only a loaded metric's flows between them,
+ * and send a test flow from the first pick to the second -- routed and drawn
+ * like any metric, on its own or on top of the one loaded.
+ */
+function renderPickTraffic(state, box, actions) {
+  const t = state.traffic;
+  const wrap = el('div', 'picks-traffic');
+  const overlay = t.key ? state.overlays.get(t.key) : null;
+  const metric = overlay && overlay.enabled && trafficKind(overlay) !== 'cables' && loadable(overlay) ? overlay : null;
+
+  if (metric) {
+    const row = el('label', 'chk');
+    const check = el('input');
+    check.type = 'checkbox';
+    check.checked = !!t.betweenOnly;
+    check.addEventListener('change', () => actions.setBetweenOnly(check.checked));
+    row.append(check, el('span', null, 'count only the flows between the picks'));
+    row.title = `Load the cables with only the flows of ${metric.label} that start in one pick and end `
+      + 'in another, instead of every flow that crosses them';
+    wrap.append(row);
+  }
+
+  const send = el('div', 'test-flow');
+  send.append(el('span', null, 'test flow'));
+  const amount = el('input');
+  amount.type = 'number';
+  amount.min = '0';
+  amount.step = 'any';
+  amount.value = String(t.test.value);
+  amount.title = 'How much the first pick sends the second';
+  amount.addEventListener('change', () => {
+    const v = Number(amount.value);
+    if (Number.isFinite(v) && v > 0) actions.setTestFlow({ value: v });
+  });
+  send.append(amount);
+  if (metric) {
+    // On top of a metric, in its unit: the two add up on every cable.
+    send.append(el('span', 'muted', loadUnit(metric, trafficKind(metric)).unit || 'units'));
+  } else {
+    const unit = el('select');
+    for (const u of TEST_UNITS) {
+      const opt = el('option', null, u);
+      opt.value = u;
+      opt.selected = t.test.unit === u;
+      unit.append(opt);
+    }
+    unit.addEventListener('change', () => actions.setTestFlow({ unit: unit.value }));
+    send.append(unit);
+  }
+  send.append(el('span', null, `1 → 2`));
+  const go = el('button', t.test.on ? 'active' : null, t.test.on ? 'Stop' : 'Send');
+  go.title = t.test.on
+    ? 'Stop sending the test flow'
+    : `Route ${trimNum(t.test.value)} from ${state.picked[0].path} to ${state.picked[1].path} over the fabric and `
+      + `draw it on the cables${metric ? `, on top of ${metric.label}` : ''}`;
+  go.addEventListener('click', () => actions.setTestFlow({ on: !t.test.on, value: Number(amount.value) || t.test.value }));
+  send.append(go);
+  wrap.append(send);
+  box.append(wrap);
 }
 
 export function renderInspector(state, host, actions) {

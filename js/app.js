@@ -22,8 +22,8 @@ import { attachHints, renderReference } from './hints.js';
 import { layoutFromHosts, matchesPattern, recordsSince, tailRecords } from './tsv.js';
 import { routesBetween } from './paths.js';
 import {
-  cableKeys, countersOf, flowsOf, hostsOf, loadable, loadUnit, routeEstimate, routeTraffic, trafficKind,
-  viewOf,
+  betweenPicks, bitRate, cableKeys, countersOf, flowsOf, hostsOf, loadable, loadUnit, mergeResults,
+  routeEstimate, routeTraffic, testFlows, trafficKind, viewOf,
 } from './traffic.js';
 import { VERSION } from './version.js';
 import {
@@ -73,7 +73,13 @@ const state = {
   // `counters` the interface counters drawn straight onto their cables;
   // `view` is which of model, change, measured and measured-less-model the
   // cables show, of those the sources allow.
-  traffic: { key: null, counters: null, split: 'even', seed: 1, spread: 'gravity', view: 'model' },
+  traffic: {
+    key: null, counters: null, split: 'even', seed: 1, spread: 'gravity', view: 'model',
+    // With two or more picks: count only the metric's flows between them,
+    // and a test flow from the first pick to the second.
+    betweenOnly: false,
+    test: { on: false, value: 100, unit: 'Gb/s' },
+  },
   trafficCache: { model: null, base: null, counters: null, view: null },
   // What-if: elements and cables taken out, by key so they survive a re-parse.
   down: { els: new Set(), links: new Set() },
@@ -288,16 +294,24 @@ function applyZScale() {
  */
 function modelSource(withDown) {
   const t = state.traffic;
-  if (!t.key) return null;
-  const overlay = state.overlays.get(t.key);
-  const kind = trafficKind(overlay);
-  if (!overlay || !overlay.enabled || kind === 'cables' || !loadable(overlay)) return null;
+  const overlay = t.key ? state.overlays.get(t.key) : null;
+  const kind = overlay ? trafficKind(overlay) : null;
+  const metric = overlay && overlay.enabled && kind !== 'cables' && loadable(overlay) ? overlay : null;
+  // With two or more picks, a test flow from the first to the second, and the
+  // metric's own flows narrowed to the ones between the picks.
+  const picks = state.picked.length >= 2 ? state.picked : null;
+  const test = picks && t.test.on && t.test.value > 0 ? t.test : null;
+  const between = !!(picks && metric && t.betweenOnly);
+  if (!metric && !test) return null;
   const out = withDown ? state.takenOut() : { els: [], links: [], size: 0 };
   const downKey = withDown ? `${[...state.down.els].sort().join('\u0001')}\u0002${[...state.down.links].sort().join('\u0001')}` : '';
+  const pickKey = picks && (test || between) ? picks.map((p) => p.key).join('\u0001') : '';
+  const testKey = test ? `${test.value}\u0001${test.unit}` : '';
   const slot = withDown ? 'model' : 'base';
   const c = state.trafficCache[slot];
-  if (c && c.overlay === overlay && c.layout === state.model && c.agg === overlay.agg && c.split === t.split
-      && c.seed === t.seed && c.spread === t.spread && c.down === downKey) {
+  if (c && c.overlay === metric && c.layout === state.model && c.agg === (metric && metric.agg)
+      && c.split === t.split && c.seed === t.seed && c.spread === t.spread && c.down === downKey
+      && c.picks === pickKey && c.test === testKey && c.between === between) {
     return c.value;
   }
   // Nothing taken out: the model and its baseline are one routing.
@@ -306,32 +320,50 @@ function modelSource(withDown) {
     state.trafficCache.model = { ...state.trafficCache.base, down: downKey };
     return same;
   }
-  const unit = loadUnit(overlay, kind);
+  // A test flow is in the metric's unit when it rides on top of one, and in
+  // its own when it is all there is.
+  const unit = metric ? loadUnit(metric, kind) : testUnit(test.unit);
   const opts = { split: t.split, seed: t.seed, spread: t.spread, down: out };
-  let result;
+  const only = between ? betweenPicks(picks) : null;
+  let result = null;
   let count = 0;
+  let total = 0;
   let unresolved = 0;
   let skipped = 0;
-  if (kind === 'flows') {
-    const f = flowsOf(overlay, state.model);
-    count = f.flows.length;
+  if (metric && kind === 'flows') {
+    const f = flowsOf(metric, state.model);
+    const flows = only ? f.flows.filter((flow) => only(flow.src, flow.dst)) : f.flows;
+    count = flows.length;
+    total = f.flows.length;
     unresolved = f.unresolved;
-    result = routeTraffic(state.model, f.flows, opts);
-  } else {
-    const h = hostsOf(overlay, state.model);
+    result = routeTraffic(state.model, flows, opts);
+  } else if (metric) {
+    const h = hostsOf(metric, state.model);
     count = h.hosts.length;
+    total = count;
     skipped = h.skipped;
-    result = routeEstimate(state.model, h.hosts, opts);
+    result = routeEstimate(state.model, h.hosts, { ...opts, only });
+  }
+  let testRun = null;
+  if (test) {
+    const flows = testFlows(picks, test.value);
+    testRun = { value: test.value, unit: unit.unit, flows: flows.length, from: picks[0], to: picks[1] };
+    result = mergeResults(result, routeTraffic(state.model, flows, opts));
   }
   const value = {
-    overlay, kind, result, loads: result.loads, toGbps: unit.toGbps, unit: unit.unit,
-    count, unresolved, skipped,
+    overlay: metric, kind: metric ? kind : 'test', result, loads: result.loads, toGbps: unit.toGbps, unit: unit.unit,
+    count, total, unresolved, skipped, between, test: testRun,
   };
   state.trafficCache[slot] = {
-    overlay, layout: state.model, agg: overlay.agg, split: t.split, seed: t.seed, spread: t.spread,
-    down: downKey, value,
+    overlay: metric, layout: state.model, agg: metric && metric.agg, split: t.split, seed: t.seed, spread: t.spread,
+    down: downKey, picks: pickKey, test: testKey, between, value,
   };
   return value;
+}
+
+function testUnit(unit) {
+  const toGbps = bitRate(unit);
+  return { ok: true, toGbps, unit, why: '' };
 }
 
 /** Interface counters drawn on the cables they measured, cached likewise. */
@@ -413,6 +445,8 @@ const actions = {
 
   clearPicks() {
     state.picked = [];
+    // A test flow belongs to the picks it ran between.
+    state.traffic.test.on = false;
     refreshPanels();
     invalidate();
   },
@@ -604,12 +638,28 @@ const actions = {
   clearTraffic() {
     state.traffic.key = null;
     state.traffic.counters = null;
+    state.traffic.test.on = false;
     refreshPanels();
     invalidate();
   },
 
   setTrafficView(view) {
     state.traffic.view = view;
+    refreshPanels();
+    invalidate();
+  },
+
+  setBetweenOnly(on) {
+    state.traffic.betweenOnly = on;
+    refreshPanels();
+    invalidate();
+  },
+
+  // The test flow between the first two picks: its size, its unit (when no
+  // metric sets one), and whether it is being sent.
+  setTestFlow(changes) {
+    Object.assign(state.traffic.test, changes);
+    if (changes.on) state.traffic.view = 'model';
     refreshPanels();
     invalidate();
   },
@@ -2329,7 +2379,13 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === '0') { renderer.fit(); invalidate(); }
   else if (e.key === '+' || e.key === '=') { renderer.zoomAt(cx, cy, 1.25); invalidate(); }
   else if (e.key === '-') { renderer.zoomAt(cx, cy, 0.8); invalidate(); }
-  else if (e.key === 'Escape') { state.selected = null; state.picked = []; refreshPanels(); invalidate(); }
+  else if (e.key === 'Escape') {
+    state.selected = null;
+    state.picked = [];
+    state.traffic.test.on = false;
+    refreshPanels();
+    invalidate();
+  }
   else if (e.key === '/') { e.preventDefault(); $('filter').focus(); }
   else if (e.key === ' ' && state.selected) { e.preventDefault(); actions.toggleCollapse(state.selected); }
 });
