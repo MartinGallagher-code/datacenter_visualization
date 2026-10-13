@@ -45,6 +45,8 @@
 import { AGGREGATIONS, DEFAULT_AGG, overlayValue } from './results.js';
 
 export const SPLITS = ['even', 'capacity', 'hashed'];
+// The units a test flow can be given when no metric sets one.
+export const TEST_UNITS = ['Gb/s', 'Mb/s', 'pps'];
 export const SPREADS = ['gravity', 'even'];
 
 const PREFIX = { '': 1e-9, k: 1e-6, m: 1e-3, g: 1, t: 1e3, p: 1e6 };
@@ -438,6 +440,10 @@ export function routeEstimate(model, hosts, opts = {}) {
     return rest > 0 ? (sent * hosts[j].value) / rest : 0;
   };
 
+  // `only`: the pairs to keep, when the picks narrow what is counted. The
+  // shares are still worked out over every host, so a pair carries what it
+  // would in the whole estimate.
+  const only = opts.only || null;
   let routed = 0;
   let delivered = 0;
   for (let j = 0; j < n; j++) {
@@ -446,9 +452,10 @@ export function routeEstimate(model, hosts, opts = {}) {
     const amount = new Map();
     for (let i = 0; i < n; i++) {
       if (i === j) continue;
+      const src = hosts[i].el;
+      if (only && !only(src, dst)) continue;
       const value = share(i, j);
       if (!(value > 0)) continue;
-      const src = hosts[i].el;
       const why = cannotStart(src, dst, f);
       if (why) { miss.note(src, dst, value, why); continue; }
       if (!route) route = towards(dst, f);
@@ -562,6 +569,77 @@ export function compareLoads(after, before, toGbpsAfter = 1, toGbpsBefore = 1) {
   }
   out.largest = largest;
   return out;
+}
+
+// ------------------------------------------------------------- between picks
+
+/** The devices an element stands for: itself if it has cables, else every device with cables inside it. */
+export function devicesOf(el) {
+  if (el.links.length) return [el];
+  const out = [];
+  const walk = (node) => {
+    if (node.links.length) out.push(node);
+    for (const child of node.children) walk(child);
+  };
+  walk(el);
+  return out;
+}
+
+/**
+ * Whether a flow runs between the picks: it starts inside one and ends inside
+ * another. A pick that is a rack holds everything in it.
+ */
+export function betweenPicks(picks) {
+  const index = new Map(picks.map((p, i) => [p, i]));
+  const which = (el) => {
+    for (let p = el; p; p = p.parent) if (index.has(p)) return index.get(p);
+    return -1;
+  };
+  return (src, dst) => {
+    const a = which(src);
+    const b = which(dst);
+    return a >= 0 && b >= 0 && a !== b;
+  };
+}
+
+/**
+ * A test flow from the first pick to the second, at `value` in all. Between
+ * two devices it is one flow; a pick that is a rack sends (or receives) it
+ * shared evenly over the devices in it.
+ */
+export function testFlows(picks, value) {
+  if (picks.length < 2 || !(value > 0)) return [];
+  const from = devicesOf(picks[0]);
+  const to = devicesOf(picks[1]);
+  const pairs = [];
+  for (const src of from) for (const dst of to) if (src !== dst) pairs.push([src, dst]);
+  // Ids clear of a metric's own (0, 1, 2, ...), so each test flow hashes onto
+  // a path of its own.
+  return pairs.map(([src, dst], k) => ({ id: 1000000 + k, src, dst, value: value / pairs.length, test: true }));
+}
+
+/** Two routings' loads together: a metric's and a test flow on top of it. */
+export function mergeResults(a, b) {
+  if (!a) return b;
+  if (!b) return a;
+  const loads = new Map();
+  for (const [link, x] of a.loads) loads.set(link, [x[0], x[1]]);
+  for (const [link, x] of b.loads) {
+    const y = loads.get(link);
+    if (y) { y[0] += x[0]; y[1] += x[1]; } else loads.set(link, [x[0], x[1]]);
+  }
+  const byWhy = new Map(a.missed.byWhy);
+  for (const [why, n] of b.missed.byWhy) byWhy.set(why, (byWhy.get(why) || 0) + n);
+  const examples = [...a.missed.examples, ...b.missed.examples].slice(0, 200);
+  return {
+    ...a,
+    loads,
+    routed: a.routed + b.routed,
+    offered: a.offered + b.offered,
+    delivered: a.delivered + b.delivered,
+    unrouted: examples,
+    missed: { count: a.missed.count + b.missed.count, amount: a.missed.amount + b.missed.amount, byWhy, examples },
+  };
 }
 
 export const VIEWS = ['model', 'change', 'measured', 'diff'];

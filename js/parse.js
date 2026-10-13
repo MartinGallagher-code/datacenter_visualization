@@ -73,7 +73,42 @@ function tokenize(line) {
     started = true;
   }
   if (started) out.push(cur);
+  // A quote left open runs to the end of the line, taking every setting after
+  // it into one value: `"label="x" show=yes gbps=400` is a label reading
+  // `x show=yes gbps=400`, and no capacity. Say so rather than let it pass.
+  out.open = quote;
   return out;
+}
+
+/**
+ * The option a mistyped word was most likely meant to be -- `gpbs` for
+ * `gbps`, `rw` for `row` -- or null when nothing is close. Close is at most
+ * two letters' edits, and fewer than half the word.
+ */
+function nearest(word, options) {
+  const w = String(word).toLowerCase();
+  let best = null;
+  let bestD = Infinity;
+  for (const option of options) {
+    const o = String(option).toLowerCase();
+    const prev = Array.from({ length: o.length + 1 }, (_, j) => j);
+    for (let i = 1; i <= w.length; i++) {
+      let diag = prev[0];
+      prev[0] = i;
+      for (let j = 1; j <= o.length; j++) {
+        const up = prev[j];
+        prev[j] = Math.min(prev[j] + 1, prev[j - 1] + 1, diag + (w[i - 1] === o[j - 1] ? 0 : 1));
+        // A swap of two neighbours (gpbs, gbps) is one slip, not two.
+        if (i > 1 && j > 1 && w[i - 1] === o[j - 2] && w[i - 2] === o[j - 1]) {
+          prev[j] = Math.min(prev[j], diag);
+        }
+        diag = up;
+      }
+    }
+    const d = prev[o.length];
+    if (d < bestD) { bestD = d; best = option; }
+  }
+  return bestD <= 2 && bestD < Math.max(2, w.length / 2) ? best : null;
 }
 
 function indentOf(line) {
@@ -112,6 +147,10 @@ function buildSyntaxTree(text, warnings) {
   text.split(/\r?\n/).forEach((raw, lineNo) => {
     const tokens = tokenize(raw);
     if (!tokens.length) return;
+    if (tokens.open) {
+      warnings.push(`line ${lineNo + 1}: a ${tokens.open} is never closed, so the rest of the line `
+        + `became one value: ${tokens[tokens.length - 1]}`);
+    }
     const indent = indentOf(raw);
 
     while (stack.length > 1 && indent <= stack[stack.length - 1].indent) stack.pop();
@@ -152,6 +191,8 @@ export const NUMBERS = {
 };
 // A net's line width is the one number that may be fractional.
 const NET_NUMBERS = { width: [0.1, 100], gbps: GBPS_RANGE };
+// Everything a `net` line takes; `on=` is the old spelling of `show=`.
+const NET_KEYS = ['label', 'color', 'style', 'width', 'show', 'on', 'gbps', 'traffic'];
 
 /**
  * One reading of a number attribute, so the check and the use cannot drift
@@ -614,6 +655,27 @@ function groupKeyFor(el, scope) {
 const at = (rule) => (rule.line ? `line ${rule.line}: ` : '');
 
 /**
+ * Why a scoped rule wired nothing, when it was the scope: each group holds
+ * one side only. ToRs in the rack rows and spines in a row of their own share
+ * no row, so `scope=row` pairs nothing. The kind that does hold both is the
+ * nearest one the two have in common -- or none, and the rule wants no scope.
+ */
+function scopeAdvice(rule, a, b) {
+  const plain = `check scope=${rule.scope}`;
+  if (!a || !b || a === b) return plain;
+  const mine = new Set();
+  for (let p = a.parent; p; p = p.parent) mine.add(p);
+  let common = null;
+  for (let p = b.parent; p; p = p.parent) if (mine.has(p)) { common = p; break; }
+  const holds = groupKeyFor(a, rule.scope) !== null && groupKeyFor(a, rule.scope) === groupKeyFor(b, rule.scope);
+  if (holds) return plain;
+  const where = common && common.parent ? `scope=${common.kind}, or ` : '';
+  return `scope=${rule.scope} wires each ${rule.scope} on its own, and no ${rule.scope} holds both `
+    + `"${rule.selA}" and "${rule.selB || rule.selA}" (${a.path} and ${b.path} are in different ones) -- `
+    + `use ${where}no scope= at all`;
+}
+
+/**
  * The runs a `splice=N` rule gathers: N consecutive matches at a time, and
  * never across a parent -- a harness is cut for the servers in one rack, not
  * for the last two of one rack and the first two of the next. Consecutive
@@ -666,6 +728,16 @@ function buildLinks(rules, model) {
     const net = model.nets.get(rule.net);
     const gbps = numAttr(rule.gbps, null, LINK_REALS.gbps) ?? (net ? net.gbps : null);
     const weight = numAttr(rule.weight, 1, LINK_REALS.weight);
+    // A scope that names no kind in the layout groups nothing, so the rule
+    // wires nothing: `scope=rw` for `scope=row`. Name the kinds there are.
+    let badScope = false;
+    if (rule.scope && rule.scope !== 'dc' && rule.scope !== '*' && !model.counts.has(rule.scope)) {
+      badScope = true;
+      const kinds = [...model.counts.keys()];
+      const guess = nearest(rule.scope, kinds);
+      model.warnings.push(`${at(rule)}net "${rule.net}": scope=${rule.scope} is not a kind in this layout`
+        + `${guess ? ` -- did you mean scope=${guess}?` : ''} The kinds here are ${kinds.join(', ')}`);
+    }
     let made = 0;
     let unpaired = 0;
     let matchedA = 0;
@@ -674,12 +746,14 @@ function buildLinks(rules, model) {
     const matchB = rule.selB ? compileSelector(rule.selB) : null;
 
     const groups = new Map();
+    let firstA = null;
+    let firstB = null;
     for (const el of model.all) {
       const a = matchA(el);
       const b = matchB ? matchB(el) : false;
       if (!a && !b) continue;
-      if (a) matchedA++;
-      if (b) matchedB++;
+      if (a) { matchedA++; firstA = firstA || el; }
+      if (b) { matchedB++; firstB = firstB || el; }
       const gk = groupKeyFor(el, rule.scope);
       if (gk === null) continue;
       let g = groups.get(gk);
@@ -773,10 +847,10 @@ function buildLinks(rules, model) {
       model.warnings.push(`${at(rule)}net "${rule.net}": selector "${rule.selA}" matched no elements`);
     } else if (matchB && !matchedB) {
       model.warnings.push(`${at(rule)}net "${rule.net}": selector "${rule.selB}" matched no elements`);
-    } else if (!made) {
+    } else if (!made && !badScope) {
       model.warnings.push(
         `${at(rule)}net "${rule.net}": rule matched ${matchedA + matchedB} elements but wired nothing`
-        + (rule.scope ? ` — check scope=${rule.scope}` : ''));
+        + (rule.scope ? ` — ${scopeAdvice(rule, firstA, firstB || firstA)}` : ''));
     }
   }
 
@@ -858,6 +932,16 @@ const truthy = (value) => {
         }
         checkNumbers(child.attrs, `net "${name}"`, model, child.line, NET_NUMBERS, false);
         checkColor(child.attrs, `net "${name}"`, model, child.line);
+        // A net takes a handful of settings, and anything else on its line was
+        // dropped without a word -- `gpbs=400` is no capacity at all, and the
+        // cable-load view then has nothing to set the traffic against.
+        for (const key of Object.keys(child.attrs)) {
+          if (NET_KEYS.includes(key)) continue;
+          const guess = nearest(key, NET_KEYS);
+          model.warnings.push(`line ${child.line}: net "${name}": ${key}= is not a net setting`
+            + `${guess ? ` -- did you mean ${guess}=?` : ''} A net takes `
+            + `${NET_KEYS.filter((k) => k !== 'on').map((k) => `${k}=`).join(' ')}`);
+        }
         // traffic=no: the net is there to be drawn, not to carry what the
         // cable-load view routes -- out-of-band mgmt beside a data fabric,
         // which would otherwise take an equal share of every flow it ties with.

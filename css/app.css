@@ -705,3 +705,8 @@ button.danger:hover { color: #ffbdbd; border-color: #8a3a3a; }
 .row-act { flex: none; font-size: 10px; line-height: 1; padding: 1px 4px; margin-left: 4px; opacity: 0.55; }
 .row-act:hover { opacity: 1; }
 .btnrow button.active { border-color: #ff5c5c; color: #ff8a8a; }
+.picks-traffic { border-top: 1px solid #ff6bd533; margin-top: 6px; padding-top: 6px; font-size: 11.5px; }
+.test-flow { display: flex; align-items: center; gap: 5px; margin-top: 4px; flex-wrap: wrap; }
+.test-flow input { width: 70px; font-size: 11.5px; padding: 1px 4px; }
+.test-flow select, .test-flow button { font-size: 11.5px; }
+.test-flow button.active { border-color: #ff6bd5; color: #ff9fe5; }

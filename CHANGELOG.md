@@ -11,6 +11,45 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.3.0 — 2026-10-13
+
+Traffic between picks. Picking elements already decided which cables are
+drawn; now it can decide which traffic is counted on them too.
+
+- **Count only the flows between the picks.** With two or more picks and a
+  metric loaded onto the cables, the picks box offers to load the cables
+  with just the flows that start in one pick and end in another — a rack
+  picked holds everything in it. Before, every flow crossing those cables
+  counted, so a server's cable showed all of its traffic while each uplink
+  showed only its share, and the two could not be compared. Per-host totals
+  keep only the host pairs between the picks, at their share of the whole
+  estimate.
+- **A test flow between picks.** `test flow [N] [unit] 1 → 2 · Send` routes N
+  from the first pick to the second and draws it like a loaded metric: on its
+  own in Gb/s, Mb/s or pps when nothing is loaded, or on top of the loaded
+  metric in its unit, to see whether one more flow fits. A rack picked shares
+  it over its devices; Stop, Esc or Clear ends it.
+
+## 1.2.1 — 2026-10-13
+
+Warnings only: three slips that left a layout's uplinks uncabled, or its
+capacity unset, without a word. Nothing that loaded reads differently.
+
+- **A setting a `net` does not take is reported**, with the one it was most
+  likely meant to be: `gpbs=400` was silently no capacity at all, and is now
+  `gpbs= is not a net setting -- did you mean gbps=?`.
+- **A quote left open is reported.** It runs to the end of the line, so
+  `net spine-a "label="spine" show=yes gbps=400` was a label reading
+  `spine show=yes gbps=400` — no `show=` and no capacity — and said nothing.
+- **A `scope=` that names no kind says which kinds there are**, with a guess:
+  `scope=rw` -- did you mean `scope=row`? It used to come out only as "wired
+  nothing — check scope=rw".
+- **A scope that keeps the two sides apart says so.** ToRs in the rack rows
+  and spines in a row of their own share no row, so `scope=row` wires no
+  uplinks, and cable load then stops every flow at the ToR. The warning now
+  says which two elements no row holds together, and names the scope that
+  does hold both — or that the rule wants no scope at all.
+
 ## 1.2.0 — 2026-10-09
 
 Three more ways to put load on the cables, all additive: a metric measured
