@@ -14,8 +14,8 @@ import {
   capacityWidth, changeColor, countDescendants, LOAD_COLORS, loadColor, linkSummary, spliceSummary,
 } from './render.js';
 import {
-  biggestChanges, busiest, cablesOf, formatGbps, loadable, loadUnit, SPLITS, SPREADS, TEST_UNITS, trafficKind,
-  utilOf,
+  biggestChanges, busiest, cablesOf, formatGbps, GEN_UNITS, hostsFor, loadable, loadUnit, PATTERNS, reachKinds,
+  SPLITS, SPREADS, TEST_UNITS, trafficKind, utilOf,
 } from './traffic.js';
 
 const el = (tag, cls, text) => {
@@ -707,10 +707,14 @@ function takeOutButton(link, actions) {
 function viewLabel(view, name) {
   if (name === 'model') {
     const m = view.model;
-    const test = m.test ? `test flow ${trimNum(m.test.value)} ${m.test.unit}` : '';
-    if (!m.overlay) return `${test[0].toUpperCase()}${test.slice(1)}`;
-    return `${m.overlay.label}${m.kind === 'hosts' ? ' (estimated)' : ''}${m.between ? ', between the picks' : ''}`
-      + `${test ? ` + ${test}` : ''}`;
+    const parts = [];
+    if (m.overlay) {
+      parts.push(`${m.overlay.label}${m.kind === 'hosts' ? ' (estimated)' : ''}${m.between ? ', between the picks' : ''}`);
+    }
+    if (m.gen) parts.push(`generated ${PATTERN_LABELS[m.gen.pattern] || m.gen.pattern}`);
+    if (m.test) parts.push(`test flow ${trimNum(m.test.value)} ${m.test.unit}`);
+    const text = parts.join(' + ');
+    return m.overlay ? text : `${text[0].toUpperCase()}${text.slice(1)}`;
   }
   if (name === 'change') return 'change since taking out';
   if (name === 'measured') return `${view.counters.overlay.label} (measured)`;
@@ -810,19 +814,25 @@ export function renderCableLoad(state, host, actions) {
       lines.append(el('div', null, `test flow: ${trimNum(t.value)} ${t.unit} from ${shortPath(t.from)} to ${shortPath(t.to)}`
         + `${t.flows > 1 ? `, shared over ${t.flows} device pairs` : ''}`));
     }
+    if (model.gen) {
+      const g = model.gen;
+      lines.append(el('div', null, `generated: ${PATTERN_LABELS[g.pattern] || g.pattern}, `
+        + `${genAmount(g.value, g.unit)} from each host · ${g.flows} flows · ${formatLoad(model, g.offered)}`));
+    }
     if (!model.overlay) {
-      // A test flow on its own: nothing more to say about a metric.
+      // A test flow or a generated load on its own: no metric to say more of.
     } else if (model.kind === 'hosts') {
       lines.append(el('div', null, `estimated from ${model.count} hosts’ totals, sent `
-        + `${SPREAD_LABELS[state.traffic.spread] || SPREAD_LABELS.gravity} · ${formatLoad(model, r.delivered)}`));
+        + `${SPREAD_LABELS[state.traffic.spread] || SPREAD_LABELS.gravity} · ${formatLoad(model, (model.own || r).delivered)}`));
       if (state.traffic.split === 'hashed') {
         lines.append(el('div', 'muted', 'an estimate is routed as an even split: hashing a guess would read as a measurement'));
       }
       if (model.skipped) lines.append(el('div', 'muted', `${model.skipped} readings on racks or rooms left out`));
     } else {
+      const own = model.own || r;
       lines.append(el('div', null, model.between
         ? `only the ${model.count} of ${model.total} flows between the picks`
-        : `${r.routed} of ${model.count} flows routed · ${formatLoad(model, r.delivered)}`));
+        : `${own.routed} of ${model.count} flows routed · ${formatLoad(model, own.delivered)}`));
     }
     if (model.between && model.kind === 'hosts') {
       lines.append(el('div', null, 'only the host pairs between the picks'));
@@ -904,6 +914,338 @@ export function renderCableLoad(state, host, actions) {
     }
   }
   host.append(box);
+}
+
+// ----------------------------------------------------------- load generator
+
+const PATTERN_LABELS = {
+  all: 'all-to-all',
+  random: 'to random hosts',
+  incast: 'incast: all to one',
+};
+const PATTERN_TITLES = {
+  all: 'Every host sends to every other host, an equal share each',
+  random: 'Every host sends to a few hosts picked at random, an equal share each. New peers draws them again',
+  incast: 'Every host sends to one target -- the first pick, or the selection -- the way many '
+    + 'clients answering one request fill the target’s own cable',
+};
+const GEN_UNIT_LABELS = { '%': '% of its NICs' };
+// "50% of its NICs", "40 Gb/s".
+const genAmount = (value, unit) => (unit === '%' ? `${trimNum(value)}% of its NICs` : `${trimNum(value)} ${unit}`);
+
+// The kinds a load can be kept out of, per layout: worked out once, since a
+// floor of a quarter of a million elements is walked to find them.
+const reachCache = new WeakMap();
+function reachOf(model) {
+  let kinds = reachCache.get(model);
+  if (!kinds) reachCache.set(model, (kinds = reachKinds(hostsFor(model).hosts)));
+  return kinds;
+}
+
+/**
+ * The load generator: a made-up load for a fabric with no metric to route,
+ * or on top of one -- a pattern, how much each host sends, where it may go,
+ * and which devices are hosts.
+ *
+ * @param unit  the unit the generator is in now (app.js resolves the default)
+ */
+export function renderLoadGen(state, host, actions, { unit } = {}) {
+  host.textContent = '';
+  if (!state.model.links.length) return;
+  const g = state.traffic.gen;
+  const box = el('div', 'load-gen');
+  const head = el('div', 'picks-head');
+  head.append(el('strong', null, 'Load generator'));
+  const go = el('button', g.on ? 'active' : null, g.on ? 'Stop' : 'Run');
+  go.title = g.on ? 'Take the generated load off the cables'
+    : 'Put this load on the cables, routed like a metric -- no results file needed';
+  go.addEventListener('click', () => actions.setGen({ on: !g.on }));
+  head.append(go);
+  box.append(head);
+
+  const choose = (options, labels, value, onChange) => {
+    const select = el('select');
+    for (const option of options) {
+      const opt = el('option', null, labels[option] || option);
+      opt.value = option;
+      opt.selected = option === value;
+      select.append(opt);
+    }
+    select.addEventListener('change', () => onChange(select.value));
+    return select;
+  };
+  const number = (value, min, onChange) => {
+    const input = el('input');
+    input.type = 'number';
+    input.min = String(min);
+    input.step = 'any';
+    input.value = String(value);
+    input.addEventListener('change', () => {
+      const v = Number(input.value);
+      if (Number.isFinite(v) && v >= min) onChange(v);
+      else input.value = String(value);
+    });
+    return input;
+  };
+
+  const shape = el('div', 'gen-row');
+  const pattern = choose(PATTERNS, PATTERN_LABELS, g.pattern, (v) => actions.setGen({ pattern: v }));
+  pattern.title = PATTERN_TITLES[g.pattern];
+  pattern.className = 'gen-pattern';
+  shape.append(pattern);
+  if (g.pattern === 'random') {
+    const peers = number(g.peers, 1, (v) => actions.setGen({ peers: Math.max(1, Math.floor(v)) }));
+    peers.className = 'gen-peers';
+    peers.step = '1';
+    peers.title = 'How many hosts each host sends to';
+    shape.append(el('span', null, '×'), peers);
+    const roll = el('button', null, 'New peers');
+    roll.title = 'Pick every host’s peers again at random';
+    roll.addEventListener('click', () => actions.rerollGen());
+    shape.append(roll);
+  }
+  box.append(shape);
+
+  // How much: in a unit of its own with nothing loaded, in the metric's when
+  // it rides on one -- or, either way where it is a bit rate, a share of
+  // each host's NICs.
+  const size = el('div', 'gen-row');
+  size.append(el('span', null, 'each sends'));
+  const amount = number(g.value, 0, (v) => actions.setGen({ value: v }));
+  amount.className = 'gen-value';
+  amount.title = 'How much every host sends, in all';
+  size.append(amount);
+  const overlay = state.traffic.key ? state.overlays.get(state.traffic.key) : null;
+  const metric = overlay && overlay.enabled && trafficKind(overlay) !== 'cables' && loadable(overlay) ? overlay : null;
+  const base = metric ? loadUnit(metric, trafficKind(metric)) : null;
+  let units = GEN_UNITS;
+  if (base) units = base.toGbps === null ? [base.unit] : ['%', 'Gb/s', 'Mb/s'];
+  if (unit && !units.includes(unit)) units = [...units, unit];
+  const unitPick = choose(units, GEN_UNIT_LABELS, unit, (v) => actions.setGen({ unit: v }));
+  unitPick.className = 'gen-unit';
+  unitPick.title = base
+    ? `Added to ${metric.label}, so in a unit that adds up with ${base.unit || 'it'}`
+    : '% of its NICs: a share of what the host’s own cables can carry (gbps=)';
+  size.append(unitPick);
+  box.append(size);
+
+  const kinds = reachOf(state.model);
+  if (kinds.length) {
+    const where = el('div', 'gen-row');
+    const labels = { any: 'anywhere' };
+    for (const kind of kinds) labels[kind] = `outside its own ${kind}`;
+    const reach = choose(['any', ...kinds], labels, kinds.includes(g.reach) ? g.reach : 'any',
+      (v) => actions.setGen({ reach: v }));
+    reach.className = 'gen-reach';
+    reach.title = 'Keep every flow out of the sender’s own rack (row, room, …): '
+      + 'outside its own rack loads the uplinks and nothing inside a rack';
+    where.append(el('span', null, 'to hosts'), reach);
+    box.append(where);
+  }
+
+  const who = el('div', 'gen-row');
+  who.append(el('span', null, 'hosts'));
+  const hosts = el('input', 'gen-hosts');
+  hosts.type = 'text';
+  hosts.value = g.hosts;
+  hosts.placeholder = 'not +switch';
+  hosts.title = 'Which devices send and receive, as a filter (role=server, hall=H1 +gpu, …). '
+    + 'Empty: every device with cables that is not tagged +switch.';
+  hosts.addEventListener('change', () => actions.setGen({ hosts: hosts.value.trim() }));
+  who.append(hosts);
+  box.append(who);
+
+  if (g.pattern === 'incast') {
+    const target = state.picked[0] || state.selected || null;
+    box.append(target
+      ? el('div', 'muted', `all to ${shortPath(target)} (${state.picked[0] ? 'the first pick' : 'the selection'})`)
+      : el('div', 'bad', 'pick or select where it all goes'));
+  }
+
+  const shown = g.on && state.cableView ? state.cableView() : null;
+  const run = shown && shown.model && shown.model.gen;
+  if (run) {
+    const lines = el('div', 'cable-summary');
+    if (run.why) lines.append(el('div', 'bad', run.why));
+    else {
+      lines.append(el('div', null, `${run.senders} of ${run.hosts} hosts send · ${run.flows} flows · `
+        + `${formatLoad(shown.model, run.offered)}`));
+    }
+    if (run.noCapacity) {
+      lines.append(el('div', 'bad', `${run.noCapacity} host${run.noCapacity === 1 ? ' has' : 's have'} no gbps= `
+        + 'on their cables, so send nothing at a % of it'));
+    }
+    if (run.untagged) {
+      lines.append(el('div', 'muted', 'nothing is tagged +switch, so every device with cables is a host: '
+        + 'tag the switches, or name the hosts (role=server)'));
+    }
+    box.append(lines);
+  } else if (!g.on) {
+    box.append(el('p', 'muted cable-note', 'A made-up load, routed and drawn like a metric: no results file needed.'));
+  }
+  host.append(box);
+}
+
+// ----------------------------------------------------------- cable tooltip
+
+const TIP_FLOWS = 5;
+const TIP_ENDS = 3;
+
+/** Whether `el` is `block`, or inside it. */
+const within = (el, block) => {
+  for (let p = el; p; p = p.parent) if (p === block) return true;
+  return false;
+};
+
+/**
+ * What a hovered cable is and what it carries, as tooltip lines: its net and
+ * its two ends -- or, where several cables are drawn as one line, how many
+ * and where -- what they can carry, the load each way against that, and the
+ * flows that cross them.
+ *
+ * @param hit    renderer.pickCable's result
+ * @param view   state.cableView(), or null
+ * @param flows  flowsOver's result, 'pending' while it is worked out, or
+ *               null where there are no flows to name
+ */
+export function cableTip(state, hit, view, flows) {
+  const net = state.model.nets.get(hit.net);
+  const label = net ? net.label || net.name : hit.net;
+  const lines = [];
+
+  // Each cable hit as its two ends and the model's cables it stands for. A
+  // splice's own trunk has its members at one end.
+  const parts = hit.cables.map(({ cable, member }) => {
+    if (cable.members) {
+      const recs = cable.links.filter((r) => !member || r.member === member);
+      const ends = member ? [member] : cable.members;
+      const name = member ? shortPath(member)
+        : `${cable.members.length} spliced (${cable.members[0].name}…${cable.members[cable.members.length - 1].name})`;
+      return { a: ends, b: cable.to, nameA: name, links: recs.map((r) => r.link) };
+    }
+    return { a: [cable.a], b: cable.b, nameA: shortPath(cable.a), links: [cable.link, ...(cable.more || [])] };
+  });
+  const links = parts.flatMap((p) => p.links);
+
+  // Several cables drawn as one line: at one port, or along one lane.
+  let side = null;
+  let sideName = '';
+  if (parts.length === 1) {
+    const p = parts[0];
+    lines.push(`${label}: ${p.nameA} ↔ ${shortPath(p.b)}`);
+    side = p.a;
+  } else {
+    const ends = parts.map((p) => new Set([...p.a, p.b]));
+    const common = [...ends[0]].find((x) => ends.every((set) => set.has(x)));
+    if (common) {
+      // One port's cables, drawn as one stub: named by where they go.
+      const far = parts.map((p) => (p.b === common ? p.nameA : shortPath(p.b)));
+      const shown = far.slice(0, TIP_ENDS).join(', ');
+      lines.push(`${label}: ${shortPath(common)} ↔ ${shown}${far.length > TIP_ENDS ? ` and ${far.length - TIP_ENDS} more` : ''}`);
+      side = [common];
+      sideName = shortPath(common);
+    } else {
+      lines.push(`${label}: ${parts.length} cables along one lane`);
+    }
+  }
+
+  // What they can carry.
+  const speeds = new Map();
+  let unknown = 0;
+  let capacity = 0;
+  for (const link of links) {
+    if (!link.gbps) { unknown++; continue; }
+    speeds.set(link.gbps, (speeds.get(link.gbps) || 0) + 1);
+    capacity += link.gbps;
+  }
+  let cap = `${links.length} cable${links.length === 1 ? '' : 's'}`;
+  if (speeds.size === 1 && !unknown) {
+    const [gbps] = speeds.keys();
+    cap += links.length === 1 ? ` · ${formatGbps(gbps)}` : ` · ${formatGbps(gbps)} each, ${formatGbps(capacity)} in all`;
+  } else if (speeds.size) {
+    cap += ` · ${formatGbps(capacity)} in all`;
+  }
+  if (unknown) cap += ` · ${unknown === links.length ? 'no' : `${unknown} with no`} gbps=`;
+  lines.push(cap);
+  if (!view) return lines;
+
+  // What they carry, each way: from the side named first (or out of the port
+  // they share), and back.
+  const fromSide = (link) => (side ? side.some((end) => within(link.a, end)) : true);
+  if (view.compare) {
+    const after = [0, 0];
+    const before = [0, 0];
+    for (const link of links) {
+      const c = view.compare.get(link);
+      if (!c) continue;
+      const k = fromSide(link) ? [0, 1] : [1, 0];
+      after[0] += c.after[k[0]];
+      after[1] += c.after[k[1]];
+      before[0] += c.before[k[0]];
+      before[1] += c.before[k[1]];
+    }
+    const amount = (v) => (view.changeToGbps ? `${formatGbps(v)}b/s` : `${formatNum(v)}${view.changeUnit ? ` ${view.changeUnit}` : ''}`);
+    const was = view.view === 'change' ? ['', ' (was ', ')'] : ['measured ', ', model ', ''];
+    const each = directions(parts, side, sideName);
+    each.forEach(([name], k) => {
+      lines.push(`${name}: ${was[0]}${amount(after[k])}${was[1]}${amount(before[k])}${was[2]}`);
+    });
+  } else {
+    const load = [0, 0];
+    let worst = null;
+    for (const link of links) {
+      const l = view.loads.get(link);
+      if (!l) continue;
+      const fwd = fromSide(link);
+      load[0] += fwd ? l[0] : l[1];
+      load[1] += fwd ? l[1] : l[0];
+      const u = utilOf(link, l, view.toGbps);
+      if (u !== null && (worst === null || u > worst)) worst = u;
+    }
+    if (!(load[0] > 0 || load[1] > 0)) lines.push('carrying nothing');
+    else {
+      directions(parts, side, sideName).forEach(([name], k) => lines.push(`${name}: ${formatLoad(view, load[k])}`));
+    }
+    if (worst !== null) {
+      const over = worst > 1.0005 ? ' — more than it can carry' : '';
+      lines.push(links.length > 1
+        ? `the fullest is ${pct(worst)} full, the busier way${over}`
+        : `${pct(worst)} full, the busier way${over}`);
+    } else if (load[0] > 0 || load[1] > 0) {
+      lines.push(view.toGbps === null
+        ? `${view.unit || 'this unit'} cannot be set against gbps=`
+        : 'no gbps=, so no utilization');
+    }
+  }
+
+  // The flows behind the load drawn.
+  const model = view.model;
+  if (flows === 'pending') lines.push('flows over it: …');
+  else if (flows && model) {
+    if (!flows.count) lines.push('no flows cross it');
+    else {
+      lines.push(`flows over it: ${flows.count}`);
+      for (const { flow, amount } of flows.flows.slice(0, TIP_FLOWS)) {
+        const tag = flow.test ? '  (test flow)' : '';
+        lines.push(`  ${shortPath(flow.src)} → ${shortPath(flow.dst)}  ${formatLoad(model, amount)}${tag}`);
+      }
+      if (flows.count > TIP_FLOWS) lines.push(`  … and ${flows.count - TIP_FLOWS} more`);
+    }
+  } else if (model && model.estimated && view.view !== 'measured') {
+    lines.push('an estimate from per-host totals: no flows to name');
+  }
+  return lines;
+}
+
+// The two directions a cable's load is told in, with their names: from its
+// first end to its second and back, or out of the port it shares and in.
+function directions(parts, side, sideName) {
+  if (parts.length === 1) {
+    const p = parts[0];
+    return [[`${p.nameA} → ${shortPath(p.b)}`], [`${shortPath(p.b)} → ${p.nameA}`]];
+  }
+  if (side) return [[`out of ${sideName}`], [`into ${sideName}`]];
+  return [['one way'], ['the other']];
 }
 
 /** What colour and width mean, for the view shown. */
@@ -1180,9 +1522,13 @@ function renderPickTraffic(state, box, actions) {
     if (Number.isFinite(v) && v > 0) actions.setTestFlow({ value: v });
   });
   send.append(amount);
+  // With no metric, a generated load sets the unit the test flow rides in.
+  const shown = !metric && t.gen.on && state.cableView ? state.cableView() : null;
   if (metric) {
     // On top of a metric, in its unit: the two add up on every cable.
     send.append(el('span', 'muted', loadUnit(metric, trafficKind(metric)).unit || 'units'));
+  } else if (shown && shown.model) {
+    send.append(el('span', 'muted', shown.model.unit));
   } else {
     const unit = el('select');
     for (const u of TEST_UNITS) {

@@ -272,6 +272,18 @@ function mix(a, b, c) {
   return (h >>> 0) / 4294967296;
 }
 
+/** The one cable a hashed flow takes at a fork, by weight=. */
+function hashedHop(hops, seed, id, n) {
+  let total = 0;
+  for (const link of hops) total += link.weight || 1;
+  let r = mix(seed, id, n) * total;
+  for (const link of hops) {
+    r -= link.weight || 1;
+    if (r < 0) return link;
+  }
+  return hops[hops.length - 1];
+}
+
 /** Each cable's share of what leaves an element, in the split asked for. */
 function sharesOf(hops, split) {
   let w;
@@ -374,15 +386,7 @@ export function routeTraffic(model, flows, opts = {}) {
         routed++;
         delivered += flow.value;
         for (let u = flow.src; u !== dst;) {
-          const hops = route.next(u);
-          let total = 0;
-          for (const link of hops) total += link.weight || 1;
-          let r = mix(seed, flow.id, u.n) * total;
-          let pick = hops[hops.length - 1];
-          for (const link of hops) {
-            r -= link.weight || 1;
-            if (r < 0) { pick = link; break; }
-          }
+          const pick = hashedHop(route.next(u), seed, flow.id, u.n);
           f.add(pick, u, flow.value);
           u = other(pick, u);
         }
@@ -404,6 +408,76 @@ export function routeTraffic(model, flows, opts = {}) {
     loads: f.loads, routed, offered, delivered, unrouted: missed.examples, missed,
     switches: f.switches, split, seed,
   };
+}
+
+/**
+ * The flows that cross a set of cables, and how much of each crosses them:
+ * routed exactly as routeTraffic routes them -- the same split, seed and
+ * what-if -- so what is listed adds up to what is drawn on those cables.
+ *
+ * A flow that crosses two of the cables (both a server's cable and the ToR's
+ * on one lane, say) is counted once, at no more than its own size.
+ *
+ * @param flows  [{ id, src, dst, value }], as routed
+ * @param links  the cables, an array or a Set
+ * @param opts   { split, seed, down }, as routeTraffic took them
+ * @returns      { flows: [{ flow, amount }] biggest first, count, amount }
+ */
+export function flowsOver(model, flows, links, opts = {}) {
+  const split = SPLITS.includes(opts.split) ? opts.split : 'even';
+  const seed = (opts.seed || 0) >>> 0;
+  const targets = links instanceof Set ? links : new Set(links);
+  const f = fabric(model, opts);
+  const byDst = new Map();
+  for (const flow of flows) {
+    if (!(flow.value > 0) || cannotStart(flow.src, flow.dst, f)) continue;
+    const list = byDst.get(flow.dst);
+    if (list) list.push(flow);
+    else byDst.set(flow.dst, [flow]);
+  }
+  const out = [];
+  let amount = 0;
+  const take = (flow, crossings) => {
+    const a = flow.value * Math.min(1, crossings);
+    if (!(a > 1e-12 * flow.value)) return;
+    out.push({ flow, amount: a });
+    amount += a;
+  };
+  for (const [dst, list] of byDst) {
+    const route = towards(dst, f);
+    if (split === 'hashed') {
+      for (const flow of list) {
+        if (!route.dist.has(flow.src)) continue;
+        let crossings = 0;
+        for (let u = flow.src; u !== dst;) {
+          const pick = hashedHop(route.next(u), seed, flow.id, u.n);
+          if (targets.has(pick)) crossings++;
+          u = other(pick, u);
+        }
+        take(flow, crossings);
+      }
+      continue;
+    }
+    // What a unit leaving each element for dst puts on the cables asked
+    // about, counting each crossing: worked out nearest dst first, since an
+    // element's share is its cables' and what each passes on.
+    const through = new Map([[dst, 0]]);
+    for (let i = 1; i < route.order.length; i++) {
+      const u = route.order[i];
+      const hops = route.next(u);
+      const shares = sharesOf(hops, split);
+      let p = 0;
+      for (let k = 0; k < hops.length; k++) {
+        p += shares[k] * ((targets.has(hops[k]) ? 1 : 0) + (through.get(other(hops[k], u)) || 0));
+      }
+      through.set(u, p);
+    }
+    for (const flow of list) {
+      if (route.dist.has(flow.src)) take(flow, through.get(flow.src) || 0);
+    }
+  }
+  out.sort((x, y) => y.amount - x.amount || x.flow.id - y.flow.id);
+  return { flows: out, count: out.length, amount };
 }
 
 /**
@@ -640,6 +714,191 @@ export function mergeResults(a, b) {
     unrouted: examples,
     missed: { count: a.missed.count + b.missed.count, amount: a.missed.amount + b.missed.amount, byWhy, examples },
   };
+}
+
+// ------------------------------------------------------------ load generator
+
+// The shapes a made-up load can take, and what its size can be given in:
+// `%` is a share of what each host's own cables can carry.
+export const PATTERNS = ['all', 'random', 'incast'];
+export const GEN_UNITS = ['%', 'Gb/s', 'Mb/s', 'pps'];
+// Clear of a metric's ids (0, 1, 2, ...) and a test flow's (1000000 on), so
+// every generated flow hashes onto a path of its own.
+const GEN_IDS = 2000000;
+// How much a generated load may cost to route: flows, and destinations times
+// cables -- each destination is a walk over the fabric. A lab floor is far
+// inside both; a hyperscale campus is far outside, and is told to narrow it.
+export const GEN_LIMITS = { flows: 300000, work: 4e7 };
+
+/**
+ * The hosts a generated load runs between: devices whose cables carry
+ * traffic, matching `match` when one is given, and otherwise every one not
+ * tagged +switch. With nothing tagged +switch there is no telling a server
+ * from a switch, so every device with cables is a host, and `untagged` says
+ * so.
+ */
+export function hostsFor(model, match = null) {
+  const blocked = new Set();
+  for (const net of model.nets.values()) if (net.traffic === false) blocked.add(net.name);
+  const { switches } = forwarding(model);
+  const hosts = [];
+  for (const el of model.all) {
+    if (el.children.length || !el.links.some((link) => !blocked.has(link.net))) continue;
+    if (match ? !match(el) : switches && el.tagsAll.has('switch')) continue;
+    hosts.push(el);
+  }
+  return { hosts, untagged: !switches && !match };
+}
+
+/** What a host's cables can carry in all, in Gb/s, over nets that carry traffic. */
+export function hostCapacity(model, el) {
+  let gbps = 0;
+  for (const link of el.links) {
+    const net = model.nets.get(link.net);
+    if (net && net.traffic === false) continue;
+    gbps += link.gbps || 0;
+  }
+  return gbps;
+}
+
+/**
+ * The kinds of container a generated load can be kept out of -- a host's
+ * rack, its row, its room -- innermost first: every kind above some host.
+ */
+export function reachKinds(hosts) {
+  const depth = new Map();
+  for (const el of hosts) {
+    let d = 0;
+    // Not the floor itself: every host shares it.
+    for (let p = el.parent; p && p.parent; p = p.parent) {
+      d++;
+      if (!(depth.get(p.kind) <= d)) depth.set(p.kind, d);
+    }
+  }
+  return [...depth.keys()].sort((a, b) => depth.get(a) - depth.get(b));
+}
+
+/**
+ * A made-up load, for a fabric with no metric to route, or on top of one.
+ * Every host sends `value` (in `unit`; `%` of what its own cables carry) in
+ * a pattern:
+ *
+ *   all     to every other host, an equal share each
+ *   random  to `peers` other hosts picked at random (by `seed`), an equal
+ *           share each -- a new seed is a new set of peers
+ *   incast  all of it to `target`, shared over the target's devices: many
+ *           to one, the pattern that fills a ToR's downlink
+ *
+ * `reach` names a kind of container (rack, row, ...) a flow must leave:
+ * 'other racks only' loads the uplinks and nothing inside a rack. 'any', or
+ * none, lets a flow go anywhere.
+ *
+ * @param gen   { pattern, value, unit, peers, reach, seed }
+ * @param opts  { match: the hosts' filter, target: an element, base: the
+ *              unit the cables are loaded in, { toGbps, unit } }
+ * @returns { flows, hosts, senders, offered, noCapacity, untagged, why }
+ *          -- why says, when there are no flows, what is missing
+ */
+export function generateFlows(model, gen, opts = {}) {
+  const base = opts.base || { toGbps: 1, unit: 'Gb/s' };
+  const { hosts, untagged } = hostsFor(model, opts.match || null);
+  const result = (flows, extra = {}) => {
+    let offered = 0;
+    const senders = new Set();
+    for (const flow of flows) { offered += flow.value; senders.add(flow.src); }
+    return { flows, hosts: hosts.length, senders: senders.size, offered, noCapacity: 0, untagged, why: '', ...extra };
+  };
+  const pattern = PATTERNS.includes(gen.pattern) ? gen.pattern : 'all';
+  const value = Number(gen.value);
+  if (!(value > 0)) return result([], { why: 'nothing to send: the amount is 0' });
+
+  // What each host sends, in the unit the cables are loaded in.
+  const unit = GEN_UNITS.includes(gen.unit) || gen.unit === base.unit ? gen.unit : base.unit;
+  let sends;
+  if (unit === '%') {
+    if (base.toGbps === null || base.toGbps === undefined) {
+      return result([], { why: `% of its NICs is a bit rate, and ${base.unit || 'this metric'} is not` });
+    }
+    sends = (el) => ((value / 100) * hostCapacity(model, el)) / base.toGbps;
+  } else if (bitRate(unit) !== null && base.toGbps !== null && base.toGbps !== undefined) {
+    const amount = (value * bitRate(unit)) / base.toGbps;
+    sends = () => amount;
+  } else if (unit === base.unit) {
+    sends = () => value;
+  } else {
+    return result([], { why: `${unit} cannot be added to ${base.unit || 'the metric’s unit'}` });
+  }
+
+  const reach = gen.reach && gen.reach !== 'any' ? gen.reach : null;
+  const groupOf = (el) => {
+    for (let p = el.parent; p; p = p.parent) if (p.kind === reach) return p;
+    return null;
+  };
+  const apart = reach ? (a, b) => { const g = groupOf(a); return !g || g !== groupOf(b); } : () => true;
+
+  const n = hosts.length;
+  const links = model.links.length;
+  const tooBig = (dsts, flows) => flows > GEN_LIMITS.flows || dsts * links > GEN_LIMITS.work;
+  const narrow = 'narrow the hosts (a filter such as path=*/H1/*)';
+
+  if (pattern === 'incast') {
+    const target = opts.target || null;
+    if (!target) return result([], { why: 'incast: pick or select where it all goes' });
+    const into = devicesOf(target).filter((el) => el.links.length);
+    if (!into.length) return result([], { why: `incast: ${target.name} has no cables` });
+    if (tooBig(into.length, n * into.length)) {
+      return result([], { why: `incast to ${into.length} devices from ${n} hosts is too much to route here: ${narrow}, or pick a smaller target` });
+    }
+    const inside = new Set(into);
+    const flows = [];
+    let noCapacity = 0;
+    for (const src of hosts) {
+      if (inside.has(src)) continue;
+      const to = into.filter((dst) => apart(src, dst));
+      const amount = sends(src);
+      if (!(amount > 0)) { if (unit === '%') noCapacity++; continue; }
+      for (const dst of to) flows.push({ id: GEN_IDS + flows.length, src, dst, value: amount / to.length, gen: true });
+    }
+    return result(flows, { noCapacity });
+  }
+
+  if (n < 2) return result([], { why: `${n ? 'one host' : 'no hosts'}: nothing to send between` });
+
+  if (pattern === 'all') {
+    if (tooBig(n, n * (n - 1))) {
+      return result([], { why: `all-to-all over ${n} hosts is ${(n * (n - 1)).toLocaleString()} flows: too many to route here — ${narrow}, or send to random hosts` });
+    }
+    const flows = [];
+    let noCapacity = 0;
+    for (const src of hosts) {
+      const amount = sends(src);
+      if (!(amount > 0)) { if (unit === '%') noCapacity++; continue; }
+      const to = hosts.filter((dst) => dst !== src && apart(src, dst));
+      for (const dst of to) flows.push({ id: GEN_IDS + flows.length, src, dst, value: amount / to.length, gen: true });
+    }
+    return result(flows, { noCapacity });
+  }
+
+  // random: `peers` distinct hosts each, drawn with the seed, skipping the
+  // host itself and anything the reach rules out.
+  const peers = Math.max(1, Math.min(n - 1, Math.floor(Number(gen.peers) || 1)));
+  if (tooBig(n, n * peers)) {
+    return result([], { why: `${n} hosts on ${links.toLocaleString()} cables is too much to route here: ${narrow}` });
+  }
+  const seed = (gen.seed || 0) >>> 0;
+  const flows = [];
+  let noCapacity = 0;
+  hosts.forEach((src, i) => {
+    const amount = sends(src);
+    if (!(amount > 0)) { if (unit === '%') noCapacity++; return; }
+    const to = new Set();
+    for (let k = 0; to.size < peers && k < peers * 40; k++) {
+      const dst = hosts[Math.floor(mix(seed, i, k) * n)];
+      if (dst !== src && apart(src, dst)) to.add(dst);
+    }
+    for (const dst of to) flows.push({ id: GEN_IDS + flows.length, src, dst, value: amount / to.size, gen: true });
+  });
+  return result(flows, { noCapacity });
 }
 
 export const VIEWS = ['model', 'change', 'measured', 'diff'];
