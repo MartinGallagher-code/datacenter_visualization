@@ -11,6 +11,38 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.4.0 — 2026-10-14
+
+A load with no file to load, and every cable can say what it carries.
+
+- **Load generator.** A box under the Networks panel puts a made-up load on
+  the cables, routed and drawn like a metric — so a fabric can be tried out
+  before anything has been measured on it. Three patterns: **all-to-all**
+  (every host to every other, an equal share each), **to random hosts** (a
+  few peers each, drawn with a seed; **New peers** draws again) and
+  **incast** (everything into the first pick or the selection). Each host
+  sends an amount in Gb/s, Mb/s or pps — or **a share of its own NICs**, its
+  cables' `gbps=` added up, which is the default where the cables have one.
+  **to hosts** can keep every flow outside the sender's own rack (row, pod,
+  …), which loads the uplinks and nothing inside a rack, and **hosts** takes a
+  filter (`role=server`, `path=*/H1/*`) where the default — every device with
+  cables not tagged `+switch` — is not the set wanted. With a metric loaded,
+  the generated load goes on top of it, in a unit that adds up with the
+  metric's. A load too big to route in the page — all-to-all over a
+  quarter of a million hosts — is refused with why, rather than hanging it.
+- **Hovering a cable shows it.** The tooltip only ever described the element
+  under the pointer, so a cable seemed to answer where it crossed a server
+  and to say nothing where it crossed the floor between racks. Now the cable
+  under the pointer is outlined, and its tooltip gives its net and its two
+  ends, what it can carry, what it carries each way and how full it is — and,
+  once the pointer rests, the flows that cross it, biggest first, routed
+  exactly as the drawing was. Where several cables are drawn as one line —
+  a ToR's stub, a rack's lane — it is all of them, told as in and out of the
+  device they share. Inside a device's own box the device still wins, unless
+  the pointer is right on a cable.
+- The panel's "N of M flows routed" counts only the metric's flows, where a
+  test flow on top of it used to be counted in too.
+
 ## 1.3.0 — 2026-10-13
 
 Traffic between picks. Picking elements already decided which cables are

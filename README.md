@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.3.0** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.4.0** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -551,6 +551,68 @@ For a single test flow, **hashed: one path per flow** is usually what you
 want: it puts the whole flow on one uplink, so every cable from server to
 server is drawn the same width, where even split shares it over every
 uplink — four spines, a quarter each.
+
+#### The load generator: a load with no file
+
+The **Load generator** box under the Networks panel puts a made-up load on
+the cables — nothing to measure first, nothing to load. **Run** routes it and
+draws it like a metric; **Stop**, or **Off** in the cable load panel, takes it
+off.
+
+- **The pattern:**
+  - **all-to-all** — every host sends to every other host, an equal share
+    each;
+  - **to random hosts** — every host sends to `×N` hosts picked at random,
+    an equal share each. The same seed picks the same peers; **New peers**
+    draws them again. Some hosts are picked more often than others, which is
+    the point: it is what makes a downlink run hot;
+  - **incast: all to one** — every host sends to one target, the first pick
+    or else the selection: many to one, the pattern that fills a single
+    server's cable. A rack as the target shares it over the rack's devices.
+- **each sends** how much every host sends in all: in Gb/s, Mb/s or pps, or
+  **% of its NICs** — a share of what the host's own cables can carry, their
+  `gbps=` added up — which is the default once the cables have a `gbps=`.
+  50% of two 25G NICs is 25 Gb/s.
+- **to hosts** — **anywhere**, or **outside its own rack** (row, pod, room —
+  the kinds in your layout): every flow leaves the sender's rack, which loads
+  the uplinks and nothing inside a rack.
+- **hosts** — which devices send and receive, as a [filter](#the-viewer):
+  `role=server`, `+gpu`, `path=*/H1/*`. Empty means every device with cables
+  that is not tagged `+switch`; a layout that tags nothing `+switch` cannot
+  tell a server from a switch, so the box says so and every device with
+  cables counts.
+
+With a metric loaded onto the cables, the generated load goes on top of it,
+in a unit that adds up with the metric's (a share of the NICs only where the
+metric is a bit rate). A test flow between picks goes on top of either.
+
+Every pattern is routed like any flow metric, by the panel's split. Over
+`examples/dual-plane.dc`, all-to-all at 50% fills every server's NICs to 50%
+and the ToR uplinks to 39%; outside its own rack, every flow takes an uplink
+and they fill to 50%. Generating is
+quick, routing is the cost: every destination is a walk over the whole
+fabric, so a load too big to route in the page — all-to-all over a
+quarter of a million hosts — is refused with why. Narrow the hosts, or use
+incast, which has one destination.
+
+#### Hovering a cable
+
+The pointer on a cable outlines it, and its tooltip says:
+
+- its net and its two ends — `TOR to spine: R01/tora ↔ SP1/spine1`;
+- what it can carry — `1 cable · 100G`, or for parallel cables drawn as one,
+  `4 cables · 100G each, 400G in all`;
+- with load on the cables: what it carries each way, and how full it is the
+  busier way — or, comparing, now against before;
+- and, once the pointer rests on it a moment, **the flows that cross it**,
+  biggest first, with how much of each: routed exactly as the drawing was,
+  so they add up to the load shown. A test flow is marked as one.
+
+Where several cables are drawn as one line — the stub out of a ToR carries
+every cable it has, a rack's lane every server's — the pointer is on all of
+them, and the tooltip says so: `NIC a: R01/tora ↔ 4 spliced (s1…s4), …`, in
+and out of the ToR. Inside a device's own box, the device is what is shown
+unless the pointer is right on a cable.
 
 #### Per-host totals: an estimate
 
@@ -1322,6 +1384,10 @@ quietly left stale.
   or Esc forgets them all. With cable load on, the picks box can also count
   only the flows between the picks, and send a test flow from the first to
   the second — see [Between picks](#between-picks-only-their-flows-and-a-test-flow).
+- **Hover a cable** to see it: its ends, what it can carry, what it carries
+  and the flows over it — see [Hovering a cable](#hovering-a-cable). With
+  nothing to load, the [load generator](#the-load-generator-a-load-with-no-file)
+  makes a load up.
 - **Files** — the panel's **Open folder…** keeps a directory open beside the
   canvas, instead of a dialog that shows one and forgets it. Layouts and
   results are listed with their sizes (worth seeing before clicking a 300 MB

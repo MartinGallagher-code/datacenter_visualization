@@ -1150,6 +1150,80 @@ await test('a test flow on its own', async () => {
   ok(/pps cannot be set against a capacity/.test(text), 'and pps is drawn by load, not against capacity');
 }, { url: '?layout=examples/dual-plane.dc' });
 
+// A made-up load with nothing loaded: the generator's panel drives it, and the
+// cable load panel shows it like any metric.
+await test('the load generator', async () => {
+  const gen = () => page.evaluate(() => document.querySelector('#load-gen').innerText);
+  const panel = () => page.evaluate(() => document.querySelector('#cable-load').innerText);
+  ok(/% of its NICs/.test(await gen()) && !/Cable load/.test(await panel()),
+     'with gbps= on the cables it offers a share of each host’s NICs, and nothing is loaded yet');
+  await page.locator('#load-gen button', { hasText: 'Run' }).click();
+  await page.waitForTimeout(400);
+  ok(/32 of 32 hosts send · 992 flows · 800Gb\/s/.test(await gen()), 'all-to-all at 50%: every server to every other');
+  const loaded = await panel();
+  ok(/Generated all-to-all/.test(loaded) && /generated: all-to-all, 50% of its NICs from each host/.test(loaded),
+     'the cable load panel says what it is showing');
+  ok(/R0\d\/tor[ab] → R0\d\/s\d\s+12\.5G\/25G · 50%/.test(loaded), 'and half of every server’s NIC is in use');
+
+  await page.locator('#load-gen select.gen-reach').selectOption('rack');
+  await page.waitForTimeout(400);
+  ok(/768 flows/.test(await gen()), 'outside its own rack: no flow stays inside one');
+  await page.locator('#load-gen select.gen-pattern').selectOption('incast');
+  await page.waitForTimeout(400);
+  ok(/pick or select where it all goes/.test(await gen()), 'incast asks for its target');
+  await page.fill('#filter', 's3');
+  await page.waitForTimeout(400);
+  await page.locator('#tree .tree-row:not(.nomatch) .tree-name', { hasText: /^s3$/ }).first().click();
+  await page.fill('#filter', '');
+  await page.waitForTimeout(400);
+  ok(/all to R01\/s3 \(the selection\)/.test(await gen()) && /24 of 32 hosts send/.test(await gen()),
+     'then sends to the selection, from every server outside its rack');
+  ok(/R01\/tor[ab] → R01\/s3\s+300G\/25G · 1200%/.test(await panel()), 'and the target’s NICs overflow');
+
+  await page.locator('#load-gen button', { hasText: 'Stop' }).click();
+  await page.waitForTimeout(300);
+  ok(!/Cable load/.test(await panel()), 'Stop takes it off the cables');
+}, { url: '?layout=examples/dual-plane.dc' });
+
+// Hovering a cable used to show whatever box lay under it -- a server's
+// tooltip where a cable crossed one, nothing where it crossed the floor.
+await test('hovering a cable', async () => {
+  await page.locator('#load-gen button', { hasText: 'Run' }).click();
+  await page.waitForTimeout(400);
+  // Sweep the floor the way a pointer would until a tooltip matches.
+  const sweep = (want) => page.evaluate((want) => {
+    const c = document.querySelector('#view');
+    const r = c.getBoundingClientRect();
+    const re = new RegExp(want);
+    for (let y = 10; y < r.height; y += 7) {
+      for (let x = 4; x < r.width; x += 2) {
+        c.dispatchEvent(new PointerEvent('pointermove', { clientX: r.left + x, clientY: r.top + y, bubbles: true }));
+        const tip = document.querySelector('#tooltip');
+        if (!tip.hidden && re.test(tip.textContent)) return { x: r.left + x, y: r.top + y, text: tip.textContent };
+      }
+    }
+    return null;
+  }, want);
+  // The one cable: on the ToR's own stub, both its uplinks are under the pointer.
+  const uplink = await sweep('^TOR to spine: R01/tora ↔ SP1/spine1\n');
+  ok(!!uplink, 'a ToR’s uplink, between the racks, has a tooltip of its own');
+  if (uplink) {
+    ok(/1 cable · 100G/.test(uplink.text), `saying what it can carry  (${uplink.text.replace(/\n/g, ' | ')})`);
+    ok(/R01\/tora → SP1\/spine1: [\d.]+Gb\/s/.test(uplink.text) && /\d+% full, the busier way/.test(uplink.text),
+       'what it carries each way, and how full it is');
+    await page.mouse.move(uplink.x, uplink.y);
+    await page.waitForTimeout(500);
+    const later = await page.evaluate(() => document.querySelector('#tooltip').textContent);
+    ok(/flows over it: 384/.test(later) && /R01\/s\d → R0[2-4]\/s\d/.test(later),
+       `once the pointer rests, the flows that cross it  (${later.split('\n').slice(-3).join(' | ')})`);
+  }
+  const server = await sweep('^s\\d   \\(node\\)');
+  ok(!!server, 'a server’s own box still shows the server');
+  const port = await sweep('^NIC a: R0\\d/tora ↔ ');
+  ok(port && /8 cables · 25G each, 200G in all/.test(port.text) && /out of R0\d\/tora/.test(port.text),
+     'on a ToR’s stub, every cable through it, told as in and out of the ToR');
+}, { url: '?layout=examples/dual-plane.dc' });
+
 // module tests can prove the two source files agree; only this can prove the
 // number reaches the screen.
 await test('the About box shows the version', async () => {

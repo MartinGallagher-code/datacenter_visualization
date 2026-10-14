@@ -122,7 +122,7 @@ export function routeCables(edges, splices, order, widthOf, styleOf = null) {
     const Q = port(e.b, e.net);
     if (!P || !Q) continue;
     const o = out(e.net);
-    run(o, P, Q, widthOf(e.net, e.count, false), e.t || IDLE);
+    run(o, P, Q, widthOf(e.net, e.count, false), e.t || IDLE, e);
     o.cables.push(e);
   }
 
@@ -163,10 +163,14 @@ export function routeCables(edges, splices, order, widthOf, styleOf = null) {
       const mt = (s.t && s.t.members.get(m)) || IDLE_END;
       tstub(o, P, inner, mt.out, mt.in, mt.worst);
     }
-    o.markers.push({
+    const marker = {
       x0: Math.min(inner, outer), x1: Math.max(inner, outer), y0, y1,
       inner, outer, entries: ys, exit: yc, w,
-    });
+    };
+    o.markers.push(marker);
+    // Kept on the splice, so the pointer can find it: piecesOf.
+    s.marker = marker;
+    s.inner = inner;
 
     // The one cable on from the marker, to the ToR, leaves from the marker's
     // outer side and is laid out like any other.
@@ -174,7 +178,7 @@ export function routeCables(edges, splices, order, widthOf, styleOf = null) {
       group: groupOf(s.members[0]), side, edge, start: outer, y: yc,
       lane: lane.lane, left, right, ends: [], h: y1 - y0, fan: null,
     };
-    run(o, P, Q, widthOf(s.net, 1, true), (s.t && s.t.trunk) || IDLE);
+    run(o, P, Q, widthOf(s.net, 1, true), (s.t && s.t.trunk) || IDLE, s);
     o.cables.push(s);
   }
 
@@ -239,16 +243,24 @@ function assignLanes(rec, order) {
   }
 }
 
+// Two devices in the same column of the same parent, leaving from the same
+// side, share that side's lane.
+const inColumn = (P, Q) => P.group === Q.group && P.side === Q.side && P.left < Q.right && Q.left < P.right;
+const columnX = (P, Q) => (P.side > 0 ? Math.max(P.edge, Q.edge) + P.lane : Math.min(P.edge, Q.edge) - P.lane);
+
 /**
  * One cable from port P to port Q. Two devices in the same column of the
  * same parent, leaving from the same side, share that side's lane: out, along
  * the lane, and in. Anything else steps out into its own lane at each end and
  * crosses straight between the two.
+ *
+ * `e` is the edge or splice being laid out: it keeps its two ports, and where
+ * along each port's lane it was fanned out to, for piecesOf.
  */
-function run(o, P, Q, w, t) {
-  const column = P.group === Q.group && P.side === Q.side && P.left < Q.right && Q.left < P.right;
-  if (column) {
-    const x = P.side > 0 ? Math.max(P.edge, Q.edge) + P.lane : Math.min(P.edge, Q.edge) - P.lane;
+function run(o, P, Q, w, t, e = null) {
+  if (e) { e.P = P; e.Q = Q; }
+  if (inColumn(P, Q)) {
+    const x = columnX(P, Q);
     if (o.traffic) {
       tstub(o, P, x, t.ab, t.ba, t.worst);
       tstub(o, Q, x, t.ba, t.ab, t.worst);
@@ -274,7 +286,7 @@ function run(o, P, Q, w, t) {
   // Laid out once every cable is known, so the ones sharing a port can be
   // fanned out along its lane. Not deduplicated: the renderer has already
   // merged cables between the same two blocks.
-  const cable = { P, Q, px, qx, w, offP: 0, offQ: 0, t };
+  const cable = { P, Q, px, qx, w, offP: 0, offQ: 0, t, e };
   o.free.push(cable);
   (P.fan || (P.fan = [])).push(cable);
   (Q.fan || (Q.fan = [])).push(cable);
@@ -511,13 +523,11 @@ function flatten(o) {
   // [x0, y0, c1x, c1y, c2x, c2y, x1, y1, ...] per line width; a renderer
   // asked for straight lines draws x0,y0 to x1,y1 and ignores the rest.
   const curves = new Map();
-  for (const { P, Q, px, qx, w, offP, offQ, t } of o.free) {
+  for (const { P, Q, px, qx, w, offP, offQ, t, e } of o.free) {
+    if (e) { e.offP = offP; e.offQ = offQ; }
     const y0 = P.y + offP;
     const y1 = Q.y + offQ;
-    // How far a curve runs out of its lane before it bends: enough to read as
-    // leaving sideways and to clear the lanes beside the device, not so much
-    // that two ports on one side join in a loop wider than the floor.
-    const reach = Math.min(CURVE_REACH, Math.max(4, Math.hypot(qx - px, y1 - y0) * 0.25));
+    const reach = curveReach(px, y0, qx, y1);
     if (o.traffic) {
       o.tcurves.push(px, y0, px + P.side * reach, y0, qx + Q.side * reach, y1, qx, y1,
         Math.max(t.ab, t.ba), t.worst);
@@ -534,4 +544,96 @@ function flatten(o) {
   o.free = undefined;
   o.tstubs = undefined;
   o.tv = undefined;
+}
+
+// How far a curve runs out of its lane before it bends: enough to read as
+// leaving sideways and to clear the lanes beside the device, not so much that
+// two ports on one side join in a loop wider than the floor.
+const curveReach = (px, y0, qx, y1) => Math.min(CURVE_REACH, Math.max(4, Math.hypot(qx - px, y1 - y0) * 0.25));
+
+/**
+ * The pieces one laid-out cable is drawn with, worked out again from what
+ * routeCables kept on it -- for finding it under the pointer and outlining
+ * it, without keeping every cable's geometry for the whole floor.
+ *
+ * @param cable   an edge or a splice, as routeCables laid it out
+ * @param port    routeCables' `ports`
+ * @param curved  whether crossings are drawn as curves or straight
+ * @returns [{ x0, y0, x1, y1 }] lines, [{ pts }] cubic curves (eight numbers)
+ *          and, for a splice, its marker as { box }. A splice member's own
+ *          stub carries `member`: that one device's cable, not the splice's.
+ */
+export function piecesOf(cable, port, curved = true) {
+  const out = [];
+  if (cable.members) {
+    for (const m of cable.members) {
+      const P = port(m, cable.net);
+      if (P && P.start !== cable.inner) out.push({ x0: P.start, y0: P.y, x1: cable.inner, y1: P.y, member: m });
+    }
+    if (cable.marker) out.push({ box: cable.marker });
+  }
+  const { P, Q } = cable;
+  if (!P || !Q) return out;
+  const line = (x0, y0, x1, y1) => { if (x0 !== x1 || y0 !== y1) out.push({ x0, y0, x1, y1 }); };
+  if (inColumn(P, Q)) {
+    const x = columnX(P, Q);
+    line(P.start, P.y, x, P.y);
+    line(Q.start, Q.y, x, Q.y);
+    line(x, P.y, x, Q.y);
+    return out;
+  }
+  const px = P.edge + P.side * P.lane;
+  const qx = Q.edge + Q.side * Q.lane;
+  const y0 = P.y + (cable.offP || 0);
+  const y1 = Q.y + (cable.offQ || 0);
+  line(P.start, P.y, px, P.y);
+  line(Q.start, Q.y, qx, Q.y);
+  // The stretch of lane a fanned-out cable runs along from its stub.
+  line(px, P.y, px, y0);
+  line(qx, Q.y, qx, y1);
+  if (!curved) {
+    line(px, y0, qx, y1);
+    return out;
+  }
+  const reach = curveReach(px, y0, qx, y1);
+  out.push({ pts: [px, y0, px + P.side * reach, y0, qx + Q.side * reach, y1, qx, y1] });
+  return out;
+}
+
+/** How far a point is from a piece piecesOf returned, in world units. */
+export function distanceTo(piece, x, y) {
+  if (piece.box) {
+    const b = piece.box;
+    const dx = Math.max(b.x0 - x, 0, x - b.x1);
+    const dy = Math.max(b.y0 - y, 0, y - b.y1);
+    return Math.hypot(dx, dy);
+  }
+  if (piece.pts) {
+    // Near enough as a polyline: a curve between two ports bends gently.
+    const p = piece.pts;
+    let best = Infinity;
+    let ax = p[0];
+    let ay = p[1];
+    for (let k = 1; k <= CURVE_STEPS; k++) {
+      const t = k / CURVE_STEPS;
+      const u = 1 - t;
+      const bx = u * u * u * p[0] + 3 * u * u * t * p[2] + 3 * u * t * t * p[4] + t * t * t * p[6];
+      const by = u * u * u * p[1] + 3 * u * u * t * p[3] + 3 * u * t * t * p[5] + t * t * t * p[7];
+      best = Math.min(best, segmentDistance(x, y, ax, ay, bx, by));
+      ax = bx;
+      ay = by;
+    }
+    return best;
+  }
+  return segmentDistance(x, y, piece.x0, piece.y0, piece.x1, piece.y1);
+}
+
+const CURVE_STEPS = 24;
+
+function segmentDistance(x, y, ax, ay, bx, by) {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const len = dx * dx + dy * dy;
+  const t = len ? Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / len)) : 0;
+  return Math.hypot(x - (ax + t * dx), y - (ay + t * dy));
 }

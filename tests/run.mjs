@@ -33,10 +33,10 @@ import {
 } from '../js/render.js';
 import {
   betweenPicks, biggestChanges, bitRate, busiest, cableKeys, cablesOf, compareLoads, countersOf, devicesOf,
-  flowsOf, formatGbps, hostsOf, loadable, loadUnit, mergeResults, routeEstimate, routeTraffic, testFlows,
-  trafficKind, utilOf, viewOf as cableView,
+  flowsOf, flowsOver, formatGbps, GEN_LIMITS, generateFlows, hostCapacity, hostsFor, hostsOf, loadable, loadUnit,
+  mergeResults, reachKinds, routeEstimate, routeTraffic, testFlows, trafficKind, utilOf, viewOf as cableView,
 } from '../js/traffic.js';
-import { CURVE_REACH, FAN_GAP, LANE, SPLICE_W } from '../js/route.js';
+import { CURVE_REACH, FAN_GAP, LANE, SPLICE_W, distanceTo, piecesOf } from '../js/route.js';
 import { compileQuery, applyFilter } from '../js/filter.js';
 import { ramp, categoricalColor, colorFor, contrastInk } from '../js/palette.js';
 import { referenceSnippets, suggestionsFor } from '../js/hints.js';
@@ -1763,6 +1763,156 @@ const segsOf = (cache, net) => {
   const picked = routeEstimate(m, hosts, { only });
   ok(picked.delivered < all.delivered && picked.routed === 2, 'narrowed, an estimate routes only the pairs between the picks');
   ok(Math.abs(picked.delivered - 2 * (30 * 30 / 60)) < 1e-9, 'each at the share it has in the whole estimate');
+}
+
+// --------------------------------------------------------- load generator
+// A made-up load for a fabric with nothing measured: every host sends, in a
+// pattern, and it is routed like any metric.
+{
+  const m = parseLayout([
+    'dc D',
+    '  row A cols=2',
+    '    rack R[1..2] u=24',
+    '      node tor at=24 role=tor +switch',
+    '      node s[1..4] u=2 role=server',
+    '  row S',
+    '    rack SP u=10',
+    '      node spine[1..2] role=spine +switch',
+    'net nic gbps=25',
+    'net mgmt traffic=no',
+    'net up gbps=100',
+    'link nic scope=rack role=server role=tor',
+    'link mgmt scope=rack role=server role=tor',
+    'link up role=tor role=spine',
+  ].join('\n'));
+  const { hosts, untagged } = hostsFor(m);
+  eq([hosts.length, untagged], [8, false], 'the hosts are the devices with cables that are not +switch');
+  eq(hostsFor(m, (el) => el.name === 's1').hosts.map((h) => h.path), ['D/A/R1/s1', 'D/A/R2/s1'],
+     'a filter names the hosts instead');
+  ok(hostsFor(parseLayout('dc D\n  node a\n  node b\nnet x\nlink x name=a name=b')).untagged,
+     'with nothing tagged +switch, every device with cables is a host, and it says so');
+  eq(hostCapacity(m, m.resolve('R1/s1')), 25, 'a host’s capacity is its traffic-carrying cables: mgmt is traffic=no');
+  eq(reachKinds(hosts), ['rack', 'row'], 'a load can be kept out of a host’s rack or row, innermost first');
+
+  const peak = (r, net) => Math.max(0, ...[...r.loads].filter(([l]) => l.net === net).map(([, x]) => Math.max(...x)));
+  // All-to-all at half of each NIC: every server's cable half full.
+  const all = generateFlows(m, { pattern: 'all', value: 50, unit: '%' });
+  eq([all.flows.length, all.senders, Math.round(all.offered * 1e9) / 1e9, all.why], [56, 8, 100, ''], 'all-to-all: every host to every other');
+  ok(all.flows.every((f) => f.gen && f.id >= 2000000), 'generated flows have ids of their own');
+  const routed = routeTraffic(m, all.flows, { split: 'even' });
+  ok(Math.abs(peak(routed, 'nic') - 12.5) < 1e-9, 'at 50% of a 25G NIC, a server’s cable carries 12.5 each way');
+  const apart = generateFlows(m, { pattern: 'all', value: 50, unit: '%', reach: 'rack' });
+  eq(apart.flows.length, 32, 'outside its own rack: each server only to the other rack’s four');
+  ok(apart.flows.every((f) => f.src.parent !== f.dst.parent), 'and no flow stays inside a rack');
+
+  // Units: a bit rate in another bit rate's terms, and what will not add up.
+  eq(generateFlows(m, { pattern: 'all', value: 7, unit: 'Gb/s' }).offered, 56, 'Gb/s from each host');
+  const inMbps = generateFlows(m, { pattern: 'all', value: 7, unit: 'Gb/s' }, { base: { toGbps: 0.001, unit: 'Mb/s' } });
+  ok(Math.abs(inMbps.offered - 56000) < 1e-6, 'on top of a metric in Mb/s, 7 Gb/s is 7000 of its units');
+  ok(/pps cannot be added to Gb\/s/.test(generateFlows(m, { pattern: 'all', value: 7, unit: 'pps' }, { base: { toGbps: 1, unit: 'Gb/s' } }).why),
+     'pps cannot ride on Gb/s, and it says so');
+  ok(/is a bit rate, and pps is not/.test(generateFlows(m, { pattern: 'all', value: 50, unit: '%' }, { base: { toGbps: null, unit: 'pps' } }).why),
+     'nor a share of the NICs on a metric in pps');
+  const bare = parseLayout('dc D\n  node a\n  node b\nnet x\nlink x name=a name=b');
+  eq(generateFlows(bare, { pattern: 'all', value: 50, unit: '%' }).noCapacity, 2,
+     'a host whose cables have no gbps= sends nothing at a % of it, and is counted');
+
+  // Random: a seeded choice of peers, a new seed a new choice.
+  const rand = generateFlows(m, { pattern: 'random', value: 10, unit: 'Gb/s', peers: 2, seed: 1 });
+  eq([rand.flows.length, rand.offered], [16, 80], 'random: two peers each, the same total');
+  ok(rand.flows.every((f) => f.src !== f.dst), 'never itself');
+  eq(generateFlows(m, { pattern: 'random', value: 10, unit: 'Gb/s', peers: 2, seed: 1 }).flows.map((f) => f.dst.path),
+     rand.flows.map((f) => f.dst.path), 'the same seed, the same peers');
+  ok(generateFlows(m, { pattern: 'random', value: 10, unit: 'Gb/s', peers: 2, seed: 2 }).flows.map((f) => f.dst.path).join()
+     !== rand.flows.map((f) => f.dst.path).join(), 'a new seed, new peers');
+
+  // Incast: everyone into one server, which is where it overflows.
+  const into = m.resolve('R1/s1');
+  const incast = generateFlows(m, { pattern: 'incast', value: 10, unit: 'Gb/s' }, { target: into });
+  eq([incast.flows.length, incast.offered], [7, 70], 'incast: every other host sends to the target');
+  const filled = routeTraffic(m, incast.flows, { split: 'even' });
+  const down = [...filled.loads].find(([l]) => l.net === 'nic' && (l.a === into || l.b === into));
+  ok(Math.abs(Math.max(...down[1]) - 70) < 1e-9 && utilOf(down[0], down[1], 1) > 2.7, 'and the target’s own cable takes all of it');
+  ok(/pick or select/.test(generateFlows(m, { pattern: 'incast', value: 10, unit: 'Gb/s' }).why), 'incast needs a target');
+  eq(generateFlows(m, { pattern: 'incast', value: 10, unit: 'Gb/s' }, { target: m.resolve('R2') }).flows.length, 20,
+     'into a rack, each sender shares its load over the rack’s devices');
+
+  // Too big to route here says so instead of hanging the page.
+  const saved = GEN_LIMITS.flows;
+  GEN_LIMITS.flows = 20;
+  ok(/too many to route here/.test(generateFlows(m, { pattern: 'all', value: 1, unit: 'Gb/s' }).why), 'a load too big to route is refused, with why');
+  GEN_LIMITS.flows = saved;
+  ok(/the amount is 0/.test(generateFlows(m, { pattern: 'all', value: 0, unit: 'Gb/s' }).why), 'and so is nothing at all');
+
+  // The flows over a cable add up to what is drawn on it, however it is split.
+  const uplink = m.links.find((l) => l.net === 'up' && l.a === m.resolve('R1/tor'));
+  for (const split of ['even', 'capacity', 'hashed']) {
+    const opts = { split, seed: 3 };
+    const r = routeTraffic(m, all.flows, opts);
+    const load = r.loads.get(uplink) || [0, 0];
+    const over = flowsOver(m, all.flows, [uplink], opts);
+    ok(Math.abs(over.amount - (load[0] + load[1])) < 1e-9, `${split}: the flows over a cable add up to its load`);
+    ok(over.flows.every((x) => x.flow.src.parent !== x.flow.dst.parent), `${split}: and only flows between racks cross an uplink`);
+  }
+  const lane = m.links.filter((l) => l.net === 'nic' && (l.a.parent === m.resolve('R1') || l.b.parent === m.resolve('R1')));
+  const inRack = flowsOver(m, all.flows, lane, { split: 'even' });
+  ok(inRack.flows.every((x) => x.amount <= x.flow.value + 1e-12), 'a flow over two of the cables asked about counts once');
+  eq(inRack.count, all.flows.filter((f) => f.src.parent === m.resolve('R1') || f.dst.parent === m.resolve('R1')).length,
+     'every flow into or out of the rack crosses its servers’ cables');
+}
+
+// ------------------------------------------------------------ cable hover
+// The cable under the pointer, found by the same pieces it is drawn with: a
+// crossing by its curve, cables sharing a stub all at once, and inside a
+// device only right on the line.
+{
+  const m = parseLayout(readFileSync(join(root, 'examples/small.dc'), 'utf8'));
+  layout(m.root);
+  const r = new Renderer({ getContext: () => null }, { ...viewOf(m), curvedCables: true });
+  r.camera.scale = 4;
+  r.rebuildLinkCache(0);
+  const toScreen = (x, y) => [(x - r.camera.x) * r.camera.scale, (y - r.camera.y) * r.camera.scale];
+  const routed = r.linkCache.nets.get('data');
+  const crossing = routed.cables.find((c) => !c.members && c.a.parent !== c.b.parent);
+  const pieces = piecesOf(crossing, r.linkCache.ports, true);
+  const curve = pieces.find((p) => p.pts);
+  ok(!!curve, 'a crossing between racks is drawn as a curve');
+  // Halfway along the curve, well away from every box.
+  const mid = (k) => (curve.pts[k] + 3 * curve.pts[k + 2] + 3 * curve.pts[k + 4] + curve.pts[k + 6]) / 8;
+  const hit = r.pickCable(...toScreen(mid(0), mid(1)));
+  ok(hit && hit.cables.length === 1 && hit.cables[0].cable === crossing, 'the pointer on a crossing finds that cable');
+  ok(distanceTo(curve, mid(0), mid(1)) < 1e-6, 'and is on the curve it is drawn with');
+  ok(hit.cables[0].cable.link && hit.cables[0].cable.link.net === 'data', 'which knows the model’s cable it stands for');
+  ok(r.pickCable(...toScreen(m.root.box.x - 100, m.root.box.y - 100)) === null, 'away from every cable, none is found');
+
+  // A ToR's stub carries every cable of the net it has: all of them at once.
+  const tor = m.resolve('DH1/A/R01/tor');
+  const P = r.linkCache.ports(tor, 'data');
+  const stub = r.pickCable(...toScreen((P.start + P.start + P.side * P.lane) / 2, P.y));
+  ok(stub && stub.cables.length > 1 && stub.cables.every(({ cable }) => cable.a === tor || cable.b === tor),
+     'on a ToR’s stub, every cable through it is under the pointer');
+
+  // Inside a device the device wins, unless the pointer is right on a cable.
+  const u05 = m.resolve('DH1/A/R01/u05');
+  const Q = r.linkCache.ports(u05, 'data');
+  const near = toScreen(Q.start - Q.side * 0.6, Q.y);
+  ok(r.pickCable(...near, false) !== null && r.pickCable(...near, true) === null,
+     'a pointer just inside a server’s box is the server’s, not its cable’s');
+
+  // Spliced cables: a member's own stub is that member's cable.
+  const s = parseLayout(['dc D', '  rack R u=10', '    node tor at=10 role=tor +switch', '    node u[1..4] role=server',
+    'net data', 'link data role=server role=tor splice=4'].join('\n'));
+  layout(s.root);
+  const rs = new Renderer({ getContext: () => null }, { ...viewOf(s), curvedCables: true });
+  rs.camera.scale = 4;
+  rs.rebuildLinkCache(0);
+  const splice = rs.linkCache.nets.get('data').cables.find((c) => c.members);
+  ok(!!splice && splice.links.length === 4, 'a splice knows the four cables it gathers');
+  const u2 = s.resolve('R/u2');
+  const own = piecesOf(splice, rs.linkCache.ports, true).find((p) => p.member === u2);
+  const at = [(own.x0 + own.x1) / 2, own.y0].map((v, i) => (v - (i ? rs.camera.y : rs.camera.x)) * rs.camera.scale);
+  const member = rs.pickCable(...at);
+  ok(member && member.cables[0].member === u2, 'on a member’s stub, the cable is that member’s own');
 }
 
 // ------------------------------------------------------------------ splices

@@ -13,7 +13,7 @@
 import { labelOf } from './layout.js';
 import { colorFor, contrastInk, ramp } from './palette.js';
 import { formatValue, isStandardized, overlayValue, zRangeOf, zScore } from './results.js';
-import { routeCables } from './route.js';
+import { distanceTo, piecesOf, routeCables } from './route.js';
 
 const THEME = {
   bg: '#0d1117',
@@ -29,6 +29,7 @@ const THEME = {
   selected: '#f5d442',
   picked: '#ff6bd5',
   hover: 'rgba(255,255,255,0.55)',
+  hoverCable: '#ffffff',
   match: '#4fa3ff',
 };
 
@@ -56,6 +57,8 @@ export class Renderer {
     this.state = state;
     this.camera = { x: 0, y: 0, scale: 1 };
     this.hover = null;
+    // The cable(s) under the pointer, as pickCable found them, or null.
+    this.hoverCable = null;
     this.linkCache = { version: -1, nets: new Map(), total: 0 };
     this.stats = { drawn: 0, links: 0, flows: 0 };
   }
@@ -118,6 +121,82 @@ export class Renderer {
     };
     walk(root);
     return found;
+  }
+
+  /**
+   * The cable under the pointer: the drawn cables nearest it, within a few
+   * pixels -- more than one where they share a lane or a port's stub, since
+   * there they are drawn as one line. Inside a device's own box the device
+   * wins unless the pointer is right on a cable.
+   *
+   * @returns { net, cables: [{ cable, member }], x, y } -- each an edge or a
+   *          splice as laid out (member: the splice member whose own stub it
+   *          is) -- or null.
+   */
+  pickCable(sx, sy, insideDevice = false) {
+    const cache = this.linkCache;
+    if (!cache || !cache.nets || !cache.nets.size) return null;
+    const p = this.screenToWorld(sx, sy);
+    const scale = this.camera.scale;
+    const tol = (insideDevice ? CABLE_HIT_INSIDE : CABLE_HIT) / scale;
+    const index = this.cableIndex();
+    const curved = this.state.curvedCables !== false && cache.total <= CURVE_LIMIT;
+    let best = Infinity;
+    let found = [];
+    const { boxes, cables } = index;
+    for (let i = 0; i < cables.length; i++) {
+      const k = i * 4;
+      if (p.x < boxes[k] - tol || p.x > boxes[k + 2] + tol || p.y < boxes[k + 1] - tol || p.y > boxes[k + 3] + tol) continue;
+      const cable = cables[i];
+      let near = Infinity;
+      let member = null;
+      for (const piece of piecesOf(cable, cache.ports, curved)) {
+        const d = distanceTo(piece, p.x, p.y);
+        if (d < near) { near = d; member = piece.member || null; }
+      }
+      if (near > tol) continue;
+      // Cables drawn along one line are all under the pointer at once.
+      if (near < best - TIE) { best = near; found = [{ cable, member }]; }
+      else if (near <= best + TIE) found.push({ cable, member });
+    }
+    if (!found.length) return null;
+    return { net: found[0].cable.net, cables: found, x: p.x, y: p.y };
+  }
+
+  /**
+   * Every laid-out cable with the box it can be drawn inside, built once per
+   * link cache the first time the pointer asks: its ends' boxes, widened by
+   * how far a lane and a curve reach out of them.
+   */
+  cableIndex() {
+    const cache = this.linkCache;
+    if (cache.index) return cache.index;
+    const enabled = new Set();
+    for (const net of this.state.model.nets.values()) if (net.enabled) enabled.add(net.name);
+    const cables = [];
+    for (const [name, routed] of cache.nets) {
+      if (!enabled.has(name)) continue;
+      for (const cable of routed.cables) cables.push(cable);
+    }
+    const boxes = new Float64Array(cables.length * 4);
+    cables.forEach((cable, i) => {
+      const ends = cable.members ? [...cable.members, cable.to] : [cable.a, cable.b];
+      let x0 = Infinity;
+      let y0 = Infinity;
+      let x1 = -Infinity;
+      let y1 = -Infinity;
+      for (const el of ends) {
+        const b = el.box;
+        if (!b) continue;
+        x0 = Math.min(x0, b.x);
+        y0 = Math.min(y0, b.y);
+        x1 = Math.max(x1, b.x + b.w);
+        y1 = Math.max(y1, b.y + b.h);
+      }
+      boxes.set([x0 - CABLE_REACH * 2, y0, x1 + CABLE_REACH * 2, y1], i * 4);
+    });
+    cache.index = { cables, boxes };
+    return cache.index;
   }
 
   // ------------------------------------------------------------------ drawing
@@ -406,17 +485,15 @@ export class Renderer {
 
   // -------------------------------------------------------------------- links
 
-  drawLinks() {
+  /**
+   * Lay the cables out again if what they depend on has moved. The cache
+   * depends on the topology version and the zoom bucket -- at a far zoom,
+   * links aggregate up to the blocks the LOD cutoff actually paints -- and on
+   * the isolated element, since routes are laid out for the cables actually
+   * shown and sharing a lane is decided by which those are.
+   */
+  syncLinkCache() {
     const state = this.state;
-    const enabled = [...state.model.nets.values()].filter((n) => n.enabled);
-    this.stats.links = 0;
-    if (!enabled.length) return;
-
-    // The cache depends on the topology version and the zoom bucket -- at a
-    // far zoom, links aggregate up to the blocks the LOD cutoff actually
-    // paints -- and on the isolated element, since routes are laid out for
-    // the cables actually shown and sharing a lane is decided by which those
-    // are.
     const bucket = Math.round(Math.log2(this.camera.scale) * 2);
     // Picks win over "only this element's cables": with two or more picked,
     // what is drawn is what runs between them.
@@ -432,7 +509,22 @@ export class Renderer {
     if (cache.version !== state.version || cache.bucket !== bucket || cache.only !== only
         || cache.keep !== keep || cache.load !== load || cache.capacity !== capacity) {
       this.rebuildLinkCache(bucket, only, keep, load, capacity);
+      // What was hovered belongs to the layout just replaced.
+      this.hoverCable = null;
     }
+  }
+
+  drawLinks() {
+    const state = this.state;
+    const enabled = [...state.model.nets.values()].filter((n) => n.enabled);
+    this.stats.links = 0;
+    // Laid out even with every net off, so the pointer finds nothing.
+    this.syncLinkCache();
+    if (!enabled.length) return;
+
+    const routes = state.between ? state.between() : null;
+    const keep = routes ? routes.links : null;
+    const only = !keep && state.isolateLinks ? state.selected : null;
 
     const ctx = this.ctx;
     const scale = this.camera.scale;
@@ -864,9 +956,12 @@ export class Renderer {
     const addEdge = (net, a, b, link) => {
       const key = a.key < b.key ? `${net} ${a.key} ${b.key}` : `${net} ${b.key} ${a.key}`;
       let edge = seen.get(key);
-      if (edge) edge.count++;
-      else {
-        edge = { net, a, b, count: 1, t: measured ? { ab: 0, ba: 0, worst: null } : undefined };
+      if (edge) {
+        edge.count++;
+        // The cables it stands for, for the tooltip: one is the common case.
+        (edge.more || (edge.more = [])).push(link);
+      } else {
+        edge = { net, a, b, count: 1, link, t: measured ? { ab: 0, ba: 0, worst: null } : undefined };
         seen.set(key, edge);
         edges.push(edge);
       }
@@ -915,7 +1010,7 @@ export class Renderer {
       const parent = blocks[0].parent;
       const intact = blocks.every((m) => sp.members.includes(m) && m.parent === parent);
       if (intact) {
-        const splice = { net: sp.net, members: blocks, to, count: blocks.length };
+        const splice = { net: sp.net, members: blocks, to, count: blocks.length, links };
         if (measured) {
           // Each member's own cable into the marker, and the one trunk on from
           // it, which carries all of theirs.
@@ -963,9 +1058,48 @@ export class Renderer {
 
   // ---------------------------------------------------------------- selection
 
+  /** The hovered cable, outlined along every piece it is drawn with. */
+  drawHoverCable() {
+    const hit = this.hoverCable;
+    const cache = this.linkCache;
+    if (!hit || !cache || !cache.ports) return;
+    const ctx = this.ctx;
+    const scale = this.camera.scale;
+    const curved = this.state.curvedCables !== false && cache.total <= CURVE_LIMIT;
+    ctx.save();
+    ctx.setLineDash([]);
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = THEME.hoverCable;
+    ctx.globalAlpha = 0.9;
+    ctx.lineWidth = 2 / scale;
+    for (const { cable, member } of hit.cables) {
+      for (const piece of piecesOf(cable, cache.ports, curved)) {
+        // A splice member's cable is its own stub and the trunk it joins.
+        if (member && piece.member && piece.member !== member) continue;
+        ctx.beginPath();
+        if (piece.box) {
+          const b = piece.box;
+          ctx.strokeRect(b.x0, b.y0, b.x1 - b.x0, b.y1 - b.y0);
+          continue;
+        }
+        if (piece.pts) {
+          const p = piece.pts;
+          ctx.moveTo(p[0], p[1]);
+          ctx.bezierCurveTo(p[2], p[3], p[4], p[5], p[6], p[7]);
+        } else {
+          ctx.moveTo(piece.x0, piece.y0);
+          ctx.lineTo(piece.x1, piece.y1);
+        }
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
+  }
+
   drawSelection() {
     const ctx = this.ctx;
     const scale = this.camera.scale;
+    this.drawHoverCable();
     // Picks: a solid outline and their number, so the inspector's list and
     // the floor can be matched up.
     const picked = this.state.picked || [];
@@ -1000,6 +1134,14 @@ export class Renderer {
 }
 
 const LOD_RECURSE = 9;   // stop descending once a container is this many px wide
+
+// How close the pointer must be to a cable, in screen pixels, for it to be
+// the cable that is hovered -- and, inside a device's own box, where the
+// device is what the pointer is most likely after.
+const CABLE_HIT = 5;
+const CABLE_HIT_INSIDE = 1.5;
+// Cables closer to the pointer than this to each other are one line.
+const TIE = 1e-6;
 
 // Cable load colours. Utilization runs green to red across 0-100%; past 100%
 // is its own colour, since demand above what the cable carries is a different

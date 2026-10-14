@@ -12,8 +12,8 @@ import {
   readingText, recomputeDomain, recomputeStats,
 } from './results.js';
 import {
-  fillWarnings, renderBuild, renderCableLoad, renderInspector, renderLive, renderNets, renderNotices,
-  renderOverlays, renderTree, renderWarnings,
+  cableTip, fillWarnings, renderBuild, renderCableLoad, renderInspector, renderLive, renderLoadGen, renderNets,
+  renderNotices, renderOverlays, renderTree, renderWarnings,
 } from './ui.js';
 import {
   droppedLayoutsNotice, layoutNotice, plural, prefixed, resultsFileNotice,
@@ -22,8 +22,8 @@ import { attachHints, renderReference } from './hints.js';
 import { layoutFromHosts, matchesPattern, recordsSince, tailRecords } from './tsv.js';
 import { routesBetween } from './paths.js';
 import {
-  betweenPicks, bitRate, cableKeys, countersOf, flowsOf, hostsOf, loadable, loadUnit, mergeResults,
-  routeEstimate, routeTraffic, testFlows, trafficKind, viewOf,
+  betweenPicks, bitRate, cableKeys, countersOf, flowsOf, flowsOver, generateFlows, hostsOf, loadable, loadUnit,
+  mergeResults, routeEstimate, routeTraffic, testFlows, trafficKind, viewOf,
 } from './traffic.js';
 import { VERSION } from './version.js';
 import {
@@ -79,6 +79,10 @@ const state = {
     // and a test flow from the first pick to the second.
     betweenOnly: false,
     test: { on: false, value: 100, unit: 'Gb/s' },
+    // The load generator: a made-up load, on its own or on top of a metric.
+    // unit null is '%' of each host's NICs where cables have a gbps=, else
+    // Gb/s; hosts is a filter, empty for every device not tagged +switch.
+    gen: { on: false, pattern: 'all', value: 50, unit: null, peers: 1, reach: 'any', hosts: '', seed: 1 },
   },
   trafficCache: { model: null, base: null, counters: null, view: null },
   // What-if: elements and cables taken out, by key so they survive a re-parse.
@@ -302,16 +306,21 @@ function modelSource(withDown) {
   const picks = state.picked.length >= 2 ? state.picked : null;
   const test = picks && t.test.on && t.test.value > 0 ? t.test : null;
   const between = !!(picks && metric && t.betweenOnly);
-  if (!metric && !test) return null;
+  const gen = t.gen.on ? t.gen : null;
+  if (!metric && !test && !gen) return null;
   const out = withDown ? state.takenOut() : { els: [], links: [], size: 0 };
   const downKey = withDown ? `${[...state.down.els].sort().join('\u0001')}\u0002${[...state.down.links].sort().join('\u0001')}` : '';
   const pickKey = picks && (test || between) ? picks.map((p) => p.key).join('\u0001') : '';
   const testKey = test ? `${test.value}\u0001${test.unit}` : '';
+  // Incast sends to the first pick, or failing that the selection.
+  const target = gen && gen.pattern === 'incast' ? state.picked[0] || state.selected || null : null;
+  const genKey = gen ? JSON.stringify([gen.pattern, gen.value, genUnit(), gen.peers, gen.reach, gen.hosts, gen.seed,
+    target && target.key]) : '';
   const slot = withDown ? 'model' : 'base';
   const c = state.trafficCache[slot];
   if (c && c.overlay === metric && c.layout === state.model && c.agg === (metric && metric.agg)
       && c.split === t.split && c.seed === t.seed && c.spread === t.spread && c.down === downKey
-      && c.picks === pickKey && c.test === testKey && c.between === between) {
+      && c.picks === pickKey && c.test === testKey && c.between === between && c.gen === genKey) {
     return c.value;
   }
   // Nothing taken out: the model and its baseline are one routing.
@@ -320,11 +329,15 @@ function modelSource(withDown) {
     state.trafficCache.model = { ...state.trafficCache.base, down: downKey };
     return same;
   }
-  // A test flow is in the metric's unit when it rides on top of one, and in
-  // its own when it is all there is.
-  const unit = metric ? loadUnit(metric, kind) : testUnit(test.unit);
+  // A test flow or a generated load is in the metric's unit when it rides on
+  // top of one; with no metric, the generator's unit is the one, and a test
+  // flow's own when it is all there is.
+  const unit = metric ? loadUnit(metric, kind) : gen ? testUnit(genBase(genUnit())) : testUnit(test.unit);
   const opts = { split: t.split, seed: t.seed, spread: t.spread, down: out };
   const only = between ? betweenPicks(picks) : null;
+  // Every flow routed, kept so a cable can say which of them it carries. An
+  // estimate has none to name: its pairs are a model, not flows.
+  const routed = [];
   let result = null;
   let count = 0;
   let total = 0;
@@ -337,6 +350,7 @@ function modelSource(withDown) {
     total = f.flows.length;
     unresolved = f.unresolved;
     result = routeTraffic(state.model, flows, opts);
+    routed.push(...flows);
   } else if (metric) {
     const h = hostsOf(metric, state.model);
     count = h.hosts.length;
@@ -344,22 +358,54 @@ function modelSource(withDown) {
     skipped = h.skipped;
     result = routeEstimate(state.model, h.hosts, { ...opts, only });
   }
+  // The metric's own count, before anything is added on top of it.
+  const own = result ? { routed: result.routed, delivered: result.delivered } : null;
+  let genRun = null;
+  if (gen) {
+    let match = null;
+    try { match = compileQuery(gen.hosts, state); } catch { match = null; }
+    const g = generateFlows(state.model, { ...gen, unit: genUnit() }, { match, target, base: unit });
+    genRun = { ...g, flows: g.flows.length, target, unit: genUnit(), pattern: gen.pattern, value: gen.value };
+    // Routed even when empty, so the panel has a result to say why.
+    result = mergeResults(result, routeTraffic(state.model, g.flows, opts));
+    routed.push(...g.flows);
+  }
   let testRun = null;
   if (test) {
     const flows = testFlows(picks, test.value);
     testRun = { value: test.value, unit: unit.unit, flows: flows.length, from: picks[0], to: picks[1] };
     result = mergeResults(result, routeTraffic(state.model, flows, opts));
+    routed.push(...flows);
   }
   const value = {
-    overlay: metric, kind: metric ? kind : 'test', result, loads: result.loads, toGbps: unit.toGbps, unit: unit.unit,
-    count, total, unresolved, skipped, between, test: testRun,
+    overlay: metric, kind: metric ? kind : gen ? 'gen' : 'test', result, loads: result.loads, toGbps: unit.toGbps,
+    unit: unit.unit, count, total, unresolved, skipped, between, test: testRun, gen: genRun, own,
+    flows: routed, opts, estimated: !!metric && kind === 'hosts',
   };
   state.trafficCache[slot] = {
     overlay: metric, layout: state.model, agg: metric && metric.agg, split: t.split, seed: t.seed, spread: t.spread,
-    down: downKey, picks: pickKey, test: testKey, between, value,
+    down: downKey, picks: pickKey, test: testKey, between, gen: genKey, value,
   };
   return value;
 }
+
+/**
+ * The generator's unit: as set, or by default a share of each host's NICs
+ * where the cables say what they carry, else Gb/s. With a metric loaded that
+ * is not a bit rate, its own unit is the only one a load can be added in.
+ */
+function genUnit() {
+  const t = state.traffic;
+  const overlay = t.key ? state.overlays.get(t.key) : null;
+  const metric = overlay && overlay.enabled && trafficKind(overlay) !== 'cables' && loadable(overlay) ? overlay : null;
+  const base = metric ? loadUnit(metric, trafficKind(metric)) : null;
+  if (base && base.toGbps === null) return base.unit;
+  if (t.gen.unit) return t.gen.unit;
+  return state.model.links.some((link) => link.gbps) ? '%' : 'Gb/s';
+}
+
+/** The unit a generated load on its own puts on the cables. */
+const genBase = (unit) => (unit === '%' ? 'Gb/s' : unit);
 
 function testUnit(unit) {
   const toGbps = bitRate(unit);
@@ -415,6 +461,7 @@ function refreshPanels() {
   renderTree(state, $('tree'), actions);
   renderOverlays(state, $('overlays'), actions);
   renderNets(state, $('nets'), actions);
+  renderLoadGen(state, $('load-gen'), actions, { unit: genUnit() });
   renderCableLoad(state, $('cable-load'), actions);
   renderInspector(state, $('inspector'), actions);
   $('overlay-hint').textContent = state.activeOverlays.length > 1
@@ -427,9 +474,15 @@ function refreshPanels() {
 const actions = {
   select(node) {
     state.selected = node;
-    renderInspector(state, $('inspector'), actions);
-    renderTree(state, $('tree'), actions);
     if (state.isolateLinks) state.version++;   // the isolated set changed
+    // Incast with no pick sends to the selection: what it loads, and every
+    // panel that says so, moves with it.
+    const g = state.traffic.gen;
+    if (g.on && g.pattern === 'incast' && !state.picked.length) refreshPanels();
+    else {
+      renderInspector(state, $('inspector'), actions);
+      renderTree(state, $('tree'), actions);
+    }
     invalidate();
   },
 
@@ -639,6 +692,7 @@ const actions = {
     state.traffic.key = null;
     state.traffic.counters = null;
     state.traffic.test.on = false;
+    state.traffic.gen.on = false;
     refreshPanels();
     invalidate();
   },
@@ -666,6 +720,22 @@ const actions = {
 
   setTrafficSpread(spread) {
     state.traffic.spread = spread;
+    refreshPanels();
+    invalidate();
+  },
+
+  // The load generator: its pattern, size, unit, peers, reach and hosts, and
+  // whether it runs. Running it shows it.
+  setGen(changes) {
+    Object.assign(state.traffic.gen, changes);
+    if (changes.on) state.traffic.view = 'model';
+    refreshPanels();
+    invalidate();
+  },
+
+  // Random peers drawn again.
+  rerollGen() {
+    state.traffic.gen.seed = (state.traffic.gen.seed + 1) >>> 0 || 1;
     refreshPanels();
     invalidate();
   },
@@ -838,6 +908,8 @@ const actions = {
     state.standardizeAll = 'off';
     state.traffic.key = null;
     state.traffic.counters = null;
+    state.traffic.test.on = false;
+    state.traffic.gen.on = false;
     state.down.els.clear();
     state.down.links.clear();
     // Nothing left to reload, so nothing is being followed or re-read. The
@@ -2317,12 +2389,22 @@ canvas.addEventListener('pointermove', (e) => {
     invalidate();
     return;
   }
-  const hit = renderer.pick(e.clientX - rect.left, e.clientY - rect.top);
-  if (hit !== renderer.hover) {
-    renderer.hover = hit;
+  const sx = e.clientX - rect.left;
+  const sy = e.clientY - rect.top;
+  const hit = renderer.pick(sx, sy);
+  // A cable drawn over the floor is what the pointer is on, before whatever
+  // box lies under it -- except inside a device, where it has to be right on
+  // the cable.
+  const device = !!hit && (!hit.children.length || hit.collapsed);
+  const cable = renderer.pickCable(sx, sy, device);
+  const over = cable ? null : hit;
+  if (over !== renderer.hover || cableKey(cable) !== cableKey(renderer.hoverCable)) {
+    renderer.hover = over;
+    renderer.hoverCable = cable;
     invalidate();
   }
-  showTooltip(hit, e.clientX - rect.left, e.clientY - rect.top);
+  if (cable) showCableTooltip(cable, sx, sy);
+  else showTooltip(hit, sx, sy);
 });
 
 canvas.addEventListener('pointerup', (e) => {
@@ -2354,6 +2436,7 @@ canvas.addEventListener('wheel', (e) => {
 
 canvas.addEventListener('pointerleave', () => {
   renderer.hover = null;
+  renderer.hoverCable = null;
   $('tooltip').hidden = true;
   invalidate();
 });
@@ -2423,6 +2506,62 @@ function showTooltip(node, x, y) {
     const reading = overlayValue(overlay, node);
     if (reading) lines.push(`${overlay.label}: ${readingText(overlay, reading.value)}`);
   }
+  placeTooltip(lines, x, y);
+}
+
+// One name for what a cable hit covers, so moving along the same cable does
+// not count as a new one.
+const cableKey = (hit) => (hit ? hit.cables.map(({ cable, member }) => {
+  const id = cable.members ? `${cable.members[0].key}>${cable.to.key}` : `${cable.a.key}>${cable.b.key}`;
+  return `${cable.net}:${id}:${member ? member.key : ''}`;
+}).join('|') : '');
+
+// The flows each hovered cable carries, worked out once the pointer rests on
+// it: finding them is a routing of its own.
+const cableFlows = { key: '', source: null, value: null, timer: null };
+const FLOWS_AFTER_MS = 150;
+
+/** A cable's tooltip: what it is, what it carries, and the flows that cross it. */
+function showCableTooltip(hit, x, y) {
+  const view = state.cableView();
+  // The flows behind what is drawn: the model's, wherever it is shown.
+  const source = view && view.view !== 'measured' ? view.model : null;
+  const key = cableKey(hit);
+  if (cableFlows.key !== key || cableFlows.source !== source) {
+    clearTimeout(cableFlows.timer);
+    Object.assign(cableFlows, { key, source, value: null, timer: null });
+    if (source && source.flows.length) {
+      cableFlows.timer = setTimeout(() => {
+        cableFlows.timer = null;
+        cableFlows.value = flowsOver(state.model, source.flows, cableLinks(hit), source.opts);
+        // Still on the same cable: fill the list in where the tooltip is.
+        if (cableKey(renderer.hoverCable) === key) showCableTooltip(renderer.hoverCable, lastTip.x, lastTip.y);
+      }, FLOWS_AFTER_MS);
+    }
+  }
+  const flows = source ? (source.flows.length ? cableFlows.value || 'pending' : null) : null;
+  placeTooltip(cableTip(state, hit, view, flows), x, y);
+}
+
+/** The model's cables a hit stands for: a splice member's own, or all of them. */
+function cableLinks(hit) {
+  const out = [];
+  for (const { cable, member } of hit.cables) {
+    if (cable.members) {
+      for (const rec of cable.links) if (!member || rec.member === member) out.push(rec.link);
+    } else {
+      out.push(cable.link, ...(cable.more || []));
+    }
+  }
+  return out;
+}
+
+const lastTip = { x: 0, y: 0 };
+
+function placeTooltip(lines, x, y) {
+  const tip = $('tooltip');
+  lastTip.x = x;
+  lastTip.y = y;
   tip.textContent = lines.join('\n');
   tip.hidden = false;
   const w = tip.offsetWidth;
