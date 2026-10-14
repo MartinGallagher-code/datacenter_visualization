@@ -418,6 +418,12 @@ const REFERENCE = [
     ['a|b', 'or', true],
     ['+gpu,role=server', 'comma is AND', true],
   ]],
+  ['Filter bar and generator hosts', 'The filter bar, and the load generator’s hosts box, take more: sections and boolean logic.', [
+    ['in:A01', 'inside A01 (by id, name or path: in:H1/A01)', true],
+    ['in:A[01..04]', 'ranges, the way a layout writes them', true],
+    ['role=server (in:A01 or in:B[03..05])', 'and, or, not, and parentheses', true],
+    ['role=server not +gpu', 'not binds tightest, then and (a space), then or', true],
+  ]],
 ];
 
 /** Every snippet the syntax reference offers, for the suite to hold it to the parser. */

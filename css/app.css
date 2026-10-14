@@ -740,3 +740,5 @@ body.resizing-rows { cursor: row-resize; user-select: none; }
 .gen-row .gen-hosts { flex: 1; min-width: 0; padding: 1px 4px; font-family: var(--mono); }
 .list-more { margin: 0 0 6px; }
 .list-more button { font-size: 11px; padding: 2px 8px; }
+.gen-row .gen-count { font-size: 10.5px; white-space: nowrap; }
+.gen-row .gen-count.bad { color: #f85149; }

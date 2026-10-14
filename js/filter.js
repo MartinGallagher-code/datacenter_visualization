@@ -4,7 +4,14 @@
 // The filter box query language.
 //
 // Space-separated terms are ANDed. Within a term, `|` alternatives are ORed and
-// a leading `!` negates. Terms may be:
+// a leading `!` negates. Across terms there is boolean logic too: `and`, `or`
+// and `not` (any case), with parentheses to group --
+//
+//   role=server (in:A[01..04] or in:B07) not +gpu
+//
+// -- where `not` binds tightest, then `and` (or a plain space), then `or`.
+// A bare `|` still joins only the two terms beside it, as it always has, so
+// `+gpu a | b` is +gpu and (a or b). Terms may be:
 //
 //   gpu                 substring of id, name, tag or any attribute value
 //   "top of rack"       quoted phrase
@@ -16,11 +23,41 @@
 //   temp_c>70           overlay reading comparison (also < <= >= = !=)
 //   has:temp_c          element has a reading for that test
 //   net:storage         element is attached to that network
+//   in:A01              inside an element with that id or name -- or path,
+//                       in:H1/A01 -- and that element itself
+//
+// A value can be a range the way a layout writes one: in:A[01..04],
+// rack=R[01..08,12], name=u[1..4]x… -- each a list of alternatives.
 //
 // Matching an element implicitly reveals its ancestors, so a hit deep in a rack
 // does not leave the rack itself filtered out from around it.
 
+import { expand } from './expand.js';
 import { globToRegExp, hasGlob, tagMatcher } from './select.js';
+
+// A value written as a layout range -- R[01..04], [a|b] -- is the list of
+// what it expands to; anything else is itself.
+const RANGE = /\[[^\]]*\]|^[^\s[\]]+\.\.[^\s[\]]+$/;
+function patternsOf(value) {
+  const list = RANGE.test(value) ? expand(value) : [value];
+  return list.map((v) => globToRegExp(v));
+}
+const anyOf = (res, text) => res.some((re) => re.test(text));
+
+// Where `|` separates alternatives: not inside a range's brackets.
+function splitAlternatives(term) {
+  const out = [];
+  let depth = 0;
+  let cur = '';
+  for (const c of term) {
+    if (c === '[') depth++;
+    else if (c === ']') depth = Math.max(0, depth - 1);
+    if (c === '|' && !depth) { out.push(cur); cur = ''; continue; }
+    cur += c;
+  }
+  out.push(cur);
+  return out;
+}
 
 const OPS = {
   '>=': (a, b) => a >= b,
@@ -31,21 +68,33 @@ const OPS = {
   '<': (a, b) => a < b,
 };
 
+// Tokens: { text, quoted } -- a quoted one is only ever text, never an
+// operator -- and parentheses on their own, outside quotes and brackets.
 function tokenizeQuery(query) {
   const out = [];
   let cur = '';
+  let quoted = false;
   let quote = null;
+  let depth = 0;
+  const flush = () => {
+    if (cur || quoted) out.push({ text: cur, quoted });
+    cur = '';
+    quoted = false;
+  };
   for (const c of query) {
     if (quote) {
       if (c === quote) quote = null;
       else cur += c;
       continue;
     }
-    if (c === '"' || c === "'") { quote = c; continue; }
-    if (/\s/.test(c)) { if (cur) { out.push(cur); cur = ''; } continue; }
+    if (c === '"' || c === "'") { quote = c; quoted = true; continue; }
+    if (c === '[') depth++;
+    else if (c === ']') depth = Math.max(0, depth - 1);
+    if ((c === '(' || c === ')') && !depth) { flush(); out.push({ text: c, paren: true }); continue; }
+    if (/\s/.test(c)) { flush(); continue; }
     cur += c;
   }
-  if (cur) out.push(cur);
+  flush();
   return out;
 }
 
@@ -89,6 +138,23 @@ function compileAtom(atom, ctx) {
     const re = globToRegExp(atom.slice(atom.indexOf('=') + 1).trim());
     return (el) => ctx.flowsOf && ctx.flowsOf(el).some((f) => re.test(f.peer));
   }
+  if (lower.startsWith('in:')) {
+    const spec = atom.slice(3);
+    const res = patternsOf(spec);
+    // A path names a container by where it is: H1/A01 is any A01 in an H1.
+    const paths = spec.includes('/') ? patternsOf(`*${spec.startsWith('/') ? '' : '/'}${spec}`) : null;
+    const memo = new Map();
+    const inside = (el) => {
+      if (!el) return false;
+      let hit = memo.get(el);
+      if (hit !== undefined) return hit;
+      hit = paths ? anyOf(paths, `/${el.path}`) : anyOf(res, el.id) || anyOf(res, el.name);
+      if (!hit) hit = inside(el.parent);
+      memo.set(el, hit);
+      return hit;
+    };
+    return inside;
+  }
   if (lower.startsWith('net:')) {
     const re = globToRegExp(atom.slice(4));
     return (el) => el.links.some((l) => re.test(l.net));
@@ -115,10 +181,10 @@ function compileAtom(atom, ctx) {
       };
     }
 
-    if (lowerKey === 'kind') { const re = globToRegExp(rawValue); return (el) => re.test(el.kind); }
-    if (lowerKey === 'name') { const re = globToRegExp(rawValue); return (el) => re.test(el.name); }
-    if (lowerKey === 'id') { const re = globToRegExp(rawValue); return (el) => re.test(el.id); }
-    if (lowerKey === 'path') { const re = globToRegExp(rawValue); return (el) => re.test(el.path); }
+    if (lowerKey === 'kind') { const res = patternsOf(rawValue); return (el) => anyOf(res, el.kind); }
+    if (lowerKey === 'name') { const res = patternsOf(rawValue); return (el) => anyOf(res, el.name); }
+    if (lowerKey === 'id') { const res = patternsOf(rawValue); return (el) => anyOf(res, el.id); }
+    if (lowerKey === 'path') { const res = patternsOf(rawValue); return (el) => anyOf(res, el.path); }
     if (lowerKey === 'tag') { const re = globToRegExp(rawValue); return (el) => [...el.tagsAll].some((t) => re.test(t)); }
 
     // Numeric attribute comparisons are common enough to be worth supporting.
@@ -129,10 +195,10 @@ function compileAtom(atom, ctx) {
         return Number.isFinite(v) && op(v, num);
       };
     }
-    const re = globToRegExp(rawValue);
+    const res = patternsOf(rawValue);
     return (el) => {
       const v = el.attrsEff[lowerKey];
-      return v !== undefined && re.test(String(v));
+      return v !== undefined && anyOf(res, String(v));
     };
   }
 
@@ -148,7 +214,7 @@ function compileAtom(atom, ctx) {
 }
 
 function compileTerm(term, ctx) {
-  const alternatives = term.split('|').filter(Boolean).map((alt) => {
+  const alternatives = splitAlternatives(term).filter(Boolean).map((alt) => {
     let negate = false;
     let body = alt;
     while (body.startsWith('!') || body.startsWith('-')) { negate = !negate; body = body.slice(1); }
@@ -166,26 +232,90 @@ function compileTerm(term, ctx) {
  * Returns null for an empty query, meaning "everything matches".
  */
 export function compileQuery(query, ctx) {
-  const terms = tokenizeQuery(String(query || '').trim());
-  // A pipe written with spaces around it still means OR: fold `a | b` into `a|b`.
-  for (let i = terms.length - 1; i >= 0; i--) {
-    if (terms[i] === '|' || terms[i].endsWith('|') || (i > 0 && terms[i - 1].endsWith('|')) || terms[i].startsWith('|')) {
-      if (terms[i] === '|') {
-        const right = terms.splice(i + 1, 1)[0] || '';
-        terms[i - 1] = `${terms[i - 1] || ''}|${right}`;
-        terms.splice(i, 1);
-      }
+  const tokens = tokenizeQuery(String(query || '').trim());
+  // A pipe written with spaces around it still means OR between the two terms
+  // beside it: fold `a | b` into `a|b` -- but not into a parenthesis.
+  const isTerm = (t) => t && !t.paren && (t.quoted || !OPS_WORDS.has(t.text.toLowerCase()));
+  for (let i = tokens.length - 1; i >= 0; i--) {
+    const t = tokens[i];
+    if (t.paren || t.quoted) continue;
+    if (t.text === '|' && isTerm(tokens[i - 1]) && isTerm(tokens[i + 1])) {
+      tokens[i - 1] = { text: `${tokens[i - 1].text}|${tokens[i + 1].text}` };
+      tokens.splice(i, 2);
     }
   }
-  for (let i = terms.length - 1; i > 0; i--) {
-    if (terms[i - 1].endsWith('|') || terms[i].startsWith('|')) {
-      terms[i - 1] = terms[i - 1] + terms.splice(i, 1)[0];
+  for (let i = tokens.length - 1; i > 0; i--) {
+    const a = tokens[i - 1];
+    const b = tokens[i];
+    if (!isTerm(a) || !isTerm(b) || a.quoted || b.quoted) continue;
+    if (a.text.endsWith('|') || b.text.startsWith('|')) {
+      tokens[i - 1] = { text: a.text + b.text };
+      tokens.splice(i, 1);
     }
   }
-  if (!terms.length) return null;
-  const fns = terms.map((t) => compileTerm(t, ctx));
-  return (el) => fns.every((fn) => fn(el));
+  if (!tokens.length) return null;
+
+  // or-expr := and-expr ('or' and-expr)* ; and-expr := not-expr (['and'] not-expr)*
+  // not-expr := 'not' not-expr | '(' or-expr ')' | term
+  let at = 0;
+  const word = () => {
+    const t = tokens[at];
+    return t && !t.paren && !t.quoted ? t.text.toLowerCase() : null;
+  };
+  const orExpr = () => {
+    const parts = [andExpr()];
+    while (at < tokens.length && (word() === 'or' || word() === '||' || word() === '|')) {
+      at++;
+      parts.push(andExpr());
+    }
+    const fns = parts.filter(Boolean);
+    if (!fns.length) return null;
+    return fns.length === 1 ? fns[0] : (el) => fns.some((fn) => fn(el));
+  };
+  const andExpr = () => {
+    const parts = [];
+    while (at < tokens.length) {
+      const t = tokens[at];
+      if (t.paren && t.text === ')') break;
+      const w = word();
+      if (w === 'or' || w === '||' || w === '|') break;
+      if (w === 'and' || w === '&&') { at++; continue; }
+      const fn = notExpr();
+      if (fn) parts.push(fn);
+    }
+    if (!parts.length) return null;
+    return parts.length === 1 ? parts[0] : (el) => parts.every((fn) => fn(el));
+  };
+  const notExpr = () => {
+    const t = tokens[at];
+    const w = word();
+    if (w === 'not' || w === '!') {
+      at++;
+      const fn = notExpr();
+      return fn ? (el) => !fn(el) : null;
+    }
+    if (t.paren && t.text === '(') {
+      at++;
+      const fn = orExpr();
+      // A missing ')' closes at the end; a stray one is passed over.
+      if (tokens[at] && tokens[at].paren && tokens[at].text === ')') at++;
+      return fn;
+    }
+    at++;
+    if (t.paren) return null;
+    return compileTerm(t.text, ctx);
+  };
+  let fn = orExpr();
+  while (at < tokens.length) {
+    at++;   // a stray ')'
+    const more = orExpr();
+    if (more) { const a = fn; fn = a ? (el) => a(el) && more(el) : more; }
+  }
+  return fn;
 }
+
+// Words that are operators between terms, unless quoted.
+const OPS_WORDS = new Set(['and', 'or', 'not', '&&', '||', '|', '!']);
 
 /**
  * Mark every element as matching / not matching, and flag ancestors of matches

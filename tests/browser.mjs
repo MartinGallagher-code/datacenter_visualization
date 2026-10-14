@@ -1213,6 +1213,16 @@ await test('the load generator', async () => {
   await page.locator('#load-gen button', { hasText: 'Stop' }).click();
   await page.waitForTimeout(300);
   ok(!/Cable load/.test(await panel()), 'Stop takes it off the cables');
+
+  // The hosts box reads the filter language, and counts as it is typed.
+  const count = () => page.evaluate(() => document.querySelector('#load-gen .gen-count').textContent);
+  eq(await count(), '32 hosts', 'every server, before a filter');
+  await page.fill('#load-gen input.gen-hosts', 'role=server (in:R01 or in:R0[3..4])');
+  await page.waitForTimeout(400);
+  eq(await count(), '24 hosts', 'three racks of eight, picked with or and a range');
+  await page.fill('#load-gen input.gen-hosts', 'role=server not in:P1');
+  await page.waitForTimeout(400);
+  eq(await count(), '16 hosts', 'and not: every server outside pod 1');
 }, { url: '?layout=examples/dual-plane.dc' });
 
 // Hovering a cable used to show whatever box lay under it -- a server's
