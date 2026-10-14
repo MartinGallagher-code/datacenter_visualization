@@ -12,7 +12,7 @@ import {
   readNumber, readingText, tailIsOdd, zRangeOf,
 } from './results.js';
 import {
-  capacityWidth, changeColor, countDescendants, LOAD_COLORS, loadColor, linkSummary, spliceSummary,
+  capacityWidth, changeColor, countDescendants, FINDING_COLORS, LOAD_COLORS, loadColor, linkSummary, spliceSummary,
 } from './render.js';
 import {
   biggestChanges, busiest, cablesOf, formatGbps, GEN_UNITS, hostsFor, loadable, loadUnit, PATTERNS, reachKinds,
@@ -1255,6 +1255,80 @@ export function renderLoadGen(state, host, actions, { unit } = {}) {
   host.append(box);
 }
 
+// ---------------------------------------------------------------- findings
+
+const FINDINGS_SHOWN = 12;
+// The mark's colour for a group: as the floor plan draws it.
+const groupColor = (g) => (g.severity === 'critical' ? FINDING_COLORS[3]
+  : g.kind === 'contention' ? FINDING_COLORS[1] : FINDING_COLORS[2]);
+
+/**
+ * What went wrong, by kind: the files' findings (drops, soft lockups, kernel
+ * errors, failed checks) and the load's (contention, flows with no route),
+ * each with the servers it was found on. Drops say how many the load
+ * explains -- a server whose traffic is held back drops packets -- and how
+ * many it does not, which are the ones to go and look at.
+ */
+export function renderFindings(state, host, actions) {
+  host.textContent = '';
+  const { groups } = state.findings ? state.findings() : { groups: [] };
+  if (!groups.length) return;
+  const box = el('div', 'findings');
+  const head = el('div', 'picks-head');
+  head.append(el('strong', null, 'Findings'));
+  const mark = el('label', 'chk');
+  const check = el('input');
+  check.type = 'checkbox';
+  check.checked = !!state.showFindings;
+  check.addEventListener('change', () => actions.setShowFindings(check.checked));
+  mark.append(check, el('span', null, 'mark on the floor'));
+  mark.title = 'A mark in the corner of every server with a finding: red critical, amber drops, magenta contention';
+  head.append(mark);
+  box.append(head);
+  for (const g of groups) {
+    const row = el('div', 'finding-group');
+    const dot = el('span', 'dot');
+    dot.style.background = groupColor(g);
+    row.append(dot, el('span', 'finding-title', `${g.label}: ${g.hosts.length} server${g.hosts.length === 1 ? '' : 's'}`));
+    box.append(row);
+    if (g.kind === 'drops' && (g.explained || g.unexplained)) {
+      const parts = [];
+      if (g.unexplained) parts.push(`${g.unexplained} with room — loss the load does not explain`);
+      if (g.explained) parts.push(`${g.explained} where contention explains it`);
+      box.append(el('div', g.unexplained ? 'bad finding-note' : 'muted finding-note', parts.join(' · ')));
+    }
+    const chips = el('div', 'picks-list finding-hosts');
+    for (const node of g.hosts.slice(0, FINDINGS_SHOWN)) {
+      const found = state.findings().hosts.get(node).filter((f) => f.kind === g.kind);
+      const chip = el('span', `pick finding-${g.severity}`, shortPath(node));
+      chip.title = `${node.path}\n${found.map((f) => f.text).join('\n')}\nClick to go to it`;
+      chip.addEventListener('click', () => actions.focus(node));
+      chips.append(chip);
+    }
+    if (g.hosts.length > FINDINGS_SHOWN) {
+      const rest = el('span', 'muted', `+${g.hosts.length - FINDINGS_SHOWN} more`);
+      rest.title = g.hosts.slice(FINDINGS_SHOWN).map((n) => n.path).join('\n');
+      chips.append(rest);
+    }
+    box.append(chips);
+  }
+  host.append(box);
+}
+
+/** The selected server's findings, in the inspector. */
+function renderElementFindings(state, host, node) {
+  const found = state.findings ? state.findings().hosts.get(node) : null;
+  if (!found || !found.length) return;
+  host.append(el('h2', null, 'Findings'));
+  const list = el('div', 'finding-lines');
+  for (const f of found) {
+    const line = el('div', f.severity === 'critical' ? 'bad' : f.kind === 'drops' && f.explained === false ? 'bad' : null);
+    line.textContent = `${f.severity === 'critical' ? '✖' : '⚠'} ${f.text}`;
+    list.append(line);
+  }
+  host.append(list);
+}
+
 // ----------------------------------------------------------- cable tooltip
 
 const TIP_FLOWS = 5;
@@ -1919,6 +1993,7 @@ export function renderInspector(state, host, actions) {
   }
 
   renderElementLoad(state, host, node, actions);
+  renderElementFindings(state, host, node, actions);
   renderFlows(state, host, node);
 }
 

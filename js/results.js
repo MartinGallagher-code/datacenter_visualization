@@ -191,6 +191,9 @@ const TEST_KEYS = {
   invert: ['true', 'yes', 'y', 'on', '1', 'false', 'no', 'n', 'off', '0'],
   agg: Object.keys(AGGREGATIONS),
   palette: PALETTE_NAMES,
+  // What a reading on a host says went wrong there, for the findings list:
+  // read from the metric's name when not given, and `no` to say it is not.
+  finding: ['drops', 'lockups', 'errors', 'verdict', 'no'],
 };
 
 function checkNumberMeta(key, value, spec, name, where, warnings) {
@@ -647,6 +650,7 @@ export function bindOverlay(overlay, model) {
     // one with a slash is a glob. The slug is that name with those characters
     // folded to underscores; the card prints it, and the filter accepts either.
     slug: slugify(meta.slug || overlay.name),
+    finding: String(meta.finding || '').toLowerCase(),
     wide: !!overlay.wide,
     unit: meta.unit || '',
     numeric,

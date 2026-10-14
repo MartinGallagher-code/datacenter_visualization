@@ -1591,3 +1591,185 @@ export function formatGbps(gbps) {
   if (a >= 1 || a === 0) return `${trim(gbps)}G`;
   return `${trim(gbps * 1000)}M`;
 }
+
+// ------------------------------------------------------------------ findings
+//
+// What went wrong, server by server, from both sides: what the model of the
+// load says (traffic held back by a full cable, flows with no route) and what
+// the files say (drops, soft lockups, kernel errors, a failed verdict). Put
+// side by side they answer the question binnacle's reckon asks: is a server
+// dropping packets because the load says it must, or with room to spare?
+
+export const FINDING_KINDS = ['errors', 'lockups', 'verdict', 'drops', 'contention', 'unrouted'];
+export const FINDING_LABELS = {
+  errors: 'kernel errors',
+  lockups: 'soft lockups or hung tasks',
+  verdict: 'failed a check',
+  drops: 'dropping packets',
+  contention: 'held back by contention',
+  unrouted: 'flows with no route',
+};
+
+// What a metric's name says it counts, when the file does not say (finding=).
+const FINDING_NAMES = [
+  ['lockups', /lock.?up|hung.?task|rcu.?stall|watchdog/i],
+  // Names are written with underscores, so a word ends at one too.
+  ['errors', /panic|oops|(?:^|[\W_])(?:mce|oom)(?:[\W_]|$)|machine.?check|edac|oom.?kill|hw.?err|kernel.?err|io.?err|i\/o.?err/i],
+  ['drops', /drop|discard|\bloss|loss\b|_loss|retrans|missed|overrun|squeeze/i],
+];
+const BAD_VERDICT = /^(fail|failed|failure|critical|crit|error|bad|down)$/i;
+const POOR_VERDICT = /^(warn|warning|no-data|nodata|degraded|marginal)$/i;
+
+/** What a metric reports when it reads as trouble on a host, or null. */
+export function findingKind(overlay) {
+  const declared = overlay.finding || '';
+  if (declared === 'no') return null;
+  if (declared && FINDING_KINDS.includes(declared)) return declared;
+  if (overlay.hasFlows || overlay.hasCables) return null;
+  if (!overlay.numeric) {
+    for (const texts of overlay.textByEl ? overlay.textByEl.values() : []) {
+      for (const text of Array.isArray(texts) ? texts : [texts]) {
+        const v = String(text).trim();
+        if (BAD_VERDICT.test(v) || POOR_VERDICT.test(v)) return 'verdict';
+      }
+    }
+    return null;
+  }
+  const name = `${overlay.name} ${overlay.label || ''}`;
+  for (const [kind, re] of FINDING_NAMES) if (re.test(name)) return kind;
+  return null;
+}
+
+/**
+ * Every finding, per server.
+ *
+ * @param overlays  the loaded metrics (bound overlays)
+ * @param model     what the cables show from the model -- app.js's modelSource
+ *                  value -- or null
+ * @returns { hosts: Map(el -> [{ kind, severity, text, overlay?, explained? }]),
+ *          groups: [{ kind, label, severity, hosts: [el], explained, unexplained }] }
+ *          -- severity 'critical' or 'warn'; a drop is `explained` when the
+ *          model holds that server's traffic back, and false when the model
+ *          has room for it (null with no model to ask)
+ */
+export function findingsOf(layout, overlays, model = null) {
+  const hosts = new Map();
+  const add = (el, finding) => {
+    let list = hosts.get(el);
+    if (!list) hosts.set(el, (list = []));
+    list.push(finding);
+  };
+
+  // From the model: what each server offered and what it carries, each way.
+  const c = model && model.result && model.result.contention;
+  const held = new Map();
+  if (c) {
+    const tally = (el) => {
+      let t = held.get(el);
+      if (!t) held.set(el, (t = { out: 0, outWanted: 0, in: 0, inWanted: 0, senders: new Set() }));
+      return t;
+    };
+    for (const f of c.flows) {
+      const s = tally(f.src);
+      s.out += f.value;
+      s.outWanted += f.wanted;
+      const d = tally(f.dst);
+      d.in += f.value;
+      d.inWanted += f.wanted;
+      d.senders.add(f.src);
+    }
+    for (const [el, t] of held) {
+      const outShort = t.out < t.outWanted * (1 - 1e-6);
+      const inShort = t.in < t.inWanted * (1 - 1e-6);
+      if (!outShort && !inShort) { held.delete(el); continue; }
+      const amount = (v) => formatAmount(model, v);
+      const parts = [];
+      if (outShort) parts.push(`sends ${amount(t.out)} of the ${amount(t.outWanted)} it offers`);
+      if (inShort) {
+        parts.push(`receives ${amount(t.in)} of the ${amount(t.inWanted)} offered to it`
+          + `${t.senders.size > 4 ? ` by ${t.senders.size} senders (incast)` : ''}`);
+      }
+      add(el, { kind: 'contention', severity: 'warn', text: `held back: ${parts.join('; ')}` });
+    }
+  } else if (model && model.toGbps !== null && model.loads) {
+    // No sharing out: a server offering past its own NICs is the finding.
+    for (const el of layout.all) {
+      if (el.children.length || !el.links.length || el.tagsAll.has('switch')) continue;
+      let worst = 0;
+      for (const link of el.links) {
+        const l = model.loads.get(link);
+        const u = l ? utilOf(link, l, model.toGbps) : null;
+        if (u !== null && u > worst) worst = u;
+      }
+      if (worst > 1.0005) {
+        add(el, { kind: 'contention', severity: 'warn', text: `offered ${Math.round(worst * 100)}% of what its NIC carries` });
+        held.set(el, true);
+      }
+    }
+  }
+  if (model && model.result) {
+    const lost = new Map();
+    for (const { flow } of model.result.missed.examples) {
+      lost.set(flow.src, (lost.get(flow.src) || 0) + 1);
+    }
+    for (const [el, n] of lost) {
+      if (!el.children.length) add(el, { kind: 'unrouted', severity: 'warn', text: `${n} flow${n === 1 ? '' : 's'} from it with no route` });
+    }
+  }
+
+  // From the files.
+  for (const overlay of overlays) {
+    const kind = findingKind(overlay);
+    if (!kind) continue;
+    for (const key of overlay.direct) {
+      const el = layout.byKey.get(key);
+      if (!el || el.children.length) continue;
+      const reading = overlayValue(overlay, el);
+      if (!reading) continue;
+      let severity = null;
+      let shown = '';
+      if (kind === 'verdict' || !reading.numeric) {
+        const v = String(reading.value).trim();
+        if (BAD_VERDICT.test(v)) severity = 'critical';
+        else if (POOR_VERDICT.test(v)) severity = 'warn';
+        shown = v;
+      } else if (Number.isFinite(reading.value) && reading.value > 0) {
+        severity = kind === 'drops' ? 'warn' : 'critical';
+        shown = `${trimmed(reading.value)}${overlay.unit ? ` ${overlay.unit}` : ''}`;
+      }
+      if (!severity) continue;
+      const finding = { kind, severity, text: `${overlay.label}: ${shown}`, overlay };
+      if (kind === 'drops' && model) {
+        finding.explained = held.has(el);
+        finding.text += finding.explained
+          ? ' — its traffic is held back here, so loss is expected'
+          : ' — with room: the load leaves its cables short of full, so this loss is something else';
+      }
+      add(el, finding);
+    }
+  }
+
+  const groups = [];
+  for (const kind of FINDING_KINDS) {
+    const list = [];
+    let explained = 0;
+    let unexplained = 0;
+    let critical = false;
+    for (const [el, findings] of hosts) {
+      const mine = findings.filter((f) => f.kind === kind);
+      if (!mine.length) continue;
+      list.push(el);
+      if (mine.some((f) => f.severity === 'critical')) critical = true;
+      if (mine.some((f) => f.explained === true)) explained++;
+      if (mine.some((f) => f.explained === false)) unexplained++;
+    }
+    if (!list.length) continue;
+    list.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+    groups.push({ kind, label: FINDING_LABELS[kind], severity: critical ? 'critical' : 'warn', hosts: list, explained, unexplained });
+  }
+  return { hosts, groups };
+}
+
+const trimmed = (v) => String(Math.round(v * 100) / 100);
+const formatAmount = (model, v) => (model.toGbps !== null && model.toGbps !== undefined
+  ? `${formatGbps(v * model.toGbps)}b/s` : `${trimmed(v)}${model.unit ? ` ${model.unit}` : ''}`);

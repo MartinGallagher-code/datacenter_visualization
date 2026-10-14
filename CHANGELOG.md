@@ -11,6 +11,26 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.8.0 — 2026-10-14
+
+Findings: what went wrong on each server, and whether the load explains it.
+
+- **A Findings box** lists, by kind, the servers something went wrong on,
+  and marks them on the floor plan — red critical, amber drops, magenta
+  contention. Their tooltips and the inspector say what.
+- **From the files:** drops, soft lockups and hung tasks, kernel errors, and
+  failed checks (`FAIL`/`WARN` text, as `reckon_verdict` writes). The kind
+  comes from the metric's name, or from **`finding=`**, a new `!test` key
+  (`drops`, `lockups`, `errors`, `verdict`, or `no`).
+- **From the load:** servers held back by contention — sending less than they
+  offer, or receiving less than they are offered (incast) — and flows with no
+  route.
+- **Drops are judged against the load**, as reckon's `LOSS_BELOW_CAPACITY`
+  judges them against the hardware: explained where the load holds that
+  server back, and *loss the load does not explain* where it leaves room.
+- `examples/dual-plane-health.tsv` shows each kind beside
+  `dual-plane-flows.tsv`.
+
 ## 1.7.0 — 2026-10-14
 
 Picking servers by section. 1.6.0 shares this pull request and is not

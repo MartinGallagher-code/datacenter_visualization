@@ -12,8 +12,8 @@ import {
   readingText, recomputeDomain, recomputeStats,
 } from './results.js';
 import {
-  cableTip, fillWarnings, renderBuild, renderCableLoad, renderInspector, renderLive, renderLoadGen, renderNets,
-  renderNotices, renderOverlays, renderTree, renderWarnings, switchTip,
+  cableTip, fillWarnings, renderBuild, renderCableLoad, renderFindings, renderInspector, renderLive, renderLoadGen,
+  renderNets, renderNotices, renderOverlays, renderTree, renderWarnings, switchTip,
 } from './ui.js';
 import {
   droppedLayoutsNotice, layoutNotice, plural, prefixed, resultsFileNotice,
@@ -23,8 +23,8 @@ import { layoutFromHosts, matchesPattern, recordsSince, tailRecords } from './ts
 import { routesBetween } from './paths.js';
 import {
   betweenPicks, bitRate, cableKeys, contend, countersOf, estimateFlows, flowsOf, flowsOver, GEN_LIMITS,
-  generateFlows, hostCapacity, hostsOf, loadable, loadUnit, mergeResults, readsAsLoad, routeEstimate, routeTraffic,
-  switchLoads, testFlows, trafficKind, viewOf,
+  findingsOf, generateFlows, hostCapacity, hostsOf, loadable, loadUnit, mergeResults, readsAsLoad, routeEstimate,
+  routeTraffic, switchLoads, testFlows, trafficKind, viewOf,
 } from './traffic.js';
 import { VERSION } from './version.js';
 import {
@@ -91,7 +91,8 @@ const state = {
     contention: true,
     listed: 8,                // rows in the busiest-cables list
   },
-  trafficCache: { model: null, base: null, counters: null, view: null, switches: null },
+  trafficCache: { model: null, base: null, counters: null, view: null, switches: null, findings: null },
+  showFindings: true,       // mark servers with findings on the floor plan
   // What-if: elements and cables taken out, by key so they survive a re-parse.
   down: { els: new Set(), links: new Set() },
   capacityView: false,      // with no traffic shown, cable widths by gbps=
@@ -195,6 +196,22 @@ const state = {
     for (const link of state.model.links) if (link.gbps) { anyCapacity = true; break; }
     const value = viewOf({ view, views, model, base, counters, anyCapacity });
     state.trafficCache.view = { model, base, counters, view, layout: state.model, value };
+    return value;
+  },
+
+  // What went wrong, server by server: the model's findings beside the
+  // files'. Worked out again when either changes.
+  findings() {
+    const view = state.cableView();
+    const model = view && view.view !== 'measured' ? view.model : null;
+    const overlays = [...state.overlays.values()];
+    const c = state.trafficCache.findings;
+    if (c && c.model === model && c.layout === state.model && c.version === state.version
+        && c.overlays.length === overlays.length && c.overlays.every((o, i) => o === overlays[i])) {
+      return c.value;
+    }
+    const value = findingsOf(state.model, overlays, model);
+    state.trafficCache.findings = { model, layout: state.model, version: state.version, overlays, value };
     return value;
   },
 
@@ -550,6 +567,7 @@ function refreshPanels() {
   renderNets(state, $('nets'), actions);
   renderLoadGen(state, $('load-gen'), actions, { unit: genUnit() });
   renderCableLoad(state, $('cable-load'), actions);
+  renderFindings(state, $('findings'), actions);
   renderInspector(state, $('inspector'), actions);
   $('overlay-hint').textContent = state.activeOverlays.length > 1
     ? `— ${state.activeOverlays.length} shown side by side`
@@ -854,6 +872,13 @@ const actions = {
 
   setTrafficSplit(split) {
     state.traffic.split = split;
+    refreshPanels();
+    invalidate();
+  },
+
+  // Whether servers with findings are marked on the floor plan.
+  setShowFindings(on) {
+    state.showFindings = on;
     refreshPanels();
     invalidate();
   },
@@ -2656,6 +2681,9 @@ function showTooltip(node, x, y) {
   const switches = state.switchLoads();
   const rec = switches && switches.get(node);
   if (rec) lines.push(...switchTip(rec, state.cableView()));
+  // What went wrong there.
+  const found = state.findings().hosts.get(node);
+  if (found) for (const f of found) lines.push(`${f.severity === 'critical' ? '✖' : '⚠'} ${f.text}`);
   placeTooltip(lines, x, y);
 }
 

@@ -33,7 +33,8 @@ import {
 } from '../js/render.js';
 import {
   betweenPicks, biggestChanges, bitRate, busiest, cableKeys, cablesOf, compareLoads, countersOf, devicesOf,
-  contend, CONTEND_LIMITS, estimateFlows, flowsOf, flowsOver, formatGbps, GEN_LIMITS, generateFlows, hostCapacity,
+  contend, CONTEND_LIMITS, estimateFlows, findingKind, findingsOf, flowsOf, flowsOver, formatGbps, GEN_LIMITS,
+  generateFlows, hostCapacity,
   hostsFor, hostsOf, loadable, loadUnit, mergeResults, reachKinds, readsAsLoad, routeEstimate, routeTraffic,
   switchCapacity, switchLoads, testFlows, trafficKind, utilOf, viewOf as cableView,
 } from '../js/traffic.js';
@@ -2021,6 +2022,50 @@ const segsOf = (cache, net) => {
   const asLoad = (name) => readsAsLoad(bindOverlay(raw.get(name), m));
   eq([asLoad('egress') && asLoad('egress').percent, asLoad('nic_util') && asLoad('nic_util').percent, asLoad('temp')], [false, true, null],
      'a rate reads as Gb/s, a percentage as a share of the NICs, a temperature not at all');
+}
+
+// --------------------------------------------------------------- findings
+// What went wrong, server by server: the files' drops, lockups, errors and
+// verdicts beside the load's contention -- and whether the load explains a
+// drop.
+{
+  const m = parseLayout(readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8'));
+  const bind = (path) => [...parseResults(readFileSync(join(root, path), 'utf8')).values()].map((r) => bindOverlay(r, m));
+  const health = bind('examples/dual-plane-health.tsv');
+  const flows = bind('examples/dual-plane-flows.tsv');
+  eq(health.map((o) => findingKind(o)), ['drops', 'lockups', 'errors', 'verdict'],
+     'a metric’s kind is read from its name, from finding=, or from FAIL and WARN in its text');
+  eq(findingKind(flows[0]), null, 'a flow metric is not a finding');
+  const named = (text) => findingKind(bindOverlay([...parseResults(text).values()][0], m));
+  eq([named('tcp_retrans_pct\tR01/s1\t2\n'), named('hung_tasks\tR01/s1\t1\n'), named('mce_count\tR01/s1\t1\n'),
+    named('!test x_drops finding=no\nx_drops\tR01/s1\t1\n'), named('temp_c\tR01/s1\t60\n')],
+     ['drops', 'lockups', 'errors', null, null], 'retransmits drop, hung tasks lock up, an MCE is an error; finding=no and a temperature are neither');
+
+  // Without a load: only the files speak, and a drop is neither explained nor not.
+  const alone = findingsOf(m, health, null);
+  eq(alone.groups.map((g) => [g.kind, g.hosts.length, g.severity]),
+     [['errors', 1, 'critical'], ['lockups', 2, 'critical'], ['verdict', 2, 'critical'], ['drops', 2, 'warn']],
+     'the health file’s findings, grouped, a zero reading and an OK verdict left out');
+  ok(alone.hosts.get(m.resolve('R02/s5')).every((f) => f.explained === undefined), 'with no load, a drop is not judged');
+
+  // With the flows loaded and shared out: the incast target's drops are
+  // explained, R03/s7's are not.
+  const offered = flowsOf(flows[0], m).flows;
+  const result = contend(m, offered, { split: 'even', toGbps: 1 });
+  const found = findingsOf(m, [...health, ...flows], { result, loads: result.loads, toGbps: 1, unit: 'Gb/s' });
+  const drop = (path) => found.hosts.get(m.resolve(path)).find((f) => f.kind === 'drops');
+  eq([drop('R02/s5').explained, drop('R03/s7').explained], [true, false], 'a drop where the load is held back is explained; one with room is not');
+  ok(/with room/.test(drop('R03/s7').text), 'and says so');
+  const groupOf = (kind) => found.groups.find((g) => g.kind === kind);
+  eq([groupOf('drops').explained, groupOf('drops').unexplained], [1, 1], 'the drops group counts each');
+  eq(groupOf('contention').hosts.length, 9, 'the incast target and its eight senders are held back');
+  ok(/receives 50Gb\/s of the 80Gb\/s offered to it by 8 senders \(incast\)/.test(
+    found.hosts.get(m.resolve('R02/s5')).find((f) => f.kind === 'contention').text), 'the target says it is an incast');
+
+  // Without contention, offering past a NIC is the finding instead.
+  const plain = routeTraffic(m, offered, { split: 'even' });
+  const over = findingsOf(m, [], { result: plain, loads: plain.loads, toGbps: 1, unit: 'Gb/s' });
+  ok(/offered 160% of what its NIC carries/.test(over.hosts.get(m.resolve('R02/s5'))[0].text), 'without contention, a NIC offered past full');
 }
 
 // ------------------------------------------------------------ cable hover

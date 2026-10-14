@@ -1,0 +1,29 @@
+# Health readings for examples/dual-plane.dc, to load beside
+# dual-plane-flows.tsv (or the load generator) and read as findings:
+#
+#   R02/s5   the incast target. It drops packets, and the load says it must:
+#            eight senders offer it 80 Gb/s over two 25G NICs.
+#   R03/s7   drops packets with its cables well short of full -- loss the
+#            load does not explain, which is the one to go and look at.
+#   R01/s4   logged soft lockups, and warns.
+#   R04/s2   logged a soft lockup and an EDAC error, and fails its check.
+#
+# The viewer reads each metric's kind from its name (drops, lockups,
+# errors) or from finding= on its !test line; a verdict is any text
+# metric with FAIL or WARN in it.
+!test	rx_drop_per_s	unit=pps	higher=bad	decimals=0	short=DROP	label="RX drops"
+!test	soft_lockups	higher=bad	decimals=0	short=LOCK	label="Soft lockups"
+!test	edac_errors	higher=bad	decimals=0	short=EDAC	label="EDAC errors"	finding=errors
+!test	health	short=HLTH	label="Host health"
+rx_drop_per_s	R02/s5	1840
+rx_drop_per_s	R03/s7	220
+rx_drop_per_s	R01/s1	0
+rx_drop_per_s	R03/s1	0
+soft_lockups	R01/s4	3
+soft_lockups	R04/s2	1
+soft_lockups	R01/s1	0
+edac_errors	R04/s2	2
+health	R01/s1	OK
+health	R01/s4	WARN
+health	R04/s2	FAIL
+health	R03/s7	OK
