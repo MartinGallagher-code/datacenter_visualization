@@ -235,6 +235,7 @@ export class Renderer {
     if (root && root.box) this.drawElement(root);
     this.drawLinks();
     this.drawSwitchGauges();
+    this.drawFindings();
     this.drawTakenOut();
     this.drawFlows();
     this.drawEndpoints();
@@ -691,6 +692,44 @@ export class Renderer {
         ctx.fillStyle = LOAD_COLORS.over;
         ctx.fillRect(b.x + b.w - h, y, h, h);
       }
+    }
+    ctx.restore();
+  }
+
+  /**
+   * A mark in the top corner of every server with a finding: red for the
+   * critical ones (a failed check, soft lockups, kernel errors), amber for
+   * drops, the contended colour where the load holds its traffic back. A
+   * server inside a collapsed rack marks the rack.
+   */
+  drawFindings() {
+    const state = this.state;
+    if (!state.findings || !state.showFindings) return;
+    const { hosts } = state.findings();
+    if (!hosts.size) return;
+    const worst = new Map();
+    const rank = (list) => (list.some((f) => f.severity === 'critical') ? 3
+      : list.some((f) => f.kind !== 'contention') ? 2 : 1);
+    for (const [el, list] of hosts) {
+      const shown = state.drawnEndpoint(el);
+      if (!shown) continue;
+      worst.set(shown, Math.max(worst.get(shown) || 0, rank(list)));
+    }
+    const ctx = this.ctx;
+    const scale = this.camera.scale;
+    ctx.save();
+    for (const [el, r] of worst) {
+      const b = el.box;
+      if (!b || !this.intersects(b) || b.w * scale < 6) continue;
+      const s = Math.min(b.h * 0.9, b.w * 0.4, FINDING_PX / scale);
+      ctx.fillStyle = FINDING_COLORS[r];
+      ctx.globalAlpha = 0.95;
+      ctx.beginPath();
+      ctx.moveTo(b.x + b.w - s, b.y);
+      ctx.lineTo(b.x + b.w, b.y);
+      ctx.lineTo(b.x + b.w, b.y + s);
+      ctx.closePath();
+      ctx.fill();
     }
     ctx.restore();
   }
@@ -1173,6 +1212,10 @@ export class Renderer {
 
 const LOD_RECURSE = 9;   // stop descending once a container is this many px wide
 const GAUGE_MIN_PX = 8;  // a switch narrower than this on screen gets no gauge
+// A finding's corner mark, at most this many pixels on a side, and its colour
+// by the worst finding there: contention only, drops, critical.
+const FINDING_PX = 11;
+export const FINDING_COLORS = { 1: '#ff40ff', 2: '#f0b429', 3: '#ff4d4d' };
 
 // How close the pointer must be to a cable, in screen pixels, for it to be
 // the cable that is hovered -- and, inside a device's own box, where the

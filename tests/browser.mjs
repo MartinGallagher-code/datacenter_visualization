@@ -1309,6 +1309,34 @@ await test('servers make the load their metric says', async () => {
     await page.evaluate(() => document.querySelector('#cable-load').innerText)), 'and the cable load panel says so');
 }, { url: '?layout=examples/dual-plane.dc&results=examples/dual-plane-hosts.tsv' });
 
+// Findings: the health file beside the flows, the panel and the tooltip.
+await test('findings', async () => {
+  const panel = () => page.evaluate(() => document.querySelector('#findings').innerText);
+  ok(/soft lockups or hung tasks: 2 servers/.test(await panel()), 'the files’ findings are listed as soon as they load');
+  ok(!/held back/.test(await panel()), 'and nothing about contention before there is a load');
+  await page.locator('#overlays .overlay-head input[type=checkbox]').first().check();
+  await page.waitForTimeout(200);
+  await page.locator('#overlays label', { hasText: /^load the cables$/ }).locator('input').check();
+  await page.waitForTimeout(400);
+  const text = await panel();
+  ok(/dropping packets: 2 servers/.test(text) && /1 with room — loss the load does not explain · 1 where contention explains it/.test(text),
+     'with the load on, drops say which the load explains');
+  ok(/held back by contention: 9 servers/.test(text), 'and contention is a finding');
+  const tip = await page.evaluate(() => {
+    const c = document.querySelector('#view');
+    const r = c.getBoundingClientRect();
+    for (let y = 10; y < r.height; y += 4) {
+      for (let x = 4; x < r.width; x += 4) {
+        c.dispatchEvent(new PointerEvent('pointermove', { clientX: r.left + x, clientY: r.top + y, bubbles: true }));
+        const t = document.querySelector('#tooltip');
+        if (!t.hidden && /LAB\/DH1\/P2\/A\/R03\/s7/.test(t.textContent)) return t.textContent;
+      }
+    }
+    return '';
+  });
+  ok(/⚠ RX drops: 220 pps — with room/.test(tip), `the server’s tooltip carries its findings  (${tip.split('\n').slice(-1)[0]})`);
+}, { url: '?layout=examples/dual-plane.dc&results=examples/dual-plane-flows.tsv,examples/dual-plane-health.tsv' });
+
 // The editor had a fixed height: there was nothing to drag.
 await test('the editor resizes', async () => {
   await page.click('#btn-edit');

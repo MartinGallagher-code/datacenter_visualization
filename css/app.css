@@ -742,3 +742,16 @@ body.resizing-rows { cursor: row-resize; user-select: none; }
 .list-more button { font-size: 11px; padding: 2px 8px; }
 .gen-row .gen-count { font-size: 10.5px; white-space: nowrap; }
 .gen-row .gen-count.bad { color: #f85149; }
+
+/* --------------------------------------------------------------- findings */
+
+.findings { border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; margin-top: 8px; font-size: 12px; }
+.findings .picks-head .chk { font-size: 11px; }
+.finding-group { display: flex; align-items: center; gap: 6px; margin-top: 6px; font-size: 11.5px; }
+.finding-group .dot { width: 9px; height: 9px; border-radius: 2px; flex: none; }
+.finding-note { font-size: 10.5px; margin: 1px 0 0 15px; }
+.finding-note.bad, .finding-lines .bad { color: #f85149; }
+.finding-hosts { margin: 3px 0 0 15px; }
+.pick.finding-critical { border-color: #ff4d4d88; background: #ff4d4d1f; }
+.pick.finding-warn { border-color: #f0b42988; background: #f0b4291a; }
+.finding-lines { font-size: 11.5px; line-height: 1.5; margin-bottom: 6px; }

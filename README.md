@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.7.0** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.8.0** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -596,6 +596,39 @@ node spine1 role=spine +switch gbps=12800
 
 A `gbps=` on a rack or a room is not passed down to what is in it.
 
+#### Findings: what went wrong, and whether the load explains it
+
+The **Findings** box under the cable load lists, by kind, every server
+something went wrong on, and marks each on the floor plan with a corner — red
+for the critical, amber for drops, magenta for contention. Its tooltip and
+the inspector say what was found. Two sides feed it:
+
+- **The files.** Any per-server metric that reports trouble: **drops**
+  (`rx_drop_per_s`, `tcp_retrans_pct`, `loss_pct`, …), **soft lockups or hung
+  tasks** (`soft_lockups`, `hung_tasks`), **kernel errors** (`edac_errors`,
+  `mce_count`, `oom_kills`, …) and **failed checks** — any text metric reading
+  `FAIL`, `CRITICAL`, `WARN` or `NO-DATA`, as `reckon_verdict` does. The kind
+  is read from the metric's name; `finding=` on its `!test` line says it
+  outright, or `finding=no` that a metric is not one. A zero, or an `OK`, is
+  not a finding.
+- **The load.** With load on the cables: servers **held back by
+  contention** — sending less than they offer, or receiving less than is
+  offered to them, an incast when many send to one — and **flows with no
+  route**. With contention unticked, a server offered more than its NICs carry.
+
+Side by side they answer the question binnacle's `reckon` asks with
+`LOSS_BELOW_CAPACITY`: **is a server dropping packets because the load says it
+must, or with room to spare?** A drop on a server whose traffic is held back is
+*explained* — that is what a full cable does. A drop on a server whose cables
+the load leaves short of full is *loss the load does not explain*, the one to
+go and look at, and the box counts those first.
+
+`examples/dual-plane-health.tsv` beside `examples/dual-plane-flows.tsv` shows
+both: the incast target drops packets and the load explains it, one other
+server drops with room, and two log soft lockups — one of them an EDAC error
+and a failed check too. With the load generator, the same: run a load, and
+the findings say which of the servers' troubles that load accounts for.
+
 #### Between picks: only their flows, and a test flow
 
 Picking two or more elements decides which cables are drawn — the routes
@@ -913,7 +946,10 @@ metric, since one range has to hold them all.
 
 (`higher=bad|good` picks the green↔red ramp direction; `palette=` chooses any
 ramp: viridis, magma, plasma, turbo, health, cool, ember, gray, rdbu;
-`agg=` presets the aggregation; `decimals=` fixes formatting, 0 to 10 places.
+`agg=` presets the aggregation; `decimals=` fixes formatting, 0 to 10 places;
+`finding=drops|lockups|errors|verdict` says what trouble a metric reports, for
+the [findings](#findings-what-went-wrong-and-whether-the-load-explains-it)
+list, where its name does not — and `finding=no` that it reports none.
 `min=`/`max=` must be numbers with `min` below `max`; anything else is
 reported in the load report and ignored rather than quietly applied.)
 
@@ -1655,6 +1691,8 @@ examples/dual-plane-flows.tsv  flows for it: one rack across the planes at 80%,
 examples/dual-plane-counters.tsv  switch port counters for the same run, as
                           hashing placed it: compare them with the model
 examples/dual-plane-hosts.tsv  per-server totals, for the estimated load
+examples/dual-plane-health.tsv  drops, soft lockups, an EDAC error and verdicts,
+                          for the findings beside the flows
 examples/iperf/          a floor plan using every layout feature, with a real
                          export-overlay run painted over it (see its README)
 examples/hostnames-results.tsv  results addressed by flat name
