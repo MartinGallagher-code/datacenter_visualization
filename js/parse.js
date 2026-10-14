@@ -40,7 +40,9 @@ export const GBPS_RANGE = [0.001, 1000000];
 const LINK_REALS = { gbps: GBPS_RANGE, weight: [0.01, 1000] };
 const DEFAULT_CAP = 2000000;
 // Attributes that describe *this* element only and must not cascade to children.
-const NON_INHERITED = new Set(['id', 'name', 'at', 'u', 'cols', 'dir', 'gap', 'label', 'size', 'seq', 'align', 'if']);
+// gbps= on an element is a switch's own forwarding capacity, so a rack's
+// would say nothing about its servers.
+const NON_INHERITED = new Set(['id', 'name', 'at', 'u', 'cols', 'dir', 'gap', 'label', 'size', 'seq', 'align', 'if', 'gbps']);
 
 const DEFAULT_NET_COLORS = ['#4fa3ff', '#ff9f43', '#4dd4ac', '#c986ff', '#ff6b8b', '#f5d442'];
 
@@ -191,6 +193,8 @@ export const NUMBERS = {
 };
 // A net's line width is the one number that may be fractional.
 const NET_NUMBERS = { width: [0.1, 100], gbps: GBPS_RANGE };
+// An element's gbps= -- a switch's forwarding capacity -- may be too.
+const ELEMENT_REALS = { gbps: GBPS_RANGE };
 // Everything a `net` line takes; `on=` is the old spelling of `show=`.
 const NET_KEYS = ['label', 'color', 'style', 'width', 'show', 'on', 'gbps', 'traffic'];
 
@@ -587,6 +591,7 @@ function materialize(syn, parent, model) {
     checkDir(attrs, wrote, model, syn.line);
     checkAlign(attrs, wrote, model, syn.line);
     checkNumbers(attrs, wrote, model, syn.line);
+    checkNumbers(attrs, wrote, model, syn.line, ELEMENT_REALS, false);
     checkColor(attrs, wrote, model, syn.line);
 
     const el = makeElement(syn.kind, id, parent, attrs, tags, model, syn.line);

@@ -511,6 +511,21 @@ button.danger:hover { color: #ffbdbd; border-color: #8a3a3a; }
 }
 #editor[hidden] { display: none; }
 
+/* Drag handle along the editor's top edge: taller than it looks, so it is
+   catchable without stealing pixels from the canvas or the editor. */
+.resizer-h {
+  flex: none;
+  height: 6px;
+  margin: -3px 0;
+  z-index: 4;
+  position: relative;
+  cursor: row-resize;
+  background: transparent;
+}
+.resizer-h:hover, .resizer-h.dragging { background: var(--accent); opacity: 0.5; }
+.resizer-h[hidden] { display: none; }
+body.resizing-rows { cursor: row-resize; user-select: none; }
+
 #editor-bar {
   display: flex;
   align-items: center;
@@ -723,3 +738,5 @@ button.danger:hover { color: #ffbdbd; border-color: #8a3a3a; }
 .gen-row input.gen-peers { width: 44px; }
 .gen-row .gen-pattern { flex: 1; min-width: 0; }
 .gen-row .gen-hosts { flex: 1; min-width: 0; padding: 1px 4px; font-family: var(--mono); }
+.list-more { margin: 0 0 6px; }
+.list-more button { font-size: 11px; padding: 2px 8px; }

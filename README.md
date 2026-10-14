@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.4.0** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.5.0** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -64,7 +64,9 @@ canvas that re-parses on every keystroke, so the floor plan, a per-kind tally
 (`3 rows · 24 racks · 216 nodes`) and any warnings follow the line being
 written. **Insert template** drops in a commented skeleton to start from, and
 **Download .dc** saves the result as a file. The same editor works on a loaded
-file, which makes it the quickest way to learn what a line expands to.
+file, which makes it the quickest way to learn what a line expands to. Drag
+the bar along its top edge to make it taller or shorter; double-click the bar
+to put it back.
 
 The editor completes as you type (or on **Ctrl+Space**): kinds at the start of
 a line, then the keys that line takes, then values — enumerated ones like
@@ -478,14 +480,16 @@ that traffic crossed and draws each one by what it carries:
 - **Width** is the traffic through that piece of cable. A rack's lane
   thickens on its way to the ToR, as it gathers its servers' cables.
 - **Colour** is how full the fullest cable at that point is: its busier
-  direction against its `gbps=`, green through yellow to red at 100%, and
-  **magenta past 100%** — more offered than the cable can take. Cables
-  carrying traffic with no `gbps=` are grey; idle ones stay, faint, in their
-  net's colour. With no capacity anywhere, colour is the load against the
-  busiest cable.
-- **The panel** names the busiest cables (`R02/torb → R02/s5 40G/25G ·
-  160%`; click one to go to it), how many flows were routed, and any that
-  could not be and why. **The inspector** gives the selected element's
+  direction against its `gbps=`, green through yellow to red, and **magenta
+  for a full cable** — one holding back the flows that cross it (see
+  [Contention](#contention-a-full-cable-shares-itself-out)). Cables carrying
+  traffic with no `gbps=` are grey; idle ones stay, faint, in their net's
+  colour. With no capacity anywhere, colour is the load against the busiest
+  cable.
+- **The panel** names the busiest cables (`R02/torb → R02/s5 25G/25G · 100%
+  · 8 held`; click one to go to it) — **Show more** lists more of them, 25 at
+  a time — and the busiest switches, how many flows were routed, and any
+  that could not be and why. **The inspector** gives the selected element's
   traffic out and in against its capacity, per net — for a rack, over its
   uplinks — and its busiest cables.
 
@@ -527,6 +531,70 @@ servers sending 40 Gb/s each across the planes — 80% of their NICs and their
 rack's uplinks — and an incast of eight servers into one, 160% of the two
 NICs it lands on. Switch to **hashed** and each 40 Gb/s flow takes one NIC,
 not two.
+
+#### Contention: a full cable shares itself out
+
+A cable cannot carry more than its line rate. What the flows *offer* — what
+their senders want — can add up to more, and what happens then is what
+happens on a real fabric: the cable's queue fills, packets are dropped (or
+marked, with ECN), and every TCP sender crossing it slows down until they
+share it. **contention: full cables share out**, on by default, models that
+steady state:
+
+- Every flow is raised from nothing at the same pace until it has all it
+  asked for, or a cable on its way is full; there it stops, at its share of
+  that cable. This is **max-min fairness**, the textbook idealization of TCP
+  flows sharing a bottleneck: no flow can get more without taking it from
+  one that has less.
+- A flow held back at one full cable **carries less on every other cable
+  along its path too**. In `examples/dual-plane-flows.tsv`, eight servers
+  sending 10 Gb/s each into one server's two 25G NICs each get 6.25 Gb/s,
+  and that is all that crosses their own cables and the uplinks on the way —
+  not the 10 they offered.
+- **Full cables are magenta**, and say how many flows they hold back
+  (`25G/25G · 100% · 8 held`). The panel gives what contention cost:
+  `contention: 2 cables full, holding back 8 of 17 flows · 385Gb/s carried
+  of 415Gb/s offered (93%)`. Hovering a cable gives what it carries each way
+  *of* what was offered, and each flow over it, held back or not.
+- The **split** matters more with contention. **Even** shares every flow
+  over every route, so a flow is held to its slowest one; **hashed** puts
+  each flow on one path, as ECMP does with TCP, so only the flows hashed onto
+  a full cable slow down — and two big flows hashed onto one uplink can
+  leave its neighbour idle.
+
+Untick it to see what the flows offer: then a cable can read past 100%, in
+magenta, which says how oversubscribed it is rather than what it carries.
+
+The model is the steady state, and real fabrics are rougher. TCP favours
+flows with shorter round trips; an incast of many senders can lose packets
+all at once and collapse well below the fair share while senders wait out
+their timeouts; UDP does not back off at all, so its excess is simply dropped
+at the full queue, after it has crossed the cables before it; and a lossless
+RoCE fabric drops nothing but pauses the senders upstream, which can spread
+the congestion to flows that never crossed the full cable.
+
+#### How full a switch is
+
+With load on the cables, every element tagged `+switch` has a **gauge**
+along the foot of its box: filled as far as it is busy, in the colour a cable
+that full would be, magenta when it is full and holding flows back. Its
+tooltip, the inspector and the panel's **Busiest switches** say how much
+passes through it against what it can pass:
+
+- With nothing more said, a switch can pass what its **ports** carry, one
+  way — `switching 132.8Gb/s of the 500G its ports carry (27%)` — and it is
+  full only where its ports are; the tooltip counts its full ports.
+- **`gbps=` on a switch** is its own forwarding capacity, as switches are
+  rated: 64 ports of 800G is `gbps=51200`. Where that is less than its ports
+  add up to, the switch is oversubscribed — the tooltip says by how much —
+  and contention shares it out like a cable: `switching 150Gb/s of the 150G
+  it can forward (100%) · full — holding back 326 flows itself`.
+
+```text
+node spine1 role=spine +switch gbps=12800
+```
+
+A `gbps=` on a rack or a room is not passed down to what is in it.
 
 #### Between picks: only their flows, and a test flow
 
@@ -581,6 +649,17 @@ off.
   that is not tagged `+switch`; a layout that tags nothing `+switch` cannot
   tell a server from a switch, so the box says so and every device with
   cables counts.
+
+- **from** — an amount of the generator's own, or **what a metric says**:
+  pretend the servers make the load they measured. Any per-host metric that
+  is loaded and ticked can be picked: a rate (`egress_gbps`, `tx_mbps`) is
+  read as what each server sends, a percentage (`unit=%`, a NIC
+  utilization, say) as that share of the server's own NICs. **each sends**
+  is then a share of the reading — 100% as measured, 200% for twice it — and
+  the pattern still says where it goes. Servers with no reading send
+  nothing, and are counted. (**load the cables (estimated)** on a rate
+  metric's card is the other way to the same idea: every host's total sent to
+  the others by the gravity model.)
 
 With a metric loaded onto the cables, the generated load goes on top of it,
 in a unit that adds up with the metric's (a share of the NICs only where the
