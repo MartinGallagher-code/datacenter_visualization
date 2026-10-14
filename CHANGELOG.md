@@ -11,6 +11,44 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.7.0 — 2026-10-14
+
+Picking servers by section. 1.6.0 shares this pull request and is not
+published on its own.
+
+- **The filter language has boolean logic**: `and`, `or` and `not` (any
+  case) and parentheses, with `not` binding tightest, then `and` or a plain
+  space, then `or`. `role=server (in:A01 or in:B07) not +gpu` is one query.
+  What was there keeps its meaning: a space still ands, a `|` still joins
+  only the two terms beside it, `!` still negates, and a quoted `"or"` is a
+  word to search for.
+- **`in:`** selects everything inside a container (and the container): by
+  id or name, `in:A01`, or by path, `in:H1/A01`.
+- **Ranges** in values, the way a layout writes them: `in:A[01..04]`,
+  `in:R[01..08,12]`, `name=u[01..10]`, `rack=R[01..04]`.
+- The load generator's **hosts** box takes all of it, and counts the hosts it
+  takes as you type. The editor's Syntax panel has a section for it.
+
+## 1.6.0 — 2026-10-14
+
+Loads on fabrics of thousands of servers.
+
+- **Routing is about ten times faster on a large floor.** It walked the whole
+  fabric once per destination server; the routes to every server behind the
+  same switches are the same but for the last hop, so the walk is now shared
+  by them — once per ToR pair instead of once per server — and only the
+  elements with traffic to pass on are visited. Random peers over 4,160
+  servers route, and share out under contention, in about a second; before,
+  they took seven, and the generator refused them.
+- **Random hosts are balanced.** Every host sends to N hosts and is now sent
+  to by exactly N: the peers are drawn as N random pairings, so no server is
+  picked more often than another. It is the way to load a fabric too big for
+  all-to-all, and when all-to-all is too many flows the panel says how many
+  peers each would fit.
+- The generator's limit counts the walks a load really costs — one per set
+  of switches its destinations hang off — so it no longer refuses a few
+  thousand servers that route quickly.
+
 ## 1.5.0 — 2026-10-14
 
 A cable can carry no more than its capacity, and now none does.

@@ -1052,6 +1052,28 @@ eq(hits('burnin=FAIL'), 20, 'overlay equality matches only measured elements');
 ok(hits('temp_c>60') > 0 && hits('temp_c>60') < 100, 'overlay comparison');
 ok(hits('+storage model=jbod*') === 80, 'tag + attr glob');
 ok(hits('u05 | u06') === hits('u05') + hits('u06'), 'filter OR');
+// Sections and boolean logic: in:, layout ranges, and/or/not, parentheses.
+{
+  const n = (q) => small.all.filter(compileQuery(q, ctx)).length;
+  const servers = (q) => small.all.filter(compileQuery(q, ctx)).filter((el) => el.attrsEff.role === 'server').length;
+  eq(servers('role=server in:DH1/A'), 120, 'in: takes a path: the 120 servers of DH1’s row A');
+  eq(servers('role=server in:A'), 120 + 240, 'by id, every A: DH1’s and DH2’s');
+  eq(servers('role=server in:DH1/[A..B]'), 240, 'a range of rows, the way a layout writes one');
+  eq(servers('role=server in:DH1/A/R[01..03]'), 60, 'and of racks');
+  eq(servers('role=server (in:DH1/A or in:DH2/B)'), 120 + 240, 'or between parenthesised groups');
+  eq(servers('role=server in:DH1/A or role=server in:DH2/B'), 120 + 240, 'or binds looser than and');
+  eq(servers('role=server in:DH1 not in:DH1/[A..D]'), 80, 'not: hall 1’s servers outside the compute rows are its storage');
+  eq(servers('role=server and not (in:DH1 or in:DH2)'), 0, 'not over a group');
+  eq(n('name=u[01..02] in:DH1/A/R01'), 2, 'ranges in name=');
+  eq(n('u05 | u06'), hits('u05') + hits('u06'), 'a bare | still joins the two terms beside it');
+  eq(n('+gpu u05 | u06'), small.all.filter((el) => el.tagsAll.has('gpu') && /u0[56]/.test(el.id)).length,
+     'and binds tighter than the space around it');
+  eq(n('"or"'), small.all.filter((el) => /or/i.test([el.id, el.name, el.kind, ...el.tagsAll,
+    ...Object.entries(el.attrsEff).flat()].join(' '))).length, 'a quoted or is a word to search for');
+  eq(servers('role=server (in:DH1/A'), 120, 'a missing ) closes at the end');
+  eq(servers('in:DH1/A) role=server'), 120, 'and a stray one is passed over');
+}
+
 applyFilter(small, compileQuery('burnin=FAIL', ctx));
 ok(small.resolve('DH1/B/R04').keep && !small.resolve('DH1/A/R01').match, 'keep flags');
 applyFilter(small, null);
@@ -1826,6 +1848,20 @@ const segsOf = (cache, net) => {
      rand.flows.map((f) => f.dst.path), 'the same seed, the same peers');
   ok(generateFlows(m, { pattern: 'random', value: 10, unit: 'Gb/s', peers: 2, seed: 2 }).flows.map((f) => f.dst.path).join()
      !== rand.flows.map((f) => f.dst.path).join(), 'a new seed, new peers');
+
+  // Random peers are balanced: every host sends to N and is sent to by N.
+  const balanced = generateFlows(m, { pattern: 'random', value: 10, unit: 'Gb/s', peers: 3, seed: 5 });
+  const count = (key) => {
+    const c = new Map();
+    for (const f of balanced.flows) c.set(f[key], (c.get(f[key]) || 0) + 1);
+    return [...new Set(c.values())];
+  };
+  eq([count('src'), count('dst')], [[3], [3]], 'random peers: every host sends to three and receives from three');
+  ok(balanced.flows.every((f) => f.src !== f.dst)
+     && new Set(balanced.flows.map((f) => `${f.src.key}>${f.dst.key}`)).size === balanced.flows.length,
+     'never itself, and never the same peer twice');
+  const out = generateFlows(m, { pattern: 'random', value: 10, unit: 'Gb/s', peers: 2, seed: 5, reach: 'rack' });
+  ok(out.flows.every((f) => f.src.parent !== f.dst.parent) && out.flows.length === 16, 'and outside its own rack when asked');
 
   // Incast: everyone into one server, which is where it overflows.
   const into = m.resolve('R1/s1');

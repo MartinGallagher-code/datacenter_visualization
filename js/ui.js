@@ -6,6 +6,7 @@
 // which is what keeps the tree and the canvas showing the same collapse state.
 
 import { PALETTE_NAMES, categoricalColor, colorFor, ramp } from './palette.js';
+import { compileQuery } from './filter.js';
 import {
   AGGREGATIONS, invertedOf, isStandardized, NORMAL_BEYOND_2SD, overlayValue, paletteOf,
   readNumber, readingText, tailIsOdd, zRangeOf,
@@ -1044,7 +1045,8 @@ const PATTERN_LABELS = {
 };
 const PATTERN_TITLES = {
   all: 'Every host sends to every other host, an equal share each',
-  random: 'Every host sends to a few hosts picked at random, an equal share each. New peers draws them again',
+  random: 'Every host sends to N hosts picked at random, an equal share each, and is sent to by N: no host is picked '
+    + 'more than another. The way to load a fabric too big for all-to-all. New peers draws them again',
   incast: 'Every host sends to one target -- the first pick, or the selection -- the way many '
     + 'clients answering one request fill the target’s own cable',
 };
@@ -1116,7 +1118,7 @@ export function renderLoadGen(state, host, actions, { unit } = {}) {
     const peers = number(g.peers, 1, (v) => actions.setGen({ peers: Math.max(1, Math.floor(v)) }));
     peers.className = 'gen-peers';
     peers.step = '1';
-    peers.title = 'How many hosts each host sends to';
+    peers.title = 'How many hosts each host sends to -- and is sent to by: every host gets exactly this many each way';
     shape.append(el('span', null, '×'), peers);
     const roll = el('button', null, 'New peers');
     roll.title = 'Pick every host’s peers again at random';
@@ -1195,10 +1197,28 @@ export function renderLoadGen(state, host, actions, { unit } = {}) {
   hosts.type = 'text';
   hosts.value = g.hosts;
   hosts.placeholder = 'not +switch';
-  hosts.title = 'Which devices send and receive, as a filter (role=server, hall=H1 +gpu, …). '
-    + 'Empty: every device with cables that is not tagged +switch.';
+  hosts.title = 'Which devices send and receive, as a filter. Empty: every device with cables not tagged +switch.\n'
+    + 'and, or, not and ( ) combine terms; in:A01 is everything inside A01; ranges as in a layout:\n'
+    + '  role=server in:A[01..04]\n'
+    + '  role=server (in:A01 or in:B[03..05]) not +gpu\n'
+    + '  role=server in:H1/A01 or role=server in:H2/A07';
+  // How many hosts the filter takes, as it is typed.
+  const count = el('span', 'muted gen-count');
+  const counted = (text) => {
+    let match = null;
+    try { match = text.trim() ? compileQuery(text, state) : null; } catch { match = null; }
+    const n = hostsFor(state.model, match).hosts.length;
+    count.textContent = `${n.toLocaleString()} host${n === 1 ? '' : 's'}`;
+    count.classList.toggle('bad', n === 0);
+  };
+  counted(g.hosts);
+  let typing = null;
+  hosts.addEventListener('input', () => {
+    clearTimeout(typing);
+    typing = setTimeout(() => counted(hosts.value), 200);
+  });
   hosts.addEventListener('change', () => actions.setGen({ hosts: hosts.value.trim() }));
-  who.append(hosts);
+  who.append(hosts, count);
   box.append(who);
 
   if (g.pattern === 'incast') {

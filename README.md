@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.5.0** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.7.0** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -631,9 +631,13 @@ off.
   - **all-to-all** — every host sends to every other host, an equal share
     each;
   - **to random hosts** — every host sends to `×N` hosts picked at random,
-    an equal share each. The same seed picks the same peers; **New peers**
-    draws them again. Some hosts are picked more often than others, which is
-    the point: it is what makes a downlink run hot;
+    an equal share each, **and is sent to by exactly N**: the peers are drawn
+    as N random pairings, each one in which every host sends to one host and
+    receives from one, so no host is picked more often than another and every
+    server's own cables carry the same. It is the way to load a fabric too
+    big for all-to-all — a few thousand servers at 16 or 64 peers each — and
+    the panel says how many peers fit when all-to-all is too many. The same
+    seed picks the same peers; **New peers** draws them again;
   - **incast: all to one** — every host sends to one target, the first pick
     or else the selection: many to one, the pattern that fills a single
     server's cable. A rack as the target shares it over the rack's devices.
@@ -645,7 +649,9 @@ off.
   the kinds in your layout): every flow leaves the sender's rack, which loads
   the uplinks and nothing inside a rack.
 - **hosts** — which devices send and receive, as a [filter](#the-viewer):
-  `role=server`, `+gpu`, `path=*/H1/*`. Empty means every device with cables
+  `role=server`, `+gpu`, `role=server in:A[01..04]`, or several sections at
+  once, `role=server (in:A01 or in:B[03..05])`; the box counts the hosts it
+  takes as you type. Empty means every device with cables
   that is not tagged `+switch`; a layout that tags nothing `+switch` cannot
   tell a server from a switch, so the box says so and every device with
   cables counts.
@@ -670,9 +676,13 @@ Every pattern is routed like any flow metric, by the panel's split. Over
 and the ToR uplinks to 39%; outside its own rack, every flow takes an uplink
 and they fill to 50%. Generating is
 quick, routing is the cost: every destination is a walk over the whole
-fabric, so a load too big to route in the page — all-to-all over a
-quarter of a million hosts — is refused with why. Narrow the hosts, or use
-incast, which has one destination.
+fabric, so a load too big to route in the page is refused with why. That
+walk is shared by every server behind the same switches, so it is done once
+per ToR (or ToR pair), not once per server: random peers over four thousand
+servers route in about a second. All-to-all grows with the square of the
+servers — a thousand of them is a million flows, past what the page will
+route — so above a few hundred, send to random hosts instead, with as many
+peers as the panel says fit, or narrow the hosts.
 
 #### Hovering a cable
 
@@ -1530,6 +1540,23 @@ quietly left stale.
   element matches when any of them reads over the threshold); `!` negates, `|` ors, space ands. Matches keep their
   ancestors visible; "hide non-matching" prunes everything else, otherwise
   non-matches are dimmed.
+  **Sections, and boolean logic.** `in:A01` is everything inside A01 (and A01
+  itself) — by id or name, or by path, `in:H1/A01` for the A01 in hall H1.
+  Values take ranges the way a layout writes them: `in:A[01..04]`,
+  `in:R[01..08,12]`, `name=u[01..10]`. Terms combine with `and`, `or` and
+  `not` (any case) and parentheses: `not` binds tightest, then `and` (or a
+  plain space), then `or`, so
+
+  ```text
+  role=server (in:A[01..04] or in:B07) not +gpu
+  role=server in:H1/A01 or role=server in:H2/A[05..08]
+  ```
+
+  each pick out servers in several sections at once. A `|` still joins only
+  the two terms beside it (`+gpu a | b` is `+gpu` and either), and a quoted
+  `"or"` is a word to search for, not an operator. The load generator's
+  **hosts** box reads the same language, and says how many hosts it takes as
+  you type.
   **A metric with a space or a slash in its name has a second name** that the
   box can read: `iperf Mb/s (out)` answers to `iperf_mb_s_out`, and every
   overlay card prints its own under **filter as** — click it to filter by that

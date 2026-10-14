@@ -228,20 +228,69 @@ function fabric(model, opts) {
   // A flow with no way through switches says so: a ring of servers wired to
   // each other only routes once the servers that forward are tagged +switch.
   const noRoute = switches ? 'no route through +switch elements' : 'no route';
-  return { carries, forwards, switches, loads, add, out, noRoute };
+  // Routes to every host behind the same switches are the same but for the
+  // last hop, so they are worked out once per set of switches: see towards.
+  // Each element's cables that carry traffic, worked out once per pass.
+  const carrying = new Map();
+  const cables = (u) => {
+    let list = carrying.get(u);
+    if (!list) carrying.set(u, (list = u.links.filter(carries)));
+    return list;
+  };
+  return { carries, cables, forwards, switches, loads, add, out, noRoute, shared: new Map() };
 }
 
-/** Hop counts to `dst`, travelling only through elements that forward. */
+/**
+ * Hop counts to `dst`, travelling only through elements that forward, and
+ * the cables from each element that continue a shortest route there.
+ *
+ * A host's routes are the same as every other host's behind the same
+ * switches, up to the last hop. So for a host they are worked out once per
+ * set of switches it hangs off -- a walk over the whole fabric per ToR pair
+ * rather than per server, which is what makes a few thousand servers cheap --
+ * and only the last hop, into the host itself, is its own.
+ */
 function towards(dst, f) {
-  const dist = new Map([[dst, 0]]);
-  const order = [dst];
+  if (f.forwards(dst)) return walk(dst, f);
+  const near = new Set();
+  for (const link of f.cables(dst)) near.add(other(link, dst));
+  const key = [...near].map((el) => el.n).sort((a, b) => a - b).join(',');
+  let shared = f.shared.get(key);
+  if (!shared) f.shared.set(key, (shared = walk(null, f, near)));
+  const into = new Map();
+  return {
+    dist: {
+      has: (u) => u === dst || shared.dist.has(u),
+      get: (u) => (u === dst ? 0 : shared.dist.get(u)),
+    },
+    order: shared.order,
+    next(u) {
+      if (!near.has(u)) return shared.next(u);
+      let hops = into.get(u);
+      if (!hops) {
+        hops = f.cables(u).filter((link) => other(link, u) === dst);
+        into.set(u, hops);
+      }
+      return hops;
+    },
+  };
+}
+
+/**
+ * The walk towards: from dst, or -- for routes shared by every host behind
+ * them -- from the switches `near`, as if from a host one hop beyond them.
+ */
+function walk(dst, f, near = null) {
+  const dist = new Map();
+  const order = [];
+  if (near) for (const el of near) { dist.set(el, 1); order.push(el); }
+  else { dist.set(dst, 0); order.push(dst); }
   for (let i = 0; i < order.length; i++) {
     const u = order[i];
     // A host is reached -- it may be a source -- but nothing passes through it.
     if (u !== dst && !f.forwards(u)) continue;
     const d = dist.get(u) + 1;
-    for (const link of u.links) {
-      if (!f.carries(link)) continue;
+    for (const link of f.cables(u)) {
       const v = other(link, u);
       if (dist.has(v)) continue;
       dist.set(v, d);
@@ -255,8 +304,7 @@ function towards(dst, f) {
     if (hops) return hops;
     hops = [];
     const du = dist.get(u);
-    for (const link of u.links) {
-      if (!f.carries(link)) continue;
+    for (const link of f.cables(u)) {
       const v = other(link, u);
       if (dist.get(v) === du - 1 && (v === dst || f.forwards(v))) hops.push(link);
     }
@@ -315,18 +363,30 @@ function sharesOf(hops, split) {
  * each is handled once however many flows cross it.
  */
 function spill(route, dst, amount, split, f) {
-  const { order, next } = route;
-  for (let i = order.length - 1; i > 0; i--) {
-    const u = order[i];
-    const a = amount.get(u);
-    if (!a) continue;
-    const hops = next(u);
-    const shares = sharesOf(hops, split);
-    for (let k = 0; k < hops.length; k++) {
-      const s = a * shares[k];
-      f.add(hops[k], u, s);
-      const v = other(hops[k], u);
-      if (v !== dst) amount.set(v, (amount.get(v) || 0) + s);
+  const { dist, next } = route;
+  // Only where there is something to pass on, farthest first: one bucket
+  // per hop count, filled as the fluid moves nearer.
+  const buckets = [];
+  let far = 0;
+  for (const u of amount.keys()) {
+    const d = dist.get(u);
+    (buckets[d] || (buckets[d] = [])).push(u);
+    if (d > far) far = d;
+  }
+  for (let d = far; d > 0; d--) {
+    for (const u of buckets[d] || []) {
+      const a = amount.get(u);
+      if (!a) continue;
+      const hops = next(u);
+      const shares = sharesOf(hops, split);
+      for (let k = 0; k < hops.length; k++) {
+        const s = a * shares[k];
+        f.add(hops[k], u, s);
+        const v = other(hops[k], u);
+        if (v === dst) continue;
+        if (!amount.has(v)) (buckets[d - 1] || (buckets[d - 1] = [])).push(v);
+        amount.set(v, (amount.get(v) || 0) + s);
+      }
     }
   }
 }
@@ -456,28 +516,27 @@ export function flowsOver(model, flows, links, opts = {}) {
     // about, counting each crossing: worked out nearest dst first, since an
     // element's share is its cables' and what each passes on. Once per
     // split, since a flow can be routed its own way.
+    // Worked out only for the elements the flows start from and pass, each
+    // once: nearer elements first by recursion, since a route is a few hops.
     const throughs = new Map();
-    const throughOf = (how) => {
+    const throughOf = (how, u) => {
       let through = throughs.get(how);
-      if (through) return through;
-      through = new Map([[dst, 0]]);
-      for (let i = 1; i < route.order.length; i++) {
-        const u = route.order[i];
-        const hops = route.next(u);
-        const shares = sharesOf(hops, how);
-        let p = 0;
-        for (let k = 0; k < hops.length; k++) {
-          p += shares[k] * ((targets.has(hops[k]) ? 1 : 0) + (through.get(other(hops[k], u)) || 0));
-        }
-        through.set(u, p);
+      if (!through) throughs.set(how, (through = new Map([[dst, 0]])));
+      const known = through.get(u);
+      if (known !== undefined) return known;
+      const hops = route.next(u);
+      const shares = sharesOf(hops, how);
+      let p = 0;
+      for (let k = 0; k < hops.length; k++) {
+        p += shares[k] * ((targets.has(hops[k]) ? 1 : 0) + throughOf(how, other(hops[k], u)));
       }
-      throughs.set(how, through);
-      return through;
+      through.set(u, p);
+      return p;
     };
     for (const flow of list) {
       if (!route.dist.has(flow.src)) continue;
       const how = flow.split || split;
-      if (how !== 'hashed') { take(flow, throughOf(how).get(flow.src) || 0); continue; }
+      if (how !== 'hashed') { take(flow, throughOf(how, flow.src)); continue; }
       let crossings = 0;
       for (let u = flow.src; u !== dst;) {
         const pick = hashedHop(route.next(u), seed, flow.id, u.n);
@@ -1079,6 +1138,8 @@ export const GEN_UNITS = ['%', 'Gb/s', 'Mb/s', 'pps'];
 // Clear of a metric's ids (0, 1, 2, ...) and a test flow's (1000000 on), so
 // every generated flow hashes onto a path of its own.
 const GEN_IDS = 2000000;
+// How long a chain of moves pairing a host again may be.
+const AUGMENT_DEPTH = 200;
 // How much a generated load may cost to route: flows, and destinations times
 // cables -- each destination is a walk over the fabric. A lab floor is far
 // inside both; a hyperscale campus is far outside, and is told to narrow it.
@@ -1220,7 +1281,20 @@ export function generateFlows(model, gen, opts = {}) {
 
   const n = hosts.length;
   const links = model.links.length;
-  const tooBig = (dsts, flows) => flows > GEN_LIMITS.flows || dsts * links > GEN_LIMITS.work;
+  // Routing walks the fabric once per set of switches the destinations hang
+  // off (see towards), not once per destination.
+  const blockedNets = new Set();
+  for (const net of model.nets.values()) if (net.traffic === false) blockedNets.add(net.name);
+  const walks = (els) => {
+    const keys = new Set();
+    for (const el of els) {
+      const near = [];
+      for (const link of el.links) if (!blockedNets.has(link.net)) near.push(other(link, el).n);
+      keys.add(near.sort((a, b) => a - b).join(','));
+    }
+    return keys.size;
+  };
+  const tooBig = (dsts, flows) => flows > GEN_LIMITS.flows || walks(dsts) * links > GEN_LIMITS.work;
   const narrow = 'narrow the hosts (a filter such as path=*/H1/*)';
 
   if (pattern === 'incast') {
@@ -1228,7 +1302,7 @@ export function generateFlows(model, gen, opts = {}) {
     if (!target) return result([], { why: 'incast: pick or select where it all goes' });
     const into = devicesOf(target).filter((el) => el.links.length);
     if (!into.length) return result([], { why: `incast: ${target.name} has no cables` });
-    if (tooBig(into.length, n * into.length)) {
+    if (tooBig(into, n * into.length)) {
       return result([], { why: `incast to ${into.length} devices from ${n} hosts is too much to route here: ${narrow}, or pick a smaller target` });
     }
     const inside = new Set(into);
@@ -1247,8 +1321,12 @@ export function generateFlows(model, gen, opts = {}) {
   if (n < 2) return result([], { why: `${n ? 'one host' : 'no hosts'}: nothing to send between` });
 
   if (pattern === 'all') {
-    if (tooBig(n, n * (n - 1))) {
-      return result([], { why: `all-to-all over ${n} hosts is ${(n * (n - 1)).toLocaleString()} flows: too many to route here — ${narrow}, or send to random hosts` });
+    if (tooBig(hosts, n * (n - 1))) {
+      const each = Math.max(1, Math.floor(GEN_LIMITS.flows / n));
+      return result([], {
+        why: `all-to-all over ${n} hosts is ${(n * (n - 1)).toLocaleString()} flows: too many to route here — `
+          + `send to random hosts instead, up to ${Math.min(each, n - 1)} each, or ${narrow}`,
+      });
     }
     const flows = [];
     let noCapacity = 0;
@@ -1261,24 +1339,69 @@ export function generateFlows(model, gen, opts = {}) {
     return result(flows, { noCapacity });
   }
 
-  // random: `peers` distinct hosts each, drawn with the seed, skipping the
-  // host itself and anything the reach rules out.
+  // random: `peers` rounds, each a random pairing in which every host sends
+  // to one host and is sent to by one -- so every host sends to `peers`
+  // hosts and receives from `peers`, none picked more than another. Drawn
+  // with the seed; never itself, never a host it already sends to, and
+  // never one the reach rules out, where a swap can avoid it.
   const peers = Math.max(1, Math.min(n - 1, Math.floor(Number(gen.peers) || 1)));
-  if (tooBig(n, n * peers)) {
-    return result([], { why: `${n} hosts on ${links.toLocaleString()} cables is too much to route here: ${narrow}` });
+  if (tooBig(hosts, n * peers)) {
+    return result([], {
+      why: `${n} hosts × ${peers} peers is too much to route here: fewer peers, or ${narrow}`,
+    });
   }
   const seed = (gen.seed || 0) >>> 0;
-  const flows = [];
+  const amounts = hosts.map((src) => sends(src));
   let noCapacity = 0;
-  hosts.forEach((src, i) => {
-    const amount = sends(src);
-    if (!(amount > 0)) { if (unit === '%') noCapacity++; return; }
-    const to = new Set();
-    for (let k = 0; to.size < peers && k < peers * 40; k++) {
-      const dst = hosts[Math.floor(mix(seed, i, k) * n)];
-      if (dst !== src && apart(src, dst)) to.add(dst);
+  if (unit === '%') for (const a of amounts) if (!(a > 0)) noCapacity++;
+  const to = hosts.map(() => new Set());
+  for (let r = 0; r < peers; r++) {
+    // A shuffle, then every host that drew itself, a repeat or a host out of
+    // reach swaps with another until both are fine.
+    const perm = hosts.map((_, i) => i);
+    for (let i = n - 1; i > 0; i--) {
+      const j = Math.floor(mix(seed, r * 7919 + 1, i) * (i + 1));
+      [perm[i], perm[j]] = [perm[j], perm[i]];
     }
-    for (const dst of to) flows.push({ id: GEN_IDS + flows.length, src, dst, value: amount / to.size, gen: true });
+    const ok = (i, j) => i !== j && !to[i].has(j) && apart(hosts[i], hosts[j]);
+    // Most of the shuffle stands, and a swap of two fixes most of what it got
+    // wrong; the few left are paired again by augmenting paths, which finds a chain of moves wherever one exists --
+    // where the rules leave few choices, a swap of two is not always enough.
+    for (let i = 0; i < n; i++) {
+      if (ok(i, perm[i])) continue;
+      for (let t = 0; t < 32; t++) {
+        const k = Math.floor(mix(seed ^ 0x5bd1e995, r * 104729 + i, t) * n);
+        if (ok(i, perm[k]) && ok(k, perm[i])) { [perm[i], perm[k]] = [perm[k], perm[i]]; break; }
+      }
+    }
+    const owner = new Array(n).fill(-1);
+    const free = [];
+    for (let i = 0; i < n; i++) {
+      if (ok(i, perm[i])) owner[perm[i]] = i;
+      else { perm[i] = -1; free.push(i); }
+    }
+    const augment = (i, seen, depth) => {
+      if (depth > AUGMENT_DEPTH) return false;
+      const from = Math.floor(mix(seed, r, i) * n);
+      for (let t = 0; t < n; t++) {
+        const j = (from + t) % n;
+        if (seen[j] || !ok(i, j)) continue;
+        seen[j] = 1;
+        if (owner[j] < 0 || augment(owner[j], seen, depth + 1)) {
+          owner[j] = i;
+          perm[i] = j;
+          return true;
+        }
+      }
+      return false;
+    };
+    for (const i of free) augment(i, new Uint8Array(n), 0);
+    for (let i = 0; i < n; i++) if (perm[i] >= 0) to[i].add(perm[i]);
+  }
+  const flows = [];
+  hosts.forEach((src, i) => {
+    if (!(amounts[i] > 0) || !to[i].size) return;
+    for (const j of to[i]) flows.push({ id: GEN_IDS + flows.length, src, dst: hosts[j], value: amounts[i] / to[i].size, gen: true });
   });
   return result(flows, { noCapacity });
 }
