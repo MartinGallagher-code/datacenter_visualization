@@ -14,7 +14,6 @@ their shapes are not a promise.
 ## 1.8.0 — 2026-10-14
 
 Findings: what went wrong on each server, and whether the load explains it.
-1.6.0 and 1.7.0 share this pull request and are not published on their own.
 
 - **A Findings box** lists, by kind, the servers something went wrong on,
   and marks them on the floor plan — red critical, amber drops, magenta
