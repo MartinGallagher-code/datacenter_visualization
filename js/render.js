@@ -30,6 +30,7 @@ const THEME = {
   picked: '#ff6bd5',
   hover: 'rgba(255,255,255,0.55)',
   hoverCable: '#ffffff',
+  gaugeTrack: 'rgba(0,0,0,0.55)',
   match: '#4fa3ff',
 };
 
@@ -233,6 +234,7 @@ export class Renderer {
     const root = this.state.model.root;
     if (root && root.box) this.drawElement(root);
     this.drawLinks();
+    this.drawSwitchGauges();
     this.drawTakenOut();
     this.drawFlows();
     this.drawEndpoints();
@@ -655,6 +657,42 @@ export class Renderer {
 
     ctx.setLineDash([]);
     ctx.globalAlpha = 1;
+  }
+
+  /**
+   * How full each switch on screen is, with load on the cables: a gauge
+   * along the foot of its box, filled as far as it is busy and coloured the
+   * way a cable that full is -- the contended colour when it is full and
+   * holding flows back, itself or at one of its ports.
+   */
+  drawSwitchGauges() {
+    const state = this.state;
+    const loads = state.switchLoads ? state.switchLoads() : null;
+    if (!loads || !loads.size) return;
+    const ctx = this.ctx;
+    const scale = this.camera.scale;
+    ctx.save();
+    ctx.setLineDash([]);
+    for (const [el, rec] of loads) {
+      if (rec.util === null || state.drawnEndpoint(el) !== el) continue;
+      const b = el.box;
+      if (!b || !this.intersects(b) || b.w * scale < GAUGE_MIN_PX) continue;
+      const h = Math.max(2.5 / scale, Math.min(b.h * 0.22, 6 / scale));
+      const y = b.y + b.h - h;
+      ctx.globalAlpha = 0.85;
+      ctx.fillStyle = THEME.gaugeTrack;
+      ctx.fillRect(b.x, y, b.w, h);
+      const full = rec.held > 0 || rec.fullPorts > 0 || rec.util > 1.0005;
+      ctx.fillStyle = full && rec.util >= 0.9995 ? LOAD_COLORS.over : loadColor(Math.min(1, rec.util));
+      ctx.globalAlpha = 1;
+      ctx.fillRect(b.x, y, b.w * Math.min(1, rec.util), h);
+      // A full port on a switch that is not full itself: a tick at the end.
+      if (rec.fullPorts && rec.util < 0.9995) {
+        ctx.fillStyle = LOAD_COLORS.over;
+        ctx.fillRect(b.x + b.w - h, y, h, h);
+      }
+    }
+    ctx.restore();
   }
 
   /**
@@ -1134,6 +1172,7 @@ export class Renderer {
 }
 
 const LOD_RECURSE = 9;   // stop descending once a container is this many px wide
+const GAUGE_MIN_PX = 8;  // a switch narrower than this on screen gets no gauge
 
 // How close the pointer must be to a cable, in screen pixels, for it to be
 // the cable that is hovered -- and, inside a device's own box, where the
@@ -1145,7 +1184,8 @@ const TIE = 1e-6;
 
 // Cable load colours. Utilization runs green to red across 0-100%; past 100%
 // is its own colour, since demand above what the cable carries is a different
-// finding from a cable that is merely full. Loaded cables with no gbps= are
+// finding from a cable that is merely full. With contention, nothing is past
+// full, and the colour marks the cables that are full and holding flows back. Loaded cables with no gbps= are
 // grey, beside ones that have one; with no capacity anywhere, the colour is
 // the load against the busiest piece instead.
 export const LOAD_COLORS = { over: '#ff40ff', unknown: '#9aa4b2' };
@@ -1184,6 +1224,9 @@ function cableStyler(load, capacity) {
   };
   const anyCapacity = !!(load && load.anyCapacity);
   const colour = load ? load.colour : 'capacity';
+  // Shared out, nothing carries more than it can: a full cable is the
+  // contended one, and takes the colour that past full has without it.
+  const contended = !!(load && load.contention);
   const span = (load && load.span) || 1;
   return (amount, worst, max) => {
     // Drawing capacity, `worst` is the fastest cable along the piece.
@@ -1197,7 +1240,7 @@ function cableStyler(load, capacity) {
       return intern(width, changeColor(v), false, Math.abs(v));
     }
     if (worst !== null) {
-      const u = worst > 1.0005 ? 2 : Math.round(worst * 20) / 20;
+      const u = worst > 1.0005 || (contended && worst >= 0.9995) ? 2 : Math.round(worst * 20) / 20;
       return intern(width, u > 1 ? LOAD_COLORS.over : ramp('health', u), false, u);
     }
     if (anyCapacity) return intern(width, LOAD_COLORS.unknown, false, 0);

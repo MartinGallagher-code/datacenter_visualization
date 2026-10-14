@@ -11,6 +11,40 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.5.0 — 2026-10-14
+
+A cable can carry no more than its capacity, and now none does.
+
+- **Contention, on by default.** Routed loads used to be what the flows
+  offer, added up, so a cable could read 160% or 1200%. Now every full cable
+  is shared out between the flows crossing it the way TCP shares it —
+  max-min fair — and a flow held back at one full cable carries less on
+  every other cable along its path too: an incast's senders carry only their
+  share of the target's NICs, on their own cables and the uplinks between.
+  Full cables are magenta and say how many flows they hold back; the panel
+  says how much was carried of what was offered; hovering a cable gives both,
+  and each flow over it. **contention: full cables share out**, unticked,
+  shows what the flows offer, as before. Estimated per-host totals, the
+  generator and test flows all share the cables with the metric they ride on.
+  What-if says how many cables are full and what is carried, before and
+  after: taking a spine out now shows its neighbour filling, and how much
+  less gets through.
+- **How full a switch is.** Every `+switch` element gets a gauge along the
+  foot of its box with load on the cables, and its tooltip, the inspector and
+  a new **Busiest switches** list say how much passes through it against
+  what it can pass — its ports, or **`gbps=` on the switch**, its own
+  forwarding capacity, which contention then shares out like a cable's and
+  which is reported when its ports add up to more (oversubscribed).
+  `gbps=` on an element is checked like a net's, and is not inherited.
+- **The load generator can read a metric**: pick a per-host rate or
+  percentage under **from**, and each server sends what it measured (a
+  percentage as that share of its NICs), scaled by **each sends**, in the
+  pattern chosen.
+- **Busiest cables and biggest changes list more** on asking: **Show more**
+  adds 25, **Show fewer** goes back to eight.
+- **The editor resizes**: drag the bar along its top edge, double-click to
+  reset. Its height is remembered with the side panels'.
+
 ## 1.4.0 — 2026-10-14
 
 A load with no file to load, and every cable can say what it carries.

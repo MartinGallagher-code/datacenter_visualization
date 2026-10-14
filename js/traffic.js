@@ -41,6 +41,13 @@
 // Loads are kept per direction, since a cable is full duplex: 20 Gb/s each way
 // on a 25 Gb/s cable is 80% used, not 160%. A cable's utilization is its
 // busier direction against its capacity.
+//
+// Contention: a cable cannot carry more than its capacity. Routed as above,
+// the loads are what the flows *offer* -- what their senders want -- and can
+// add up past 100%. contend() then does what TCP does when they do: every
+// full cable is shared out, each flow gets the most it can on every cable
+// it crosses (max-min fairness), and a flow held back at one full cable
+// carries less on every other cable along its path too.
 
 import { AGGREGATIONS, DEFAULT_AGG, overlayValue } from './results.js';
 
@@ -445,40 +452,387 @@ export function flowsOver(model, flows, links, opts = {}) {
   };
   for (const [dst, list] of byDst) {
     const route = towards(dst, f);
-    if (split === 'hashed') {
-      for (const flow of list) {
-        if (!route.dist.has(flow.src)) continue;
-        let crossings = 0;
-        for (let u = flow.src; u !== dst;) {
-          const pick = hashedHop(route.next(u), seed, flow.id, u.n);
-          if (targets.has(pick)) crossings++;
-          u = other(pick, u);
-        }
-        take(flow, crossings);
-      }
-      continue;
-    }
     // What a unit leaving each element for dst puts on the cables asked
     // about, counting each crossing: worked out nearest dst first, since an
-    // element's share is its cables' and what each passes on.
-    const through = new Map([[dst, 0]]);
-    for (let i = 1; i < route.order.length; i++) {
-      const u = route.order[i];
-      const hops = route.next(u);
-      const shares = sharesOf(hops, split);
-      let p = 0;
-      for (let k = 0; k < hops.length; k++) {
-        p += shares[k] * ((targets.has(hops[k]) ? 1 : 0) + (through.get(other(hops[k], u)) || 0));
+    // element's share is its cables' and what each passes on. Once per
+    // split, since a flow can be routed its own way.
+    const throughs = new Map();
+    const throughOf = (how) => {
+      let through = throughs.get(how);
+      if (through) return through;
+      through = new Map([[dst, 0]]);
+      for (let i = 1; i < route.order.length; i++) {
+        const u = route.order[i];
+        const hops = route.next(u);
+        const shares = sharesOf(hops, how);
+        let p = 0;
+        for (let k = 0; k < hops.length; k++) {
+          p += shares[k] * ((targets.has(hops[k]) ? 1 : 0) + (through.get(other(hops[k], u)) || 0));
+        }
+        through.set(u, p);
       }
-      through.set(u, p);
-    }
+      throughs.set(how, through);
+      return through;
+    };
     for (const flow of list) {
-      if (route.dist.has(flow.src)) take(flow, through.get(flow.src) || 0);
+      if (!route.dist.has(flow.src)) continue;
+      const how = flow.split || split;
+      if (how !== 'hashed') { take(flow, throughOf(how).get(flow.src) || 0); continue; }
+      let crossings = 0;
+      for (let u = flow.src; u !== dst;) {
+        const pick = hashedHop(route.next(u), seed, flow.id, u.n);
+        if (targets.has(pick)) crossings++;
+        u = other(pick, u);
+      }
+      take(flow, crossings);
     }
   }
   out.sort((x, y) => y.amount - x.amount || x.flow.id - y.flow.id);
   return { flows: out, count: out.length, amount };
 }
+
+// ---------------------------------------------------------------- contention
+
+// How much sharing out may cost here: the cables each flow crosses, summed
+// over the flows. A lab floor is far inside it.
+export const CONTEND_LIMITS = { crossings: 3e6 };
+
+/**
+ * Route flows, and then share out every cable they fill, as TCP does: what
+ * happens when more is offered to a cable than it can carry.
+ *
+ * The offered loads are routed as routeTraffic routes them. Then every flow
+ * is raised from nothing at the same pace -- each its own share of every
+ * cable it crosses, in the split it was routed with -- until it has all it
+ * asked for, or a cable on its way is full: there it stops, at the share
+ * that cable gives it. The cables that fill are the contended ones; a flow
+ * held back at one carries less on every other cable along its path too.
+ * This is max-min fairness, the textbook steady state of TCP flows sharing
+ * a bottleneck (real TCP is rougher: shorter round trips get more, and
+ * synchronised losses can collapse an incast below the fair share).
+ *
+ * Only cables with a gbps= limit anything, and only a load that is a bit
+ * rate (`toGbps`) can be set against them.
+ *
+ * @param flows  [{ id, src, dst, value, split? }] -- `split` routes one flow
+ *               its own way (an estimate's pairs are never hashed)
+ * @param opts   { split, seed, down, toGbps }
+ * @returns as routeTraffic, with `loads` what is carried, and contention:
+ *          { offered: Map(link -> [ab, ba]) before sharing, full: Map(link
+ *          -> [ab, ba]) the flows held back there each way -- a cable that
+ *          is full and holding none back is not in it, flows: each flow
+ *          routed, its value what it carries and `wanted` what it offered,
+ *          held: how many carry less than they offered, wanted, carried } --
+ *          or null when sharing out would cost more than CONTEND_LIMITS.crossings.
+ */
+export function contend(model, flows, opts = {}) {
+  const split = SPLITS.includes(opts.split) ? opts.split : 'even';
+  const seed = (opts.seed || 0) >>> 0;
+  const toGbps = opts.toGbps;
+  const f = fabric(model, opts);
+  const miss = misses();
+
+  // What can fill: each cable as two slots, one per direction, since a
+  // cable is full duplex -- and each switch with a gbps= of its own as one,
+  // for everything it passes on.
+  const slotOf = new Map();
+  const owner = [];
+  const slot = (link, from) => {
+    let i = slotOf.get(link);
+    if (i === undefined) {
+      i = owner.length;
+      slotOf.set(link, i);
+      owner.push({ link, dir: 0 }, { link, dir: 1 });
+    }
+    return i + (link.a === from ? 0 : 1);
+  };
+  const nodeSlot = (el) => {
+    let i = slotOf.get(el);
+    if (i === undefined) {
+      i = owner.length;
+      slotOf.set(el, i);
+      owner.push({ el });
+    }
+    return i;
+  };
+
+  const byDst = new Map();
+  let offered = 0;
+  for (const flow of flows) {
+    offered += flow.value;
+    const why = cannotStart(flow.src, flow.dst, f);
+    if (why) { miss.note(flow.src, flow.dst, flow.value, why); continue; }
+    const list = byDst.get(flow.dst);
+    if (list) list.push(flow);
+    else byDst.set(flow.dst, [flow]);
+  }
+
+  // Where each flow goes: the slots it crosses and its share of each.
+  const routed = [];
+  const paths = [];
+  let size = 0;
+  for (const [dst, list] of byDst) {
+    const route = towards(dst, f);
+    for (const flow of list) {
+      if (!route.dist.has(flow.src)) { miss.note(flow.src, dst, flow.value, f.noRoute); continue; }
+      const how = flow.split || split;
+      const path = [];
+      if (how === 'hashed') {
+        for (let u = flow.src; u !== dst;) {
+          const pick = hashedHop(route.next(u), seed, flow.id, u.n);
+          path.push(slot(pick, u), 1);
+          u = other(pick, u);
+          if (u !== dst && switchCapacity(u)) path.push(nodeSlot(u), 1);
+        }
+      } else {
+        // Hop by hop towards dst: every element one hop nearer at each step.
+        let level = new Map([[flow.src, 1]]);
+        while (level.size) {
+          const nearer = new Map();
+          for (const [u, a] of level) {
+            const hops = route.next(u);
+            const shares = sharesOf(hops, how);
+            for (let k = 0; k < hops.length; k++) {
+              const r = a * shares[k];
+              path.push(slot(hops[k], u), r);
+              const v = other(hops[k], u);
+              if (v !== dst) nearer.set(v, (nearer.get(v) || 0) + r);
+            }
+          }
+          // What each switch on this step passes on, once all of it is in.
+          for (const [v, r] of nearer) if (switchCapacity(v)) path.push(nodeSlot(v), r);
+          level = nearer;
+        }
+      }
+      size += path.length / 2;
+      if (size > CONTEND_LIMITS.crossings) return null;
+      routed.push(flow);
+      paths.push(path);
+    }
+  }
+
+  const slots = owner.length;
+  const cap = new Float64Array(slots).fill(Infinity);
+  if (toGbps !== null && toGbps !== undefined) {
+    owner.forEach((o, k) => {
+      const gbps = o.link ? o.link.gbps : switchCapacity(o.el);
+      if (gbps) cap[k] = gbps / toGbps;
+    });
+  }
+  const n = routed.length;
+  const demand = routed.map((flow) => Math.max(0, flow.value));
+  const rate = new Float64Array(n);
+  const heldAt = new Int32Array(n).fill(-1);
+  const frozen = new Uint8Array(n);
+  // Per slot: the active flows' summed shares, how many cross it, what the
+  // settled ones already put on it, and which flows cross it.
+  const sumR = new Float64Array(slots);
+  const live = new Int32Array(slots);
+  const used = new Float64Array(slots);
+  const crossing = Array.from({ length: slots }, () => []);
+  let active = 0;
+  for (let i = 0; i < n; i++) {
+    if (!(demand[i] > 0)) { frozen[i] = 1; continue; }
+    active++;
+    const path = paths[i];
+    for (let k = 0; k < path.length; k += 2) {
+      sumR[path[k]] += path[k + 1];
+      live[path[k]]++;
+      const list = crossing[path[k]];
+      if (list[list.length - 1] !== i) list.push(i);
+    }
+  }
+  // Which round each flow settled in: every cable that fills in a round
+  // holds back each flow crossing it that settled in that round.
+  const round = new Int32Array(n).fill(-1);
+  let rounds = 0;
+  const settle = (i, x, at) => {
+    frozen[i] = 1;
+    rate[i] = x;
+    heldAt[i] = at;
+    round[i] = rounds;
+    active--;
+    const path = paths[i];
+    for (let k = 0; k < path.length; k += 2) {
+      const sl = path[k];
+      used[sl] += path[k + 1] * x;
+      if (--live[sl] === 0) sumR[sl] = 0;
+      else sumR[sl] -= path[k + 1];
+    }
+  };
+
+  const order = [];
+  for (let i = 0; i < n; i++) if (!frozen[i]) order.push(i);
+  order.sort((x, y) => demand[x] - demand[y]);
+  let limited = [];
+  for (let sl = 0; sl < slots; sl++) if (cap[sl] < Infinity && live[sl]) limited.push(sl);
+  let p = 0;
+  let level = 0;
+  const holds = new Map();   // slot -> flows it held back
+  while (active > 0) {
+    rounds++;
+    while (p < order.length && frozen[order[p]]) p++;
+    let next = p < order.length ? demand[order[p]] : Infinity;
+    limited = limited.filter((sl) => live[sl] > 0);
+    for (const sl of limited) {
+      const t = (cap[sl] - used[sl]) / sumR[sl];
+      if (t < next) next = t;
+    }
+    level = Math.max(level, next);
+    const before = active;
+    // Everyone who has all they asked for...
+    while (p < order.length && (frozen[order[p]] || demand[order[p]] <= level * (1 + 1e-12))) {
+      const i = order[p++];
+      if (!frozen[i]) settle(i, demand[i], -1);
+    }
+    // ...and everyone on a cable that is now full. Every cable that fills at
+    // this level is found before anyone settles: two that fill together --
+    // a server's two NICs, split evenly -- both hold its flows back.
+    const filled = limited.filter((sl) => live[sl] && used[sl] + level * sumR[sl] >= cap[sl] * (1 - 1e-9));
+    for (const sl of filled) {
+      for (const i of crossing[sl]) if (!frozen[i]) settle(i, level, sl);
+    }
+    for (const sl of filled) {
+      let k = 0;
+      for (const i of crossing[sl]) if (round[i] === rounds && heldAt[i] >= 0) k++;
+      if (k) holds.set(sl, k);
+    }
+    if (active === before) break;   // nothing moved: rounding, never a real case
+  }
+  for (let i = 0; i < n; i++) if (!frozen[i]) rate[i] = Math.min(demand[i], level);
+
+  const loads = new Map();
+  const offeredLoads = new Map();
+  const into = (map, link, k, v) => {
+    let l = map.get(link);
+    if (!l) map.set(link, (l = [0, 0]));
+    l[k] += v;
+  };
+  let carried = 0;
+  let wanted = 0;
+  let held = 0;
+  const out = routed.map((flow, i) => {
+    const path = paths[i];
+    for (let k = 0; k < path.length; k += 2) {
+      const o = owner[path[k]];
+      if (!o.link) continue;
+      into(loads, o.link, o.dir, path[k + 1] * rate[i]);
+      into(offeredLoads, o.link, o.dir, path[k + 1] * demand[i]);
+    }
+    carried += rate[i];
+    wanted += demand[i];
+    const short = rate[i] < demand[i] * (1 - 1e-9);
+    if (short) held++;
+    const at = short && heldAt[i] >= 0 ? owner[heldAt[i]] : null;
+    return { ...flow, value: rate[i], wanted: demand[i], heldAt: at ? at.link || at.el : null };
+  });
+  // The full cables, by how many flows each holds back each way, and the
+  // full switches by how many in all. One filled exactly, holding nothing
+  // back, is not contended.
+  const fullMap = new Map();
+  const fullSwitches = new Map();
+  for (const [sl, k] of holds) {
+    const o = owner[sl];
+    if (o.link) into(fullMap, o.link, o.dir, k);
+    else fullSwitches.set(o.el, k);
+  }
+
+  const missed = miss.done();
+  return {
+    loads, routed: n, offered, delivered: carried, unrouted: missed.examples, missed,
+    switches: f.switches, split, seed,
+    contention: { offered: offeredLoads, full: fullMap, switches: fullSwitches, flows: out, held, wanted, carried },
+  };
+}
+
+/**
+ * A switch's own forwarding capacity, in Gb/s: its gbps=, or null. A switch
+ * is rated the way its ports are, one way: 64 ports of 800G is 51.2T.
+ */
+export function switchCapacity(el) {
+  const raw = el.attrs && el.attrs.gbps;
+  if (raw === undefined) return null;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+/**
+ * How full each switch is: what passes through it, against what it can
+ * pass -- its own gbps= where the layout gives one, else what its ports can
+ * carry in all, one way. A switch that forwards at line rate is full only
+ * where its ports are; one given a smaller gbps= is a bottleneck of its own,
+ * and contention shares that out like a cable.
+ *
+ * @param loads    Map(link -> [ab, ba]), as carried
+ * @param toGbps   the loads' factor to Gb/s, or null
+ * @param contention  contend()'s, for which ports and switches are full
+ * @returns Map(switch -> { in, out, through, ports, portGbps, unknown,
+ *          declared, capacity, util, fullPorts, held }) -- through the
+ *          busier of in and out; util null where there is no capacity to
+ *          set it against. Only elements tagged +switch: with none tagged,
+ *          there is no telling which elements are switches.
+ */
+export function switchLoads(model, loads, toGbps, contention = null) {
+  const out = new Map();
+  const blocked = new Set();
+  for (const net of model.nets.values()) if (net.traffic === false) blocked.add(net.name);
+  for (const el of model.all) {
+    if (!el.links.length || !el.tagsAll.has('switch')) continue;
+    const rec = {
+      in: 0, out: 0, through: 0, ports: 0, portGbps: 0, unknown: 0,
+      declared: switchCapacity(el), capacity: null, util: null, fullPorts: 0, held: 0,
+    };
+    for (const link of el.links) {
+      if (blocked.has(link.net)) continue;
+      rec.ports++;
+      if (link.gbps) rec.portGbps += link.gbps;
+      else rec.unknown++;
+      const l = loads && loads.get(link);
+      if (l) {
+        const fwd = link.a === el;
+        rec.out += fwd ? l[0] : l[1];
+        rec.in += fwd ? l[1] : l[0];
+      }
+      if (contention && contention.full.has(link)) rec.fullPorts++;
+    }
+    if (!rec.ports) continue;
+    rec.through = Math.max(rec.in, rec.out);
+    rec.capacity = rec.declared || rec.portGbps || null;
+    if (rec.capacity && toGbps !== null && toGbps !== undefined) rec.util = (rec.through * toGbps) / rec.capacity;
+    rec.held = (contention && contention.switches && contention.switches.get(el)) || 0;
+    out.set(el, rec);
+  }
+  return out;
+}
+
+/**
+ * Per-host totals as flows: who each host is estimated to have sent to, one
+ * flow per pair, for routing with contention. The same estimate
+ * routeEstimate routes; never hashed, since a guessed pair has no one path.
+ */
+export function estimateFlows(hosts, opts = {}) {
+  const spread = SPREADS.includes(opts.spread) ? opts.spread : 'gravity';
+  const split = opts.split === 'capacity' ? 'capacity' : 'even';
+  const only = opts.only || null;
+  let total = 0;
+  for (const h of hosts) total += h.value;
+  const n = hosts.length;
+  const flows = [];
+  for (let i = 0; i < n; i++) {
+    const sent = hosts[i].value;
+    if (!(sent > 0)) continue;
+    for (let j = 0; j < n; j++) {
+      if (i === j) continue;
+      if (only && !only(hosts[i].el, hosts[j].el)) continue;
+      const rest = total - sent;
+      const value = spread === 'even' ? (n > 1 ? sent / (n - 1) : 0) : rest > 0 ? (sent * hosts[j].value) / rest : 0;
+      if (value > 0) flows.push({ id: ESTIMATE_IDS + flows.length, src: hosts[i].el, dst: hosts[j].el, value, split, estimate: true });
+    }
+  }
+  return flows;
+}
+
+const ESTIMATE_IDS = 3000000;
 
 /**
  * Route per-host totals, by estimating who each host sent to.
@@ -750,6 +1104,20 @@ export function hostsFor(model, match = null) {
   return { hosts, untagged: !switches && !match };
 }
 
+/**
+ * Whether the load generator can read a metric as what each server sends:
+ * a per-host rate, read in Gb/s, or a per-host percentage, read as that share
+ * of the host's own NICs -- a NIC utilization, say. Returns { overlay,
+ * toGbps, percent }, or null for anything else.
+ */
+export function readsAsLoad(overlay) {
+  if (!overlay || trafficKind(overlay) !== 'hosts') return null;
+  const unit = loadUnit(overlay, 'hosts');
+  if (unit.ok && unit.toGbps !== null) return { overlay, toGbps: unit.toGbps, percent: false };
+  if (/^\s*(%|percent|pct)\s*$/i.test(String(overlay.unit || ''))) return { overlay, toGbps: 1, percent: true };
+  return null;
+}
+
 /** What a host's cables can carry in all, in Gb/s, over nets that carry traffic. */
 export function hostCapacity(model, el) {
   let gbps = 0;
@@ -795,18 +1163,22 @@ export function reachKinds(hosts) {
  *
  * @param gen   { pattern, value, unit, peers, reach, seed }
  * @param opts  { match: the hosts' filter, target: an element, base: the
- *              unit the cables are loaded in, { toGbps, unit } }
- * @returns { flows, hosts, senders, offered, noCapacity, untagged, why }
- *          -- why says, when there are no flows, what is missing
+ *              unit the cables are loaded in, { toGbps, unit }, amounts:
+ *              el -> Gb/s or null } -- with `amounts`, each host sends what
+ *              that says (a metric read off the servers), at `value` % of it
+ * @returns { flows, hosts, senders, offered, noCapacity, noReading,
+ *          untagged, why } -- why says, when there are no flows, what is
+ *          missing
  */
 export function generateFlows(model, gen, opts = {}) {
   const base = opts.base || { toGbps: 1, unit: 'Gb/s' };
   const { hosts, untagged } = hostsFor(model, opts.match || null);
+  let noReading = 0;   // hosts a metric has no reading for
   const result = (flows, extra = {}) => {
     let offered = 0;
     const senders = new Set();
     for (const flow of flows) { offered += flow.value; senders.add(flow.src); }
-    return { flows, hosts: hosts.length, senders: senders.size, offered, noCapacity: 0, untagged, why: '', ...extra };
+    return { flows, hosts: hosts.length, senders: senders.size, offered, noCapacity: 0, noReading, untagged, why: '', ...extra };
   };
   const pattern = PATTERNS.includes(gen.pattern) ? gen.pattern : 'all';
   const value = Number(gen.value);
@@ -815,7 +1187,17 @@ export function generateFlows(model, gen, opts = {}) {
   // What each host sends, in the unit the cables are loaded in.
   const unit = GEN_UNITS.includes(gen.unit) || gen.unit === base.unit ? gen.unit : base.unit;
   let sends;
-  if (unit === '%') {
+  if (opts.amounts) {
+    // Read off a metric: the servers make the load they measured.
+    if (base.toGbps === null || base.toGbps === undefined) {
+      return result([], { why: `a metric read as Gb/s cannot be added to ${base.unit || 'this metric'}` });
+    }
+    sends = (el) => {
+      const gbps = opts.amounts(el);
+      if (gbps === null || gbps === undefined || !Number.isFinite(gbps)) { noReading++; return 0; }
+      return ((value / 100) * Math.max(0, gbps)) / base.toGbps;
+    };
+  } else if (unit === '%') {
     if (base.toGbps === null || base.toGbps === undefined) {
       return result([], { why: `% of its NICs is a bit rate, and ${base.unit || 'this metric'} is not` });
     }
@@ -917,7 +1299,9 @@ const ZERO = [0, 0, null];
  * @param s  { view, views, model, base, counters, anyCapacity } -- model,
  *           base and counters are { loads, toGbps, unit } or null
  * @returns  { view, views, colour: 'util'|'load'|'diff', loads, toGbps,
- *             unit, share(link) -> [ab, ba, colour value], compare, span }
+ *             unit, share(link) -> [ab, ba, colour value], compare, span,
+ *             contention } -- contention is contend()'s, where the cables
+ *             show traffic shared out, else null
  *           where share gives what is drawn: the load each way (the width)
  *           and the value the colour comes from -- a utilization, or a
  *           signed change, as a fraction of the cable's capacity (or of the
@@ -933,6 +1317,7 @@ export function viewOf(s) {
       ...base,
       colour: anyCapacity && toGbps !== null ? 'util' : 'load',
       loads, toGbps, unit: src.unit, compare: null, span: 1, after: src, before: null,
+      contention: (src.result && src.result.contention) || null,
       share(link) {
         const l = loads.get(link);
         return l ? [l[0], l[1], utilOf(link, l, toGbps)] : ZERO;
@@ -954,6 +1339,7 @@ export function viewOf(s) {
     // What is drawn is the after side; the changes are in Gb/s where both
     // sides are bit rates, else in the after side's own unit.
     loads: after.loads, toGbps: after.toGbps, unit: after.unit, compare,
+    contention: (view === 'change' && after.result && after.result.contention) || null,
     changeToGbps: bits ? 1 : null, changeUnit: bits ? 'Gb/s' : after.unit,
     // Past half a cable's capacity either way, the colour is at its end.
     span: relative ? 1 : 0.5,

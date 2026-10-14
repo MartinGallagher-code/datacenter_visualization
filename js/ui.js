@@ -15,7 +15,7 @@ import {
 } from './render.js';
 import {
   biggestChanges, busiest, cablesOf, formatGbps, GEN_UNITS, hostsFor, loadable, loadUnit, PATTERNS, reachKinds,
-  SPLITS, SPREADS, TEST_UNITS, trafficKind, utilOf,
+  readsAsLoad, SPLITS, SPREADS, TEST_UNITS, trafficKind, utilOf,
 } from './traffic.js';
 
 const el = (tag, cls, text) => {
@@ -675,6 +675,7 @@ const SPREAD_LABELS = {
 };
 
 const BUSIEST_SHOWN = 8;
+const MORE_STEP = 25;
 
 // "40G/25G · 160%": a load against a capacity, short enough for a list row.
 function loadAgainst(src, value, gbps, util) {
@@ -719,6 +720,49 @@ function viewLabel(view, name) {
   if (name === 'change') return 'change since taking out';
   if (name === 'measured') return `${view.counters.overlay.label} (measured)`;
   return 'measured − model';
+}
+
+/** "2 cables and 1 switch": what is full, holding flows back. */
+function contendedText(c) {
+  const n = (k, what) => `${k} ${what}${k === 1 ? '' : what.endsWith('h') ? 'es' : 's'}`;
+  const parts = [];
+  if (c.full.size) parts.push(n(c.full.size, 'cable'));
+  if (c.switches && c.switches.size) parts.push(n(c.switches.size, 'switch'));
+  return parts.join(' and ') || 'nothing';
+}
+
+/** A utilization's colour: shared out, a full cable is the contended one. */
+const utilColor = (view, util) => (view.contention && util >= 0.9995 ? LOAD_COLORS.over : loadColor(util));
+
+/** How many flows a full cable holds back, both ways, with contention; else 0. */
+function heldBy(view, link) {
+  const held = view.contention && view.contention.full.get(link);
+  return held ? held[0] + held[1] : 0;
+}
+
+/** A switch's colour: how full it is, and the contended colour when it holds flows back. */
+export const switchColor = (rec) => (rec.held || rec.util > 1.0005 ? LOAD_COLORS.over : loadColor(Math.min(1, rec.util)));
+
+/**
+ * How full a switch is, as short lines for its tooltip and the inspector:
+ * what passes through it against what it can pass, how many of its ports
+ * are full, and what it holds back itself.
+ */
+export function switchTip(rec, view) {
+  const lines = [];
+  const what = rec.declared ? 'it can forward' : 'its ports carry';
+  if (rec.capacity) {
+    lines.push(`switching ${formatLoad(view, rec.through)} of the ${formatGbps(rec.capacity)} ${what}`
+      + `${rec.util !== null ? ` (${pct(rec.util)})` : ''}`);
+  } else {
+    lines.push(`switching ${formatLoad(view, rec.through)}, its ports’ capacity unknown (no gbps=)`);
+  }
+  if (rec.held) lines.push(`full — holding back ${rec.held} flow${rec.held === 1 ? '' : 's'} itself`);
+  if (rec.fullPorts) lines.push(`${rec.fullPorts} of ${rec.ports} ports full`);
+  if (rec.declared && rec.portGbps > rec.declared) {
+    lines.push(`its ports add up to ${formatGbps(rec.portGbps)}: oversubscribed ${trimNum(Math.round((rec.portGbps / rec.declared) * 10) / 10)}:1`);
+  }
+  return lines;
 }
 
 /** How many cables are past full, in a set of loads. */
@@ -802,6 +846,20 @@ export function renderCableLoad(state, host, actions) {
       row.append(spread);
     }
     box.append(row);
+    // Whether a full cable shares out what it carries, as TCP does, or the
+    // cables show what the flows offer -- which can be more than they carry.
+    if (model.toGbps !== null) {
+      const share = el('label', 'chk contention');
+      const check = el('input');
+      check.type = 'checkbox';
+      check.checked = !!state.traffic.contention;
+      check.addEventListener('change', () => actions.setContention(check.checked));
+      share.append(check, el('span', null, 'contention: full cables share out'));
+      share.title = 'A cable cannot carry more than its gbps=. Ticked, every full cable is shared out between '
+        + 'the flows crossing it, as TCP shares it, and a flow held back there carries less on the rest of its '
+        + 'path too. Unticked, the cables show what the flows offer, which can be more than 100%.';
+      box.append(share);
+    }
   }
 
   renderLoadKey(view, box);
@@ -817,7 +875,8 @@ export function renderCableLoad(state, host, actions) {
     if (model.gen) {
       const g = model.gen;
       lines.append(el('div', null, `generated: ${PATTERN_LABELS[g.pattern] || g.pattern}, `
-        + `${genAmount(g.value, g.unit)} from each host · ${g.flows} flows · ${formatLoad(model, g.offered)}`));
+        + `${g.from ? `${trimNum(g.value)}% of what ${g.from.label} says` : genAmount(g.value, g.unit)} from each host`
+        + ` · ${g.flows} flows · ${formatLoad(model, g.offered)}`));
     }
     if (!model.overlay) {
       // A test flow or a generated load on its own: no metric to say more of.
@@ -836,6 +895,16 @@ export function renderCableLoad(state, host, actions) {
     }
     if (model.between && model.kind === 'hosts') {
       lines.append(el('div', null, 'only the host pairs between the picks'));
+    }
+    const c = r.contention;
+    if (c) {
+      const where = contendedText(c);
+      lines.append(el('div', c.held ? 'bad' : null, c.held
+        ? `contention: ${where} full, holding back ${c.held} of ${c.flows.length} flows · `
+          + `${formatLoad(model, c.carried)} carried of ${formatLoad(model, c.wanted)} offered (${pct(c.wanted ? c.carried / c.wanted : 1)})`
+        : 'contention: nothing is full · every flow carries all it offers'));
+    } else if (model.contentionWhy && state.traffic.contention) {
+      lines.append(el('div', 'muted', model.contentionWhy));
     }
     lines.append(el('div', 'muted', r.switches
       ? `forwarded only by the ${r.switches} elements tagged +switch`
@@ -865,8 +934,27 @@ export function renderCableLoad(state, host, actions) {
 
   if (down.size) renderWhatIf(state, box, actions, down, view);
 
+  // How many rows the lists show: a few, or more on asking.
+  const shown = Math.max(BUSIEST_SHOWN, state.traffic.listed || BUSIEST_SHOWN);
+  const more = (total, title) => {
+    if (total <= BUSIEST_SHOWN) return null;
+    const bar = el('div', 'btnrow list-more');
+    if (shown < total) {
+      const b = el('button', null, `Show more (${total} in all)`);
+      b.title = `Show ${Math.min(MORE_STEP, total - shown)} more ${title}`;
+      b.addEventListener('click', () => actions.setListed(shown + MORE_STEP));
+      bar.append(b);
+    }
+    if (shown > BUSIEST_SHOWN) {
+      const b = el('button', null, 'Show fewer');
+      b.addEventListener('click', () => actions.setListed(BUSIEST_SHOWN));
+      bar.append(b);
+    }
+    return bar;
+  };
   if (view.compare) {
-    const rows = biggestChanges(view.compare, BUSIEST_SHOWN);
+    const all = biggestChanges(view.compare, Infinity);
+    const rows = all.slice(0, shown);
     if (rows.length) {
       box.append(el('div', 'load-title', view.view === 'change' ? 'Biggest changes' : 'Biggest differences from the model'));
       const list = el('div', 'load-list');
@@ -888,9 +976,12 @@ export function renderCableLoad(state, host, actions) {
         list.append(item);
       }
       box.append(list);
+      const bar = more(all.length, 'changes');
+      if (bar) box.append(bar);
     }
   } else {
-    const top = busiest(view.loads, view.toGbps, BUSIEST_SHOWN);
+    const all = busiest(view.loads, view.toGbps, Infinity);
+    const top = all.slice(0, shown);
     if (top.length) {
       box.append(el('div', 'load-title', 'Busiest cables'));
       const list = el('div', 'load-list');
@@ -899,22 +990,50 @@ export function renderCableLoad(state, host, actions) {
         const [from, to] = l[0] >= l[1] ? [link.a, link.b] : [link.b, link.a];
         const item = el('div', 'load-row');
         const dot = el('span', 'dot');
-        dot.style.background = util !== null ? loadColor(util) : LOAD_COLORS.unknown;
+        dot.style.background = util !== null ? utilColor(view, util) : LOAD_COLORS.unknown;
         item.append(dot);
         item.append(el('span', 'load-ends', `${shortPath(from)} → ${shortPath(to)}`));
-        item.append(el('span', 'val', loadAgainst(view, row.peak, link.gbps, util)));
+        const held = heldBy(view, link);
+        item.append(el('span', 'val', `${loadAgainst(view, row.peak, link.gbps, util)}${held ? ` · ${held} held` : ''}`));
         item.title = `${link.net}: ${from.path} → ${to.path}\n`
           + `${formatLoad(view, Math.max(l[0], l[1]))} the busier way, ${formatLoad(view, Math.min(l[0], l[1]))} the other`
+          + `${held ? `\nFull: holding back ${held} flow${held === 1 ? '' : 's'} crossing it` : ''}`
           + '\nClick to select its sending end';
         item.addEventListener('click', () => { actions.select(from); actions.focus(from); });
         if (view.view === 'model') item.append(takeOutButton(link, actions));
         list.append(item);
       }
       box.append(list);
+      const bar = more(all.length, 'cables');
+      if (bar) box.append(bar);
     }
+  }
+
+  // The switches passing the most, against what they can pass.
+  const sw = state.switchLoads ? state.switchLoads() : null;
+  const fullest = sw ? [...sw].filter(([, r]) => r.through > 0)
+    .sort(([, x], [, y]) => ((y.util ?? -1) - (x.util ?? -1)) || (y.through - x.through)).slice(0, SWITCHES_SHOWN) : [];
+  if (fullest.length) {
+    box.append(el('div', 'load-title', 'Busiest switches'));
+    const list = el('div', 'load-list switch-list');
+    for (const [node, rec] of fullest) {
+      const item = el('div', 'load-row');
+      const dot = el('span', 'dot');
+      dot.style.background = rec.util !== null ? switchColor(rec) : LOAD_COLORS.unknown;
+      item.append(dot, el('span', 'load-ends', shortPath(node)));
+      const amount = view.toGbps !== null ? formatGbps(rec.through * view.toGbps) : formatNum(rec.through);
+      item.append(el('span', 'val', `${amount}${rec.capacity ? `/${formatGbps(rec.capacity)}` : ''}`
+        + `${rec.util !== null ? ` · ${pct(rec.util)}` : ''}${rec.held ? ` · ${rec.held} held` : ''}`));
+      item.title = `${node.path}\n${switchTip(rec, view).join('\n')}\nClick to select it`;
+      item.addEventListener('click', () => { actions.select(node); actions.focus(node); });
+      list.append(item);
+    }
+    box.append(list);
   }
   host.append(box);
 }
+
+const SWITCHES_SHOWN = 5;
 
 // ----------------------------------------------------------- load generator
 
@@ -1006,28 +1125,55 @@ export function renderLoadGen(state, host, actions, { unit } = {}) {
   }
   box.append(shape);
 
+  // What the servers send: an amount of the generator's own, or what a
+  // per-host metric says each one sends -- a rate, or a share of its NICs.
+  const readable = [...state.overlays.values()].filter((o) => o.enabled && readsAsLoad(o));
+  if (readable.length || g.from) {
+    const src = el('div', 'gen-row');
+    src.append(el('span', null, 'from'));
+    const labels = { '': 'an amount of its own' };
+    for (const o of readable) labels[o.key] = `what ${o.label} says`;
+    const keys = ['', ...readable.map((o) => o.key)];
+    if (g.from && !labels[g.from]) { keys.push(g.from); labels[g.from] = `${g.from} (not loaded)`; }
+    // Reading a metric starts at all of what it says.
+    const pick = choose(keys, labels, g.from || '',
+      (v) => actions.setGen(v && !g.from ? { from: v, value: 100 } : { from: v || null }));
+    pick.className = 'gen-from';
+    pick.title = 'Pretend the servers make the load a metric says they do: a rate as it reads, '
+      + 'a percentage as that share of each server’s NICs. The pattern says where it goes.';
+    src.append(pick);
+    box.append(src);
+  }
+
   // How much: in a unit of its own with nothing loaded, in the metric's when
   // it rides on one -- or, either way where it is a bit rate, a share of
-  // each host's NICs.
+  // each host's NICs. Read off a metric, a share of what it reads.
   const size = el('div', 'gen-row');
   size.append(el('span', null, 'each sends'));
   const amount = number(g.value, 0, (v) => actions.setGen({ value: v }));
   amount.className = 'gen-value';
-  amount.title = 'How much every host sends, in all';
+  amount.title = g.from ? 'How much of what the metric reads each host sends: 100 is all of it, 200 twice it'
+    : 'How much every host sends, in all';
   size.append(amount);
+  if (g.from) {
+    size.append(el('span', null, '% of its reading'));
+    box.append(size);
+  }
   const overlay = state.traffic.key ? state.overlays.get(state.traffic.key) : null;
   const metric = overlay && overlay.enabled && trafficKind(overlay) !== 'cables' && loadable(overlay) ? overlay : null;
   const base = metric ? loadUnit(metric, trafficKind(metric)) : null;
   let units = GEN_UNITS;
   if (base) units = base.toGbps === null ? [base.unit] : ['%', 'Gb/s', 'Mb/s'];
   if (unit && !units.includes(unit)) units = [...units, unit];
-  const unitPick = choose(units, GEN_UNIT_LABELS, unit, (v) => actions.setGen({ unit: v }));
-  unitPick.className = 'gen-unit';
-  unitPick.title = base
-    ? `Added to ${metric.label}, so in a unit that adds up with ${base.unit || 'it'}`
-    : '% of its NICs: a share of what the host’s own cables can carry (gbps=)';
-  size.append(unitPick);
-  box.append(size);
+  if (!g.from) {
+    const unitPick = choose(units, GEN_UNIT_LABELS, unit, (v) => actions.setGen({ unit: v }));
+    unitPick.className = 'gen-unit';
+    unitPick.title = base
+      ? `Added to ${metric.label}, so in a unit that adds up with ${base.unit || 'it'}`
+      : '% of its NICs: a share of what the host’s own cables can carry (gbps=)';
+    size.append(unitPick);
+    box.append(size);
+  }
 
   const kinds = reachOf(state.model);
   if (kinds.length) {
@@ -1070,6 +1216,9 @@ export function renderLoadGen(state, host, actions, { unit } = {}) {
     else {
       lines.append(el('div', null, `${run.senders} of ${run.hosts} hosts send · ${run.flows} flows · `
         + `${formatLoad(shown.model, run.offered)}`));
+    }
+    if (run.noReading) {
+      lines.append(el('div', 'muted', `${run.noReading} host${run.noReading === 1 ? ' has' : 's have'} no reading, so send nothing`));
     }
     if (run.noCapacity) {
       lines.append(el('div', 'bad', `${run.noCapacity} host${run.noCapacity === 1 ? ' has' : 's have'} no gbps= `
@@ -1192,11 +1341,21 @@ export function cableTip(state, hit, view, flows) {
     });
   } else {
     const load = [0, 0];
+    // Shared out: what the flows offered each way, and how many are held back.
+    const offered = [0, 0];
+    let held = 0;
     let worst = null;
+    const c = view.contention;
     for (const link of links) {
-      const l = view.loads.get(link);
-      if (!l) continue;
       const fwd = fromSide(link);
+      const l = view.loads.get(link);
+      if (c) {
+        const o = c.offered.get(link);
+        if (o) { offered[0] += fwd ? o[0] : o[1]; offered[1] += fwd ? o[1] : o[0]; }
+        const h = c.full.get(link);
+        if (h) held += h[0] + h[1];
+      }
+      if (!l) continue;
       load[0] += fwd ? l[0] : l[1];
       load[1] += fwd ? l[1] : l[0];
       const u = utilOf(link, l, view.toGbps);
@@ -1204,10 +1363,15 @@ export function cableTip(state, hit, view, flows) {
     }
     if (!(load[0] > 0 || load[1] > 0)) lines.push('carrying nothing');
     else {
-      directions(parts, side, sideName).forEach(([name], k) => lines.push(`${name}: ${formatLoad(view, load[k])}`));
+      directions(parts, side, sideName).forEach(([name], k) => {
+        const wanted = c && offered[k] > load[k] * (1 + 1e-9) ? `, of ${formatLoad(view, offered[k])} offered` : '';
+        lines.push(`${name}: ${formatLoad(view, load[k])}${wanted}`);
+      });
     }
-    if (worst !== null) {
-      const over = worst > 1.0005 ? ' — more than it can carry' : '';
+    if (worst !== null && c && held) {
+      lines.push(`${links.length > 1 ? 'the fullest is ' : ''}full — holding back ${held} flow${held === 1 ? '' : 's'} crossing it`);
+    } else if (worst !== null) {
+      const over = worst > 1.0005 ? ' — more offered than it can carry' : '';
       lines.push(links.length > 1
         ? `the fullest is ${pct(worst)} full, the busier way${over}`
         : `${pct(worst)} full, the busier way${over}`);
@@ -1226,12 +1390,15 @@ export function cableTip(state, hit, view, flows) {
     else {
       lines.push(`flows over it: ${flows.count}`);
       for (const { flow, amount } of flows.flows.slice(0, TIP_FLOWS)) {
-        const tag = flow.test ? '  (test flow)' : '';
-        lines.push(`  ${shortPath(flow.src)} → ${shortPath(flow.dst)}  ${formatLoad(model, amount)}${tag}`);
+        const tag = flow.test ? '  (test flow)' : flow.estimate ? '  (estimated)' : '';
+        // Held back somewhere on its way: what it carries here, of what it offered.
+        const wanted = flow.wanted > flow.value * (1 + 1e-9) && flow.value > 0
+          ? ` of ${formatLoad(model, (amount * flow.wanted) / flow.value)}` : '';
+        lines.push(`  ${shortPath(flow.src)} → ${shortPath(flow.dst)}  ${formatLoad(model, amount)}${wanted}${tag}`);
       }
       if (flows.count > TIP_FLOWS) lines.push(`  … and ${flows.count - TIP_FLOWS} more`);
     }
-  } else if (model && model.estimated && view.view !== 'measured') {
+  } else if (model && model.estimated && !model.result.contention && view.view !== 'measured') {
     lines.push('an estimate from per-host totals: no flows to name');
   }
   return lines;
@@ -1271,16 +1438,20 @@ function renderLoadKey(view, box) {
     key.append(el('span', null, '0%'), bar, el('span', null, '100%'));
     const over = el('span', 'load-chip');
     over.style.background = LOAD_COLORS.over;
-    over.title = 'More than the cable can carry';
-    key.append(over, el('span', null, 'over'));
+    over.title = view.contention
+      ? 'Full: the flows crossing it share it out, and are held back on the rest of their path too'
+      : 'More offered than the cable can carry';
+    key.append(over, el('span', null, view.contention ? 'full' : 'over'));
     const unknown = el('span', 'load-chip');
     unknown.style.background = LOAD_COLORS.unknown;
     unknown.title = 'Carrying traffic, but its capacity (gbps=) is not given';
     key.append(unknown, el('span', null, 'no gbps='));
     box.append(key);
-    box.append(el('p', 'muted cable-note',
-      'Colour: the fullest cable at that point, busier direction against its gbps=. '
-      + 'Width: the traffic carried there.'));
+    box.append(el('p', 'muted cable-note', view.contention
+      ? 'Colour: the fullest cable at that point, busier direction against its gbps=; a full one holds back '
+        + 'the flows crossing it. Width: the traffic carried there, after sharing out.'
+      : 'Colour: the fullest cable at that point, busier direction against its gbps=. '
+        + 'Width: what the flows offer there — without contention, it can be more than the cable carries.'));
     return;
   }
   box.append(el('p', 'muted cable-note', view.toGbps === null
@@ -1318,12 +1489,27 @@ function renderWhatIf(state, host, actions, down, view) {
   const model = view && view.model;
   if (model && view.base) {
     const lost = model.result.missed.count - view.base.result.missed.count;
-    const now = overFull(model.loads, model.toGbps);
-    const before = overFull(view.base.loads, view.base.toGbps);
+    // Shared out, nothing is past full: what counts is how many are full.
+    const shared = model.result.contention && view.base.result.contention;
+    const fullOf = (c) => c.full.size + (c.switches ? c.switches.size : 0);
+    const now = shared ? fullOf(model.result.contention) : overFull(model.loads, model.toGbps);
+    const before = shared ? fullOf(view.base.result.contention) : overFull(view.base.loads, view.base.toGbps);
+    const nowText = shared ? contendedText(model.result.contention) : '';
+    const beforeText = shared ? contendedText(view.base.result.contention) : '';
     const facts = [];
     facts.push(lost > 0 ? `${lost} ${model.kind === 'hosts' ? 'host pairs' : 'flows'} lost their route` : 'every flow still has a route');
-    if (model.toGbps !== null) facts.push(`${now} cables past full${now !== before ? ` (was ${before})` : ''}`);
-    box.append(el('div', lost > 0 || now > before ? 'bad' : 'muted', facts.join(' · ')));
+    if (model.toGbps !== null && shared) {
+      facts.push(`${nowText} full${nowText !== beforeText ? ` (was ${beforeText})` : ''}`);
+    } else if (model.toGbps !== null) {
+      facts.push(`${now} cable${now === 1 ? '' : 's'} past full${now !== before ? ` (was ${before})` : ''}`);
+    }
+    if (shared) {
+      const carried = model.result.contention.carried;
+      const was = view.base.result.contention.carried;
+      if (Math.abs(carried - was) > 1e-9 * Math.max(1, was)) facts.push(`${formatLoad(model, carried)} carried (was ${formatLoad(model, was)})`);
+    }
+    const worse = lost > 0 || now > before || (shared && model.result.contention.carried < view.base.result.contention.carried * (1 - 1e-9));
+    box.append(el('div', worse ? 'bad' : 'muted', facts.join(' · ')));
   } else if (!model) {
     box.append(el('p', 'muted cable-note',
       'Routes between picks go round what is taken out. Load a flow metric onto the cables to see where its traffic goes.'));
@@ -1369,12 +1555,23 @@ function renderElementLoad(state, host, node, actions) {
   const leaf = !node.children.length;
   host.append(el('h2', null, view.view === 'measured' ? 'Cable load, measured' : 'Cable load'));
   const dl = el('dl', 'kv');
+  // A switch: how much of what it can pass it is passing.
+  const sw = state.switchLoads ? state.switchLoads() : null;
+  const swRec = sw && sw.get(node);
+  if (swRec) {
+    dl.append(el('dt', null, 'switching'));
+    const dd = el('dd', 'switching');
+    const dot = el('span', 'dot');
+    dot.style.background = swRec.util !== null ? switchColor(swRec) : LOAD_COLORS.unknown;
+    dd.append(dot, el('span', null, switchTip(swRec, view).join(' · ')));
+    dl.append(dd);
+  }
   for (const [net, rec] of byNet) {
     if (!rec.out && !rec.in && !rec.gbps) continue;
     dl.append(el('dt', null, leaf ? net : `${net} leaving`));
     const dd = el('dd');
     const dot = el('span', 'dot');
-    dot.style.background = rec.worst !== null ? loadColor(rec.worst) : LOAD_COLORS.unknown;
+    dot.style.background = rec.worst !== null ? utilColor(view, rec.worst) : LOAD_COLORS.unknown;
     dd.append(dot);
     const of = rec.gbps ? ` of ${formatGbps(rec.gbps)}` : '';
     const worst = rec.worst !== null ? ` · fullest ${pct(rec.worst)}` : '';
@@ -1418,7 +1615,7 @@ function renderElementLoad(state, host, node, actions) {
     const got = link.a === mine ? l[1] : l[0];
     const item = el('div', 'load-row');
     const dot = el('span', 'dot');
-    dot.style.background = util !== null ? loadColor(util) : LOAD_COLORS.unknown;
+    dot.style.background = util !== null ? utilColor(view, util) : LOAD_COLORS.unknown;
     item.append(dot);
     item.append(el('span', 'load-ends', `${leaf ? '' : `${mine.name} `}↔ ${shortPath(far)}`));
     item.append(el('span', 'val', `↑${short(sent)} ↓${short(got)}`

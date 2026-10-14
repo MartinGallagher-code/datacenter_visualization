@@ -13,7 +13,7 @@ import {
 } from './results.js';
 import {
   cableTip, fillWarnings, renderBuild, renderCableLoad, renderInspector, renderLive, renderLoadGen, renderNets,
-  renderNotices, renderOverlays, renderTree, renderWarnings,
+  renderNotices, renderOverlays, renderTree, renderWarnings, switchTip,
 } from './ui.js';
 import {
   droppedLayoutsNotice, layoutNotice, plural, prefixed, resultsFileNotice,
@@ -22,8 +22,9 @@ import { attachHints, renderReference } from './hints.js';
 import { layoutFromHosts, matchesPattern, recordsSince, tailRecords } from './tsv.js';
 import { routesBetween } from './paths.js';
 import {
-  betweenPicks, bitRate, cableKeys, countersOf, flowsOf, flowsOver, generateFlows, hostsOf, loadable, loadUnit,
-  mergeResults, routeEstimate, routeTraffic, testFlows, trafficKind, viewOf,
+  betweenPicks, bitRate, cableKeys, contend, countersOf, estimateFlows, flowsOf, flowsOver, GEN_LIMITS,
+  generateFlows, hostCapacity, hostsOf, loadable, loadUnit, mergeResults, readsAsLoad, routeEstimate, routeTraffic,
+  switchLoads, testFlows, trafficKind, viewOf,
 } from './traffic.js';
 import { VERSION } from './version.js';
 import {
@@ -82,9 +83,15 @@ const state = {
     // The load generator: a made-up load, on its own or on top of a metric.
     // unit null is '%' of each host's NICs where cables have a gbps=, else
     // Gb/s; hosts is a filter, empty for every device not tagged +switch.
-    gen: { on: false, pattern: 'all', value: 50, unit: null, peers: 1, reach: 'any', hosts: '', seed: 1 },
+    // `from` names a per-host metric the servers send what they read, at
+    // `value` % of it, in place of an amount of its own.
+    gen: { on: false, pattern: 'all', value: 50, unit: null, peers: 1, reach: 'any', hosts: '', seed: 1, from: null },
+    // A full cable shares out what it carries, as TCP does, and holds back
+    // the flows crossing it; off, the cables show what the flows offer.
+    contention: true,
+    listed: 8,                // rows in the busiest-cables list
   },
-  trafficCache: { model: null, base: null, counters: null, view: null },
+  trafficCache: { model: null, base: null, counters: null, view: null, switches: null },
   // What-if: elements and cables taken out, by key so they survive a re-parse.
   down: { els: new Set(), links: new Set() },
   capacityView: false,      // with no traffic shown, cable widths by gbps=
@@ -188,6 +195,18 @@ const state = {
     for (const link of state.model.links) if (link.gbps) { anyCapacity = true; break; }
     const value = viewOf({ view, views, model, base, counters, anyCapacity });
     state.trafficCache.view = { model, base, counters, view, layout: state.model, value };
+    return value;
+  },
+
+  // How full each switch is, under what the cables show now; null while
+  // nothing is loaded onto them.
+  switchLoads() {
+    const view = state.cableView();
+    if (!view) return null;
+    const c = state.trafficCache.switches;
+    if (c && c.view === view) return c.value;
+    const value = switchLoads(state.model, view.loads, view.toGbps, view.contention);
+    state.trafficCache.switches = { view, value };
     return value;
   },
 
@@ -315,12 +334,15 @@ function modelSource(withDown) {
   // Incast sends to the first pick, or failing that the selection.
   const target = gen && gen.pattern === 'incast' ? state.picked[0] || state.selected || null : null;
   const genKey = gen ? JSON.stringify([gen.pattern, gen.value, genUnit(), gen.peers, gen.reach, gen.hosts, gen.seed,
-    target && target.key]) : '';
+    target && target.key, gen.from]) : '';
+  // A metric the generator reads: re-read when its file is, so by object.
+  const from = gen && gen.from ? genSource() : null;
   const slot = withDown ? 'model' : 'base';
   const c = state.trafficCache[slot];
   if (c && c.overlay === metric && c.layout === state.model && c.agg === (metric && metric.agg)
       && c.split === t.split && c.seed === t.seed && c.spread === t.spread && c.down === downKey
-      && c.picks === pickKey && c.test === testKey && c.between === between && c.gen === genKey) {
+      && c.picks === pickKey && c.test === testKey && c.between === between && c.gen === genKey
+      && c.from === from && c.contention === t.contention) {
     return c.value;
   }
   // Nothing taken out: the model and its baseline are one routing.
@@ -335,56 +357,109 @@ function modelSource(withDown) {
   const unit = metric ? loadUnit(metric, kind) : gen ? testUnit(genBase(genUnit())) : testUnit(test.unit);
   const opts = { split: t.split, seed: t.seed, spread: t.spread, down: out };
   const only = between ? betweenPicks(picks) : null;
-  // Every flow routed, kept so a cable can say which of them it carries. An
-  // estimate has none to name: its pairs are a model, not flows.
-  const routed = [];
-  let result = null;
   let count = 0;
   let total = 0;
   let unresolved = 0;
   let skipped = 0;
+
+  // What there is to route: the metric's flows, or its per-host totals to
+  // estimate from; a generated load; a test flow.
+  let metricFlows = [];
+  let hosts = null;
   if (metric && kind === 'flows') {
     const f = flowsOf(metric, state.model);
-    const flows = only ? f.flows.filter((flow) => only(flow.src, flow.dst)) : f.flows;
-    count = flows.length;
+    metricFlows = only ? f.flows.filter((flow) => only(flow.src, flow.dst)) : f.flows;
+    count = metricFlows.length;
     total = f.flows.length;
     unresolved = f.unresolved;
-    result = routeTraffic(state.model, flows, opts);
-    routed.push(...flows);
   } else if (metric) {
     const h = hostsOf(metric, state.model);
-    count = h.hosts.length;
+    hosts = h.hosts;
+    count = hosts.length;
     total = count;
     skipped = h.skipped;
-    result = routeEstimate(state.model, h.hosts, { ...opts, only });
   }
-  // The metric's own count, before anything is added on top of it.
-  const own = result ? { routed: result.routed, delivered: result.delivered } : null;
+  let genFlows = [];
   let genRun = null;
   if (gen) {
     let match = null;
     try { match = compileQuery(gen.hosts, state); } catch { match = null; }
-    const g = generateFlows(state.model, { ...gen, unit: genUnit() }, { match, target, base: unit });
-    genRun = { ...g, flows: g.flows.length, target, unit: genUnit(), pattern: gen.pattern, value: gen.value };
-    // Routed even when empty, so the panel has a result to say why.
-    result = mergeResults(result, routeTraffic(state.model, g.flows, opts));
-    routed.push(...g.flows);
+    // Read off a metric, each host sends what it measured: a rate as it
+    // reads, a percentage as that share of its own NICs.
+    const amounts = from ? (el) => {
+      if (!from.overlay.direct.has(el.key)) return null;
+      const reading = overlayValue(from.overlay, el);
+      if (!reading || !reading.numeric || !Number.isFinite(reading.value)) return null;
+      return from.percent ? (reading.value / 100) * hostCapacity(state.model, el) : reading.value * from.toGbps;
+    } : null;
+    const g = gen.from && !from
+      ? { flows: [], hosts: 0, senders: 0, offered: 0, noCapacity: 0, noReading: 0, why: 'the metric it reads is not loaded and ticked' }
+      : generateFlows(state.model, { ...gen, unit: genUnit() }, { match, target, base: unit, amounts });
+    genFlows = g.flows;
+    genRun = {
+      ...g, flows: g.flows.length, target, unit: genUnit(), pattern: gen.pattern, value: gen.value,
+      from: from ? from.overlay : null,
+    };
   }
+  let testFlowsNow = [];
   let testRun = null;
   if (test) {
-    const flows = testFlows(picks, test.value);
-    testRun = { value: test.value, unit: unit.unit, flows: flows.length, from: picks[0], to: picks[1] };
-    result = mergeResults(result, routeTraffic(state.model, flows, opts));
-    routed.push(...flows);
+    testFlowsNow = testFlows(picks, test.value);
+    testRun = { value: test.value, unit: unit.unit, flows: testFlowsNow.length, from: picks[0], to: picks[1] };
+  }
+
+  // Contention: everything routed together, since it all shares the cables,
+  // and every full cable shared out. Only a bit rate fills a gbps=.
+  let contended = null;
+  let contentionWhy = '';
+  if (t.contention) {
+    if (unit.toGbps === null) contentionWhy = `${unit.unit || 'this unit'} cannot fill a cable’s gbps=, so nothing is shared out`;
+    else if (!state.model.links.some((link) => link.gbps)) contentionWhy = 'no cable has a gbps= to fill, so nothing is shared out';
+    else {
+      const pairs = hosts ? estimateFlows(hosts, { spread: t.spread, split: t.split, only }) : [];
+      if (pairs.length > GEN_LIMITS.flows) {
+        contentionWhy = `${pairs.length.toLocaleString()} estimated host pairs are too many to share out here`;
+      } else {
+        contended = contend(state.model, [...metricFlows, ...pairs, ...genFlows, ...testFlowsNow], { ...opts, toGbps: unit.toGbps });
+        if (!contended) contentionWhy = 'too many flows to share out here';
+      }
+    }
+  }
+
+  // Every flow routed, kept so a cable can say which of them it carries --
+  // with contention, at what each carries. An estimate routed without it has
+  // none to name: its pairs are a model, not flows.
+  let routed;
+  let result;
+  let own = null;
+  if (contended) {
+    result = contended;
+    routed = contended.contention.flows;
+    if (metric) {
+      const mine = routed.filter((flow) => !flow.gen && !flow.test);
+      own = { routed: mine.length, delivered: mine.reduce((sum, flow) => sum + flow.value, 0) };
+    }
+  } else {
+    routed = [...metricFlows];
+    result = null;
+    if (metric) {
+      result = hosts ? routeEstimate(state.model, hosts, { ...opts, only }) : routeTraffic(state.model, metricFlows, opts);
+      // The metric's own count, before anything is added on top of it.
+      own = { routed: result.routed, delivered: result.delivered };
+    }
+    // Routed even when empty, so the panel has a result to say why.
+    if (gen) result = mergeResults(result, routeTraffic(state.model, genFlows, opts));
+    if (test) result = mergeResults(result, routeTraffic(state.model, testFlowsNow, opts));
+    routed.push(...genFlows, ...testFlowsNow);
   }
   const value = {
     overlay: metric, kind: metric ? kind : gen ? 'gen' : 'test', result, loads: result.loads, toGbps: unit.toGbps,
     unit: unit.unit, count, total, unresolved, skipped, between, test: testRun, gen: genRun, own,
-    flows: routed, opts, estimated: !!metric && kind === 'hosts',
+    flows: routed, opts, estimated: !!metric && kind === 'hosts', contentionWhy,
   };
   state.trafficCache[slot] = {
     overlay: metric, layout: state.model, agg: metric && metric.agg, split: t.split, seed: t.seed, spread: t.spread,
-    down: downKey, picks: pickKey, test: testKey, between, gen: genKey, value,
+    down: downKey, picks: pickKey, test: testKey, between, gen: genKey, from, contention: t.contention, value,
   };
   return value;
 }
@@ -400,12 +475,24 @@ function genUnit() {
   const metric = overlay && overlay.enabled && trafficKind(overlay) !== 'cables' && loadable(overlay) ? overlay : null;
   const base = metric ? loadUnit(metric, trafficKind(metric)) : null;
   if (base && base.toGbps === null) return base.unit;
+  // Read off a metric, a load is in Gb/s.
+  if (t.gen.from) return 'Gb/s';
   if (t.gen.unit) return t.gen.unit;
   return state.model.links.some((link) => link.gbps) ? '%' : 'Gb/s';
 }
 
 /** The unit a generated load on its own puts on the cables. */
 const genBase = (unit) => (unit === '%' ? 'Gb/s' : unit);
+
+/**
+ * The per-host metric the generator reads, if it is loaded and ticked: a
+ * rate, read in Gb/s, or a percentage, read as that share of each host's
+ * NICs. Null for anything else.
+ */
+function genSource() {
+  const overlay = state.overlays.get(state.traffic.gen.from);
+  return overlay && overlay.enabled ? readsAsLoad(overlay) : null;
+}
 
 function testUnit(unit) {
   const toGbps = bitRate(unit);
@@ -767,6 +854,20 @@ const actions = {
 
   setTrafficSplit(split) {
     state.traffic.split = split;
+    refreshPanels();
+    invalidate();
+  },
+
+  // How many rows the busiest-cables and biggest-changes lists show.
+  setListed(n) {
+    state.traffic.listed = n;
+    refreshPanels();
+  },
+
+  // Whether full cables share out what they carry, or the cables show what
+  // the flows offer.
+  setContention(on) {
+    state.traffic.contention = on;
     refreshPanels();
     invalidate();
   },
@@ -2127,6 +2228,8 @@ const applyEditor = debounce(() => {
 
 function toggleEditor(show = $('editor').hidden) {
   $('editor').hidden = !show;
+  $('editor-resize').hidden = !show;
+  applyEditorHeight();
   invalidate();               // the canvas re-measures on the next draw
   if (show) {
     syncEditor();
@@ -2212,6 +2315,7 @@ function loadPanels() {
     saved[side].w = clampPanel(Number(saved[side].w) || PANEL_DEFAULT[side]);
     saved[side].off = !!saved[side].off;
   }
+  if (!(Number(saved.editorHeight) > 0)) delete saved.editorHeight;
   return saved;
 }
 
@@ -2309,6 +2413,48 @@ for (const side of ['left', 'right']) {
   handle.addEventListener('dblclick', () => {
     panelState[side].w = PANEL_DEFAULT[side];
     applyPanels();
+    savePanels();
+  });
+}
+
+// The editor's height: dragged by the bar along its top edge, remembered
+// with the panels. Unset, it is the stylesheet's share of the window.
+const EDITOR_MIN = 120;
+
+function applyEditorHeight() {
+  const h = panelState.editorHeight;
+  const room = $('editor').parentElement.clientHeight;
+  // Always leave the floor plan something to show above it.
+  $('editor').style.height = h ? `${Math.max(EDITOR_MIN, Math.min(h, room - 120))}px` : '';
+  invalidate();
+}
+
+{
+  const handle = $('editor-resize');
+  handle.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    handle.setPointerCapture(e.pointerId);
+    handle.classList.add('dragging');
+    document.body.classList.add('resizing-rows');
+    const startY = e.clientY;
+    const startH = $('editor').getBoundingClientRect().height;
+    const move = (ev) => {
+      panelState.editorHeight = Math.max(EDITOR_MIN, startH - (ev.clientY - startY));
+      applyEditorHeight();
+    };
+    const up = () => {
+      handle.removeEventListener('pointermove', move);
+      handle.removeEventListener('pointerup', up);
+      handle.classList.remove('dragging');
+      document.body.classList.remove('resizing-rows');
+      savePanels();
+    };
+    handle.addEventListener('pointermove', move);
+    handle.addEventListener('pointerup', up);
+  });
+  handle.addEventListener('dblclick', () => {
+    delete panelState.editorHeight;
+    applyEditorHeight();
     savePanels();
   });
 }
@@ -2506,6 +2652,10 @@ function showTooltip(node, x, y) {
     const reading = overlayValue(overlay, node);
     if (reading) lines.push(`${overlay.label}: ${readingText(overlay, reading.value)}`);
   }
+  // A switch, with load on the cables: how full it is.
+  const switches = state.switchLoads();
+  const rec = switches && switches.get(node);
+  if (rec) lines.push(...switchTip(rec, state.cableView()));
   placeTooltip(lines, x, y);
 }
 

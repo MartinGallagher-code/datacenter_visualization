@@ -33,8 +33,9 @@ import {
 } from '../js/render.js';
 import {
   betweenPicks, biggestChanges, bitRate, busiest, cableKeys, cablesOf, compareLoads, countersOf, devicesOf,
-  flowsOf, flowsOver, formatGbps, GEN_LIMITS, generateFlows, hostCapacity, hostsFor, hostsOf, loadable, loadUnit,
-  mergeResults, reachKinds, routeEstimate, routeTraffic, testFlows, trafficKind, utilOf, viewOf as cableView,
+  contend, CONTEND_LIMITS, estimateFlows, flowsOf, flowsOver, formatGbps, GEN_LIMITS, generateFlows, hostCapacity,
+  hostsFor, hostsOf, loadable, loadUnit, mergeResults, reachKinds, readsAsLoad, routeEstimate, routeTraffic,
+  switchCapacity, switchLoads, testFlows, trafficKind, utilOf, viewOf as cableView,
 } from '../js/traffic.js';
 import { CURVE_REACH, FAN_GAP, LANE, SPLICE_W, distanceTo, piecesOf } from '../js/route.js';
 import { compileQuery, applyFilter } from '../js/filter.js';
@@ -1859,6 +1860,131 @@ const segsOf = (cache, net) => {
   ok(inRack.flows.every((x) => x.amount <= x.flow.value + 1e-12), 'a flow over two of the cables asked about counts once');
   eq(inRack.count, all.flows.filter((f) => f.src.parent === m.resolve('R1') || f.dst.parent === m.resolve('R1')).length,
      'every flow into or out of the rack crosses its servers’ cables');
+}
+
+// -------------------------------------------------------------- contention
+// A cable carries no more than its capacity. What the flows offer past it is
+// shared out the way TCP shares it -- max-min fair -- and a flow held back at
+// one full cable carries less on every other cable it crosses.
+{
+  // The textbook case: two flows share a 10G cable, and one of them also
+  // crosses a 2G one. That one is held to 2 there; the other takes the 8
+  // left, not an even 5.
+  const t = parseLayout(['dc D', '  node a +switch', '  node b +switch', '  node c +switch', '  node h1', '  node h2', '  node h3',
+    'net x', 'link x name=h1 name=a gbps=100', 'link x name=h2 name=a gbps=100', 'link x name=a name=b gbps=10',
+    'link x name=b name=c gbps=2', 'link x name=b name=h3 gbps=100'].join('\n'));
+  const two = [{ id: 0, src: t.resolve('h1'), dst: t.resolve('h3'), value: 10 }, { id: 1, src: t.resolve('h2'), dst: t.resolve('c'), value: 10 }];
+  const r = contend(t, two, { toGbps: 1 });
+  eq(r.contention.flows.map((f) => [f.src.name, Math.round(f.value * 1e9) / 1e9, f.wanted]), [['h1', 8, 10], ['h2', 2, 10]],
+     'max-min fair: the flow held at the 2G cable gets 2, the other the 8 left of the 10G');
+  eq(r.contention.flows.map((f) => f.heldAt && `${f.heldAt.a.name}-${f.heldAt.b.name}`), ['a-b', 'b-c'], 'each flow knows where it is held back');
+  eq([r.contention.held, r.contention.full.size, Math.round(r.contention.carried * 1e9) / 1e9, r.contention.wanted], [2, 2, 10, 20],
+     'two flows held back at two full cables: 10 carried of 20 offered');
+  const ab = t.links.find((l) => l.a.name === 'a' && l.b.name === 'b');
+  ok(Math.abs(r.loads.get(ab)[0] - 10) < 1e-9 && r.contention.offered.get(ab)[0] === 20,
+     'a cable carries its capacity, and remembers the 20 offered it');
+  // Without a bit rate there is nothing to set against a gbps=.
+  eq(contend(t, two, { toGbps: null }).contention.held, 0, 'a load that is not a bit rate fills nothing');
+
+  // Over a real fabric, under every split: nothing past full, and what the
+  // flows offered is what routeTraffic routes.
+  const m = parseLayout(readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8'));
+  const gen = generateFlows(m, { pattern: 'all', value: 150, unit: '%' });
+  for (const split of ['even', 'capacity', 'hashed']) {
+    const opts = { split, seed: 3 };
+    const c = contend(m, gen.flows, { ...opts, toGbps: 1 });
+    const offered = routeTraffic(m, gen.flows, opts);
+    ok([...c.loads].every(([l, x]) => !l.gbps || Math.max(...x) <= l.gbps * (1 + 1e-9)), `${split}: no cable carries more than it can`);
+    ok([...offered.loads].every(([l, x]) => {
+      const y = c.contention.offered.get(l);
+      return y && Math.abs(y[0] - x[0]) < 1e-6 && Math.abs(y[1] - x[1]) < 1e-6;
+    }), `${split}: what is offered is routed as without contention`);
+    ok(c.contention.carried < c.contention.wanted && c.contention.held > 0, `${split}: at 150% of the NICs, flows are held back`);
+    // The flows over a cable, at what each carries, add up to what it carries.
+    const busy = [...c.contention.full.keys()][0];
+    const over = flowsOver(m, c.contention.flows, [busy], opts);
+    const load = c.loads.get(busy);
+    ok(Math.abs(over.amount - (load[0] + load[1])) < 1e-6, `${split}: the flows over a full cable add up to what it carries`);
+  }
+  const even = contend(m, gen.flows, { split: 'even', toGbps: 1 });
+  eq(Math.round(even.contention.carried * 1e6) / 1e6, 1600, 'evenly split, every server’s two NICs are full: 32 × 50G carried');
+  eq(even.contention.full.size, 64, 'and every one of those 64 cables is a full one, holding flows back');
+
+  // Incast: every sender held to its share of the target's cables.
+  const into = m.resolve('R01/s1');
+  const incast = generateFlows(m, { pattern: 'incast', value: 10, unit: 'Gb/s' }, { target: into });
+  const c = contend(m, incast.flows, { split: 'even', toGbps: 1 });
+  ok(c.contention.flows.every((f) => Math.abs(f.value - 50 / 31) < 1e-9), 'incast: 31 senders share the target’s 50G evenly');
+  ok(c.contention.flows.every((f) => f.heldAt && (f.heldAt.a === into || f.heldAt.b === into)), 'held back at the target’s own cables');
+  const up = m.links.find((l) => l.net === 'fabric' && (c.loads.get(l) || [0, 0])[0] + (c.loads.get(l) || [0, 0])[1] > 0);
+  ok(Math.max(...c.loads.get(up)) < Math.max(...c.contention.offered.get(up)) / 5,
+     'and an uplink on the way carries what fits into the target, not what was offered');
+
+  // An estimate's pairs as flows route as routeEstimate routes them.
+  const hosts = hostsFor(m).hosts.slice(0, 6).map((el, i) => ({ el, value: 5 + i }));
+  const pairs = estimateFlows(hosts, { spread: 'gravity' });
+  const routedPairs = routeTraffic(m, pairs, { split: 'hashed' });
+  const estimate = routeEstimate(m, hosts, {});
+  ok(pairs.every((f) => f.split === 'even' && f.estimate) && Math.abs(routedPairs.delivered - estimate.delivered) < 1e-9,
+     'estimated pairs carry the estimate, and are never hashed');
+  ok([...estimate.loads].every(([l, x]) => {
+    const y = contend(m, pairs, { split: 'hashed', toGbps: 1 }).contention.offered.get(l);
+    return y && Math.abs(y[0] - x[0]) < 1e-9 && Math.abs(y[1] - x[1]) < 1e-9;
+  }), 'and contend routes them the estimate’s way, whatever the split');
+
+  // Too many crossings to share out here: null, and the caller shows offered.
+  const saved = CONTEND_LIMITS.crossings;
+  CONTEND_LIMITS.crossings = 10;
+  ok(contend(m, gen.flows, { toGbps: 1 }) === null, 'too much to share out is refused, not left to hang the page');
+  CONTEND_LIMITS.crossings = saved;
+}
+
+// ------------------------------------------------------------- full switches
+// How full a switch is: what passes through it against what it can pass --
+// its own gbps= where given, else its ports. A gbps= of its own is a limit
+// contention shares out like a cable's.
+{
+  const text = readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8')
+    .replace('node spine1 at=6 u=2 role=spine plane=1 +switch', 'node spine1 at=6 u=2 role=spine plane=1 +switch gbps=150');
+  const m = parseLayout(text);
+  eq(m.warnings, [], 'gbps= on a switch parses clean');
+  const spine = m.resolve('SP1/spine1');
+  eq([switchCapacity(spine), switchCapacity(m.resolve('SP1/spine2'))], [150, null], 'it is that switch’s alone');
+  const racked = parseLayout('dc D\n  rack R gbps=400\n    node s');
+  eq(racked.resolve('R/s').attrsEff.gbps, undefined, 'a rack’s gbps= is not inherited by what is in it');
+  ok(/gbps=fast is not a number/.test(parseLayout('dc D\n  node t +switch gbps=fast').warnings[0] || ''), 'and a bad one is reported');
+
+  const gen = generateFlows(m, { pattern: 'all', value: 50, unit: '%', reach: 'rack' });
+  const c = contend(m, gen.flows, { split: 'hashed', seed: 1, toGbps: 1 });
+  ok(c.contention.switches.get(spine) > 0, 'a switch of 150G with more offered holds flows back itself');
+  const loads = switchLoads(m, c.loads, 1, c.contention);
+  const rec = loads.get(spine);
+  ok(Math.abs(rec.through - 150) < 1e-6 && rec.declared === 150 && Math.abs(rec.util - 1) < 1e-9 && rec.held > 0,
+     'and is full: 150 through of the 150 it can forward');
+  const tor = loads.get(m.resolve('R01/tora'));
+  eq([tor.declared, tor.capacity, tor.ports], [null, 500, 11], 'a ToR with no gbps= of its own is set against its ports: 8 × 25G, the peer’s 100G and 2 × 100G up');
+  ok(tor.util > 0 && tor.util < 1, 'and is part full');
+  ok(!loads.has(m.resolve('R01/s1')), 'a server is not a switch');
+  eq(switchLoads(m, routeTraffic(m, gen.flows, { split: 'hashed', seed: 1 }).loads, 1).get(spine).held, 0,
+     'without contention, nothing is held back');
+}
+
+// ---------------------------------------------- servers make the load
+// The generator reading a per-host metric: each server sends what it says.
+{
+  const m = parseLayout(readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8'));
+  const s1 = m.resolve('R01/s1');
+  const amounts = (el) => (el.parent === s1.parent && el.name !== 'tora' && el.name !== 'torb' ? 10 : null);
+  const g = generateFlows(m, { pattern: 'all', value: 200 }, { amounts });
+  eq([g.senders, Math.round(g.offered * 1e6) / 1e6, g.noReading], [8, 160, 24], 'each host sends what its reading says, here at 200% of it, and the rest are counted');
+  ok(/cannot be added to pps/.test(generateFlows(m, { pattern: 'all', value: 100 }, { amounts, base: { toGbps: null, unit: 'pps' } }).why),
+     'read as Gb/s, it cannot ride on a metric in pps');
+
+  const raw = parseResults('!test egress unit=Gb/s\negress\tR01/s1\t30\n!test nic_util unit=%\nnic_util\tR01/s1\t40\n'
+    + '!test temp unit=C\ntemp\tR01/s1\t40\n');
+  const asLoad = (name) => readsAsLoad(bindOverlay(raw.get(name), m));
+  eq([asLoad('egress') && asLoad('egress').percent, asLoad('nic_util') && asLoad('nic_util').percent, asLoad('temp')], [false, true, null],
+     'a rate reads as Gb/s, a percentage as a share of the NICs, a temperature not at all');
 }
 
 // ------------------------------------------------------------ cable hover

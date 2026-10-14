@@ -111,6 +111,9 @@ const fixtures = new Map([
   ['/fx/runs/tuesday/results.tsv', '!test beta unit=B\nbeta\tDH1/A/R01/u02\t42\n'],
   // A file that grows between reads, which is what a live dashboard watches.
   ['/fx/live/feed.tsv', FEED_HEAD + FEED_ROW('00', 'DH1/A/R01/u01', 100)],
+  // The dual-plane fabric with one spine that can forward only 150G.
+  ['/fx/slow-spine.dc', readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8')
+    .replace('node spine1 at=6 u=2 role=spine plane=1 +switch', 'node spine1 at=6 u=2 role=spine plane=1 +switch gbps=150')],
 ]);
 
 function serve() {
@@ -1008,8 +1011,27 @@ await test('a flow metric loads the cables', async () => {
   await page.waitForTimeout(400);
   const text = await panel();
   ok(/17 of 17 flows routed/.test(text), `every flow is routed  (${text.slice(0, 120).replace(/\n/g, ' | ')})`);
-  ok(/R02\/tor[ab] → R02\/s5\s+40G\/25G · 160%/.test(text), 'the busiest cable is the incast, past full');
+  // A cable carries no more than it can: the incast's two NICs are full,
+  // and the eight flows into them are held back.
+  ok(/R02\/tor[ab] → R02\/s5\s+25G\/25G · 100% · 8 held/.test(text), 'the busiest cable is the incast, full, holding its flows back');
+  ok(/contention: 2 cables full, holding back 8 of 17 flows · 385Gb\/s carried of 415Gb\/s offered \(93%\)/.test(text),
+     'and the panel says what contention cost');
   ok(/forwarded only by the 24 elements tagged \+switch/.test(text), 'and it says what forwards');
+  const rows = () => page.locator('#cable-load .load-list').first().locator('.load-row').count();
+  eq(await rows(), 8, 'the busiest cables list shows eight');
+  await page.locator('#cable-load button', { hasText: /Show more \(\d+ in all\)/ }).click();
+  await page.waitForTimeout(200);
+  ok(await rows() > 8, 'Show more lists more');
+  await page.locator('#cable-load button', { hasText: 'Show fewer' }).click();
+  await page.waitForTimeout(200);
+  eq(await rows(), 8, 'and Show fewer goes back to eight');
+  // Unticked, the cables show what the flows offer, past full.
+  await page.locator('#cable-load label.contention input').uncheck();
+  await page.waitForTimeout(300);
+  ok(/R02\/tor[ab] → R02\/s5\s+40G\/25G · 160%/.test(await panel()) && !/contention: \d/.test(await panel()),
+     'without contention, the incast is what it offers: past full');
+  await page.locator('#cable-load label.contention input').check();
+  await page.waitForTimeout(300);
 
   await page.locator('#cable-load select').selectOption('hashed');
   await page.waitForTimeout(300);
@@ -1023,7 +1045,8 @@ await test('a flow metric loads the cables', async () => {
   await page.waitForTimeout(300);
   const inspector = await page.evaluate(() => document.querySelector('#inspector').innerText);
   ok(/fabric ×4 \(all leaving\) · 400G leaving/.test(inspector), 'the inspector gives a rack’s uplink capacity');
-  ok(/CABLE LOAD|Cable load/.test(inspector) && /out 320Gb\/s/.test(inspector.replace(/\s+/g, ' ')),
+  // Hashed, each server's 40G flow takes one 25G NIC and is held to it.
+  ok(/CABLE LOAD|Cable load/.test(inspector) && /out 200Gb\/s/.test(inspector.replace(/\s+/g, ' ')),
      'and what they carry out of it');
 
   await page.locator('#overlays .overlay-head input[type=checkbox]').first().uncheck();
@@ -1066,7 +1089,10 @@ await test('counters, the model, and taking a spine out', async () => {
   const after = await panel();
   ok(/What-if: 1 taken out/.test(after) && /every flow still has a route/.test(after),
      `the what-if names what is out and what it cost  (${after.slice(0, 160).replace(/\n/g, ' | ')})`);
-  ok(/Biggest changes\s+R01\/tor[ab] → SP1\/spine2\s+\+80G/.test(after), 'and shows where the traffic went');
+  // spine2's uplinks fill: only 20G more fits, and the flows are held back.
+  ok(/6 cables full \(was 2 cables\) · 265Gb\/s carried \(was 385Gb\/s\)/.test(after), 'what it cost, with contention');
+  ok(/Biggest changes\s+R01\/tor[ab] → SP1\/spine1\s+−80G/.test(after) && /R01\/tor[ab] → SP1\/spine2\s+\+20G/.test(after),
+     'and shows where the traffic went, as far as it fits');
   ok(await page.locator('#inspector button', { hasText: 'Put back' }).count() === 1, 'the inspector offers to put it back');
   await page.locator('#cable-load button', { hasText: 'Put all back' }).click();
   await page.waitForTimeout(300);
@@ -1116,7 +1142,9 @@ await test('traffic between the picks', async () => {
   const sent = await panel();
   ok(/Offered load, between the picks \+ test flow 50 Gb\/s/.test(sent), 'a test flow rides on top, in the metric’s unit');
   ok(/test flow: 50 Gb\/s from R01\/s1 to R03\/s1/.test(sent), 'from the first pick to the second');
-  ok(/R01\/s1 → R01\/tor[ab]\s+45G\/25G · 180%/.test(sent), 'and adds to what the metric put on the same cable');
+  const busy = /R01\/s1 → R01\/tor[ab]\s+(.*)/.exec(sent);
+  ok(/R01\/s1 → R01\/tor[ab]\s+25G\/25G · 100% · 2 held/.test(sent),
+     `and shares the server’s cable with what the metric put on it  (${busy && busy[1]})`);
 
   await page.keyboard.press('Escape');
   await page.keyboard.press('Escape');
@@ -1178,7 +1206,9 @@ await test('the load generator', async () => {
   await page.waitForTimeout(400);
   ok(/all to R01\/s3 \(the selection\)/.test(await gen()) && /24 of 32 hosts send/.test(await gen()),
      'then sends to the selection, from every server outside its rack');
-  ok(/R01\/tor[ab] → R01\/s3\s+300G\/25G · 1200%/.test(await panel()), 'and the target’s NICs overflow');
+  const into = /R01\/tor[ab] → R01\/s3\s+(.*)/.exec(await panel());
+  ok(/R01\/tor[ab] → R01\/s3\s+25G\/25G · 100% · 24 held/.test(await panel()),
+     `and the target’s NICs are full, holding back every sender  (${into && into[1]})`);
 
   await page.locator('#load-gen button', { hasText: 'Stop' }).click();
   await page.waitForTimeout(300);
@@ -1223,6 +1253,73 @@ await test('hovering a cable', async () => {
   ok(port && /8 cables · 25G each, 200G in all/.test(port.text) && /out of R0\d\/tora/.test(port.text),
      'on a ToR’s stub, every cable through it, told as in and out of the ToR');
 }, { url: '?layout=examples/dual-plane.dc' });
+
+// A switch with a gbps= of its own fills like a cable: the panel, its gauge's
+// numbers in its tooltip, and the switches it lists.
+await test('how full a switch is', async () => {
+  const panel = () => page.evaluate(() => document.querySelector('#cable-load').innerText);
+  await page.locator('#load-gen button', { hasText: 'Run' }).click();
+  await page.waitForTimeout(300);
+  await page.locator('#load-gen select.gen-reach').selectOption('rack');
+  await page.waitForTimeout(300);
+  await page.locator('#cable-load .btnrow select').first().selectOption('hashed');
+  await page.waitForTimeout(400);
+  const text = await panel();
+  ok(/contention: 2 switches full, holding back \d+ of 768 flows/.test(text), 'the slow spines are what is full');
+  ok(/Busiest switches[\s\S]*SP1\/spine1\s+150G\/150G · 100% · \d+ held/.test(text), 'and lead the busiest switches');
+  const tip = await page.evaluate(() => {
+    const c = document.querySelector('#view');
+    const r = c.getBoundingClientRect();
+    for (let y = 10; y < r.height; y += 5) {
+      for (let x = 4; x < r.width; x += 3) {
+        c.dispatchEvent(new PointerEvent('pointermove', { clientX: r.left + x, clientY: r.top + y, bubbles: true }));
+        const t = document.querySelector('#tooltip');
+        if (!t.hidden && /^spine1 {3}\(node\)\nLAB\/DH1\/P1/.test(t.textContent)) return t.textContent;
+      }
+    }
+    return '';
+  });
+  ok(/switching 150Gb\/s of the 150G it can forward \(100%\)/.test(tip) && /full — holding back \d+ flows itself/.test(tip),
+     `hovering the switch says how full it is  (${tip.replace(/\n/g, ' | ')})`);
+  ok(/oversubscribed 18\.7:1/.test(tip), 'and what its ports add up to');
+}, { url: '?layout=fx/slow-spine.dc' });
+
+// Pretend the servers make the load a metric says they do.
+await test('servers make the load their metric says', async () => {
+  const gen = () => page.evaluate(() => document.querySelector('#load-gen').innerText);
+  await page.locator('#overlays .overlay-head input[type=checkbox]').first().check();
+  await page.waitForTimeout(300);
+  await page.locator('#load-gen select.gen-from').selectOption({ label: 'what Egress per server says' });
+  await page.waitForTimeout(200);
+  await page.locator('#load-gen button', { hasText: 'Run' }).click();
+  await page.waitForTimeout(400);
+  ok(/100 % of its reading|% of its reading/.test(await gen()) && /32 of 32 hosts send · 992 flows · 619Gb\/s/.test(await gen()),
+     `every server sends what it measured, all-to-all  (${(await gen()).split('\n').slice(-2).join(' | ')})`);
+  ok(/generated: all-to-all, 100% of what Egress per server says from each host/.test(
+    await page.evaluate(() => document.querySelector('#cable-load').innerText)), 'and the cable load panel says so');
+}, { url: '?layout=examples/dual-plane.dc&results=examples/dual-plane-hosts.tsv' });
+
+// The editor had a fixed height: there was nothing to drag.
+await test('the editor resizes', async () => {
+  await page.click('#btn-edit');
+  await page.waitForTimeout(300);
+  const height = () => page.evaluate(() => Math.round(document.querySelector('#editor').getBoundingClientRect().height));
+  const before = await height();
+  const bar = await page.locator('#editor-resize').boundingBox();
+  ok(!!bar, 'the editor has a bar along its top edge');
+  await page.mouse.move(bar.x + 100, bar.y + bar.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(bar.x + 100, bar.y - 150, { steps: 6 });
+  await page.mouse.up();
+  const after = await height();
+  ok(Math.abs(after - before - 150) <= 3, `dragging it up makes the editor taller  (${before} → ${after})`);
+  await page.locator('#editor-resize').dblclick();
+  await page.waitForTimeout(200);
+  eq(await height(), before, 'and a double-click puts it back');
+  await page.click('#editor-close');
+  await page.waitForTimeout(200);
+  ok(await page.locator('#editor-resize').isHidden(), 'the bar goes with the editor');
+}, { url: '?layout=examples/small.dc' });
 
 // module tests can prove the two source files agree; only this can prove the
 // number reaches the screen.

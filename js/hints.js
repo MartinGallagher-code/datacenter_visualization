@@ -33,6 +33,7 @@ const ELEMENT_KEYS = [
   ['if=', 'make this line only where it holds: if={row}=1, if={row}!=1'],
   ['color=', 'fill colour: #4fa3ff, teal, rgb(1,2,3)'],
   ['seq=', 'count per enclosing kind (seq=room) or by name (seq=net)'],
+  ['gbps=', 'a switch’s own forwarding capacity, in Gb/s: gbps=12800'],
 ];
 
 const NET_KEYS = [
@@ -403,6 +404,7 @@ const REFERENCE = [
     ['net mgmt gbps=1 traffic=no', 'drawn, but carries none of the routed traffic'],
     ['link fabric role=tor role=spine weight=2', 'twice the share of a flow where routes fork'],
     ['+switch', 'only elements tagged switch forward traffic', true],
+    ['node spine role=spine +switch gbps=12800', 'a switch that can forward 12.8 Tb/s in all, whatever its ports add up to'],
     ['gbps=1 gbps=10 gbps=25 gbps=40 gbps=100 gbps=200 gbps=400 gbps=800', 'common port speeds', true],
   ]],
   ['Selectors', 'For link rules and the filter bar.', [
