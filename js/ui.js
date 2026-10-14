@@ -1044,7 +1044,8 @@ const PATTERN_LABELS = {
 };
 const PATTERN_TITLES = {
   all: 'Every host sends to every other host, an equal share each',
-  random: 'Every host sends to a few hosts picked at random, an equal share each. New peers draws them again',
+  random: 'Every host sends to N hosts picked at random, an equal share each, and is sent to by N: no host is picked '
+    + 'more than another. The way to load a fabric too big for all-to-all. New peers draws them again',
   incast: 'Every host sends to one target -- the first pick, or the selection -- the way many '
     + 'clients answering one request fill the target’s own cable',
 };
@@ -1116,7 +1117,7 @@ export function renderLoadGen(state, host, actions, { unit } = {}) {
     const peers = number(g.peers, 1, (v) => actions.setGen({ peers: Math.max(1, Math.floor(v)) }));
     peers.className = 'gen-peers';
     peers.step = '1';
-    peers.title = 'How many hosts each host sends to';
+    peers.title = 'How many hosts each host sends to -- and is sent to by: every host gets exactly this many each way';
     shape.append(el('span', null, '×'), peers);
     const roll = el('button', null, 'New peers');
     roll.title = 'Pick every host’s peers again at random';

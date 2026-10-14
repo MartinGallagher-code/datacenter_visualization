@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.5.0** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.6.0** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -631,9 +631,13 @@ off.
   - **all-to-all** — every host sends to every other host, an equal share
     each;
   - **to random hosts** — every host sends to `×N` hosts picked at random,
-    an equal share each. The same seed picks the same peers; **New peers**
-    draws them again. Some hosts are picked more often than others, which is
-    the point: it is what makes a downlink run hot;
+    an equal share each, **and is sent to by exactly N**: the peers are drawn
+    as N random pairings, each one in which every host sends to one host and
+    receives from one, so no host is picked more often than another and every
+    server's own cables carry the same. It is the way to load a fabric too
+    big for all-to-all — a few thousand servers at 16 or 64 peers each — and
+    the panel says how many peers fit when all-to-all is too many. The same
+    seed picks the same peers; **New peers** draws them again;
   - **incast: all to one** — every host sends to one target, the first pick
     or else the selection: many to one, the pattern that fills a single
     server's cable. A rack as the target shares it over the rack's devices.
@@ -670,9 +674,13 @@ Every pattern is routed like any flow metric, by the panel's split. Over
 and the ToR uplinks to 39%; outside its own rack, every flow takes an uplink
 and they fill to 50%. Generating is
 quick, routing is the cost: every destination is a walk over the whole
-fabric, so a load too big to route in the page — all-to-all over a
-quarter of a million hosts — is refused with why. Narrow the hosts, or use
-incast, which has one destination.
+fabric, so a load too big to route in the page is refused with why. That
+walk is shared by every server behind the same switches, so it is done once
+per ToR (or ToR pair), not once per server: random peers over four thousand
+servers route in about a second. All-to-all grows with the square of the
+servers — a thousand of them is a million flows, past what the page will
+route — so above a few hundred, send to random hosts instead, with as many
+peers as the panel says fit, or narrow the hosts.
 
 #### Hovering a cable
 

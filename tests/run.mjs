@@ -1827,6 +1827,20 @@ const segsOf = (cache, net) => {
   ok(generateFlows(m, { pattern: 'random', value: 10, unit: 'Gb/s', peers: 2, seed: 2 }).flows.map((f) => f.dst.path).join()
      !== rand.flows.map((f) => f.dst.path).join(), 'a new seed, new peers');
 
+  // Random peers are balanced: every host sends to N and is sent to by N.
+  const balanced = generateFlows(m, { pattern: 'random', value: 10, unit: 'Gb/s', peers: 3, seed: 5 });
+  const count = (key) => {
+    const c = new Map();
+    for (const f of balanced.flows) c.set(f[key], (c.get(f[key]) || 0) + 1);
+    return [...new Set(c.values())];
+  };
+  eq([count('src'), count('dst')], [[3], [3]], 'random peers: every host sends to three and receives from three');
+  ok(balanced.flows.every((f) => f.src !== f.dst)
+     && new Set(balanced.flows.map((f) => `${f.src.key}>${f.dst.key}`)).size === balanced.flows.length,
+     'never itself, and never the same peer twice');
+  const out = generateFlows(m, { pattern: 'random', value: 10, unit: 'Gb/s', peers: 2, seed: 5, reach: 'rack' });
+  ok(out.flows.every((f) => f.src.parent !== f.dst.parent) && out.flows.length === 16, 'and outside its own rack when asked');
+
   // Incast: everyone into one server, which is where it overflows.
   const into = m.resolve('R1/s1');
   const incast = generateFlows(m, { pattern: 'incast', value: 10, unit: 'Gb/s' }, { target: into });
