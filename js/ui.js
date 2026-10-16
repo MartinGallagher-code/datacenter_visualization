@@ -1088,6 +1088,7 @@ export function renderCableLoad(state, host, actions) {
       const g = model.gen;
       lines.append(el('div', null, `generated: ${PATTERN_LABELS[g.pattern] || g.pattern}, `
         + `${g.from ? `${trimNum(g.value)}% of what ${g.from.label} says${g.from.duplex ? ' (a duplex total, halved)' : ''}` : genAmount(g.value, g.unit)}`
+        + `${g.packets ? ` of ${g.packets.bytes} B requests${g.packets.reply ? `, ${g.packets.reply} B replies` : ''}` : ''}`
         + ` from each host${g.per === 'peer' ? ` ${GEN_PER_LABELS[g.pattern].peer}` : ''}`
         + ` · ${g.flows} flows · ${formatLoad(model, g.offered)}`));
     }
@@ -1282,7 +1283,8 @@ const GEN_PER_LABELS = {
   incast: { host: 'in all', peer: 'to each target device' },
 };
 // "50% of its NICs", "40 Gb/s".
-const genAmount = (value, unit) => (unit === '%' ? `${trimNum(value)}% of its NICs` : `${trimNum(value)} ${unit}`);
+const genAmount = (value, unit) => (unit === '%' ? `${trimNum(value)}% of its NICs`
+  : `${unit === 'pps' ? Number(value).toLocaleString('en-US') : trimNum(value)} ${unit}`);
 
 // The kinds a load can be kept out of, per layout: worked out once, since a
 // floor of a quarter of a million elements is walked to find them.
@@ -1399,15 +1401,46 @@ export function renderLoadGen(state, host, actions, { unit } = {}) {
   const unitOf = (o) => (state.metricUnit ? state.metricUnit(o, trafficKind(o)) : loadUnit(o, trafficKind(o)));
   const base = metric ? unitOf(metric) : null;
   let units = GEN_UNITS;
-  if (base) units = base.toGbps === null ? [base.unit] : ['%', 'Gb/s', 'Mb/s'];
+  // On a bit rate, pps too: requests and replies of a size add up with it.
+  if (base) units = base.toGbps === null ? [base.unit] : ['%', 'Gb/s', 'Mb/s', 'pps'];
   if (unit && !units.includes(unit)) units = [...units, unit];
   if (!g.from) {
-    const unitPick = choose(units, GEN_UNIT_LABELS, unit, (v) => actions.setGen({ unit: v }));
+    // Packets with no size are only a count: choosing pps starts from a
+    // full-size packet, so the load reads against the cables at once.
+    const unitPick = choose(units, GEN_UNIT_LABELS, unit,
+      (v) => actions.setGen(v === 'pps' && !(g.bytes > 0) ? { unit: v, bytes: 1500 } : { unit: v }));
     unitPick.className = 'gen-unit';
     unitPick.title = base
       ? `Added to ${metric.label}, so in a unit that adds up with ${base.unit || 'it'}`
       : '% of its NICs: a share of what the host’s own cables can carry (gbps=)';
     size.append(unitPick);
+    // A packet rate: requests of a size, and the reply each one gets, on a
+    // row of its own under the amount.
+    let packets = null;
+    if (unit === 'pps') {
+      packets = el('div', 'gen-row packets');
+      const field = (value, cls, title, onChange) => {
+        const input = el('input', cls);
+        input.type = 'number';
+        input.min = '0';
+        input.step = '1';
+        input.value = value ? String(value) : '';
+        input.placeholder = '—';
+        input.title = title;
+        input.addEventListener('change', () => onChange(Math.max(0, Math.floor(Number(input.value) || 0))));
+        return input;
+      };
+      packets.append(el('span', null, 'requests of'),
+        field(g.bytes, 'gen-bytes', 'Each request’s payload, in bytes; it carries 66 more on the wire. Empty: plain packets, drawn by load alone.',
+          (v) => actions.setGen({ bytes: v })),
+        el('span', null, 'B, replies of'),
+        field(g.reply, 'gen-reply', 'The reply each request gets, in bytes, sent back the other way. Empty or 0: no replies.',
+          (v) => actions.setGen({ reply: v })),
+        el('span', null, 'B'));
+      packets.title = 'Requests and replies, as matrix_orchestrator sends them: with a request size, each host’s packet '
+        + 'rate is a bit rate on the cables -- set against gbps=, shared out where full -- and every request is '
+        + 'answered by a reply of its own size, the other way.';
+    }
     // In all, more peers spread the same load thinner; to each, every peer
     // adds its own.
     const labels = GEN_PER_LABELS[g.pattern] || GEN_PER_LABELS.all;
@@ -1417,6 +1450,7 @@ export function renderLoadGen(state, host, actions, { unit } = {}) {
       + `${labels.peer[0].toUpperCase()}${labels.peer.slice(1)}: every flow carries the whole amount, so the host sends it times the peers.`;
     size.append(per);
     box.append(size);
+    if (packets) box.append(packets);
   }
 
   const kinds = reachOf(state.model);

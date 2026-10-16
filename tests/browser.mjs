@@ -1425,6 +1425,29 @@ await test('packet rates with a size', async () => {
      'with no reply size, only the requests are routed');
 }, { url: '?layout=examples/mx/floor.dc&results=examples/mx/mx-results.tsv' });
 
+// A made-up matrix run: each server sends requests of one size and gets
+// replies of another, as matrix_orchestrator does.
+await test('generated requests and replies', async () => {
+  const panel = () => page.evaluate(() => document.querySelector('#cable-load').innerText);
+  await page.locator('#load-gen select.gen-unit').selectOption('pps');
+  await page.waitForTimeout(200);
+  eq(await page.inputValue('#load-gen input.gen-bytes'), '1500', 'choosing pps starts from a full-size packet, never a bare count');
+  for (const [cls, value] of [['gen-value', '1000000'], ['gen-bytes', '500'], ['gen-reply', '4096']]) {
+    await page.fill(`#load-gen input.${cls}`, value);
+    await page.locator(`#load-gen input.${cls}`).dispatchEvent('change');
+    await page.waitForTimeout(200);
+  }
+  await page.locator('#load-gen button', { hasText: 'Run' }).click();
+  await page.waitForTimeout(500);
+  const text = await panel();
+  ok(/32 Mpps requests · 32 Mpps replies — 500 B out, 4096 B back, framing included/.test(text),
+     'every server’s million requests a second, and as many replies');
+  // 1M x (500 + 66) x 8 out and 1M x (4096 + 66) x 8 back: 37.8 of 50G.
+  ok(/NIC a\s+1\.2Tb\/s of 1\.6T · 76%/.test(text), `the replies fill the NICs the other way  (${(/NIC a.*/.exec(text) || [''])[0]})`);
+  ok(/generated: all-to-all, 1,000,000 pps of 500 B requests, 4096 B replies from each host · 992 flows/.test(text),
+     'and the panel says what was generated');
+}, { url: '?layout=examples/dual-plane.dc' });
+
 // Findings: the health file beside the flows, the panel and the tooltip.
 await test('findings', async () => {
   const panel = () => page.evaluate(() => document.querySelector('#findings').innerText);

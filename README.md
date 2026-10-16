@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.13.0** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.14.0** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -712,6 +712,16 @@ off.
 
   Read off a metric, the amount is always the host's total: a reading is
   what the server sent in all.
+- **requests of … B, replies of … B** — in pps, the packets' size: a made-up
+  matrix_orchestrator run. Each host sends its packet rate as requests of
+  that payload (plus 66 bytes of framing on the wire), and every request is
+  answered by a reply of its own size, the other way. The load is then a bit
+  rate — set against `gbps=`, shared out where full — and the headline gives
+  the packets beside the bits. Over `examples/dual-plane.dc`, all-to-all at
+  1,000,000 pps of 500 B requests and 4096 B replies is 32 Mpps each way and
+  fills every server's NICs to 76%, almost all of it the replies coming back.
+  Choosing pps starts at 1500 B requests and no replies; with the request
+  size emptied, pps is plain packets, drawn by load alone.
 - **to hosts** — **anywhere**, or **outside its own rack** (row, pod, room —
   the kinds in your layout): every flow leaves the sender's rack, which loads
   the uplinks and nothing inside a rack.

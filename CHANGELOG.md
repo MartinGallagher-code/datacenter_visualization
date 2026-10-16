@@ -11,6 +11,19 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.14.0 — 2026-10-16
+
+Made-up matrix runs. 1.12.0 and 1.13.0 ride the same pull request and are
+not published on their own.
+
+- **The load generator sends requests and replies.** In pps it takes
+  **requests of … B, replies of … B**: each host's packet rate goes out as
+  requests of that payload, framing added, and every one comes back as a
+  reply of its own size. The load is a bit rate — utilization, contention,
+  switch fullness — and the headline gives the packet rates beside it.
+  Choosing pps starts at 1500 B requests, so it is never a bare count
+  again; on top of a metric in a bit rate, pps is now offered too.
+
 ## 1.13.0 — 2026-10-16
 
 Packet rates on the cables, and section headers you can find. 1.12.0 rides

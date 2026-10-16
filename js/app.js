@@ -91,7 +91,7 @@ const state = {
     // Gb/s; hosts is a filter, empty for every device not tagged +switch.
     // `from` names a per-host metric the servers send what they read, at
     // `value` % of it, in place of an amount of its own.
-    gen: { on: false, pattern: 'all', value: 50, unit: null, per: 'host', peers: 1, reach: 'any', hosts: '', seed: 1, from: null },
+    gen: { on: false, pattern: 'all', value: 50, unit: null, per: 'host', bytes: 0, reply: 0, peers: 1, reach: 'any', hosts: '', seed: 1, from: null },
     // A full cable shares out what it carries, as TCP does, and holds back
     // the flows crossing it; off, the cables show what the flows offer.
     contention: true,
@@ -372,7 +372,7 @@ function modelSource(withDown) {
   // Incast sends to the first pick, or failing that the selection.
   const target = gen && gen.pattern === 'incast' ? state.picked[0] || state.selected || null : null;
   const genKey = gen ? JSON.stringify([gen.pattern, gen.value, genUnit(), gen.per, gen.peers, gen.reach, gen.hosts, gen.seed,
-    target && target.key, gen.from]) : '';
+    target && target.key, gen.from, gen.bytes, gen.reply]) : '';
   // A metric the generator reads: re-read when its file is, so by object.
   const from = gen && gen.from ? genSource() : null;
   const duplexKey = metric && kind === 'hosts' ? duplexOf(metric) : null;
@@ -466,13 +466,32 @@ function modelSource(withDown) {
       if (!reading || !reading.numeric || !Number.isFinite(reading.value)) return null;
       return from.percent ? (reading.value / 100) * hostCapacity(state.model, el) : reading.value * from.toGbps;
     } : null;
+    // Requests and replies of a size: made in pps, then each request sized
+    // into bits and answered by its reply, the other way.
+    const sized = genSized();
     const g = gen.from && !from
       ? { flows: [], hosts: 0, senders: 0, offered: 0, noCapacity: 0, noReading: 0, why: 'the metric it reads is not loaded and ticked' }
-      : generateFlows(state.model, { ...gen, unit: genUnit() }, { match, target, base: unit, amounts });
+      : generateFlows(state.model, { ...gen, unit: genUnit() }, {
+        match, target, base: sized ? { toGbps: null, unit: 'pps' } : unit, amounts,
+      });
     genFlows = g.flows;
+    let genPackets = null;
+    if (sized && g.flows.length) {
+      const req = packetGb(gen.bytes) / unit.toGbps;
+      const rep = gen.reply > 0 ? packetGb(gen.reply) / unit.toGbps : 0;
+      genFlows = [];
+      for (const flow of g.flows) {
+        genFlows.push({ ...flow, value: flow.value * req, pps: flow.value });
+        if (rep) {
+          genFlows.push({ ...flow, id: REPLY_IDS + flow.id, src: flow.dst, dst: flow.src, value: flow.value * rep, pps: flow.value, reply: true });
+        }
+      }
+      genPackets = { bytes: gen.bytes, reply: gen.reply, why: '' };
+    }
     genRun = {
       ...g, flows: g.flows.length, target, unit: genUnit(), pattern: gen.pattern, value: gen.value, per: gen.from ? 'host' : gen.per,
-      from: from ? from.overlay : null,
+      from: from ? from.overlay : null, packets: genPackets,
+      offered: genPackets ? genFlows.reduce((sum, flow) => sum + flow.value, 0) : g.offered,
     };
   }
   let testFlowsNow = [];
@@ -535,7 +554,8 @@ function modelSource(withDown) {
   const value = {
     overlay: metric, kind: metric ? kind : gen ? 'gen' : 'test', result, loads: result.loads, toGbps: unit.toGbps,
     unit: unit.unit, count, total, unresolved, skipped, between, test: testRun, gen: genRun, own,
-    flows: routed, opts, estimated: !!metric && kind === 'hosts', contentionWhy, duplex, over, packets: packetRun,
+    flows: routed, opts, estimated: !!metric && kind === 'hosts', contentionWhy, duplex, over,
+    packets: packetRun || (genRun && genRun.packets) || null,
   };
   state.trafficCache[slot] = {
     overlay: metric, layout: state.model, agg: metric && metric.agg, split: t.split, seed: t.seed, spread: t.spread,
@@ -563,7 +583,20 @@ function genUnit() {
 }
 
 /** The unit a generated load on its own puts on the cables. */
-const genBase = (unit) => (unit === '%' ? 'Gb/s' : unit);
+const genBase = (unit) => (unit === '%' || (unit === 'pps' && genSized()) ? 'Gb/s' : unit);
+
+/**
+ * Whether the generator sends requests and replies of a size: a packet rate
+ * in pps with its packets sized, which loads the cables as a bit rate. Not
+ * when it reads a metric, nor on top of one that is not a bit rate.
+ */
+function genSized() {
+  const g = state.traffic.gen;
+  if (g.from || !(g.bytes > 0) || genUnit() !== 'pps') return false;
+  const overlay = state.traffic.key ? state.overlays.get(state.traffic.key) : null;
+  const metric = overlay && overlay.enabled && trafficKind(overlay) !== 'cables' && loadable(overlay) ? overlay : null;
+  return !metric || metricUnit(metric, trafficKind(metric)).toGbps !== null;
+}
 
 /**
  * The per-host metric the generator reads, if it is loaded and ticked: a
