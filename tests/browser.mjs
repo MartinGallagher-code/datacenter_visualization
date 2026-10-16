@@ -1193,6 +1193,20 @@ await test('the load generator', async () => {
      'the cable load panel says what it is showing');
   ok(/R0\d\/tor[ab] → R0\d\/s\d\s+12\.5G\/25G · 50%/.test(loaded), 'and half of every server’s NIC is in use');
 
+  // Per peer: every flow carries the whole amount, so the NICs are past full
+  // and contention holds them back.
+  await page.fill('#load-gen input.gen-value', '1');
+  await page.locator('#load-gen input.gen-value').dispatchEvent('change');
+  await page.locator('#load-gen select.gen-per').selectOption('peer');
+  await page.waitForTimeout(400);
+  ok(/32 of 32 hosts send · 992 flows · 496Gb\/s/.test(await gen()), `per peer: 1% of a host's 50G to each of 31 others  (${(await gen()).split('\n').pop()})`);
+  ok(/generated: all-to-all, 1% of its NICs from each host to each other host/.test(await panel()), 'and the panel says so');
+  await page.locator('#load-gen select.gen-per').selectOption('host');
+  await page.fill('#load-gen input.gen-value', '50');
+  await page.locator('#load-gen input.gen-value').dispatchEvent('change');
+  await page.waitForTimeout(400);
+  ok(/992 flows · 800Gb\/s/.test(await gen()), 'and in all again, 50% is the host’s total');
+
   await page.locator('#load-gen select.gen-reach').selectOption('rack');
   await page.waitForTimeout(400);
   ok(/768 flows/.test(await gen()), 'outside its own rack: no flow stays inside one');

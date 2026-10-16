@@ -11,6 +11,20 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.9.0 — 2026-10-16
+
+The load generator can send to each peer, not only in all. 1.8.1 rides the
+same pull request and is not published on its own.
+
+- **in all / to each peer**, beside the generator's amount. In all, as
+  before, the amount is each host's total, so more random peers spread it
+  thinner and the cables carry the same. To each peer, every flow carries the
+  whole amount, so more peers is more load: 1 Gb/s to each of 150 peers is
+  150 Gb/s from every server. All-to-all says **to each other host**, incast
+  **to each target device**; a share of the NICs works the same way, and a
+  load read off a metric stays the host's total. The cable load panel says
+  which: `generated: to random hosts, 1 Gb/s from each host to each peer`.
+
 ## 1.8.1 — 2026-10-16
 
 A random load of a hundred thousand flows or more no longer stops the page.

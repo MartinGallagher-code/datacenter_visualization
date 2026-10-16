@@ -1900,6 +1900,20 @@ const segsOf = (cache, net) => {
   eq(generateFlows(m, { pattern: 'incast', value: 10, unit: 'Gb/s' }, { target: m.resolve('R2') }).flows.length, 20,
      'into a rack, each sender shares its load over the rack’s devices');
 
+  // Per peer: every flow carries the whole amount, so more peers is more
+  // load -- where in all, more peers only spread the same load thinner.
+  const perPeer = (peers) => generateFlows(m, { pattern: 'random', value: 10, unit: 'Gb/s', per: 'peer', peers, seed: 1 });
+  eq([perPeer(2).flows.length, perPeer(2).offered], [16, 160], 'per peer: 10 Gb/s to each of two peers is 20 from each host');
+  eq(perPeer(3).offered, 240, 'and a third peer adds a third');
+  ok(perPeer(3).flows.every((f) => f.value === 10), 'every flow carries the whole amount');
+  eq(generateFlows(m, { pattern: 'random', value: 10, unit: 'Gb/s', peers: 3, seed: 1 }).offered, 80,
+     'in all, three peers send what two did');
+  eq(generateFlows(m, { pattern: 'all', value: 1, unit: 'Gb/s', per: 'peer' }).offered, 56, 'all-to-all per host: 1 Gb/s to each of the seven others');
+  eq(generateFlows(m, { pattern: 'incast', value: 10, unit: 'Gb/s', per: 'peer' }, { target: m.resolve('R2') }).offered, 200,
+     'incast per device: 10 Gb/s from each of four senders to each of the rack’s five devices');
+  ok(Math.abs(generateFlows(m, { pattern: 'all', value: 5, unit: '%', per: 'peer' }).offered - 8 * 7 * 1.25) < 1e-9,
+     'and a share of the NICs to each peer: 5% of a 25G NIC is 1.25 to each');
+
   // Too big to route here says so instead of hanging the page.
   const saved = GEN_LIMITS.flows;
   GEN_LIMITS.flows = 20;
@@ -2041,6 +2055,8 @@ const segsOf = (cache, net) => {
   eq([g.senders, Math.round(g.offered * 1e6) / 1e6, g.noReading], [8, 160, 24], 'each host sends what its reading says, here at 200% of it, and the rest are counted');
   ok(/cannot be added to pps/.test(generateFlows(m, { pattern: 'all', value: 100 }, { amounts, base: { toGbps: null, unit: 'pps' } }).why),
      'read as Gb/s, it cannot ride on a metric in pps');
+  eq(Math.round(generateFlows(m, { pattern: 'all', value: 200, per: 'peer' }, { amounts }).offered * 1e6) / 1e6, 160,
+     'a reading is the host’s total: per peer does not multiply it');
 
   const raw = parseResults('!test egress unit=Gb/s\negress\tR01/s1\t30\n!test nic_util unit=%\nnic_util\tR01/s1\t40\n'
     + '!test temp unit=C\ntemp\tR01/s1\t40\n');

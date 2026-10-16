@@ -1303,6 +1303,12 @@ export function generateFlows(model, gen, opts = {}) {
     return result([], { why: `${unit} cannot be added to ${base.unit || 'the metric’s unit'}` });
   }
 
+  // What one flow carries: each host's amount shared over the hosts it sends
+  // to, or -- per peer -- all of it to every one of them, so more peers is
+  // more load. A metric's reading is a host's total, never per peer.
+  const perPeer = gen.per === 'peer' && !opts.amounts;
+  const share = (amount, k) => (perPeer ? amount : amount / k);
+
   const reach = gen.reach && gen.reach !== 'any' ? gen.reach : null;
   const groupOf = (el) => {
     for (let p = el.parent; p; p = p.parent) if (p.kind === reach) return p;
@@ -1344,7 +1350,7 @@ export function generateFlows(model, gen, opts = {}) {
       const to = into.filter((dst) => apart(src, dst));
       const amount = sends(src);
       if (!(amount > 0)) { if (unit === '%') noCapacity++; continue; }
-      for (const dst of to) flows.push({ id: GEN_IDS + flows.length, src, dst, value: amount / to.length, gen: true });
+      for (const dst of to) flows.push({ id: GEN_IDS + flows.length, src, dst, value: share(amount, to.length), gen: true });
     }
     return result(flows, { noCapacity });
   }
@@ -1365,7 +1371,7 @@ export function generateFlows(model, gen, opts = {}) {
       const amount = sends(src);
       if (!(amount > 0)) { if (unit === '%') noCapacity++; continue; }
       const to = hosts.filter((dst) => dst !== src && apart(src, dst));
-      for (const dst of to) flows.push({ id: GEN_IDS + flows.length, src, dst, value: amount / to.length, gen: true });
+      for (const dst of to) flows.push({ id: GEN_IDS + flows.length, src, dst, value: share(amount, to.length), gen: true });
     }
     return result(flows, { noCapacity });
   }
@@ -1432,7 +1438,7 @@ export function generateFlows(model, gen, opts = {}) {
   const flows = [];
   hosts.forEach((src, i) => {
     if (!(amounts[i] > 0) || !to[i].size) return;
-    for (const j of to[i]) flows.push({ id: GEN_IDS + flows.length, src, dst: hosts[j], value: amounts[i] / to[i].size, gen: true });
+    for (const j of to[i]) flows.push({ id: GEN_IDS + flows.length, src, dst: hosts[j], value: share(amounts[i], to[i].size), gen: true });
   });
   return result(flows, { noCapacity });
 }
