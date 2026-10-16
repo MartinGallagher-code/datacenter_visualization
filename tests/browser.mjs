@@ -1316,6 +1316,10 @@ await test('hovering a cable', async () => {
   }
   const server = await sweep('^s\\d   \\(node\\)');
   ok(!!server, 'a server’s own box still shows the server');
+  // And what the server itself sends and receives, in all and on each NIC.
+  ok(server && /sending 25Gb\/s · receiving 25Gb\/s — 50% of its 50G/.test(server)
+     && /NIC a to R0\d\/tora: out 12\.5Gb\/s · in 12\.5Gb\/s · 50%/.test(server) && /31 flows out, 31 in/.test(server),
+     `with its own traffic  (${server && server.replace(/\n/g, ' | ')})`);
   const port = await sweep('^NIC a: R0\\d/tora ↔ ');
   ok(port && /8 cables · 25G each, 200G in all/.test(port.text) && /out of R0\d\/tora/.test(port.text),
      'on a ToR’s stub, every cable through it, told as in and out of the ToR');

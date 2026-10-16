@@ -13,7 +13,7 @@ import {
 } from './results.js';
 import {
   cableTip, fillWarnings, renderBuild, renderCableLoad, renderFindings, renderInspector, renderLive, renderLoadGen,
-  renderNets, renderNotices, renderOverlays, renderTree, renderWarnings, switchTip,
+  hostTip, renderNets, renderNotices, renderOverlays, renderTree, renderWarnings, switchTip,
 } from './ui.js';
 import {
   droppedLayoutsNotice, layoutNotice, plural, prefixed, resultsFileNotice,
@@ -2685,6 +2685,10 @@ function showTooltip(node, x, y) {
   const switches = state.switchLoads();
   const rec = switches && switches.get(node);
   if (rec) lines.push(...switchTip(rec, state.cableView()));
+  // A host, with load on the cables: what it sends and receives.
+  else if (node.links.length && !node.children.length) {
+    for (const line of hostTip(state, node, state.cableView())) lines.push(line);
+  }
   // What went wrong there.
   const found = state.findings().hosts.get(node);
   if (found) for (const f of found) lines.push(`${f.severity === 'critical' ? '✖' : '⚠'} ${f.text}`);

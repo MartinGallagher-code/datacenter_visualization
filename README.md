@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.10.0** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.11.0** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -769,6 +769,22 @@ every cable it has, a rack's lane every server's — the pointer is on all of
 them, and the tooltip says so: `NIC a: R01/tora ↔ 4 spliced (s1…s4), …`, in
 and out of the ToR. Inside a device's own box, the device is what is shown
 unless the pointer is right on a cable.
+
+Every cable is full duplex, and its load is told each way: a NIC carrying
+88 Gb/s out and 88 Gb/s in is 88% full, not 176%. A flow listed over a
+cable shows the part of it that crosses that cable — under an even split
+over two NICs, half of it each.
+
+#### Hovering a server
+
+With load on the cables, a server's tooltip says what it sends and receives
+in all, and how full that is of its cables' capacity, the busier way —
+`sending 25Gb/s · receiving 25Gb/s — 50% of its 50G` — then each of its
+cables, out and in, and how many of the flows start and end there. Shared
+out, it also says what it offered where a full cable held it back, and how
+many of its flows were: an incast target reads `receiving 50Gb/s, of
+775Gb/s offered — 100% of its 50G … 31 held back by a full cable`. A switch
+says how much it switches instead (see **How full a switch is**).
 
 #### Per-host totals: an estimate
 

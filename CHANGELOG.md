@@ -11,6 +11,21 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.11.0 — 2026-10-16
+
+What a server sends and receives, on hover. 1.10.0 rides the same pull
+request and is not published on its own.
+
+- **A server's tooltip carries its traffic.** With load on the cables it
+  says what the server sends and receives in all, against what its cables
+  carry (`sending 25Gb/s · receiving 25Gb/s — 50% of its 50G`), each cable
+  out and in, and how many flows start and end there. Shared out, it says
+  what the server offered where a full cable held it back, and how many of
+  its flows were held. Before, only a switch's tooltip said anything about
+  load.
+- The README says a cable's load is told each way, full duplex, and that a
+  flow listed over a cable shows only the part of it that crosses it.
+
 ## 1.10.0 — 2026-10-16
 
 Bonded NICs.
