@@ -11,6 +11,82 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.15.0 — 2026-10-16
+
+More ways to route, more to send, and packet-rate limits. 1.12.0–1.14.0
+ride the same pull request and are not published on their own.
+
+- **Two more splits.** **Polarized**: one path per flow, hashed the same way
+  at every tier, so flows that collide once collide again. **Adaptive**: one
+  path per flow, each placed on the cable with the most room as the load
+  stands — congestion-aware routing, the opposite extreme to hashing.
+  Routing, contention and the flows over a hovered cable pick the same paths.
+- **Bundles: `count=` on a link rule** makes that many member cables per
+  pair (`count=6 gbps=400`), so a hashed flow fills one member while the
+  bundle looks half empty. In the completions and the Syntax panel.
+- **More patterns.** One to many (the target sends to every host), hotspot
+  (a share of every host's load to the target, the rest to random peers),
+  shift (each host to the one k on — half the hosts on by default, the
+  classic ECMP worst case) and ring (each to the next, as an all-reduce).
+- **Bursts.** A **bursts of ×** box in the cable load panel counts the
+  cables a burst that many times the average would overflow, and their
+  tooltips say what it would need.
+- **Packet-rate limits: `pps=` on a switch.** With a load that knows its
+  packets, contention holds flows back at a switch out of packets as at a
+  full cable; the switch's tooltip, the busiest switches and its gauge say
+  how full of packets it is. In the completions and the Syntax panel.
+- `routeTraffic` honours a flow's own split, as contention always did: an
+  estimate's pairs are never put on one path.
+
+## 1.14.0 — 2026-10-16
+
+Made-up matrix runs. 1.12.0 and 1.13.0 ride the same pull request and are
+not published on their own.
+
+- **The load generator sends requests and replies.** In pps it takes
+  **requests of … B, replies of … B**: each host's packet rate goes out as
+  requests of that payload, framing added, and every one comes back as a
+  reply of its own size. The load is a bit rate — utilization, contention,
+  switch fullness — and the headline gives the packet rates beside it.
+  Choosing pps starts at 1500 B requests, so it is never a bare count
+  again; on top of a metric in a bit rate, pps is now offered too.
+
+## 1.13.0 — 2026-10-16
+
+Packet rates on the cables, and section headers you can find. 1.12.0 rides
+the same pull request and is not published on its own.
+
+- **A packet rate with a size is a bit rate.** A pps metric — mx's
+  `mx_peer_pps` matrix, or `mx_pps` per host — gets **packets of … B,
+  replies of … B** in the cable load panel, filled in from mx export's
+  `# run shape:` header or from `bytes=` and `reply_bytes=`, new `!test`
+  keys. Every request is routed at its payload plus 66 bytes of framing and
+  its reply routed back the other way, so the cables read against their
+  `gbps=`, contention shares out the full ones, and the headline gives the
+  packet rates beside the bits: `4.7 Mpps requests · 4.7 Mpps replies`.
+  Checked against mx's own figures: 80,000 requests of 256 bytes is its
+  0.2061 Gb/s `mx_request_gbps`.
+- **Section headers in the side panels are a quiet steel blue** rather than
+  grey — Files, Networks, Inspector and the rest stand out a little.
+
+## 1.12.0 — 2026-10-16
+
+Duplex totals.
+
+- **treat as duplex.** A per-host rate that adds both directions — iperf's
+  bidirectional total — was read whole as what each server sent, so a
+  server measured at 309 Gb/s over two 100G NICs read as sending 309 and
+  receiving as much, 155% of them. A box in the cable load panel (and in
+  the load generator, when it reads the metric) reads each total as half
+  sent, half received. It ticks itself when the metric's name says
+  `duplex` or `bidir`, or `duplex=yes` is on its `!test` line, a new key
+  (`duplex=no` says it is not); it is offered unticked when hosts read past
+  what their cables carry one way, which a measurement cannot, and the
+  panel names the worst of them in red.
+- The load generator reading a metric no longer routes everything again on
+  every redraw: each read of the metric was a new object, so its cache
+  never matched.
+
 ## 1.11.0 — 2026-10-16
 
 A headline for all of it, and what a server sends and receives, on hover.

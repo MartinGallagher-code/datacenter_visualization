@@ -51,7 +51,9 @@
 
 import { AGGREGATIONS, DEFAULT_AGG, overlayValue } from './results.js';
 
-export const SPLITS = ['even', 'capacity', 'hashed'];
+export const SPLITS = ['even', 'capacity', 'hashed', 'polarized', 'adaptive'];
+// The splits that put each flow on one path, picked at every fork (picker).
+export const SINGLE_PATH = new Set(['hashed', 'polarized', 'adaptive']);
 // The units a test flow can be given when no metric sets one.
 export const TEST_UNITS = ['Gb/s', 'Mb/s', 'pps'];
 export const SPREADS = ['gravity', 'even'];
@@ -168,19 +170,34 @@ export function flowsOf(overlay, model) {
 /**
  * The hosts a per-host total was measured on: devices with cables, each with
  * its value under the metric's aggregation. A reading on a rack or a room is
- * not a host's, and is counted rather than spread.
+ * not a host's, and is counted rather than spread. `duplex` reads each as a
+ * total of both directions, half of it sent; `over` is the hosts that read
+ * past what their cables carry one way, which a measurement cannot.
  */
-export function hostsOf(overlay, model) {
+export function hostsOf(overlay, model, duplex = !!overlay.duplex) {
   const hosts = [];
   let containers = 0;
+  // A duplex total adds both directions: half of it is what the host sent.
+  const share = duplex ? 0.5 : 1;
+  // A measured host cannot send more than its cables carry, one way: one
+  // that reads past it is counted, the likeliest reason a duplex total read
+  // as what was sent.
+  const unit = loadUnit(overlay, 'hosts');
+  const over = [];
   for (const el of model.all) {
     if (!overlay.direct.has(el.key)) continue;
     if (el.children.length || !el.links.length) { containers++; continue; }
     const reading = overlayValue(overlay, el);
     if (!reading || !reading.numeric || !Number.isFinite(reading.value)) continue;
-    hosts.push({ el, value: Math.max(0, reading.value) });
+    const value = Math.max(0, reading.value) * share;
+    hosts.push({ el, value });
+    if (unit.toGbps !== null) {
+      const capacity = hostCapacity(model, el);
+      if (capacity && value * unit.toGbps > capacity * (1 + 1e-6)) over.push({ el, gbps: value * unit.toGbps, capacity });
+    }
   }
-  return { hosts, skipped: containers };
+  over.sort((a, b) => b.gbps / b.capacity - a.gbps / a.capacity);
+  return { hosts, skipped: containers, duplex, over };
 }
 
 const other = (link, node) => (link.a === node ? link.b : link.a);
@@ -420,6 +437,38 @@ function hashedHop(hops, seed, id, n) {
   return hops[hops.length - 1];
 }
 
+/**
+ * How a flow on one path picks its cable at a fork, for the splits that
+ * keep a flow on one path:
+ *   hashed     a hash of the flow at each switch, as ECMP hashes a 5-tuple;
+ *   polarized  the same hash at every tier, as switches sharing one hash
+ *              seed do -- flows that collide at one tier collide at the next;
+ *   adaptive   the cable with the most room, as the load stands when the
+ *              flow is placed -- congestion-aware routing, flows placed in
+ *              order, ties broken by the hash.
+ * One picker per routing pass: adaptive remembers what it has placed, so
+ * two passes over the same flows in the same order pick the same cables.
+ */
+function picker(how, seed) {
+  if (how === 'polarized') return (hops, u, id) => hashedHop(hops, seed, id, 0);
+  if (how !== 'adaptive') return (hops, u, id) => hashedHop(hops, seed, id, u.n);
+  const placed = new Map();
+  return (hops, u, id, value) => {
+    let best = null;
+    let bestFill = Infinity;
+    const tie = hashedHop(hops, seed, id, u.n);
+    for (const link of hops) {
+      const l = placed.get(link);
+      const fill = ((l ? l[link.a === u ? 0 : 1] : 0) + value) / ((link.gbps || 1) * (link.weight || 1));
+      if (fill < bestFill - 1e-12 || (Math.abs(fill - bestFill) <= 1e-12 && link === tie)) { best = link; bestFill = fill; }
+    }
+    let l = placed.get(best);
+    if (!l) placed.set(best, (l = [0, 0]));
+    l[best.a === u ? 0 : 1] += value;
+    return best;
+  };
+}
+
 /** Each cable's share of what leaves an element, in the split asked for. */
 function sharesOf(hops, split) {
   let w;
@@ -532,27 +581,35 @@ export function routeTraffic(model, flows, opts = {}) {
       if (leg.pre) f.add(leg.pre, flow.src, value);
       if (leg.post) f.add(leg.post, leg.dst, value);
       if (leg.src === leg.dst) continue;
+      const how = flow.split || split;
       const list = byDst.get(leg.dst);
-      if (list) list.push([leg, value]);
-      else byDst.set(leg.dst, [[leg, value]]);
+      if (list) list.push([leg, value, how]);
+      else byDst.set(leg.dst, [[leg, value, how]]);
     }
   }
 
+  // One path per flow where the split says so, placed in order; the rest as
+  // a fluid, split by split.
+  const pickers = new Map();
+  const pickFor = (how) => pickers.get(how) || pickers.set(how, picker(how, seed)).get(how);
   for (const [dst, list] of byDst) {
     const route = f.route(dst);
-    if (split === 'hashed') {
-      for (const [leg, value] of list) {
+    const amounts = new Map();
+    for (const [leg, value, how] of list) {
+      if (SINGLE_PATH.has(how)) {
+        const pick = pickFor(how);
         for (let u = leg.src; u !== dst;) {
-          const pick = hashedHop(route.next(u), seed, leg.id, u.n);
-          f.add(pick, u, value);
-          u = other(pick, u);
+          const link = pick(route.next(u), u, leg.id, value);
+          f.add(link, u, value);
+          u = other(link, u);
         }
+        continue;
       }
-      continue;
+      let amount = amounts.get(how);
+      if (!amount) amounts.set(how, (amount = new Map()));
+      amount.set(leg.src, (amount.get(leg.src) || 0) + value);
     }
-    const amount = new Map();
-    for (const [leg, value] of list) amount.set(leg.src, (amount.get(leg.src) || 0) + value);
-    spill(route, dst, amount, split, f);
+    for (const [how, amount] of amounts) spill(route, dst, amount, how, f);
   }
 
   const missed = miss.done();
@@ -597,6 +654,8 @@ export function flowsOver(model, flows, links, opts = {}) {
       else byDst.set(leg.dst, [[flow, leg]]);
     }
   }
+  const pickers = new Map();
+  const pickFor = (how) => pickers.get(how) || pickers.set(how, picker(how, seed)).get(how);
   for (const [dst, list] of byDst) {
     const route = f.route(dst);
     // What a unit leaving each element for dst puts on the cables asked
@@ -622,12 +681,15 @@ export function flowsOver(model, flows, links, opts = {}) {
     };
     for (const [flow, leg] of list) {
       const how = flow.split || split;
-      if (how !== 'hashed') { cross(flow, leg.share * throughOf(how, leg.src)); continue; }
+      if (!SINGLE_PATH.has(how)) { cross(flow, leg.share * throughOf(how, leg.src)); continue; }
       let crossings = 0;
+      const pick = pickFor(how);
       for (let u = leg.src; u !== dst;) {
-        const pick = hashedHop(route.next(u), seed, leg.id, u.n);
-        if (targets.has(pick)) crossings++;
-        u = other(pick, u);
+        // Placed by what it offered, as it was routed: a flow held back
+        // since carries less, but took its path before.
+        const link = pick(route.next(u), u, leg.id, (flow.wanted ?? flow.value) * leg.share);
+        if (targets.has(link)) crossings++;
+        u = other(link, u);
       }
       cross(flow, leg.share * crossings);
     }
@@ -712,6 +774,18 @@ export function contend(model, flows, opts = {}) {
     }
     return i;
   };
+  // And each switch with a pps= as one more, for the packets it passes on:
+  // filled by the flows that know their packets, in packets a second.
+  const pktOf = new Map();
+  const pktSlot = (el) => {
+    let i = pktOf.get(el);
+    if (i === undefined) {
+      i = owner.length;
+      pktOf.set(el, i);
+      owner.push({ el, pps: true });
+    }
+    return i;
+  };
 
   // Every flow as its legs, gathered by where each leg is going.
   const routed = [];
@@ -740,6 +814,8 @@ export function contend(model, flows, opts = {}) {
   // a hundred peers each is a hundred thousand flows but only a few thousand
   // distinct ways on from the ToRs.
   const paths = routed.map(() => []);
+  const pickers = new Map();
+  const pickFor = (how) => pickers.get(how) || pickers.set(how, picker(how, seed)).get(how);
   let size = 0;
   const part = (i, path, scale) => {
     if (!path.length) return;
@@ -753,9 +829,16 @@ export function contend(model, flows, opts = {}) {
     // share of the flow: one hop nearer at each step.
     const rest = (level, how) => {
       const path = [];
+      // The switches' packet slots on the way, apart: a flow fills them by
+      // its own packets per unit of load.
+      const pkt = [];
+      path.pkt = pkt;
       while (level.size) {
         // What each switch on this step passes on, once all of it is in.
-        for (const [v, r] of level) if (switchCapacity(v)) path.push(nodeSlot(v), r);
+        for (const [v, r] of level) {
+          if (switchCapacity(v)) path.push(nodeSlot(v), r);
+          if (switchPps(v)) pkt.push(pktSlot(v), r);
+        }
         const nearer = new Map();
         for (const [u, a] of level) {
           const hops = route.next(u);
@@ -781,33 +864,48 @@ export function contend(model, flows, opts = {}) {
     for (const [i, leg] of list) {
       const flow = routed[i];
       const how = flow.split || split;
+      // Packets per unit of load, where the flow knows its packets.
+      const ppf = flow.pps > 0 && flow.value > 0 ? flow.pps / flow.value : 0;
+      const packets = (pkt) => { if (ppf && pkt && pkt.length) part(i, pkt, leg.share * ppf); };
       // A bonded host's own cable, and the switch at the far end of the one
       // a leg arrives on: the route stops short of it.
       const ends = [];
+      const endsPkt = [];
       if (leg.pre) ends.push(slot(leg.pre, flow.src), 1);
       if (leg.post) {
         if (leg.dst !== leg.src && switchCapacity(leg.dst)) ends.push(nodeSlot(leg.dst), 1);
+        if (leg.dst !== leg.src && switchPps(leg.dst)) endsPkt.push(pktSlot(leg.dst), 1);
         ends.push(slot(leg.post, leg.dst), 1);
       }
       if (leg.src === leg.dst) {
         // Both cables on one switch: it passes the leg on itself.
         if (leg.src !== flow.dst && switchCapacity(leg.src)) ends.push(nodeSlot(leg.src), 1);
+        if (leg.src !== flow.dst && switchPps(leg.src)) endsPkt.push(pktSlot(leg.src), 1);
         part(i, ends, leg.share);
-      } else if (how === 'hashed') {
+        packets(endsPkt);
+      } else if (SINGLE_PATH.has(how)) {
         const path = ends;
+        const pkt = endsPkt;
         if (leg.pre && switchCapacity(leg.src)) path.push(nodeSlot(leg.src), 1);
+        if (leg.pre && switchPps(leg.src)) pkt.push(pktSlot(leg.src), 1);
+        const pick = pickFor(how);
         for (let u = leg.src; u !== dst;) {
-          const pick = hashedHop(route.next(u), seed, leg.id, u.n);
-          path.push(slot(pick, u), 1);
-          u = other(pick, u);
+          const link = pick(route.next(u), u, leg.id, flow.value * leg.share);
+          path.push(slot(link, u), 1);
+          u = other(link, u);
           if (u !== dst && switchCapacity(u)) path.push(nodeSlot(u), 1);
+          if (u !== dst && switchPps(u)) pkt.push(pktSlot(u), 1);
         }
         part(i, path, leg.share);
+        packets(pkt);
       } else if (leg.pre) {
         // From the switch at the far end of a bonded cable, the whole way on
         // is shared.
         part(i, ends, leg.share);
-        part(i, restFrom(new Map([[leg.src, 1]]), how), leg.share);
+        packets(endsPkt);
+        const tail = restFrom(new Map([[leg.src, 1]]), how);
+        part(i, tail, leg.share);
+        packets(tail.pkt);
       } else {
         const head = ends;
         const first = new Map();
@@ -819,7 +917,10 @@ export function contend(model, flows, opts = {}) {
           if (v !== dst) first.set(v, (first.get(v) || 0) + shares[k]);
         }
         part(i, head, leg.share);
-        part(i, restFrom(first, how), leg.share);
+        packets(endsPkt);
+        const tail = restFrom(first, how);
+        part(i, tail, leg.share);
+        packets(tail.pkt);
       }
       if (size > CONTEND_LIMITS.crossings) return null;
     }
@@ -827,12 +928,13 @@ export function contend(model, flows, opts = {}) {
 
   const slots = owner.length;
   const cap = new Float64Array(slots).fill(Infinity);
-  if (toGbps !== null && toGbps !== undefined) {
-    owner.forEach((o, k) => {
-      const gbps = o.link ? o.link.gbps : switchCapacity(o.el);
-      if (gbps) cap[k] = gbps / toGbps;
-    });
-  }
+  owner.forEach((o, k) => {
+    // A packet slot is in packets a second, whatever the load's unit.
+    if (o.pps) { cap[k] = switchPps(o.el) || Infinity; return; }
+    if (toGbps === null || toGbps === undefined) return;
+    const gbps = o.link ? o.link.gbps : switchCapacity(o.el);
+    if (gbps) cap[k] = gbps / toGbps;
+  });
   const n = routed.length;
   const demand = routed.map((flow) => Math.max(0, flow.value));
   const rate = new Float64Array(n);
@@ -933,6 +1035,7 @@ export function contend(model, flows, opts = {}) {
   let carried = 0;
   let wanted = 0;
   let held = 0;
+  const ppsThrough = new Map();   // switch -> [packets carried, offered] a second
   const out = routed.map((flow, i) => {
     const parts = paths[i];
     for (let p = 0; p < parts.length; p += 2) {
@@ -940,6 +1043,14 @@ export function contend(model, flows, opts = {}) {
       const scale = parts[p + 1];
       for (let k = 0; k < path.length; k += 2) {
         const o = owner[path[k]];
+        if (o.pps) {
+          // Packets through a switch with a pps=: carried, and offered.
+          const p2 = ppsThrough.get(o.el) || [0, 0];
+          p2[0] += path[k + 1] * scale * rate[i];
+          p2[1] += path[k + 1] * scale * demand[i];
+          ppsThrough.set(o.el, p2);
+          continue;
+        }
         if (!o.link) continue;
         into(loads, o.link, o.dir, path[k + 1] * scale * rate[i]);
         into(offeredLoads, o.link, o.dir, path[k + 1] * scale * demand[i]);
@@ -957,9 +1068,11 @@ export function contend(model, flows, opts = {}) {
   // back, is not contended.
   const fullMap = new Map();
   const fullSwitches = new Map();
+  const fullPps = new Map();
   for (const [sl, k] of holds) {
     const o = owner[sl];
     if (o.link) into(fullMap, o.link, o.dir, k);
+    else if (o.pps) fullPps.set(o.el, k);
     else fullSwitches.set(o.el, k);
   }
 
@@ -967,8 +1080,23 @@ export function contend(model, flows, opts = {}) {
   return {
     loads, routed: n, offered, delivered: carried, unrouted: missed.examples, missed,
     switches: f.switches, split, seed,
-    contention: { offered: offeredLoads, full: fullMap, switches: fullSwitches, flows: out, held, wanted, carried },
+    contention: {
+      offered: offeredLoads, full: fullMap, switches: fullSwitches, flows: out, held, wanted, carried,
+      // Switches with a pps=: the packets they pass, and those full of them.
+      packets: { through: ppsThrough, full: fullPps },
+    },
   };
+}
+
+/**
+ * A switch's packet rate, in packets a second: its pps=, or null. Small
+ * packets can fill it while its bandwidth has room to spare.
+ */
+export function switchPps(el) {
+  const raw = el.attrs && el.attrs.pps;
+  if (raw === undefined) return null;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : null;
 }
 
 /**
@@ -1026,6 +1154,12 @@ export function switchLoads(model, loads, toGbps, contention = null) {
     rec.capacity = rec.declared || rec.portGbps || null;
     if (rec.capacity && toGbps !== null && toGbps !== undefined) rec.util = (rec.through * toGbps) / rec.capacity;
     rec.held = (contention && contention.switches && contention.switches.get(el)) || 0;
+    // Its packet rate, where it has a pps= and the load knows its packets.
+    rec.pps = switchPps(el);
+    const pk = contention && contention.packets;
+    const p = pk && pk.through.get(el);
+    rec.packets = p ? { through: p[0], offered: p[1], held: pk.full.get(el) || 0 } : null;
+    rec.ppsUtil = rec.pps && rec.packets ? rec.packets.through / rec.pps : null;
     out.set(el, rec);
   }
   return out;
@@ -1059,6 +1193,15 @@ export function estimateFlows(hosts, opts = {}) {
 }
 
 const ESTIMATE_IDS = 3000000;
+
+// A packet on the wire: its payload and what Ethernet, IP and UDP add to it --
+// 14 header, 4 FCS, 8 preamble, 12 gap, 20 IP, 8 UDP. mx export's own
+// request rate on the wire is 256 bytes of payload at 322 bytes a packet.
+export const FRAMING_BYTES = 66;
+/** What one packet of `bytes` payload is on the wire, in Gb. */
+export const packetGb = (bytes) => ((bytes + FRAMING_BYTES) * 8) / 1e9;
+// A reply's flow id: its request's, moved out of every other range.
+export const REPLY_IDS = 1000000000;
 
 /**
  * Route per-host totals, by estimating who each host sent to.
@@ -1313,7 +1456,9 @@ export function mergeResults(a, b) {
 
 // The shapes a made-up load can take, and what its size can be given in:
 // `%` is a share of what each host's own cables can carry.
-export const PATTERNS = ['all', 'random', 'incast'];
+export const PATTERNS = ['all', 'random', 'incast', 'outcast', 'hotspot', 'shift', 'ring'];
+// The patterns that send to, or from, a target: the first pick or the selection.
+export const TARGETED = new Set(['incast', 'outcast', 'hotspot']);
 export const GEN_UNITS = ['%', 'Gb/s', 'Mb/s', 'pps'];
 // Clear of a metric's ids (0, 1, 2, ...) and a test flow's (1000000 on), so
 // every generated flow hashes onto a path of its own.
@@ -1349,12 +1494,14 @@ export function hostsFor(model, match = null) {
  * Whether the load generator can read a metric as what each server sends:
  * a per-host rate, read in Gb/s, or a per-host percentage, read as that share
  * of the host's own NICs -- a NIC utilization, say. Returns { overlay,
- * toGbps, percent }, or null for anything else.
+ * toGbps, percent, duplex }, or null for anything else; a duplex rate is
+ * read at half, what the host sent.
  */
-export function readsAsLoad(overlay) {
+export function readsAsLoad(overlay, duplex = !!overlay.duplex) {
   if (!overlay || trafficKind(overlay) !== 'hosts') return null;
   const unit = loadUnit(overlay, 'hosts');
-  if (unit.ok && unit.toGbps !== null) return { overlay, toGbps: unit.toGbps, percent: false };
+  // A duplex total is half what the host sent: see hostsOf.
+  if (unit.ok && unit.toGbps !== null) return { overlay, toGbps: unit.toGbps * (duplex ? 0.5 : 1), percent: false, duplex };
   if (/^\s*(%|percent|pct)\s*$/i.test(String(overlay.unit || ''))) return { overlay, toGbps: 1, percent: true };
   return null;
 }
@@ -1483,6 +1630,44 @@ export function generateFlows(model, gen, opts = {}) {
   const tooBig = (dsts, flows) => flows > GEN_LIMITS.flows || walks(dsts) * links > GEN_LIMITS.work;
   const narrow = 'narrow the hosts (a filter such as path=*/H1/*)';
 
+  // hotspot: a share of every host's load to the target, as incast, and the
+  // rest to random peers -- a few servers everyone calls, over a background.
+  if (pattern === 'hotspot') {
+    if (!opts.target) return result([], { why: 'hotspot: pick or select the hot devices' });
+    const hot = Math.max(0, Math.min(100, Number(gen.hot ?? 20))) / 100;
+    const into = generateFlows(model, { ...gen, pattern: 'incast', value: value * hot, per: 'host' }, opts);
+    if (into.why) return result([], { why: into.why.replace(/^incast/, 'hotspot') });
+    const rest = hot < 1
+      ? generateFlows(model, { ...gen, pattern: 'random', value: value * (1 - hot), per: 'host' }, opts)
+      : { flows: [], why: '' };
+    if (rest.why) return result([], { why: rest.why });
+    const flows = [...into.flows, ...rest.flows].map((flow, i) => ({ ...flow, id: GEN_IDS + i }));
+    return result(flows, { noCapacity: into.noCapacity + (rest.noCapacity || 0) });
+  }
+
+  // outcast: one to many -- the target sends to every host, as a storage
+  // server feeding its clients does.
+  if (pattern === 'outcast') {
+    const target = opts.target || null;
+    if (!target) return result([], { why: 'one to many: pick or select who sends' });
+    const from = devicesOf(target).filter((el) => el.links.length);
+    if (!from.length) return result([], { why: `one to many: ${target.name} has no cables` });
+    const inside = new Set(from);
+    const to = hosts.filter((el) => !inside.has(el));
+    if (tooBig(to, from.length * to.length)) {
+      return result([], { why: `one to many from ${from.length} devices to ${to.length} hosts is too much to route here: ${narrow}` });
+    }
+    const flows = [];
+    let noCapacity = 0;
+    for (const src of from) {
+      const amount = sends(src);
+      if (!(amount > 0)) { if (unit === '%') noCapacity++; continue; }
+      const dsts = to.filter((dst) => apart(src, dst));
+      for (const dst of dsts) flows.push({ id: GEN_IDS + flows.length, src, dst, value: share(amount, dsts.length), gen: true });
+    }
+    return result(flows, { noCapacity });
+  }
+
   if (pattern === 'incast') {
     const target = opts.target || null;
     if (!target) return result([], { why: 'incast: pick or select where it all goes' });
@@ -1505,6 +1690,24 @@ export function generateFlows(model, gen, opts = {}) {
   }
 
   if (n < 2) return result([], { why: `${n ? 'one host' : 'no hosts'}: nothing to send between` });
+
+  // shift: each host to the one k places on, in the layout's order -- a
+  // permutation, every host sending to one and sent to by one. Half the
+  // hosts on, every flow crosses the middle: the classic worst case for
+  // ECMP. ring: one place on, as an all-reduce passes its data round.
+  if (pattern === 'shift' || pattern === 'ring') {
+    const k = pattern === 'ring' ? 1
+      : Math.max(1, Math.min(n - 1, Math.floor(Number(gen.shift) || Math.floor(n / 2))));
+    if (tooBig(hosts, n)) return result([], { why: `${n} hosts is too much to route here: ${narrow}` });
+    const flows = [];
+    let noCapacity = 0;
+    hosts.forEach((src, i) => {
+      const amount = sends(src);
+      if (!(amount > 0)) { if (unit === '%') noCapacity++; return; }
+      flows.push({ id: GEN_IDS + flows.length, src, dst: hosts[(i + k) % n], value: amount, gen: true });
+    });
+    return result(flows, { noCapacity, shift: k });
+  }
 
   if (pattern === 'all') {
     if (tooBig(hosts, n * (n - 1))) {
@@ -1590,6 +1793,22 @@ export function generateFlows(model, gen, opts = {}) {
     for (const j of to[i]) flows.push({ id: GEN_IDS + flows.length, src, dst: hosts[j], value: share(amounts[i], to[i].size), gen: true });
   });
   return result(flows, { noCapacity });
+}
+
+/**
+ * The cables a burst would overflow: the load is a steady average, and a
+ * burst of `burst` times it -- traffic that arrives in clumps, a synchronised
+ * start -- needs that much more for as long as it lasts. Each cable whose
+ * busier direction times the burst passes its gbps=, fullest first.
+ */
+export function burstRisk(loads, toGbps, burst) {
+  if (!(burst > 1) || toGbps === null || toGbps === undefined) return [];
+  const out = [];
+  for (const [link, l] of loads) {
+    const u = utilOf(link, l, toGbps);
+    if (u !== null && u * burst > 1 + 1e-9) out.push({ link, util: u });
+  }
+  return out.sort((a, b) => b.util - a.util);
 }
 
 export const VIEWS = ['model', 'change', 'measured', 'diff'];

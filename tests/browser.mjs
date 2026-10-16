@@ -114,6 +114,14 @@ const fixtures = new Map([
   // The dual-plane fabric with one spine that can forward only 150G.
   ['/fx/slow-spine.dc', readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8')
     .replace('node spine1 at=6 u=2 role=spine plane=1 +switch', 'node spine1 at=6 u=2 role=spine plane=1 +switch gbps=150')],
+  // Every dual-plane server measured at 77,000 Mb/s, both directions added,
+  // under a name that does not say so.
+  ['/fx/iperf-total.tsv', `!test iperf_total_mbps unit=Mb/s label="iperf total"\n${
+    [1, 2, 3, 4].flatMap((r) => [1, 2, 3, 4, 5, 6, 7, 8].map((n) => `iperf_total_mbps\tR0${r}/s${n}\t77000\n`)).join('')}`],
+  // The dual-plane fabric with spines that pass two million packets a second.
+  ['/fx/pps-spines.dc', readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8')
+    .replace('node spine1 at=6 u=2 role=spine plane=1 +switch', 'node spine1 at=6 u=2 role=spine plane=1 +switch pps=2000000')
+    .replace('node spine2 at=2 u=2 role=spine plane=2 +switch', 'node spine2 at=2 u=2 role=spine plane=2 +switch pps=2000000')],
   // The dual-plane fabric with each server's two NICs bonded.
   ['/fx/bonded.dc', readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8')
     .replace(/^(net nica .*)$/m, '$1 bond=nic').replace(/^(net nicb .*)$/m, '$1 bond=nic')],
@@ -1374,6 +1382,121 @@ await test('servers make the load their metric says', async () => {
   ok(/generated: all-to-all, 100% of what Egress per server says from each host/.test(
     await page.evaluate(() => document.querySelector('#cable-load').innerText)), 'and the cable load panel says so');
 }, { url: '?layout=examples/dual-plane.dc&results=examples/dual-plane-hosts.tsv' });
+
+// A duplex total read as what a server sent is more than its NICs carry:
+// the panel suspects it, offers the box, and ticking it halves the load.
+await test('treat as duplex', async () => {
+  const panel = () => page.evaluate(() => document.querySelector('#cable-load').innerText);
+  await page.locator('#overlays .overlay-head input[type=checkbox]').first().check();
+  await page.waitForTimeout(200);
+  await page.locator('#overlays label', { hasText: /^load the cables \(estimated\)$/ }).locator('input').check();
+  await page.waitForTimeout(400);
+  let text = await panel();
+  const box = page.locator('#cable-load label.duplex input');
+  ok(await box.count() === 1 && !(await box.isChecked()) && /treat as duplex\s*—\s*32 hosts read past their cables one way/.test(text),
+     'read whole, every server reads past its NICs, and the box is offered unticked');
+  ok(/32 hosts read more than their cables carry one way — R0\d\/s\d: 77Gb\/s of 50G/.test(text), 'with the reason, in red');
+  await box.check();
+  await page.waitForTimeout(400);
+  text = await panel();
+  ok(await page.locator('#cable-load label.duplex input').isChecked() && !/read more than/.test(text)
+     && /^1\.2Tb\/s$/m.test(text), `ticked, each reading is half sent, and nothing reads past its NICs  (${text.split('\n').slice(1, 3).join(' | ')})`);
+}, { url: '?layout=examples/dual-plane.dc&results=fx/iperf-total.tsv' });
+
+// mx's per-peer packet rates, sized by the run shape in its header: each
+// request and its reply routed, in Gb/s, with the packet rates beside.
+await test('packet rates with a size', async () => {
+  const panel = () => page.evaluate(() => document.querySelector('#cable-load').innerText);
+  await page.evaluate(() => document.querySelectorAll('#overlays .overlay-head').forEach((h) => h.click()));
+  await page.waitForTimeout(300);
+  const card = page.locator('#overlays .overlay', { has: page.locator('.overlay-name', { hasText: /^Requests sent to one peer$/ }) });
+  await card.locator('.overlay-head input[type=checkbox]').check();
+  await page.waitForTimeout(200);
+  await card.locator('label', { hasText: /^load the cables$/ }).locator('input').check();
+  await page.waitForTimeout(500);
+  let text = await panel();
+  const sizes = await page.evaluate(() => [...document.querySelectorAll('#cable-load .packets input')].map((i) => i.value));
+  eq(sizes, ['256', '4096'], 'the header’s run shape fills in the packet sizes');
+  ok(/^168\.7Gb\/s$/m.test(text) && /delivered between hosts · 132 flows/.test(text)
+     && /4\.7 Mpps requests · 4\.7 Mpps replies — 256 B out, 4096 B back, framing included/.test(text),
+     `requests and replies, in Gb/s and in packets  (${text.split('\n').slice(1, 4).join(' | ')})`);
+  ok(/132 of 132 flows routed/.test(text), 'a reply is not counted as a flow of its own');
+  await page.fill('#cable-load .packets input >> nth=1', '0');
+  await page.locator('#cable-load .packets input >> nth=1').dispatchEvent('change');
+  await page.waitForTimeout(400);
+  text = await panel();
+  ok(/4\.7 Mpps requests — 256 B out, framing included/.test(text) && !/replies/.test(text.split('\n').slice(0, 4).join(' ')),
+     'with no reply size, only the requests are routed');
+}, { url: '?layout=examples/mx/floor.dc&results=examples/mx/mx-results.tsv' });
+
+// A made-up matrix run: each server sends requests of one size and gets
+// replies of another, as matrix_orchestrator does.
+await test('generated requests and replies', async () => {
+  const panel = () => page.evaluate(() => document.querySelector('#cable-load').innerText);
+  await page.locator('#load-gen select.gen-unit').selectOption('pps');
+  await page.waitForTimeout(200);
+  eq(await page.inputValue('#load-gen input.gen-bytes'), '1500', 'choosing pps starts from a full-size packet, never a bare count');
+  for (const [cls, value] of [['gen-value', '1000000'], ['gen-bytes', '500'], ['gen-reply', '4096']]) {
+    await page.fill(`#load-gen input.${cls}`, value);
+    await page.locator(`#load-gen input.${cls}`).dispatchEvent('change');
+    await page.waitForTimeout(200);
+  }
+  await page.locator('#load-gen button', { hasText: 'Run' }).click();
+  await page.waitForTimeout(500);
+  const text = await panel();
+  ok(/32 Mpps requests · 32 Mpps replies — 500 B out, 4096 B back, framing included/.test(text),
+     'every server’s million requests a second, and as many replies');
+  // 1M x (500 + 66) x 8 out and 1M x (4096 + 66) x 8 back: 37.8 of 50G.
+  ok(/NIC a\s+1\.2Tb\/s of 1\.6T · 76%/.test(text), `the replies fill the NICs the other way  (${(/NIC a.*/.exec(text) || [''])[0]})`);
+  ok(/generated: all-to-all, 1,000,000 pps of 500 B requests, 4096 B replies from each host · 992 flows/.test(text),
+     'and the panel says what was generated');
+}, { url: '?layout=examples/dual-plane.dc' });
+
+// The routing and generation added together: two more splits, more
+// patterns, bursts, and switches that run out of packets.
+await test('splits, patterns, bursts and packet rates', async () => {
+  const panel = () => page.evaluate(() => document.querySelector('#cable-load').innerText);
+  const gen = () => page.evaluate(() => document.querySelector('#load-gen').innerText);
+  await page.locator('#load-gen button', { hasText: 'Run' }).click();
+  await page.waitForTimeout(400);
+  const splits = await page.evaluate(() => [...document.querySelectorAll('#cable-load .btnrow select option')].map((o) => o.value));
+  ok(splits.includes('polarized') && splits.includes('adaptive'), 'polarized and adaptive are splits to pick');
+  await page.locator('#cable-load .btnrow select').first().selectOption('polarized');
+  await page.waitForTimeout(300);
+  ok(await page.locator('#cable-load .btnrow button', { hasText: 'Re-roll' }).count() === 1, 'polarized hashes, so it can be re-rolled');
+  await page.locator('#cable-load .btnrow select').first().selectOption('adaptive');
+  await page.waitForTimeout(300);
+  ok(/992 flows/.test(await panel()), 'adaptive routes the same flows');
+
+  await page.fill('#cable-load input.burst', '2.5');
+  await page.locator('#cable-load input.burst').dispatchEvent('change');
+  await page.waitForTimeout(300);
+  ok(/with bursts of 2\.5× the average, \d+ cables would overflow/.test(await panel()), 'a 2.5× burst overflows the half-full NICs');
+
+  await page.locator('#load-gen select.gen-pattern').selectOption('shift');
+  await page.waitForTimeout(300);
+  ok(/32 of 32 hosts send · 32 flows/.test(await gen()), 'shift: each server to one other, half the hosts on');
+  await page.locator('#load-gen select.gen-pattern').selectOption('outcast');
+  await page.waitForTimeout(300);
+  ok(/pick or select who sends/.test(await gen()), 'one to many asks for its sender');
+}, { url: '?layout=examples/dual-plane.dc' });
+
+await test('switches out of packets', async () => {
+  const panel = () => page.evaluate(() => document.querySelector('#cable-load').innerText);
+  await page.locator('#load-gen select.gen-unit').selectOption('pps');
+  await page.waitForTimeout(200);
+  for (const [cls, value] of [['gen-value', '1000000'], ['gen-bytes', '64']]) {
+    await page.fill(`#load-gen input.${cls}`, value);
+    await page.locator(`#load-gen input.${cls}`).dispatchEvent('change');
+    await page.waitForTimeout(200);
+  }
+  await page.locator('#load-gen select.gen-reach').selectOption('rack');
+  await page.locator('#load-gen button', { hasText: 'Run' }).click();
+  await page.waitForTimeout(500);
+  const text = await panel();
+  ok(/contention: 4 switches out of packets, holding back/.test(text), `the spines run out of packets  (${(/contention: .*/.exec(text) || [''])[0]})`);
+  ok(/Busiest switches\s+SP\d\/spine\d\s+[^\n]*100% of its pps/.test(text), 'and lead the busiest switches, full of packets');
+}, { url: '?layout=fx/pps-spines.dc' });
 
 // Findings: the health file beside the flows, the panel and the tooltip.
 await test('findings', async () => {

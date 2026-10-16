@@ -32,8 +32,8 @@ import { compileSelector, globToRegExp, hasGlob } from './select.js';
 // sorted key and drawn as one line, so there is no reverse to wire -- and a
 // per-rule label reached every link object and no part of the UI. Both are
 // gone rather than left looking like settings.
-export const LINK_OPTS = new Set(['scope', 'mode', 'cap', 'splice', 'gbps', 'weight']);
-const LINK_NUMBERS = { cap: [1, 100000000], splice: [2, 1000] };
+export const LINK_OPTS = new Set(['scope', 'mode', 'cap', 'splice', 'gbps', 'weight', 'count']);
+const LINK_NUMBERS = { cap: [1, 100000000], splice: [2, 1000], count: [1, 1000] };
 // What a cable can carry, and its share of the traffic at a fork. Both may be
 // fractional: a 100 Mb/s mgmt port is gbps=0.1.
 export const GBPS_RANGE = [0.001, 1000000];
@@ -42,7 +42,7 @@ const DEFAULT_CAP = 2000000;
 // Attributes that describe *this* element only and must not cascade to children.
 // gbps= on an element is a switch's own forwarding capacity, so a rack's
 // would say nothing about its servers.
-const NON_INHERITED = new Set(['id', 'name', 'at', 'u', 'cols', 'dir', 'gap', 'label', 'size', 'seq', 'align', 'if', 'gbps']);
+const NON_INHERITED = new Set(['id', 'name', 'at', 'u', 'cols', 'dir', 'gap', 'label', 'size', 'seq', 'align', 'if', 'gbps', 'pps']);
 
 const DEFAULT_NET_COLORS = ['#4fa3ff', '#ff9f43', '#4dd4ac', '#c986ff', '#ff6b8b', '#f5d442'];
 
@@ -194,7 +194,9 @@ export const NUMBERS = {
 // A net's line width is the one number that may be fractional.
 const NET_NUMBERS = { width: [0.1, 100], gbps: GBPS_RANGE };
 // An element's gbps= -- a switch's forwarding capacity -- may be too.
-const ELEMENT_REALS = { gbps: GBPS_RANGE };
+// pps=: what a switch can forward in packets a second -- a packet-rate
+// ceiling of its own, beside its gbps=.
+const ELEMENT_REALS = { gbps: GBPS_RANGE, pps: [1, 1e13] };
 // Everything a `net` line takes; `on=` is the old spelling of `show=`.
 const NET_KEYS = ['label', 'color', 'style', 'width', 'show', 'on', 'gbps', 'traffic', 'bond'];
 
@@ -732,6 +734,15 @@ function buildLinks(rules, model) {
     // zero -- the cable-load view says so rather than painting it full.
     const net = model.nets.get(rule.net);
     const gbps = numAttr(rule.gbps, null, LINK_REALS.gbps) ?? (net ? net.gbps : null);
+    // count=: cables per pair -- a bundle's members, each its own cable of
+    // gbps=, so a flow hashed onto one fills that one. A splice's cable is
+    // shared by its members already, so a bundle of them means nothing.
+    let count = intAttr(rule.count, 1, LINK_NUMBERS.count);
+    if (count > 1 && splice) {
+      model.warnings.push(`${at(rule)}net "${rule.net}": count= makes parallel cables between each pair, `
+        + 'and a splice shares one cable between several -- count= ignored');
+      count = 1;
+    }
     const weight = numAttr(rule.weight, 1, LINK_REALS.weight);
     // A scope that names no kind in the layout groups nothing, so the rule
     // wires nothing: `scope=rw` for `scope=row`. Name the kinds there are.
@@ -773,14 +784,18 @@ function buildLinks(rules, model) {
       const sig = netIndex * 0x100000000000 + x.n * 0x100000 + y.n;
       if (seen.has(sig)) return null;
       seen.add(sig);
-      const link = { net: rule.net, a: x, b: y, gbps, weight };
-      links.push(link);
       if (x.links === NO_LINKS) x.links = [];
       if (y.links === NO_LINKS) y.links = [];
-      x.links.push(link);
-      y.links.push(link);
+      let first = null;
+      for (let k = 0; k < count; k++) {
+        const link = { net: rule.net, a: x, b: y, gbps, weight };
+        links.push(link);
+        x.links.push(link);
+        y.links.push(link);
+        first = first || link;
+      }
       made++;
-      return link;
+      return first;
     };
 
     for (const g of groups.values()) {
