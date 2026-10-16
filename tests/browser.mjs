@@ -118,6 +118,10 @@ const fixtures = new Map([
   // under a name that does not say so.
   ['/fx/iperf-total.tsv', `!test iperf_total_mbps unit=Mb/s label="iperf total"\n${
     [1, 2, 3, 4].flatMap((r) => [1, 2, 3, 4, 5, 6, 7, 8].map((n) => `iperf_total_mbps\tR0${r}/s${n}\t77000\n`)).join('')}`],
+  // The dual-plane fabric with spines that pass two million packets a second.
+  ['/fx/pps-spines.dc', readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8')
+    .replace('node spine1 at=6 u=2 role=spine plane=1 +switch', 'node spine1 at=6 u=2 role=spine plane=1 +switch pps=2000000')
+    .replace('node spine2 at=2 u=2 role=spine plane=2 +switch', 'node spine2 at=2 u=2 role=spine plane=2 +switch pps=2000000')],
   // The dual-plane fabric with each server's two NICs bonded.
   ['/fx/bonded.dc', readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8')
     .replace(/^(net nica .*)$/m, '$1 bond=nic').replace(/^(net nicb .*)$/m, '$1 bond=nic')],
@@ -1447,6 +1451,52 @@ await test('generated requests and replies', async () => {
   ok(/generated: all-to-all, 1,000,000 pps of 500 B requests, 4096 B replies from each host · 992 flows/.test(text),
      'and the panel says what was generated');
 }, { url: '?layout=examples/dual-plane.dc' });
+
+// The routing and generation added together: two more splits, more
+// patterns, bursts, and switches that run out of packets.
+await test('splits, patterns, bursts and packet rates', async () => {
+  const panel = () => page.evaluate(() => document.querySelector('#cable-load').innerText);
+  const gen = () => page.evaluate(() => document.querySelector('#load-gen').innerText);
+  await page.locator('#load-gen button', { hasText: 'Run' }).click();
+  await page.waitForTimeout(400);
+  const splits = await page.evaluate(() => [...document.querySelectorAll('#cable-load .btnrow select option')].map((o) => o.value));
+  ok(splits.includes('polarized') && splits.includes('adaptive'), 'polarized and adaptive are splits to pick');
+  await page.locator('#cable-load .btnrow select').first().selectOption('polarized');
+  await page.waitForTimeout(300);
+  ok(await page.locator('#cable-load .btnrow button', { hasText: 'Re-roll' }).count() === 1, 'polarized hashes, so it can be re-rolled');
+  await page.locator('#cable-load .btnrow select').first().selectOption('adaptive');
+  await page.waitForTimeout(300);
+  ok(/992 flows/.test(await panel()), 'adaptive routes the same flows');
+
+  await page.fill('#cable-load input.burst', '2.5');
+  await page.locator('#cable-load input.burst').dispatchEvent('change');
+  await page.waitForTimeout(300);
+  ok(/with bursts of 2\.5× the average, \d+ cables would overflow/.test(await panel()), 'a 2.5× burst overflows the half-full NICs');
+
+  await page.locator('#load-gen select.gen-pattern').selectOption('shift');
+  await page.waitForTimeout(300);
+  ok(/32 of 32 hosts send · 32 flows/.test(await gen()), 'shift: each server to one other, half the hosts on');
+  await page.locator('#load-gen select.gen-pattern').selectOption('outcast');
+  await page.waitForTimeout(300);
+  ok(/pick or select who sends/.test(await gen()), 'one to many asks for its sender');
+}, { url: '?layout=examples/dual-plane.dc' });
+
+await test('switches out of packets', async () => {
+  const panel = () => page.evaluate(() => document.querySelector('#cable-load').innerText);
+  await page.locator('#load-gen select.gen-unit').selectOption('pps');
+  await page.waitForTimeout(200);
+  for (const [cls, value] of [['gen-value', '1000000'], ['gen-bytes', '64']]) {
+    await page.fill(`#load-gen input.${cls}`, value);
+    await page.locator(`#load-gen input.${cls}`).dispatchEvent('change');
+    await page.waitForTimeout(200);
+  }
+  await page.locator('#load-gen select.gen-reach').selectOption('rack');
+  await page.locator('#load-gen button', { hasText: 'Run' }).click();
+  await page.waitForTimeout(500);
+  const text = await panel();
+  ok(/contention: 4 switches out of packets, holding back/.test(text), `the spines run out of packets  (${(/contention: .*/.exec(text) || [''])[0]})`);
+  ok(/Busiest switches\s+SP\d\/spine\d\s+[^\n]*100% of its pps/.test(text), 'and lead the busiest switches, full of packets');
+}, { url: '?layout=fx/pps-spines.dc' });
 
 // Findings: the health file beside the flows, the panel and the tooltip.
 await test('findings', async () => {

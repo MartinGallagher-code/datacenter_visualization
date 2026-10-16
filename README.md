@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.14.0** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.15.0** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -516,8 +516,21 @@ is end to end, and only switch counters see the cables themselves:
     fork, picked pseudo-randomly per flow, which is what ECMP hashing really
     does: a handful of big flows can land on the same uplink and overload it
     while its neighbour idles. **Re-roll** hashes again with another seed.
+  - **hashed alike at every tier (polarized)** — one path per flow, hashed
+    the same way at every switch, as switches sharing one hash seed do: two
+    flows that collide on a ToR's uplink collide again on the spine's, so
+    the hot spots line up tier after tier instead of averaging out;
+  - **adaptive: each flow where there is room** — one path per flow, each
+    placed in turn on the cable with the most room as the load then stands:
+    congestion-aware routing (flowlets, adaptive routing on newer fabrics),
+    the opposite extreme to hashing and the best this fabric could do.
 - **`weight=`** on a link rule scales its cables' share in every mode —
   `weight=3` takes three times what a weight-1 cable beside it does.
+- **`count=`** on a link rule makes that many cables between each pair — a
+  bundle's members: `link plane1 role=spine role=superspine count=6
+  gbps=400` is six 400G members per pair, drawn as one heavier line. Hashed,
+  a flow lands on one member, so one 400G member can be full while the
+  bundle reads 60% — what one 2.4T cable cannot show.
 - **`bond=`** on nets bonds a host's cables on them: `net nica gbps=100
   bond=nic` and `net nicb gbps=100 bond=nic` make every server's NIC a and
   NIC b one bond. A flow from or to a bonded host is split over the bond by
@@ -576,6 +589,16 @@ steady state:
 Untick it to see what the flows offer: then a cable can read past 100%, in
 magenta, which says how oversubscribed it is rather than what it carries.
 
+**bursts of ×** says how bursty the load is. The model is a steady average,
+and real traffic comes in clumps — a synchronised start, an incast all
+answering at once — that last microseconds and overflow a shallow buffer
+while the second's average looks easy. Above 1, the panel counts the cables
+a burst that many times the average would overflow, naming the fullest —
+all-to-all at 50% over `examples/dual-plane.dc` reads `with bursts of 4× the
+average, 80 cables would overflow — the fullest, R03/tora ↔ R03/s1, is 50%
+on average, 200% in a burst` — and a cable's tooltip says what such a burst
+would need of it.
+
 Sharing out costs in proportion to the cables every flow crosses, added up
 over the flows. Flows that leave the same switches for the same server share
 that part of the work, and the page shares out up to twenty million
@@ -612,6 +635,21 @@ passes through it against what it can pass:
 
 ```text
 node spine1 role=spine +switch gbps=12800
+```
+
+- **`pps=` on a switch** is the packets a second it can forward. Small
+  packets fill a switch long before its bandwidth — what a matrix test of
+  small requests does to a fabric — and with a load that knows its packets
+  (a packet rate with a size, mx's own or the generator's) contention holds
+  flows back there too. Over `examples/dual-plane.dc` with its spines at
+  `pps=2000000`, every server sending a million 64-byte requests a second
+  out of its rack reads `passing 2 Mpps of the 2 Mpps it can (100%), of 13.3
+  Mpps offered · out of packets — holding back 640 flows itself` with the
+  spine's bandwidth all but idle. The busiest switches say `· 100% of its
+  pps`, and the gauge fills by whichever is fuller.
+
+```text
+node superspine role=superspine +switch gbps=51200 pps=8000000000
 ```
 
 A `gbps=` on a rack or a room is not passed down to what is in it.
@@ -693,7 +731,18 @@ off.
     seed picks the same peers; **New peers** draws them again;
   - **incast: all to one** — every host sends to one target, the first pick
     or else the selection: many to one, the pattern that fills a single
-    server's cable. A rack as the target shares it over the rack's devices.
+    server's cable. A rack as the target shares it over the rack's devices;
+  - **one to many** — the target sends to every other host, as a storage
+    server feeding its clients: its own cables fill outward;
+  - **hotspot: a share to one** — every host sends a share of its load to
+    the target (20% unless set) and the rest to ×N random peers: a few
+    servers everyone calls, over a background;
+  - **shift: each to one, k on** — every host sends everything to the host
+    k places on, in the layout's order, and is sent to by one. With k empty,
+    half the hosts on, so every flow crosses the middle of the fabric: the
+    classic worst case for ECMP;
+  - **ring: each to the next** — shift by one, the last to the first: how an
+    all-reduce passes its data round.
 - **each sends** how much every host sends in all: in Gb/s, Mb/s or pps, or
   **% of its NICs** — a share of what the host's own cables can carry, their
   `gbps=` added up — which is the default once the cables have a `gbps=`.

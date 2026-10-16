@@ -32,7 +32,7 @@ import {
   Renderer, capacityWidth, changeColor, LOAD_COLORS, linkSummary, loadColor, sharesLineage, spliceSummary,
 } from '../js/render.js';
 import {
-  betweenPicks, biggestChanges, bitRate, busiest, cableKeys, cablesOf, compareLoads, countersOf, devicesOf,
+  betweenPicks, biggestChanges, bitRate, burstRisk, busiest, cableKeys, cablesOf, compareLoads, countersOf, devicesOf,
   contend, CONTEND_LIMITS, estimateFlows, findingKind, findingsOf, flowsOf, flowsOver, formatGbps, GEN_LIMITS,
   generateFlows, hostCapacity,
   hostsFor, hostsOf, loadable, loadUnit, mergeResults, packetGb, reachKinds, readsAsLoad, routeEstimate, routeTraffic,
@@ -1923,7 +1923,7 @@ const segsOf = (cache, net) => {
 
   // The flows over a cable add up to what is drawn on it, however it is split.
   const uplink = m.links.find((l) => l.net === 'up' && l.a === m.resolve('R1/tor'));
-  for (const split of ['even', 'capacity', 'hashed']) {
+  for (const split of ['even', 'capacity', 'hashed', 'polarized', 'adaptive']) {
     const opts = { split, seed: 3 };
     const r = routeTraffic(m, all.flows, opts);
     const load = r.loads.get(uplink) || [0, 0];
@@ -1966,7 +1966,7 @@ const segsOf = (cache, net) => {
   // flows offered is what routeTraffic routes.
   const m = parseLayout(readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8'));
   const gen = generateFlows(m, { pattern: 'all', value: 150, unit: '%' });
-  for (const split of ['even', 'capacity', 'hashed']) {
+  for (const split of ['even', 'capacity', 'hashed', 'polarized', 'adaptive']) {
     const opts = { split, seed: 3 };
     const c = contend(m, gen.flows, { ...opts, toGbps: 1 });
     const offered = routeTraffic(m, gen.flows, opts);
@@ -2015,6 +2015,110 @@ const segsOf = (cache, net) => {
   CONTEND_LIMITS.crossings = saved;
 }
 
+// ----------------------------------------------------------- more patterns
+// shift and ring are permutations; one to many is incast turned round;
+// hotspot is a share to a target over a random background.
+{
+  const m = parseLayout(readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8'));
+  const hosts = hostsFor(m).hosts;
+  const each = (flows, key) => [...new Set([...flows.reduce((c, f) => c.set(f[key], (c.get(f[key]) || 0) + 1), new Map()).values()])];
+  const shift = generateFlows(m, { pattern: 'shift', value: 10, unit: 'Gb/s' });
+  eq([shift.flows.length, each(shift.flows, 'src'), each(shift.flows, 'dst'), shift.shift], [32, [1], [1], 16],
+     'shift: half the hosts on by default, each sending to one and sent to by one');
+  ok(shift.flows.every((f) => hosts.indexOf(f.dst) === (hosts.indexOf(f.src) + 16) % 32), 'k places on, in the layout’s order');
+  ok(generateFlows(m, { pattern: 'shift', value: 10, unit: 'Gb/s', shift: 3 }).flows[0].dst === hosts[3], 'k as given');
+  const ring = generateFlows(m, { pattern: 'ring', value: 10, unit: 'Gb/s' });
+  ok(ring.flows.length === 32 && ring.flows.every((f) => hosts.indexOf(f.dst) === (hosts.indexOf(f.src) + 1) % 32), 'ring: each to the next');
+  const s1 = m.resolve('R01/s1');
+  const out = generateFlows(m, { pattern: 'outcast', value: 31, unit: 'Gb/s' }, { target: s1 });
+  ok(out.flows.length === 31 && out.flows.every((f) => f.src === s1 && f.value === 1), 'one to many: the target sends to every other host');
+  ok(/pick or select who sends/.test(generateFlows(m, { pattern: 'outcast', value: 1, unit: 'Gb/s' }).why), 'and needs its sender');
+  const hot = generateFlows(m, { pattern: 'hotspot', value: 10, unit: 'Gb/s', hot: 30, peers: 2, seed: 1 }, { target: s1 });
+  const toHot = hot.flows.filter((f) => f.dst === s1).reduce((sum, f) => sum + f.value, 0);
+  ok(toHot >= 31 * 3 - 1e-9, `hotspot: every other host sends 30% of its 10 to the target, and random peers may add to it  (${toHot})`);
+  ok(Math.abs(hot.offered - (31 * 3 + 32 * 7)) < 1e-9, 'and the rest to random peers, every host its whole amount');
+  ok(new Set(hot.flows.map((f) => f.id)).size === hot.flows.length, 'with an id each');
+}
+
+// ------------------------------------------------------------ packet rates
+// pps= on a switch: a packet-rate ceiling of its own. Small packets fill it
+// while its bandwidth has room, and contention holds the flows back there.
+{
+  const text = readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8')
+    .replace('node spine1 at=6 u=2 role=spine plane=1 +switch', 'node spine1 at=6 u=2 role=spine plane=1 +switch pps=2000000')
+    .replace('node spine2 at=2 u=2 role=spine plane=2 +switch', 'node spine2 at=2 u=2 role=spine plane=2 +switch pps=2000000');
+  const m = parseLayout(text);
+  eq(m.warnings, [], 'pps= is an element setting');
+  // Every server to the other rack's, a million 64-byte packets a second each.
+  const plain = generateFlows(m, { pattern: 'all', value: 1000000, unit: 'pps', reach: 'rack' }, { base: { toGbps: null, unit: 'pps' } });
+  const flows = plain.flows.map((f) => ({ ...f, value: f.value * packetGb(64), pps: f.value }));
+  const c = contend(m, flows, { split: 'even', toGbps: 1 });
+  const sw = switchLoads(m, c.loads, 1, c.contention);
+  const spine = sw.get(m.resolve('SP1/spine1'));
+  ok(spine.util < 0.1 && Math.abs(spine.ppsUtil - 1) < 1e-6 && spine.packets.held > 0,
+     `the spine is out of packets with its bandwidth nearly idle  (${(spine.util * 100).toFixed(1)}% of bits, ${(spine.ppsUtil * 100).toFixed(0)}% of packets)`);
+  ok(c.contention.held > 0 && c.contention.packets.full.size === 4, 'and all four spines hold flows back');
+  ok(spine.packets.offered > spine.packets.through, 'what was offered is more than it passes');
+  // A load that does not know its packets cannot fill a packet rate.
+  const bits = contend(m, flows.map(({ pps, ...f }) => f), { split: 'even', toGbps: 1 });
+  eq([bits.contention.held, bits.contention.packets.full.size], [0, 0], 'a load in bits alone leaves pps= alone');
+}
+
+// ------------------------------------------------------------------ bursts
+// A steady average that fits can still overflow in a clump: burstRisk lists
+// the cables a burst of N times the average would overflow, fullest first.
+{
+  const m = parseLayout(readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8'));
+  const r = routeTraffic(m, generateFlows(m, { pattern: 'all', value: 50, unit: '%' }).flows, { split: 'even' });
+  eq(burstRisk(r.loads, 1, 1).length, 0, 'steady, nothing is flagged');
+  const two = burstRisk(r.loads, 1, 2.5);
+  ok(two.length > 0 && two.every((x) => x.util * 2.5 > 1) && two[0].util >= two[two.length - 1].util,
+     `a 2.5× burst overflows the half-full NICs, fullest first  (${two.length})`);
+  eq(burstRisk(r.loads, 1, 1.5).length, 0, 'and a 1.5× burst on 50% fits');
+  eq(burstRisk(r.loads, null, 4).length, 0, 'a load that is not a bit rate has no capacity to overflow');
+}
+
+// ----------------------------------------------------------------- bundles
+// count= on a link rule: that many cables per pair, the members of a bundle.
+// Four repeated rules and one rule with count=4 wire the same fabric.
+{
+  const text = readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8');
+  const four = parseLayout(text);
+  const lines = text.split('\n').filter((l) => !/^link plane[12] /.test(l));
+  lines.push('link plane1 role=spine,plane=1 role=superspine,plane=1 count=4',
+    'link plane2 role=spine,plane=2 role=superspine,plane=2 count=4');
+  const counted = parseLayout(lines.join('\n'));
+  eq(counted.warnings, [], 'count= is a link option');
+  const planes = (m) => m.links.filter((l) => l.net.startsWith('plane')).length;
+  eq([planes(counted), planes(four)], [96, 96], 'count=4 makes the four cables per pair that four rules did');
+  const spine = counted.resolve('SP1/spine1');
+  eq(spine.links.filter((l) => l.net === 'plane1').length, 24, 'a spine 1: four cables to each of six superspines');
+  ok(/count= ignored/.test(parseLayout(`${text}\nlink nica role=server role=tor,nic=a scope=rack splice=4 count=2`).warnings.join('\n')),
+     'and count= on a splice is refused, with why');
+}
+
+// ------------------------------------------------------- one path per flow
+// Hashed, polarized and adaptive each put a flow on one path. Adaptive
+// places each where there is most room, so it never leaves the busiest
+// uplink fuller than hashing does; polarized hashes alike at every tier.
+{
+  const m = parseLayout(readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8'));
+  const gen = generateFlows(m, { pattern: 'random', value: 20, unit: 'Gb/s', peers: 2, seed: 7, reach: 'rack' });
+  const fullest = (split, net) => {
+    const r = routeTraffic(m, gen.flows, { split, seed: 5 });
+    let worst = 0;
+    for (const [l, x] of r.loads) if (l.net === net) worst = Math.max(worst, x[0] / l.gbps, x[1] / l.gbps);
+    return worst;
+  };
+  ok(fullest('adaptive', 'fabric') <= fullest('hashed', 'fabric') + 1e-9 && fullest('adaptive', 'fabric') < fullest('hashed', 'fabric'),
+     `adaptive leaves the busiest uplink emptier than hashing  (${fullest('adaptive', 'fabric').toFixed(2)} vs ${fullest('hashed', 'fabric').toFixed(2)})`);
+  const once = routeTraffic(m, gen.flows, { split: 'polarized', seed: 5 });
+  const again = routeTraffic(m, gen.flows, { split: 'polarized', seed: 5 });
+  ok([...once.loads].every(([l, x]) => { const y = again.loads.get(l); return y && y[0] === x[0] && y[1] === x[1]; }),
+     'polarized is as repeatable as hashed');
+  eq(once.delivered, gen.offered, 'and every flow still arrives');
+}
+
 // ------------------------------------------------------------------- bonds
 // bond= on nets: a host's cables on nets of one bond carry every flow from
 // or to it in shares by capacity -- sending and receiving, under every split,
@@ -2042,7 +2146,7 @@ const segsOf = (cache, net) => {
     return Math.max(Math.abs(a[0] - b[0]), Math.abs(a[1] - b[1]));
   }));
   const gen = generateFlows(m, { pattern: 'random', value: 10, unit: 'Gb/s', peers: 3, seed: 2 });
-  for (const split of ['even', 'capacity', 'hashed']) {
+  for (const split of ['even', 'capacity', 'hashed', 'polarized', 'adaptive']) {
     const r = routeTraffic(m, gen.flows, { split, seed: 4 });
     ok(gap(r) < 1e-9 && r.routed === gen.flows.length, `${split}: every server's two NICs send and receive exactly the same`);
     const c = contend(m, gen.flows, { split, seed: 4, toGbps: 1 });

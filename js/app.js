@@ -23,7 +23,7 @@ import { layoutFromHosts, matchesPattern, recordsSince, tailRecords } from './ts
 import { routesBetween } from './paths.js';
 import {
   betweenPicks, bitRate, cableKeys, contend, countersOf, estimateFlows, flowsOf, flowsOver, GEN_LIMITS,
-  findingsOf, generateFlows, hostCapacity, hostsOf, loadable, loadUnit, mergeResults, packetGb, readsAsLoad, REPLY_IDS, routeEstimate,
+  findingsOf, generateFlows, hostCapacity, hostsOf, TARGETED, loadable, loadUnit, mergeResults, packetGb, readsAsLoad, REPLY_IDS, routeEstimate,
   routeTraffic, switchLoads, testFlows, trafficKind, viewOf,
 } from './traffic.js';
 import { VERSION } from './version.js';
@@ -91,10 +91,13 @@ const state = {
     // Gb/s; hosts is a filter, empty for every device not tagged +switch.
     // `from` names a per-host metric the servers send what they read, at
     // `value` % of it, in place of an amount of its own.
-    gen: { on: false, pattern: 'all', value: 50, unit: null, per: 'host', bytes: 0, reply: 0, peers: 1, reach: 'any', hosts: '', seed: 1, from: null },
+    gen: { on: false, pattern: 'all', value: 50, unit: null, per: 'host', bytes: 0, reply: 0, hot: 20, shift: 0, peers: 1, reach: 'any', hosts: '', seed: 1, from: null },
     // A full cable shares out what it carries, as TCP does, and holds back
     // the flows crossing it; off, the cables show what the flows offer.
     contention: true,
+    // How bursty the load is: a burst of this many times the average, to
+    // flag the cables it would overflow. 1: steady, nothing flagged.
+    burst: 1,
     listed: 8,                // rows in the busiest-cables list
   },
   trafficCache: { model: null, base: null, counters: null, view: null, switches: null, findings: null },
@@ -370,9 +373,9 @@ function modelSource(withDown) {
   const pickKey = picks && (test || between) ? picks.map((p) => p.key).join('\u0001') : '';
   const testKey = test ? `${test.value}\u0001${test.unit}` : '';
   // Incast sends to the first pick, or failing that the selection.
-  const target = gen && gen.pattern === 'incast' ? state.picked[0] || state.selected || null : null;
+  const target = gen && TARGETED.has(gen.pattern) ? state.picked[0] || state.selected || null : null;
   const genKey = gen ? JSON.stringify([gen.pattern, gen.value, genUnit(), gen.per, gen.peers, gen.reach, gen.hosts, gen.seed,
-    target && target.key, gen.from, gen.bytes, gen.reply]) : '';
+    target && target.key, gen.from, gen.bytes, gen.reply, gen.hot, gen.shift]) : '';
   // A metric the generator reads: re-read when its file is, so by object.
   const from = gen && gen.from ? genSource() : null;
   const duplexKey = metric && kind === 'hosts' ? duplexOf(metric) : null;
@@ -725,7 +728,7 @@ const actions = {
     // Incast with no pick sends to the selection: what it loads, and every
     // panel that says so, moves with it.
     const g = state.traffic.gen;
-    if (g.on && g.pattern === 'incast' && !state.picked.length) refreshPanels();
+    if (g.on && TARGETED.has(g.pattern) && !state.picked.length) refreshPanels();
     else {
       renderInspector(state, $('inspector'), actions);
       renderTree(state, $('tree'), actions);
@@ -1033,6 +1036,12 @@ const actions = {
 
   // Whether full cables share out what they carry, or the cables show what
   // the flows offer.
+  setBurst(burst) {
+    state.traffic.burst = Math.max(1, Number(burst) || 1);
+    refreshPanels();
+    invalidate();
+  },
+
   setContention(on) {
     state.traffic.contention = on;
     refreshPanels();
