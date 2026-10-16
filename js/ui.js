@@ -846,7 +846,8 @@ function renderHeadline(state, view, box) {
     const c = r.contention;
     const delivered = c ? c.carried : r.delivered;
     const offered = c ? c.wanted : r.delivered;
-    const flows = model.flows ? model.flows.length : r.routed;
+    // A reply is its request coming back, not a flow of its own.
+    const flows = model.flows ? model.flows.filter((flow) => !flow.reply).length : r.routed;
     wrap.append(el('div', 'headline-big', formatLoad(model, delivered)));
     let sub = model.estimated && !c ? 'between hosts, estimated' : 'delivered between hosts';
     if (offered > delivered * (1 + 1e-9)) sub += ` of ${formatLoad(model, offered)} offered (${pct(delivered / offered)})`;
@@ -854,6 +855,20 @@ function renderHeadline(state, view, box) {
     const missed = r.missed && r.missed.count;
     if (missed) sub += ` · ${missed.toLocaleString()} not routed`;
     wrap.append(el('div', 'muted', sub));
+    // A packet rate sized into bits: its packets, requests and replies, as
+    // carried -- a flow held back carries its packets in the same share.
+    if (model.packets && model.flows) {
+      const pps = [0, 0];
+      for (const flow of model.flows) {
+        if (!flow.pps) continue;
+        const share = flow.wanted > 0 ? flow.value / flow.wanted : 1;
+        pps[flow.reply ? 1 : 0] += flow.pps * share;
+      }
+      const mpps = (v) => (v >= 1e6 ? `${trimNum(Math.round(v / 1e5) / 10)} Mpps` : `${Math.round(v).toLocaleString()} pps`);
+      wrap.append(el('div', 'muted', `${mpps(pps[0])} requests${pps[1] ? ` · ${mpps(pps[1])} replies` : ''}`
+        + ` — ${model.packets.bytes} B out${model.packets.reply ? `, ${model.packets.reply} B back` : ''}, framing included`));
+      if (model.packets.why) wrap.append(el('div', 'bad', model.packets.why));
+    }
   }
   // Each net's cables, both ways, against what they carry both ways.
   const nets = new Map();
@@ -886,6 +901,46 @@ function renderHeadline(state, view, box) {
     wrap.append(table);
   }
   if (wrap.childNodes.length) box.append(wrap);
+}
+
+/**
+ * A packet rate's packets: each request's payload and the reply it gets, in
+ * bytes. Set -- by the file (mx export's run shape, or bytes= on the !test
+ * line) or here -- a rate in pps becomes a bit rate, framing added, set
+ * against the cables' gbps=, and every request comes back as its reply.
+ */
+function packetsRow(state, overlay, actions) {
+  const p = state.packetsOf ? state.packetsOf(overlay) : null;
+  if (!p) return null;
+  const row = el('div', 'gen-row packets');
+  const field = (value, title, onChange) => {
+    const input = el('input');
+    input.type = 'number';
+    input.min = '0';
+    input.step = '1';
+    input.value = value ? String(value) : '';
+    input.placeholder = '—';
+    input.title = title;
+    input.addEventListener('change', () => {
+      const v = Math.max(0, Math.floor(Number(input.value) || 0));
+      onChange(v);
+    });
+    return input;
+  };
+  row.append(el('span', null, 'packets of'),
+    field(p.bytes, 'Each request’s payload, in bytes. Empty: the rate stays in pps, drawn by load alone.',
+      (v) => actions.setPackets(overlay, { bytes: v, reply: p.reply })),
+    el('span', null, 'B, replies of'),
+    field(p.reply, 'The reply each request gets, in bytes, routed back the other way. Empty or 0: no replies.',
+      (v) => actions.setPackets(overlay, { bytes: p.bytes, reply: v })),
+    el('span', null, 'B'));
+  row.title = `Payloads, in bytes: each packet carries ${66} more on the wire (Ethernet, IP, UDP, preamble and gap). `
+    + 'With a size, a packet rate is a bit rate: set against gbps=, shared out where full, and every request '
+    + 'is answered by a reply the other way. mx export says the sizes in its header (run shape), and bytes= '
+    + 'and reply_bytes= on a !test line say them in any file.';
+  if (!p.bytes) row.append(el('span', 'muted', ' — give a size to set pps against capacity'));
+  else if (p.file) row.append(el('span', 'muted', ' — from the file'));
+  return row;
 }
 
 /**
@@ -1011,6 +1066,12 @@ export function renderCableLoad(state, host, actions) {
         + 'path too. Unticked, the cables show what the flows offer, which can be more than 100%.';
       box.append(share);
     }
+  }
+
+  // A packet rate: the size of its packets, which makes it a bit rate.
+  if (model && model.overlay) {
+    const row = packetsRow(state, model.overlay, actions);
+    if (row) box.append(row);
   }
 
   renderLoadKey(view, box);
@@ -1335,7 +1396,8 @@ export function renderLoadGen(state, host, actions, { unit } = {}) {
   }
   const overlay = state.traffic.key ? state.overlays.get(state.traffic.key) : null;
   const metric = overlay && overlay.enabled && trafficKind(overlay) !== 'cables' && loadable(overlay) ? overlay : null;
-  const base = metric ? loadUnit(metric, trafficKind(metric)) : null;
+  const unitOf = (o) => (state.metricUnit ? state.metricUnit(o, trafficKind(o)) : loadUnit(o, trafficKind(o)));
+  const base = metric ? unitOf(metric) : null;
   let units = GEN_UNITS;
   if (base) units = base.toGbps === null ? [base.unit] : ['%', 'Gb/s', 'Mb/s'];
   if (unit && !units.includes(unit)) units = [...units, unit];
@@ -1997,7 +2059,8 @@ function renderPickTraffic(state, box, actions) {
   const shown = !metric && t.gen.on && state.cableView ? state.cableView() : null;
   if (metric) {
     // On top of a metric, in its unit: the two add up on every cable.
-    send.append(el('span', 'muted', loadUnit(metric, trafficKind(metric)).unit || 'units'));
+    const u = state.metricUnit ? state.metricUnit(metric, trafficKind(metric)) : loadUnit(metric, trafficKind(metric));
+    send.append(el('span', 'muted', u.unit || 'units'));
   } else if (shown && shown.model) {
     send.append(el('span', 'muted', shown.model.unit));
   } else {

@@ -35,7 +35,7 @@ import {
   betweenPicks, biggestChanges, bitRate, busiest, cableKeys, cablesOf, compareLoads, countersOf, devicesOf,
   contend, CONTEND_LIMITS, estimateFlows, findingKind, findingsOf, flowsOf, flowsOver, formatGbps, GEN_LIMITS,
   generateFlows, hostCapacity,
-  hostsFor, hostsOf, loadable, loadUnit, mergeResults, reachKinds, readsAsLoad, routeEstimate, routeTraffic,
+  hostsFor, hostsOf, loadable, loadUnit, mergeResults, packetGb, reachKinds, readsAsLoad, routeEstimate, routeTraffic,
   switchCapacity, switchLoads, testFlows, trafficKind, utilOf, viewOf as cableView,
 } from '../js/traffic.js';
 import { CURVE_REACH, FAN_GAP, LANE, SPLICE_W, distanceTo, piecesOf } from '../js/route.js';
@@ -2151,6 +2151,26 @@ const segsOf = (cache, net) => {
   const asSent = readsAsLoad(bound('xfer_mbps'));
   eq([asSent.duplex, asSent.toGbps], [true, 0.0005], 'and the generator reads it at half: 38.5G of 77,000 Mb/s');
   eq(readsAsLoad(bound('xfer_mbps'), false).toGbps, 0.001, 'unless told it is not');
+}
+
+// ---------------------------------------------------------- packet sizes
+// A packet rate becomes a bit rate once its packets have a size: mx export's
+// header says them (run shape), and bytes= / reply_bytes= say them anywhere.
+{
+  const mxText = readFileSync(join(root, 'examples/mx/mx-results.tsv'), 'utf8');
+  const parsed = parseResults(mxText, new Map(), [], 'mx-results.tsv');
+  const get = (name) => [...parsed.values()].find((o) => o.name === name);
+  const m = parseLayout(readFileSync(join(root, 'examples/mx/floor.dc'), 'utf8'));
+  const peer = bindOverlay(get('mx_peer_pps'), m);
+  eq([peer.bytes, peer.replyBytes], [256, 4096], 'the run shape in mx export’s header sizes its packet rates');
+  eq(bindOverlay(get('mx_loss'), m).bytes, null, 'and nothing that is not in pps');
+  // mx's own request rate on the wire: 80,000 requests of 256 bytes, framing
+  // included, is 0.2061 Gb/s -- which is what packetGb makes of it.
+  ok(Math.abs(80000 * packetGb(256) - 0.2061) < 1e-4, 'a packet is its payload and 66 bytes of framing on the wire');
+  const own = parseResults('# run shape: 64 bytes out -> 512 bytes back\n!test p_pps unit=pps bytes=1000 reply_bytes=0\np_pps\tr01/tor\t5\n',
+    new Map(), [], 'own.tsv');
+  const p = bindOverlay([...own.values()][0], m);
+  eq([p.bytes, p.replyBytes], [1000, 0], 'bytes= and reply_bytes= on the !test line win over the header');
 }
 
 // --------------------------------------------------------------- findings

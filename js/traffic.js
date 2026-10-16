@@ -1075,6 +1075,15 @@ export function estimateFlows(hosts, opts = {}) {
 
 const ESTIMATE_IDS = 3000000;
 
+// A packet on the wire: its payload and what Ethernet, IP and UDP add to it --
+// 14 header, 4 FCS, 8 preamble, 12 gap, 20 IP, 8 UDP. mx export's own
+// request rate on the wire is 256 bytes of payload at 322 bytes a packet.
+export const FRAMING_BYTES = 66;
+/** What one packet of `bytes` payload is on the wire, in Gb. */
+export const packetGb = (bytes) => ((bytes + FRAMING_BYTES) * 8) / 1e9;
+// A reply's flow id: its request's, moved out of every other range.
+export const REPLY_IDS = 1000000000;
+
 /**
  * Route per-host totals, by estimating who each host sent to.
  *

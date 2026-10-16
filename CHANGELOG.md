@@ -11,6 +11,24 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.13.0 — 2026-10-16
+
+Packet rates on the cables, and section headers you can find. 1.12.0 rides
+the same pull request and is not published on its own.
+
+- **A packet rate with a size is a bit rate.** A pps metric — mx's
+  `mx_peer_pps` matrix, or `mx_pps` per host — gets **packets of … B,
+  replies of … B** in the cable load panel, filled in from mx export's
+  `# run shape:` header or from `bytes=` and `reply_bytes=`, new `!test`
+  keys. Every request is routed at its payload plus 66 bytes of framing and
+  its reply routed back the other way, so the cables read against their
+  `gbps=`, contention shares out the full ones, and the headline gives the
+  packet rates beside the bits: `4.7 Mpps requests · 4.7 Mpps replies`.
+  Checked against mx's own figures: 80,000 requests of 256 bytes is its
+  0.2061 Gb/s `mx_request_gbps`.
+- **Section headers in the side panels are a quiet steel blue** rather than
+  grey — Files, Networks, Inspector and the rest stand out a little.
+
 ## 1.12.0 — 2026-10-16
 
 Duplex totals.

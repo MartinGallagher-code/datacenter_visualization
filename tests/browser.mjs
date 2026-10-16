@@ -1385,11 +1385,11 @@ await test('treat as duplex', async () => {
   const panel = () => page.evaluate(() => document.querySelector('#cable-load').innerText);
   await page.locator('#overlays .overlay-head input[type=checkbox]').first().check();
   await page.waitForTimeout(200);
-  await page.locator('#overlays label', { hasText: /^load the cables$/ }).locator('input').check();
+  await page.locator('#overlays label', { hasText: /^load the cables \(estimated\)$/ }).locator('input').check();
   await page.waitForTimeout(400);
   let text = await panel();
   const box = page.locator('#cable-load label.duplex input');
-  ok(await box.count() === 1 && !(await box.isChecked()) && /treat as duplex — 32 hosts read past their cables one way/.test(text),
+  ok(await box.count() === 1 && !(await box.isChecked()) && /treat as duplex\s*—\s*32 hosts read past their cables one way/.test(text),
      'read whole, every server reads past its NICs, and the box is offered unticked');
   ok(/32 hosts read more than their cables carry one way — R0\d\/s\d: 77Gb\/s of 50G/.test(text), 'with the reason, in red');
   await box.check();
@@ -1398,6 +1398,32 @@ await test('treat as duplex', async () => {
   ok(await page.locator('#cable-load label.duplex input').isChecked() && !/read more than/.test(text)
      && /^1\.2Tb\/s$/m.test(text), `ticked, each reading is half sent, and nothing reads past its NICs  (${text.split('\n').slice(1, 3).join(' | ')})`);
 }, { url: '?layout=examples/dual-plane.dc&results=fx/iperf-total.tsv' });
+
+// mx's per-peer packet rates, sized by the run shape in its header: each
+// request and its reply routed, in Gb/s, with the packet rates beside.
+await test('packet rates with a size', async () => {
+  const panel = () => page.evaluate(() => document.querySelector('#cable-load').innerText);
+  await page.evaluate(() => document.querySelectorAll('#overlays .overlay-head').forEach((h) => h.click()));
+  await page.waitForTimeout(300);
+  const card = page.locator('#overlays .overlay', { has: page.locator('.overlay-name', { hasText: /^Requests sent to one peer$/ }) });
+  await card.locator('.overlay-head input[type=checkbox]').check();
+  await page.waitForTimeout(200);
+  await card.locator('label', { hasText: /^load the cables$/ }).locator('input').check();
+  await page.waitForTimeout(500);
+  let text = await panel();
+  const sizes = await page.evaluate(() => [...document.querySelectorAll('#cable-load .packets input')].map((i) => i.value));
+  eq(sizes, ['256', '4096'], 'the header’s run shape fills in the packet sizes');
+  ok(/^168\.7Gb\/s$/m.test(text) && /delivered between hosts · 132 flows/.test(text)
+     && /4\.7 Mpps requests · 4\.7 Mpps replies — 256 B out, 4096 B back, framing included/.test(text),
+     `requests and replies, in Gb/s and in packets  (${text.split('\n').slice(1, 4).join(' | ')})`);
+  ok(/132 of 132 flows routed/.test(text), 'a reply is not counted as a flow of its own');
+  await page.fill('#cable-load .packets input >> nth=1', '0');
+  await page.locator('#cable-load .packets input >> nth=1').dispatchEvent('change');
+  await page.waitForTimeout(400);
+  text = await panel();
+  ok(/4\.7 Mpps requests — 256 B out, framing included/.test(text) && !/replies/.test(text.split('\n').slice(0, 4).join(' ')),
+     'with no reply size, only the requests are routed');
+}, { url: '?layout=examples/mx/floor.dc&results=examples/mx/mx-results.tsv' });
 
 // Findings: the health file beside the flows, the panel and the tooltip.
 await test('findings', async () => {

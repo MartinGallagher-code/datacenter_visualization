@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.12.0** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.13.0** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -1019,7 +1019,9 @@ ramp: viridis, magma, plasma, turbo, health, cool, ember, gray, rdbu;
 the [findings](#findings-what-went-wrong-and-whether-the-load-explains-it)
 list, where its name does not — and `finding=no` that it reports none;
 `duplex=yes|no` says whether a per-host rate adds both directions, where its
-name does not say `duplex` or `bidir`.
+name does not say `duplex` or `bidir`; `bytes=` and `reply_bytes=` size a
+packet rate's requests and replies, in bytes of payload, so it loads the
+cables as a bit rate.
 `min=`/`max=` must be numbers with `min` below `max`; anything else is
 reported in the load report and ignored rather than quietly applied.)
 
@@ -1133,6 +1135,32 @@ readable.
 on a layered run). They live under their own names so a `mean` over the
 per-host overlays can never quietly include per-flow rows, and they ask for
 `max` by default, which reads as *the worst peer of this host*.
+
+**The matrix on the cables, in packets and in bits.** `mx export --peers`
+writes `mx_peer_pps`, one sample per flow tagged `peer=` — the matrix itself.
+Tick **load the cables** on it and every flow is routed, src to peer. A
+packet rate alone cannot be set against a cable's `gbps=`, so the panel
+asks for its packets' size: **packets of [256] B, replies of [4096] B**,
+filled in by itself from the `# run shape: 256 bytes out -> 4096 bytes back`
+line mx export writes at the top of the file. With a size:
+
+- every request is routed out at its payload plus 66 bytes of framing
+  (Ethernet, IP, UDP, preamble and gap — mx's own `mx_request_gbps` is
+  exactly that), and **its reply is routed back** at the reply's size, so a
+  matrix of small requests and big replies loads the return path hardest;
+- the load is a bit rate: cables read as a share of their `gbps=`,
+  contention shares out the full ones, and switches say how full they are;
+- the headline gives both: `168.7Gb/s delivered between hosts · 132 flows`,
+  then `4.7 Mpps requests · 4.7 Mpps replies — 256 B out, 4096 B back`.
+
+Change either size in the panel to ask what a different payload would do;
+empty the reply size to route the requests alone. `bytes=` and
+`reply_bytes=` on a `!test` line size any packet-rate metric, mx's or not.
+Per-host totals (`mx_pps`) work the same way, with each host's requests
+spread as the estimate spreads them and every reply sent back to whoever
+asked — up to about 380 hosts, the most that can be paired here; past that
+the panel says the replies are left out, and `mx_peer_pps` is the one to
+load.
 
 **Rates you can read without knowing the hardware.** `mx_rel_median` is the
 one to open first on an unfamiliar fleet: it puts every host against the

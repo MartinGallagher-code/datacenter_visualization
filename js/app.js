@@ -23,7 +23,7 @@ import { layoutFromHosts, matchesPattern, recordsSince, tailRecords } from './ts
 import { routesBetween } from './paths.js';
 import {
   betweenPicks, bitRate, cableKeys, contend, countersOf, estimateFlows, flowsOf, flowsOver, GEN_LIMITS,
-  findingsOf, generateFlows, hostCapacity, hostsOf, loadable, loadUnit, mergeResults, readsAsLoad, routeEstimate,
+  findingsOf, generateFlows, hostCapacity, hostsOf, loadable, loadUnit, mergeResults, packetGb, readsAsLoad, REPLY_IDS, routeEstimate,
   routeTraffic, switchLoads, testFlows, trafficKind, viewOf,
 } from './traffic.js';
 import { VERSION } from './version.js';
@@ -83,6 +83,9 @@ const state = {
     // Per metric, by key: treat its per-host totals as duplex (both
     // directions added) or not, where the viewer's own guess is overruled.
     duplex: new Map(),
+    // Per packet-rate metric, by key: the payload of each request and of the
+    // reply to it, in bytes, where the file's own are overruled.
+    packets: new Map(),
     // The load generator: a made-up load, on its own or on top of a metric.
     // unit null is '%' of each host's NICs where cables have a gbps=, else
     // Gb/s; hosts is a filter, empty for every device not tagged +switch.
@@ -233,6 +236,8 @@ const state = {
   // Whether a per-host metric is read as duplex, and why the box for it is
   // shown: guessed from its name or !test line, suspected because hosts read
   // past their cables, or set by hand.
+  metricUnit,
+  packetsOf,
   duplexState(overlay) {
     if (!overlay) return null;
     return {
@@ -371,12 +376,15 @@ function modelSource(withDown) {
   // A metric the generator reads: re-read when its file is, so by object.
   const from = gen && gen.from ? genSource() : null;
   const duplexKey = metric && kind === 'hosts' ? duplexOf(metric) : null;
+  const packets = metric ? packetsOf(metric) : null;
+  const packetKey = packets ? `${packets.bytes}\u0001${packets.reply}` : '';
   const slot = withDown ? 'model' : 'base';
   const c = state.trafficCache[slot];
   if (c && c.overlay === metric && c.layout === state.model && c.agg === (metric && metric.agg)
       && c.split === t.split && c.seed === t.seed && c.spread === t.spread && c.down === downKey
       && c.picks === pickKey && c.test === testKey && c.between === between && c.gen === genKey
-      && sameSource(c.from, from) && c.contention === t.contention && c.duplex === duplexKey) {
+      && sameSource(c.from, from) && c.contention === t.contention && c.duplex === duplexKey
+      && c.packets === packetKey) {
     return c.value;
   }
   // Nothing taken out: the model and its baseline are one routing.
@@ -388,7 +396,7 @@ function modelSource(withDown) {
   // A test flow or a generated load is in the metric's unit when it rides on
   // top of one; with no metric, the generator's unit is the one, and a test
   // flow's own when it is all there is.
-  const unit = metric ? loadUnit(metric, kind) : gen ? testUnit(genBase(genUnit())) : testUnit(test.unit);
+  const unit = metric ? metricUnit(metric, kind) : gen ? testUnit(genBase(genUnit())) : testUnit(test.unit);
   const opts = { split: t.split, seed: t.seed, spread: t.spread, down: out };
   const only = between ? betweenPicks(picks) : null;
   let count = 0;
@@ -416,6 +424,34 @@ function modelSource(withDown) {
     skipped = h.skipped;
     duplex = h.duplex;
     over = h.over;
+  }
+  // A packet rate with its packets' size is a bit rate: every request
+  // carries its payload and framing, and comes back as a reply of its own
+  // size, the other way. Per-host totals are paired first, as the estimate
+  // pairs them, so their replies can go back to whoever asked.
+  let packetRun = null;
+  if (packets && packets.bytes > 0) {
+    const req = packetGb(packets.bytes);
+    const rep = packets.reply > 0 ? packetGb(packets.reply) : 0;
+    packetRun = { ...packets, why: '' };
+    if (hosts && rep) {
+      const pairs = estimateFlows(hosts, { spread: t.spread, split: t.split, only });
+      if (pairs.length * 2 <= GEN_LIMITS.flows) {
+        metricFlows = pairs;
+        hosts = null;
+      } else {
+        packetRun.why = `${hosts.length.toLocaleString()} hosts are too many to pair here, so their replies are left out`;
+      }
+    }
+    if (hosts) hosts = hosts.map((h) => ({ el: h.el, value: h.value * req, pps: h.value }));
+    const both = [];
+    for (const flow of metricFlows) {
+      both.push({ ...flow, value: flow.value * req, pps: flow.value });
+      if (rep) {
+        both.push({ ...flow, id: REPLY_IDS + flow.id, src: flow.dst, dst: flow.src, value: flow.value * rep, pps: flow.value, reply: true });
+      }
+    }
+    metricFlows = both;
   }
   let genFlows = [];
   let genRun = null;
@@ -475,7 +511,8 @@ function modelSource(withDown) {
     routed = contended.contention.flows;
     if (metric) {
       const mine = routed.filter((flow) => !flow.gen && !flow.test);
-      own = { routed: mine.length, delivered: mine.reduce((sum, flow) => sum + flow.value, 0) };
+      // A reply is its request's flow coming back, not a flow of its own.
+      own = { routed: mine.filter((flow) => !flow.reply).length, delivered: mine.reduce((sum, flow) => sum + flow.value, 0) };
     }
   } else {
     routed = [...metricFlows];
@@ -483,7 +520,8 @@ function modelSource(withDown) {
     if (metric) {
       result = hosts ? routeEstimate(state.model, hosts, { ...opts, only }) : routeTraffic(state.model, metricFlows, opts);
       // The metric's own count, before anything is added on top of it.
-      own = { routed: result.routed, delivered: result.delivered };
+      // Every request routed has its reply routed back the same way round.
+      own = { routed: packetRun && packetRun.reply && !hosts ? Math.round(result.routed / 2) : result.routed, delivered: result.delivered };
     }
     // Routed even when empty, so the panel has a result to say why.
     if (gen) result = mergeResults(result, routeTraffic(state.model, genFlows, opts));
@@ -497,11 +535,12 @@ function modelSource(withDown) {
   const value = {
     overlay: metric, kind: metric ? kind : gen ? 'gen' : 'test', result, loads: result.loads, toGbps: unit.toGbps,
     unit: unit.unit, count, total, unresolved, skipped, between, test: testRun, gen: genRun, own,
-    flows: routed, opts, estimated: !!metric && kind === 'hosts', contentionWhy, duplex, over,
+    flows: routed, opts, estimated: !!metric && kind === 'hosts', contentionWhy, duplex, over, packets: packetRun,
   };
   state.trafficCache[slot] = {
     overlay: metric, layout: state.model, agg: metric && metric.agg, split: t.split, seed: t.seed, spread: t.spread,
-    down: downKey, picks: pickKey, test: testKey, between, gen: genKey, from, contention: t.contention, duplex: duplexKey, value,
+    down: downKey, picks: pickKey, test: testKey, between, gen: genKey, from, contention: t.contention, duplex: duplexKey,
+    packets: packetKey, value,
   };
   return value;
 }
@@ -515,7 +554,7 @@ function genUnit() {
   const t = state.traffic;
   const overlay = t.key ? state.overlays.get(t.key) : null;
   const metric = overlay && overlay.enabled && trafficKind(overlay) !== 'cables' && loadable(overlay) ? overlay : null;
-  const base = metric ? loadUnit(metric, trafficKind(metric)) : null;
+  const base = metric ? metricUnit(metric, trafficKind(metric)) : null;
   if (base && base.toGbps === null) return base.unit;
   // Read off a metric, a load is in Gb/s.
   if (t.gen.from) return 'Gb/s';
@@ -540,6 +579,28 @@ function genSource() {
 // same overlay the same way: readsAsLoad makes a new object every call.
 const sameSource = (a, b) => a === b
   || !!(a && b && a.overlay === b.overlay && a.toGbps === b.toGbps && a.percent === b.percent);
+
+/**
+ * A packet-rate metric's packets: each request's payload and its reply's,
+ * in bytes, as set here or as the file says (0: not known). Null for a
+ * metric that is not in pps.
+ */
+function packetsOf(overlay) {
+  if (!/^\s*pps\s*$/i.test(String(overlay.unit || ''))) return null;
+  const set = state.traffic.packets.get(overlay.key);
+  return {
+    bytes: set ? set.bytes : overlay.bytes || 0,
+    reply: set ? set.reply : overlay.replyBytes || 0,
+    file: !!overlay.bytes,
+  };
+}
+
+/** What a metric loads the cables in: its own unit, or Gb/s once its packets are sized. */
+function metricUnit(overlay, kind) {
+  const p = packetsOf(overlay);
+  if (p && p.bytes > 0) return { ok: true, toGbps: 1, unit: 'Gb/s', why: '', packets: p };
+  return loadUnit(overlay, kind);
+}
 
 /** Whether a metric's per-host totals are read as duplex: as set, or as guessed. */
 function duplexOf(overlay) {
@@ -941,6 +1002,14 @@ const actions = {
   // the flows offer.
   setContention(on) {
     state.traffic.contention = on;
+    refreshPanels();
+    invalidate();
+  },
+
+  // A packet-rate metric's packets, in bytes: { bytes, reply }, overruling
+  // the file's own.
+  setPackets(overlay, packets) {
+    state.traffic.packets.set(overlay.key, packets);
     refreshPanels();
     invalidate();
   },

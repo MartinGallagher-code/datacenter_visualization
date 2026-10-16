@@ -198,6 +198,13 @@ const TEST_KEYS = {
   // total -- read as half out and half in: read from the name (duplex,
   // bidir) when not given, and `no` to say it is not.
   duplex: ['true', 'yes', 'y', 'on', '1', 'false', 'no', 'n', 'off', '0'],
+  // A packet rate's packets: each request's payload in bytes, and the
+  // reply each one is answered with (0: none). With them a rate in pps is a
+  // bit rate, framing added, and every request comes back as a reply. mx
+  // export says them in its header, `# run shape: 256 bytes out -> 4096
+  // bytes back`, which sets them for every pps metric in the file.
+  bytes: num(1, 1e6, true),
+  reply_bytes: num(0, 1e6, true),
 };
 
 function checkNumberMeta(key, value, spec, name, where, warnings) {
@@ -277,8 +284,10 @@ export function parseResults(text, into = new Map(), warnings = [], source = '',
       into.source = opts.group || source;
       return parseWideResults(text, into, warnings, source);
     }
-    return looksLikeJson(text) ? parseJsonResults(text, into, warnings)
-                               : parseTextResults(text, into, warnings);
+    const out = looksLikeJson(text) ? parseJsonResults(text, into, warnings)
+                                    : parseTextResults(text, into, warnings);
+    runShape(text, into, source);
+    return out;
   } finally {
     into.source = '';
   }
@@ -551,6 +560,21 @@ const truncate = (line) => (line.length > 60 ? `${line.slice(0, 57)}…` : line)
  */
 export const overlayKey = (source, name) => (source ? `${source}\u0000${name}` : name);
 
+// mx export's header says what one request and its reply carry: set them
+// on every packet-rate metric in the file that does not say its own.
+const RUN_SHAPE = /^#.*\brun shape:\s*([\d,]+)\s*bytes?\s+out\s*(?:->|→)\s*([\d,]+)\s*bytes?\s+back/im;
+function runShape(text, into, source) {
+  const m = RUN_SHAPE.exec(text);
+  if (!m) return;
+  const [out, back] = [m[1], m[2]].map((v) => Number(v.replace(/,/g, '')));
+  for (const overlay of into.values()) {
+    if ((overlay.source || '') !== (source || '')) continue;
+    if (!/^\s*pps\s*$/i.test(String(overlay.meta.unit || ''))) continue;
+    if (overlay.meta.bytes === undefined) overlay.meta.bytes = String(out);
+    if (overlay.meta.reply_bytes === undefined) overlay.meta.reply_bytes = String(back);
+  }
+}
+
 function ensureOverlay(map, name) {
   const source = map.source || '';
   const key = overlayKey(source, name);
@@ -655,6 +679,8 @@ export function bindOverlay(overlay, model) {
     // folded to underscores; the card prints it, and the filter accepts either.
     slug: slugify(meta.slug || overlay.name),
     finding: String(meta.finding || '').toLowerCase(),
+    bytes: metaNumber(meta.bytes, null, TEST_KEYS.bytes),
+    replyBytes: metaNumber(meta.reply_bytes, null, TEST_KEYS.reply_bytes),
     duplex: meta.duplex !== undefined
       ? flagged(meta.duplex)
       : /duplex|bidir/i.test(`${overlay.name} ${meta.label || ''}`),

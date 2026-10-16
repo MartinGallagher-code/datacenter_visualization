@@ -11,6 +11,8 @@
   --ink: #c9d1d9;
   --ink-dim: #8b949e;
   --accent: #4fa3ff;
+  /* Section headers: a quiet steel blue, so a panel's sections can be found at a glance. */
+  --head: #86b3df;
   --warn: #d29922;
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
@@ -147,7 +149,7 @@ body.resizing { cursor: col-resize; user-select: none; }
   font-size: 10.5px;
   letter-spacing: 0.09em;
   text-transform: uppercase;
-  color: var(--ink-dim);
+  color: var(--head);
   font-weight: 600;
 }
 .hint { text-transform: none; letter-spacing: 0; color: #6b7484; font-weight: 400; }
