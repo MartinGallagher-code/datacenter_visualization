@@ -27,7 +27,9 @@ Bonded NICs.
   Syntax panel.
 - Contention shares out up to twenty million cable crossings, up from
   twelve: bonded legs keep to their own side and cross more cables, though
-  sharing the way on from each ToR makes them no slower.
+  sharing the way on from each ToR makes them no slower. 576 servers at 280
+  random peers over `examples/dual-plane.dc` grown to eight pods — 161,280
+  flows, given up on in 1.8.1 — now share out in about two seconds.
 
 ## 1.9.0 — 2026-10-16
 

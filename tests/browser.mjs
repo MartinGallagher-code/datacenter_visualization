@@ -1260,11 +1260,11 @@ await test('a random load of 160k flows', async () => {
   await page.waitForFunction(() => /flows/.test(document.querySelector('#cable-load').innerText), null, { timeout: 60000 });
   ok(/576 of 576 hosts send · 161280 flows/.test(await gen()), 'every server sends to 280 others, and the page is still there');
   const text = await page.evaluate(() => document.querySelector('#cable-load').innerText);
-  // This fabric's spines each run 24 parallel plane cables, so an even split
-  // crosses too many to share out here: the page says so and draws what is
-  // offered, rather than hanging.
-  ok(/Busiest cables[\s\S]*SP\d\/spine\d → R\d\d\/tor[ab]/.test(text) && /too many flows to share out here/.test(text),
-     'the cables are drawn, and the panel says it could not share them out');
+  // Its spines each run 24 parallel plane cables, so an even split crosses
+  // about fifteen million: inside what the page shares out.
+  const summary = (/contention: \d+ cables full, holding back .*/.exec(text) || [''])[0];
+  ok(/Busiest cables[\s\S]*SP\d\/spine\d → R\d\d\/tor[ab]/.test(text) && summary && !/too many flows/.test(text),
+     `the cables are drawn, and shared out  (${summary})`);
 }, { url: '?layout=examples/dual-plane.dc' });
 
 // Bonded NICs carry the same, hashed or not: each flow is split over the
