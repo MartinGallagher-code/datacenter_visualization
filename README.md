@@ -775,6 +775,15 @@ Every cable is full duplex, and its load is told each way: a NIC carrying
 cable shows the part of it that crosses that cable — under an even split
 over two NICs, half of it each.
 
+#### The headline
+
+At the top of the Cable load panel, one number: what the hosts deliver to
+each other in all — with contention, of what they offered — and over how
+many flows. Under it, each net's load, both ways, against what its cables
+that carry any of it can carry: `plane-1 57.6Tb/s of 115.2T · 50%` says how
+much crosses the superspines. The nets are not added up, since a flow
+between two rows crosses NICs, uplinks and planes and is counted on each.
+
 #### Hovering a server
 
 With load on the cables, a server's tooltip says what it sends and receives

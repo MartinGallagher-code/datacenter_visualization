@@ -1195,6 +1195,10 @@ await test('the load generator', async () => {
   ok(/Generated all-to-all/.test(loaded) && /generated: all-to-all, 50% of its NICs from each host/.test(loaded),
      'the cable load panel says what it is showing');
   ok(/R0\d\/tor[ab] → R0\d\/s\d\s+12\.5G\/25G · 50%/.test(loaded), 'and half of every server’s NIC is in use');
+  // The headline: all of it delivered, and each net's share of what it carries.
+  const headline = await page.evaluate(() => document.querySelector('#cable-load .headline').innerText);
+  ok(/^800Gb\/s\ndelivered between hosts · 992 flows/.test(headline) && /NIC a\s+800Gb\/s of 1\.6T · 50%/.test(headline),
+     `a headline says what is delivered in all, and each net's load  (${headline.replace(/\n/g, ' | ')})`);
 
   // Per peer: every flow carries the whole amount, so the NICs are past full
   // and contention holds them back.
@@ -1317,9 +1321,10 @@ await test('hovering a cable', async () => {
   const server = await sweep('^s\\d   \\(node\\)');
   ok(!!server, 'a server’s own box still shows the server');
   // And what the server itself sends and receives, in all and on each NIC.
-  ok(server && /sending 25Gb\/s · receiving 25Gb\/s — 50% of its 50G/.test(server)
-     && /NIC a to R0\d\/tora: out 12\.5Gb\/s · in 12\.5Gb\/s · 50%/.test(server) && /31 flows out, 31 in/.test(server),
-     `with its own traffic  (${server && server.replace(/\n/g, ' | ')})`);
+  const own = server ? server.text : '';
+  ok(/sending 25Gb\/s · receiving 25Gb\/s — 50% of its 50G/.test(own)
+     && /NIC a to R0\d\/tora: out 12\.5Gb\/s · in 12\.5Gb\/s · 50%/.test(own) && /31 flows out, 31 in/.test(own),
+     `with its own traffic  (${own.replace(/\n/g, ' | ')})`);
   const port = await sweep('^NIC a: R0\\d/tora ↔ ');
   ok(port && /8 cables · 25G each, 200G in all/.test(port.text) && /out of R0\d\/tora/.test(port.text),
      'on a ToR’s stub, every cable through it, told as in and out of the ToR');

@@ -13,8 +13,14 @@ their shapes are not a promise.
 
 ## 1.11.0 — 2026-10-16
 
-What a server sends and receives, on hover. 1.10.0 rides the same pull
-request and is not published on its own.
+A headline for all of it, and what a server sends and receives, on hover.
+1.10.0 rides the same pull request and is not published on its own.
+
+- **A headline at the top of the Cable load panel**: what the hosts deliver
+  to each other in all (with contention, of what they offered) and over how
+  many flows, and under it each net's load against what its loaded cables
+  carry — `plane-1 57.6Tb/s of 115.2T · 50%` is how much crosses the
+  superspines.
 
 - **A server's tooltip carries its traffic.** With load on the cables it
   says what the server sends and receives in all, against what its cables

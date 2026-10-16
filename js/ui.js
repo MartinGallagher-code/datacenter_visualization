@@ -833,6 +833,61 @@ export function hostTip(state, node, view) {
   return lines;
 }
 
+/**
+ * The whole of it at a glance: what the hosts deliver to each other, of what
+ * they offer -- and what crosses each net, both ways, against what its cables
+ * carry. The nets are not added up: one flow crosses several of them.
+ */
+function renderHeadline(state, view, box) {
+  const wrap = el('div', 'headline');
+  const model = view.view === 'measured' || view.view === 'diff' ? null : view.model;
+  if (model && model.result) {
+    const r = model.result;
+    const c = r.contention;
+    const delivered = c ? c.carried : r.delivered;
+    const offered = c ? c.wanted : r.delivered;
+    const flows = model.flows ? model.flows.length : r.routed;
+    wrap.append(el('div', 'headline-big', formatLoad(model, delivered)));
+    let sub = model.estimated && !c ? 'between hosts, estimated' : 'delivered between hosts';
+    if (offered > delivered * (1 + 1e-9)) sub += ` of ${formatLoad(model, offered)} offered (${pct(delivered / offered)})`;
+    if (flows) sub += ` · ${flows.toLocaleString()} flow${flows === 1 ? '' : 's'}`;
+    const missed = r.missed && r.missed.count;
+    if (missed) sub += ` · ${missed.toLocaleString()} not routed`;
+    wrap.append(el('div', 'muted', sub));
+  }
+  // Each net's cables, both ways, against what they carry both ways.
+  const nets = new Map();
+  for (const [link, l] of view.loads) {
+    const sum = l[0] + l[1];
+    if (!(sum > 0)) continue;
+    let n = nets.get(link.net);
+    if (!n) nets.set(link.net, (n = { load: 0, capacity: 0, unknown: false }));
+    n.load += sum;
+    if (link.gbps) n.capacity += 2 * link.gbps;
+    else n.unknown = true;
+  }
+  if (nets.size) {
+    const table = el('div', 'headline-nets');
+    table.title = 'What crosses each net, both ways, against what the cables of it that carry any of this load '
+      + 'can carry both ways. Not added up: a flow between two racks crosses a NIC, an uplink and a NIC again, '
+      + 'and is counted on each.';
+    const order = [...state.model.nets.keys()];
+    const names = [...nets.keys()].sort((a, b) => order.indexOf(a) - order.indexOf(b));
+    for (const name of names) {
+      const n = nets.get(name);
+      const net = state.model.nets.get(name);
+      const share = view.toGbps !== null && n.capacity && !n.unknown ? (n.load * view.toGbps) / n.capacity : null;
+      const row = el('div', 'headline-net');
+      row.append(el('span', null, net ? net.label || net.name : name),
+        el('span', null, `${formatLoad(view, n.load)}${n.capacity && !n.unknown ? ` of ${formatGbps(n.capacity)}` : ''}`
+          + `${share !== null ? ` · ${pct(share)}` : ''}`));
+      table.append(row);
+    }
+    wrap.append(table);
+  }
+  if (wrap.childNodes.length) box.append(wrap);
+}
+
 /** How many cables are past full, in a set of loads. */
 function overFull(loads, toGbps) {
   let n = 0;
@@ -865,6 +920,7 @@ export function renderCableLoad(state, host, actions) {
   off.addEventListener('click', () => actions.clearTraffic());
   head.append(off);
   box.append(head);
+  renderHeadline(state, view, box);
 
   if (view.views.length > 1) {
     const pick = el('select', 'cable-view');

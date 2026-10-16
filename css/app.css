@@ -700,6 +700,12 @@ body.resizing-rows { cursor: row-resize; user-select: none; }
 .load-ramp { flex: 1; min-width: 50px; height: 7px; border-radius: 2px; }
 .load-chip { width: 10px; height: 7px; border-radius: 2px; flex: none; margin-left: 4px; }
 .cable-summary { font-size: 11px; margin: 4px 0; }
+.headline { margin: 2px 0 6px; }
+.headline-big { font-size: 20px; font-weight: 600; line-height: 1.2; }
+.headline .muted { font-size: 11px; }
+.headline-nets { margin-top: 4px; font-size: 11px; }
+.headline-net { display: flex; justify-content: space-between; gap: 8px; }
+.headline-net span:last-child { font-family: var(--mono); white-space: nowrap; }
 .cable-summary .bad, .cable-load .bad { color: #f85149; }
 .load-title { font-size: 11px; color: var(--ink-dim); margin: 6px 0 2px; }
 .load-list { margin: 2px 0 6px; }
