@@ -11,6 +11,47 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.11.0 — 2026-10-16
+
+A headline for all of it, and what a server sends and receives, on hover.
+1.10.0 rides the same pull request and is not published on its own.
+
+- **A headline at the top of the Cable load panel**: what the hosts deliver
+  to each other in all (with contention, of what they offered) and over how
+  many flows, and under it each net's load against what its loaded cables
+  carry — `plane-1 57.6Tb/s of 115.2T · 50%` is how much crosses the
+  superspines.
+
+- **A server's tooltip carries its traffic.** With load on the cables it
+  says what the server sends and receives in all, against what its cables
+  carry (`sending 25Gb/s · receiving 25Gb/s — 50% of its 50G`), each cable
+  out and in, and how many flows start and end there. Shared out, it says
+  what the server offered where a full cable held it back, and how many of
+  its flows were held. Before, only a switch's tooltip said anything about
+  load.
+- The README says a cable's load is told each way, full duplex, and that a
+  flow listed over a cable shows only the part of it that crosses it.
+
+## 1.10.0 — 2026-10-16
+
+Bonded NICs.
+
+- **`bond=` on nets.** A host's cables on nets with the same `bond=` are one
+  bond, and every flow from or to it is split over them by capacity —
+  sending and receiving, under every split. Hashed used to put each flow on
+  one NIC for its whole way, so a server's two NICs came out a flow or so
+  apart; bonded, they carry exactly the same. Between two bonded hosts each
+  NIC's half keeps to its own net, NIC a to NIC a, and is routed (and
+  hashed) on its own. A ToR or cable taken out leaves the rest of the bond
+  to carry everything. Routing, contention, the flows over a hovered cable
+  and the host-total estimate all use it. In the editor's completions and
+  Syntax panel.
+- Contention shares out up to twenty million cable crossings, up from
+  twelve: bonded legs keep to their own side and cross more cables, though
+  sharing the way on from each ToR makes them no slower. 576 servers at 280
+  random peers over `examples/dual-plane.dc` grown to eight pods — 161,280
+  flows, given up on in 1.8.1 — now share out in about two seconds.
+
 ## 1.9.0 — 2026-10-16
 
 The load generator can send to each peer, not only in all. 1.8.1 rides the

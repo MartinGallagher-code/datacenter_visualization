@@ -44,6 +44,7 @@ const NET_KEYS = [
   ['show=', 'true/false: start visible or unticked'],
   ['gbps=', 'what each cable carries, in Gb/s: gbps=100'],
   ['traffic=', 'no: drawn, but carries no routed traffic (mgmt)'],
+  ['bond=', 'name: a host’s cables on nets with the same bond share every flow by capacity'],
 ];
 
 // Every option a link rule takes, and only those. The parser's own LINK_OPTS
@@ -402,6 +403,7 @@ const REFERENCE = [
     ['net fabric gbps=100', 'every cable of the net carries 100 Gb/s'],
     ['link nica role=server role=tor scope=rack gbps=25', 'this rule’s cables, over the net’s'],
     ['net mgmt gbps=1 traffic=no', 'drawn, but carries none of the routed traffic'],
+    ['net nica gbps=100 bond=nic', 'bonded with every net of bond=nic: a server’s NICs share each flow by capacity, sending and receiving'],
     ['link fabric role=tor role=spine weight=2', 'twice the share of a flow where routes fork'],
     ['+switch', 'only elements tagged switch forward traffic', true],
     ['node spine role=spine +switch gbps=12800', 'a switch that can forward 12.8 Tb/s in all, whatever its ports add up to'],

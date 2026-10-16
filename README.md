@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.9.0** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.11.0** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -518,6 +518,17 @@ is end to end, and only switch counters see the cables themselves:
     while its neighbour idles. **Re-roll** hashes again with another seed.
 - **`weight=`** on a link rule scales its cables' share in every mode —
   `weight=3` takes three times what a weight-1 cable beside it does.
+- **`bond=`** on nets bonds a host's cables on them: `net nica gbps=100
+  bond=nic` and `net nicb gbps=100 bond=nic` make every server's NIC a and
+  NIC b one bond. A flow from or to a bonded host is split over the bond by
+  capacity — two equal NICs half each — **sending and receiving, under every
+  split**, hashed included, where unbonded a hashed flow rides one NIC all
+  the way and the two come out a flow or so apart. Between two bonded hosts
+  each NIC's half keeps to its own side, NIC a to NIC a, so in one rack it
+  never leaves the ToR; beyond that, each half is routed (and hashed) on its
+  own. Take a ToR or a NIC's cable out and the rest of the bond carries
+  everything. Only hosts bond: a switch's cables on the same nets are what
+  the hosts hang off. A host with cables in two bonds uses the bigger.
 - A pair's samples are reduced by the card's own aggregation (the mean of a
   run's passes, by default). The metric must be a rate (`unit=Gb/s`, `Mb/s`,
   `MB/s`, `pps`, … — or a name like `iperf_mbps_out`) or a volume; a bit or
@@ -567,9 +578,10 @@ magenta, which says how oversubscribed it is rather than what it carries.
 
 Sharing out costs in proportion to the cables every flow crosses, added up
 over the flows. Flows that leave the same switches for the same server share
-that part of the work, and the page shares out up to twelve million
+that part of the work, and the page shares out up to twenty million
 crossings: a thousand servers each sending to 150 random peers over a
-four-plane fabric is about nine million, and takes a few seconds. Past that
+four-plane fabric is about nine million (fourteen with bonded NICs), and
+takes a few seconds. Past that
 the panel says **too many flows to share out here**, and draws what the flows
 offer, as if contention were unticked.
 
@@ -757,6 +769,31 @@ every cable it has, a rack's lane every server's — the pointer is on all of
 them, and the tooltip says so: `NIC a: R01/tora ↔ 4 spliced (s1…s4), …`, in
 and out of the ToR. Inside a device's own box, the device is what is shown
 unless the pointer is right on a cable.
+
+Every cable is full duplex, and its load is told each way: a NIC carrying
+88 Gb/s out and 88 Gb/s in is 88% full, not 176%. A flow listed over a
+cable shows the part of it that crosses that cable — under an even split
+over two NICs, half of it each.
+
+#### The headline
+
+At the top of the Cable load panel, one number: what the hosts deliver to
+each other in all — with contention, of what they offered — and over how
+many flows. Under it, each net's load, both ways, against what its cables
+that carry any of it can carry: `plane-1 57.6Tb/s of 115.2T · 50%` says how
+much crosses the superspines. The nets are not added up, since a flow
+between two rows crosses NICs, uplinks and planes and is counted on each.
+
+#### Hovering a server
+
+With load on the cables, a server's tooltip says what it sends and receives
+in all, and how full that is of its cables' capacity, the busier way —
+`sending 25Gb/s · receiving 25Gb/s — 50% of its 50G` — then each of its
+cables, out and in, and how many of the flows start and end there. Shared
+out, it also says what it offered where a full cable held it back, and how
+many of its flows were: an incast target reads `receiving 50Gb/s, of
+775Gb/s offered — 100% of its 50G … 31 held back by a full cable`. A switch
+says how much it switches instead (see **How full a switch is**).
 
 #### Per-host totals: an estimate
 

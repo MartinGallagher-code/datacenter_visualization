@@ -2015,6 +2015,74 @@ const segsOf = (cache, net) => {
   CONTEND_LIMITS.crossings = saved;
 }
 
+// ------------------------------------------------------------------- bonds
+// bond= on nets: a host's cables on nets of one bond carry every flow from
+// or to it in shares by capacity -- sending and receiving, under every split,
+// hashed included, where one flow would otherwise ride one NIC all the way.
+{
+  const text = readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8')
+    .replace(/^(net nica .*)$/m, '$1 bond=nic').replace(/^(net nicb .*)$/m, '$1 bond=nic');
+  const m = parseLayout(text);
+  eq(m.warnings, [], 'bond= is a net setting');
+  eq([m.nets.get('nica').bond, m.nets.get('nicb').bond, m.nets.get('fabric').bond], ['nic', 'nic', null], 'and it is read');
+  ok(/bnd= is not a net setting -- did you mean bond=\?/.test(parseLayout(text.replace('bond=nic', 'bnd=nic')).warnings.join('\n')),
+     'and a misspelt one is named');
+
+  const servers = hostsFor(m).hosts;
+  const nics = (r, s) => {
+    const each = (net) => {
+      const link = s.links.find((l) => l.net === net);
+      const x = r.loads.get(link) || [0, 0];
+      return link.a === s ? x : [x[1], x[0]];
+    };
+    return [each('nica'), each('nicb')];
+  };
+  const gap = (r) => Math.max(...servers.map((s) => {
+    const [a, b] = nics(r, s);
+    return Math.max(Math.abs(a[0] - b[0]), Math.abs(a[1] - b[1]));
+  }));
+  const gen = generateFlows(m, { pattern: 'random', value: 10, unit: 'Gb/s', peers: 3, seed: 2 });
+  for (const split of ['even', 'capacity', 'hashed']) {
+    const r = routeTraffic(m, gen.flows, { split, seed: 4 });
+    ok(gap(r) < 1e-9 && r.routed === gen.flows.length, `${split}: every server's two NICs send and receive exactly the same`);
+    const c = contend(m, gen.flows, { split, seed: 4, toGbps: 1 });
+    ok([...r.loads].every(([l, x]) => {
+      const y = c.contention.offered.get(l);
+      return y && Math.abs(y[0] - x[0]) < 1e-9 && Math.abs(y[1] - x[1]) < 1e-9;
+    }), `${split}: and contend routes the legs as routeTraffic does`);
+    const cable = servers[5].links.find((l) => l.net === 'nicb');
+    const over = flowsOver(m, gen.flows, [cable], { split, seed: 4 });
+    const load = r.loads.get(cable);
+    ok(Math.abs(over.amount - (load[0] + load[1])) < 1e-9 && over.count === 6,
+       `${split}: the flows over one NIC are the server's six, half of each`);
+  }
+  // Unbonded and hashed, one flow rides one NIC: the two are apart by a flow.
+  const plain = parseLayout(readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8'));
+  const loose = routeTraffic(plain, generateFlows(plain, { pattern: 'random', value: 10, unit: 'Gb/s', peers: 3, seed: 2 }).flows,
+    { split: 'hashed', seed: 4 });
+  ok(gap(loose) >= 10 || Math.max(...hostsFor(plain).hosts.map((s) => {
+    const a = loose.loads.get(s.links.find((l) => l.net === 'nica')) || [0, 0];
+    const b = loose.loads.get(s.links.find((l) => l.net === 'nicb')) || [0, 0];
+    return Math.abs(Math.max(...a) - Math.max(...b));
+  })) >= 10, 'without bond=, hashed flows leave one NIC a whole flow busier');
+
+  // NIC a to NIC a: the legs keep to their side, so between two servers on
+  // one pair of ToRs nothing goes up to a spine.
+  const [s1, s2] = [m.resolve('R01/s1'), m.resolve('R01/s2')];
+  const pair = routeTraffic(m, [{ id: 1, src: s1, dst: s2, value: 10 }], { split: 'hashed' });
+  eq([...pair.loads.keys()].map((l) => l.net).sort(), ['nica', 'nica', 'nicb', 'nicb'], 'in one rack, each NIC’s half stays on its own ToR');
+
+  // Take a ToR out and the bond's other cable carries all of it.
+  const tora = m.resolve('R01/tora');
+  const failed = routeTraffic(m, gen.flows, { split: 'hashed', seed: 4, down: { els: [tora], links: [] } });
+  const [a, b] = nics(failed, s1);
+  ok(a[0] === 0 && a[1] === 0 && Math.abs(b[0] - 10) < 1e-9, `with its ToR a out, a server sends all of its 10 on NIC b  (${b[0]})`);
+
+  // An estimate between hosts is bonded too.
+  const est = routeEstimate(m, servers.map((el, i) => ({ el, value: 10 + i })), { spread: 'gravity' });
+  ok(gap(est) < 1e-9, 'an estimate splits each server evenly over its NICs');
+}
+
 // ------------------------------------------------------------- full switches
 // How full a switch is: what passes through it against what it can pass --
 // its own gbps= where given, else its ports. A gbps= of its own is a limit
