@@ -12,7 +12,7 @@
 
 // Headless test suite: node tests/run.mjs
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -559,6 +559,31 @@ eq(braced.get('temp_c').samples.length, 1, 'comment starting with { stays text')
   eq([bound.min, bound.max], [0, 499], 'and the domain comes out of them');
   ok(overlayValue(bound, small.resolve('DH1/A/R01/u05')).samples === 150000,
      'with every sample on the element');
+
+  // The same overflow, twice more: a random load of 150k flows pushed into
+  // one array with push(...flows), and a layout range with a long segment.
+  eq(expand('s[1..300000,7]').length, 300001, 'a range with a 300k segment expands');
+
+  // So every argument spread in the viewer is listed here, with why it is
+  // small. A new one fails until it is either a loop or added with its bound.
+  const smallSpreads = new Map([
+    ['app.js', ['lines.push(...switchTip(', 'fn(...args)']],          // a tooltip's lines; a debounce's arguments
+    ['hints.js', ['options.push(...NET_KEYS)', 'options.push(...LINK_KEYS)', 'options.push(...ELEMENT_KEYS)']],
+    ['paths.js', ['Math.min(...layer)']],                             // one hop's parallel cables
+    ['render.js', ['Math.min(...xs)', 'Math.max(...xs)']],            // a curve's four points
+    ['ui.js', ['Math.max(...y.l)', 'Math.max(...x.l)']],              // a cable's two directions
+  ]);
+  const spreads = [];
+  for (const file of readdirSync(join(root, 'js')).filter((f) => f.endsWith('.js'))) {
+    readFileSync(join(root, 'js', file), 'utf8').split('\n').forEach((line, i) => {
+      if (/^\s*(\/\/|\*)/.test(line)) return;
+      for (const m of line.matchAll(/[\w\]]\((\.\.\.)/g)) {
+        const known = smallSpreads.get(file) || [];
+        if (!known.some((k) => line.includes(k))) spreads.push(`${file}:${i + 1}: ${line.trim()}`);
+      }
+    });
+  }
+  eq(spreads, [], 'no argument spread in js/ that could be handed a hundred thousand items');
 }
 
 // ----------------------------------------------------------- overlay source

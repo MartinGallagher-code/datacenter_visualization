@@ -11,6 +11,25 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.8.1 — 2026-10-16
+
+A random load of a hundred thousand flows or more no longer stops the page.
+
+- **Random peers at 150 and up no longer crash the viewer.** A thousand
+  servers at ×150 is 153,600 flows, and passing every one of them to a
+  single `push(...)` overflowed the stack ("Maximum call stack size
+  exceeded"), leaving the page blank. They are added one at a time now. A
+  test in `tests/run.mjs` lists every argument spread in `js/` with why it
+  is small, so a new one fails until it is a loop: this was the third time.
+- **Contention keeps up with it.** Flows leaving the same switches for the
+  same server now share the rest of their path, and sharing out may cover
+  twelve million cable crossings rather than three, so that same load is
+  shared out in a few seconds instead of quietly being drawn as offered.
+- **A layout range with a long segment**, such as `s[1..300000,7]`,
+  overflowed the stack the same way, and now expands.
+- The README says what the peer count does: it spreads each host's load
+  over more flows, and does not add to it.
+
 ## 1.8.0 — 2026-10-14
 
 Findings: what went wrong on each server, and whether the load explains it.

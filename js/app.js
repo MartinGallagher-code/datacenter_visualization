@@ -467,7 +467,11 @@ function modelSource(withDown) {
     // Routed even when empty, so the panel has a result to say why.
     if (gen) result = mergeResults(result, routeTraffic(state.model, genFlows, opts));
     if (test) result = mergeResults(result, routeTraffic(state.model, testFlowsNow, opts));
-    routed.push(...genFlows, ...testFlowsNow);
+    // Not push(...genFlows): a random generator at a hundred peers makes a
+    // hundred thousand flows, and spreading that many arguments overflows
+    // the stack.
+    for (const flow of genFlows) routed.push(flow);
+    for (const flow of testFlowsNow) routed.push(flow);
   }
   const value = {
     overlay: metric, kind: metric ? kind : gen ? 'gen' : 'test', result, loads: result.loads, toGbps: unit.toGbps,

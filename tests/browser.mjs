@@ -1225,6 +1225,31 @@ await test('the load generator', async () => {
   eq(await count(), '16 hosts', 'and not: every server outside pod 1');
 }, { url: '?layout=examples/dual-plane.dc' });
 
+// A hundred thousand flows and more: a random load at a few hundred peers
+// over a few hundred servers. Spreading that many flows into one push()
+// overflowed the stack, and the page went blank.
+await test('a random load of 160k flows', async () => {
+  const big = readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8')
+    .replace('pod [1..2]', 'pod [1..8]').replace('u=24', 'u=40')
+    .replace('at=24', 'at=40').replace('at=23', 'at=39').replace('s[1..8] u=2', 's[1..36] u=1');
+  await openLayout(big);
+  const gen = () => page.evaluate(() => document.querySelector('#load-gen').innerText);
+  await page.locator('#load-gen select.gen-pattern').selectOption('random');
+  await page.waitForTimeout(300);
+  await page.fill('#load-gen input.gen-peers', '280');
+  await page.locator('#load-gen input.gen-peers').dispatchEvent('change');
+  await page.waitForTimeout(300);
+  await page.locator('#load-gen button', { hasText: 'Run' }).click();
+  await page.waitForFunction(() => /flows/.test(document.querySelector('#cable-load').innerText), null, { timeout: 60000 });
+  ok(/576 of 576 hosts send · 161280 flows/.test(await gen()), 'every server sends to 280 others, and the page is still there');
+  const text = await page.evaluate(() => document.querySelector('#cable-load').innerText);
+  // This fabric's spines each run 24 parallel plane cables, so an even split
+  // crosses too many to share out here: the page says so and draws what is
+  // offered, rather than hanging.
+  ok(/Busiest cables[\s\S]*SP\d\/spine\d → R\d\d\/tor[ab]/.test(text) && /too many flows to share out here/.test(text),
+     'the cables are drawn, and the panel says it could not share them out');
+}, { url: '?layout=examples/dual-plane.dc' });
+
 // Hovering a cable used to show whatever box lay under it -- a server's
 // tooltip where a cable crossed one, nothing where it crossed the floor.
 await test('hovering a cable', async () => {
