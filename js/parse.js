@@ -196,7 +196,7 @@ const NET_NUMBERS = { width: [0.1, 100], gbps: GBPS_RANGE };
 // An element's gbps= -- a switch's forwarding capacity -- may be too.
 const ELEMENT_REALS = { gbps: GBPS_RANGE };
 // Everything a `net` line takes; `on=` is the old spelling of `show=`.
-const NET_KEYS = ['label', 'color', 'style', 'width', 'show', 'on', 'gbps', 'traffic'];
+const NET_KEYS = ['label', 'color', 'style', 'width', 'show', 'on', 'gbps', 'traffic', 'bond'];
 
 /**
  * One reading of a number attribute, so the check and the use cannot drift
@@ -967,6 +967,9 @@ const truthy = (value) => {
           width: numAttr(child.attrs.width, 1, NET_NUMBERS.width),
           gbps: numAttr(child.attrs.gbps, null, NET_NUMBERS.gbps),
           traffic,
+          // bond=: a host's cables on nets with the same bond are one bond,
+          // and every flow from or to it is spread over them by capacity.
+          bond: child.attrs.bond || null,
           enabled,
         });
       } else if (child.kind === 'link') {

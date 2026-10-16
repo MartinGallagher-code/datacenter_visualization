@@ -11,6 +11,24 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.10.0 — 2026-10-16
+
+Bonded NICs.
+
+- **`bond=` on nets.** A host's cables on nets with the same `bond=` are one
+  bond, and every flow from or to it is split over them by capacity —
+  sending and receiving, under every split. Hashed used to put each flow on
+  one NIC for its whole way, so a server's two NICs came out a flow or so
+  apart; bonded, they carry exactly the same. Between two bonded hosts each
+  NIC's half keeps to its own net, NIC a to NIC a, and is routed (and
+  hashed) on its own. A ToR or cable taken out leaves the rest of the bond
+  to carry everything. Routing, contention, the flows over a hovered cable
+  and the host-total estimate all use it. In the editor's completions and
+  Syntax panel.
+- Contention shares out up to twenty million cable crossings, up from
+  twelve: bonded legs keep to their own side and cross more cables, though
+  sharing the way on from each ToR makes them no slower.
+
 ## 1.9.0 — 2026-10-16
 
 The load generator can send to each peer, not only in all. 1.8.1 rides the

@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.9.0** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.10.0** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -518,6 +518,17 @@ is end to end, and only switch counters see the cables themselves:
     while its neighbour idles. **Re-roll** hashes again with another seed.
 - **`weight=`** on a link rule scales its cables' share in every mode —
   `weight=3` takes three times what a weight-1 cable beside it does.
+- **`bond=`** on nets bonds a host's cables on them: `net nica gbps=100
+  bond=nic` and `net nicb gbps=100 bond=nic` make every server's NIC a and
+  NIC b one bond. A flow from or to a bonded host is split over the bond by
+  capacity — two equal NICs half each — **sending and receiving, under every
+  split**, hashed included, where unbonded a hashed flow rides one NIC all
+  the way and the two come out a flow or so apart. Between two bonded hosts
+  each NIC's half keeps to its own side, NIC a to NIC a, so in one rack it
+  never leaves the ToR; beyond that, each half is routed (and hashed) on its
+  own. Take a ToR or a NIC's cable out and the rest of the bond carries
+  everything. Only hosts bond: a switch's cables on the same nets are what
+  the hosts hang off. A host with cables in two bonds uses the bigger.
 - A pair's samples are reduced by the card's own aggregation (the mean of a
   run's passes, by default). The metric must be a rate (`unit=Gb/s`, `Mb/s`,
   `MB/s`, `pps`, … — or a name like `iperf_mbps_out`) or a volume; a bit or
@@ -567,9 +578,10 @@ magenta, which says how oversubscribed it is rather than what it carries.
 
 Sharing out costs in proportion to the cables every flow crosses, added up
 over the flows. Flows that leave the same switches for the same server share
-that part of the work, and the page shares out up to twelve million
+that part of the work, and the page shares out up to twenty million
 crossings: a thousand servers each sending to 150 random peers over a
-four-plane fabric is about nine million, and takes a few seconds. Past that
+four-plane fabric is about nine million (fourteen with bonded NICs), and
+takes a few seconds. Past that
 the panel says **too many flows to share out here**, and draws what the flows
 offer, as if contention were unticked.
 

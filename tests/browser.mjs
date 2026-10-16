@@ -114,6 +114,9 @@ const fixtures = new Map([
   // The dual-plane fabric with one spine that can forward only 150G.
   ['/fx/slow-spine.dc', readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8')
     .replace('node spine1 at=6 u=2 role=spine plane=1 +switch', 'node spine1 at=6 u=2 role=spine plane=1 +switch gbps=150')],
+  // The dual-plane fabric with each server's two NICs bonded.
+  ['/fx/bonded.dc', readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8')
+    .replace(/^(net nica .*)$/m, '$1 bond=nic').replace(/^(net nicb .*)$/m, '$1 bond=nic')],
 ]);
 
 function serve() {
@@ -1263,6 +1266,21 @@ await test('a random load of 160k flows', async () => {
   ok(/Busiest cables[\s\S]*SP\d\/spine\d → R\d\d\/tor[ab]/.test(text) && /too many flows to share out here/.test(text),
      'the cables are drawn, and the panel says it could not share them out');
 }, { url: '?layout=examples/dual-plane.dc' });
+
+// Bonded NICs carry the same, hashed or not: each flow is split over the
+// bond, where unbonded a hashed flow rides one NIC all the way.
+await test('bonded NICs', async () => {
+  await page.locator('#load-gen button', { hasText: 'Run' }).click();
+  await page.waitForTimeout(400);
+  await page.locator('#cable-load .btnrow select').first().selectOption('hashed');
+  await page.waitForTimeout(400);
+  const nics = await page.evaluate(() => {
+    const text = document.querySelector('#cable-load').innerText;
+    return [...text.matchAll(/R0\d\/tor[ab] → R0\d\/s\d\s+([^\n✕]+)/g)].map((m) => m[1].trim());
+  });
+  ok(nics.length > 0 && nics.every((t) => t === '12.5G/25G · 50%'),
+     `hashed, every NIC in the busiest cables carries exactly half its 25G  (${[...new Set(nics)].join(', ')})`);
+}, { url: '?layout=fx/bonded.dc' });
 
 // Hovering a cable used to show whatever box lay under it -- a server's
 // tooltip where a cable crossed one, nothing where it crossed the floor.
