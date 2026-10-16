@@ -12,7 +12,7 @@
 
 // Headless test suite: node tests/run.mjs
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -559,6 +559,31 @@ eq(braced.get('temp_c').samples.length, 1, 'comment starting with { stays text')
   eq([bound.min, bound.max], [0, 499], 'and the domain comes out of them');
   ok(overlayValue(bound, small.resolve('DH1/A/R01/u05')).samples === 150000,
      'with every sample on the element');
+
+  // The same overflow, twice more: a random load of 150k flows pushed into
+  // one array with push(...flows), and a layout range with a long segment.
+  eq(expand('s[1..300000,7]').length, 300001, 'a range with a 300k segment expands');
+
+  // So every argument spread in the viewer is listed here, with why it is
+  // small. A new one fails until it is either a loop or added with its bound.
+  const smallSpreads = new Map([
+    ['app.js', ['lines.push(...switchTip(', 'fn(...args)']],          // a tooltip's lines; a debounce's arguments
+    ['hints.js', ['options.push(...NET_KEYS)', 'options.push(...LINK_KEYS)', 'options.push(...ELEMENT_KEYS)']],
+    ['paths.js', ['Math.min(...layer)']],                             // one hop's parallel cables
+    ['render.js', ['Math.min(...xs)', 'Math.max(...xs)']],            // a curve's four points
+    ['ui.js', ['Math.max(...y.l)', 'Math.max(...x.l)']],              // a cable's two directions
+  ]);
+  const spreads = [];
+  for (const file of readdirSync(join(root, 'js')).filter((f) => f.endsWith('.js'))) {
+    readFileSync(join(root, 'js', file), 'utf8').split('\n').forEach((line, i) => {
+      if (/^\s*(\/\/|\*)/.test(line)) return;
+      for (const m of line.matchAll(/[\w\]]\((\.\.\.)/g)) {
+        const known = smallSpreads.get(file) || [];
+        if (!known.some((k) => line.includes(k))) spreads.push(`${file}:${i + 1}: ${line.trim()}`);
+      }
+    });
+  }
+  eq(spreads, [], 'no argument spread in js/ that could be handed a hundred thousand items');
 }
 
 // ----------------------------------------------------------- overlay source
@@ -1875,6 +1900,20 @@ const segsOf = (cache, net) => {
   eq(generateFlows(m, { pattern: 'incast', value: 10, unit: 'Gb/s' }, { target: m.resolve('R2') }).flows.length, 20,
      'into a rack, each sender shares its load over the rack’s devices');
 
+  // Per peer: every flow carries the whole amount, so more peers is more
+  // load -- where in all, more peers only spread the same load thinner.
+  const perPeer = (peers) => generateFlows(m, { pattern: 'random', value: 10, unit: 'Gb/s', per: 'peer', peers, seed: 1 });
+  eq([perPeer(2).flows.length, perPeer(2).offered], [16, 160], 'per peer: 10 Gb/s to each of two peers is 20 from each host');
+  eq(perPeer(3).offered, 240, 'and a third peer adds a third');
+  ok(perPeer(3).flows.every((f) => f.value === 10), 'every flow carries the whole amount');
+  eq(generateFlows(m, { pattern: 'random', value: 10, unit: 'Gb/s', peers: 3, seed: 1 }).offered, 80,
+     'in all, three peers send what two did');
+  eq(generateFlows(m, { pattern: 'all', value: 1, unit: 'Gb/s', per: 'peer' }).offered, 56, 'all-to-all per host: 1 Gb/s to each of the seven others');
+  eq(generateFlows(m, { pattern: 'incast', value: 10, unit: 'Gb/s', per: 'peer' }, { target: m.resolve('R2') }).offered, 200,
+     'incast per device: 10 Gb/s from each of four senders to each of the rack’s five devices');
+  ok(Math.abs(generateFlows(m, { pattern: 'all', value: 5, unit: '%', per: 'peer' }).offered - 8 * 7 * 1.25) < 1e-9,
+     'and a share of the NICs to each peer: 5% of a 25G NIC is 1.25 to each');
+
   // Too big to route here says so instead of hanging the page.
   const saved = GEN_LIMITS.flows;
   GEN_LIMITS.flows = 20;
@@ -2016,6 +2055,8 @@ const segsOf = (cache, net) => {
   eq([g.senders, Math.round(g.offered * 1e6) / 1e6, g.noReading], [8, 160, 24], 'each host sends what its reading says, here at 200% of it, and the rest are counted');
   ok(/cannot be added to pps/.test(generateFlows(m, { pattern: 'all', value: 100 }, { amounts, base: { toGbps: null, unit: 'pps' } }).why),
      'read as Gb/s, it cannot ride on a metric in pps');
+  eq(Math.round(generateFlows(m, { pattern: 'all', value: 200, per: 'peer' }, { amounts }).offered * 1e6) / 1e6, 160,
+     'a reading is the host’s total: per peer does not multiply it');
 
   const raw = parseResults('!test egress unit=Gb/s\negress\tR01/s1\t30\n!test nic_util unit=%\nnic_util\tR01/s1\t40\n'
     + '!test temp unit=C\ntemp\tR01/s1\t40\n');

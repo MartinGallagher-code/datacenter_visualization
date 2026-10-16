@@ -876,7 +876,8 @@ export function renderCableLoad(state, host, actions) {
     if (model.gen) {
       const g = model.gen;
       lines.append(el('div', null, `generated: ${PATTERN_LABELS[g.pattern] || g.pattern}, `
-        + `${g.from ? `${trimNum(g.value)}% of what ${g.from.label} says` : genAmount(g.value, g.unit)} from each host`
+        + `${g.from ? `${trimNum(g.value)}% of what ${g.from.label} says` : genAmount(g.value, g.unit)}`
+        + ` from each host${g.per === 'peer' ? ` ${GEN_PER_LABELS[g.pattern].peer}` : ''}`
         + ` · ${g.flows} flows · ${formatLoad(model, g.offered)}`));
     }
     if (!model.overlay) {
@@ -1051,6 +1052,12 @@ const PATTERN_TITLES = {
     + 'clients answering one request fill the target’s own cable',
 };
 const GEN_UNIT_LABELS = { '%': '% of its NICs' };
+// Who the amount is for: the host's total, or each host it sends to.
+const GEN_PER_LABELS = {
+  all: { host: 'in all', peer: 'to each other host' },
+  random: { host: 'in all', peer: 'to each peer' },
+  incast: { host: 'in all', peer: 'to each target device' },
+};
 // "50% of its NICs", "40 Gb/s".
 const genAmount = (value, unit) => (unit === '%' ? `${trimNum(value)}% of its NICs` : `${trimNum(value)} ${unit}`);
 
@@ -1155,7 +1162,7 @@ export function renderLoadGen(state, host, actions, { unit } = {}) {
   const amount = number(g.value, 0, (v) => actions.setGen({ value: v }));
   amount.className = 'gen-value';
   amount.title = g.from ? 'How much of what the metric reads each host sends: 100 is all of it, 200 twice it'
-    : 'How much every host sends, in all';
+    : g.per === 'peer' ? 'How much every host sends to each host it sends to' : 'How much every host sends, in all';
   size.append(amount);
   if (g.from) {
     size.append(el('span', null, '% of its reading'));
@@ -1174,6 +1181,14 @@ export function renderLoadGen(state, host, actions, { unit } = {}) {
       ? `Added to ${metric.label}, so in a unit that adds up with ${base.unit || 'it'}`
       : '% of its NICs: a share of what the host’s own cables can carry (gbps=)';
     size.append(unitPick);
+    // In all, more peers spread the same load thinner; to each, every peer
+    // adds its own.
+    const labels = GEN_PER_LABELS[g.pattern] || GEN_PER_LABELS.all;
+    const per = choose(['host', 'peer'], labels, g.per === 'peer' ? 'peer' : 'host', (v) => actions.setGen({ per: v }));
+    per.className = 'gen-per';
+    per.title = 'In all: the amount is the host’s total, shared over the hosts it sends to, so more peers spread it thinner.\n'
+      + `${labels.peer[0].toUpperCase()}${labels.peer.slice(1)}: every flow carries the whole amount, so the host sends it times the peers.`;
+    size.append(per);
     box.append(size);
   }
 

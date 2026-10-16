@@ -553,8 +553,10 @@ export function flowsOver(model, flows, links, opts = {}) {
 // ---------------------------------------------------------------- contention
 
 // How much sharing out may cost here: the cables each flow crosses, summed
-// over the flows. A lab floor is far inside it.
-export const CONTEND_LIMITS = { crossings: 3e6 };
+// over the flows. A thousand servers each sending to 150 random peers over
+// a four-plane fabric is 150k flows of about 60 crossings each -- nine
+// million, a few seconds and a few hundred megabytes in a browser.
+export const CONTEND_LIMITS = { crossings: 1.2e7 };
 
 /**
  * Route flows, and then share out every cable they fill, as TCP does: what
@@ -626,47 +628,73 @@ export function contend(model, flows, opts = {}) {
     else byDst.set(flow.dst, [flow]);
   }
 
-  // Where each flow goes: the slots it crosses and its share of each.
+  // Where each flow goes: the slots it crosses and its share of each, as
+  // parts -- a flow's own first hop, then the rest of the way, which every
+  // flow to the same place from the same switches shares: two servers on one
+  // pair of ToRs leave them for a server elsewhere identically. A thousand
+  // servers sending to a hundred peers each is a hundred thousand flows but
+  // only a few thousand distinct ways on from the ToRs.
   const routed = [];
   const paths = [];
   let size = 0;
   for (const [dst, list] of byDst) {
     const route = towards(dst, f);
+    const onward = new Map();   // the switches a flow reaches first -> the rest
+    // The slots from these elements on to dst, each element carrying its
+    // share of the flow: one hop nearer at each step.
+    const rest = (level, how) => {
+      const path = [];
+      while (level.size) {
+        // What each switch on this step passes on, once all of it is in.
+        for (const [v, r] of level) if (switchCapacity(v)) path.push(nodeSlot(v), r);
+        const nearer = new Map();
+        for (const [u, a] of level) {
+          const hops = route.next(u);
+          const shares = sharesOf(hops, how);
+          for (let k = 0; k < hops.length; k++) {
+            const r = a * shares[k];
+            path.push(slot(hops[k], u), r);
+            const v = other(hops[k], u);
+            if (v !== dst) nearer.set(v, (nearer.get(v) || 0) + r);
+          }
+        }
+        level = nearer;
+      }
+      return path;
+    };
     for (const flow of list) {
       if (!route.dist.has(flow.src)) { miss.note(flow.src, dst, flow.value, f.noRoute); continue; }
       const how = flow.split || split;
-      const path = [];
+      let parts;
       if (how === 'hashed') {
+        const path = [];
         for (let u = flow.src; u !== dst;) {
           const pick = hashedHop(route.next(u), seed, flow.id, u.n);
           path.push(slot(pick, u), 1);
           u = other(pick, u);
           if (u !== dst && switchCapacity(u)) path.push(nodeSlot(u), 1);
         }
+        parts = [path];
       } else {
-        // Hop by hop towards dst: every element one hop nearer at each step.
-        let level = new Map([[flow.src, 1]]);
-        while (level.size) {
-          const nearer = new Map();
-          for (const [u, a] of level) {
-            const hops = route.next(u);
-            const shares = sharesOf(hops, how);
-            for (let k = 0; k < hops.length; k++) {
-              const r = a * shares[k];
-              path.push(slot(hops[k], u), r);
-              const v = other(hops[k], u);
-              if (v !== dst) nearer.set(v, (nearer.get(v) || 0) + r);
-            }
-          }
-          // What each switch on this step passes on, once all of it is in.
-          for (const [v, r] of nearer) if (switchCapacity(v)) path.push(nodeSlot(v), r);
-          level = nearer;
+        const head = [];
+        const first = new Map();
+        const hops = route.next(flow.src);
+        const shares = sharesOf(hops, how);
+        for (let k = 0; k < hops.length; k++) {
+          head.push(slot(hops[k], flow.src), shares[k]);
+          const v = other(hops[k], flow.src);
+          if (v !== dst) first.set(v, (first.get(v) || 0) + shares[k]);
         }
+        let key = how;
+        for (const [v, r] of first) key += ` ${v.n}:${r}`;
+        let tail = onward.get(key);
+        if (!tail) onward.set(key, (tail = rest(first, how)));
+        parts = [head, tail];
       }
-      size += path.length / 2;
+      for (const path of parts) size += path.length / 2;
       if (size > CONTEND_LIMITS.crossings) return null;
       routed.push(flow);
-      paths.push(path);
+      paths.push(parts);
     }
   }
 
@@ -693,12 +721,13 @@ export function contend(model, flows, opts = {}) {
   for (let i = 0; i < n; i++) {
     if (!(demand[i] > 0)) { frozen[i] = 1; continue; }
     active++;
-    const path = paths[i];
-    for (let k = 0; k < path.length; k += 2) {
-      sumR[path[k]] += path[k + 1];
-      live[path[k]]++;
-      const list = crossing[path[k]];
-      if (list[list.length - 1] !== i) list.push(i);
+    for (const path of paths[i]) {
+      for (let k = 0; k < path.length; k += 2) {
+        sumR[path[k]] += path[k + 1];
+        live[path[k]]++;
+        const list = crossing[path[k]];
+        if (list[list.length - 1] !== i) list.push(i);
+      }
     }
   }
   // Which round each flow settled in: every cable that fills in a round
@@ -711,12 +740,13 @@ export function contend(model, flows, opts = {}) {
     heldAt[i] = at;
     round[i] = rounds;
     active--;
-    const path = paths[i];
-    for (let k = 0; k < path.length; k += 2) {
-      const sl = path[k];
-      used[sl] += path[k + 1] * x;
-      if (--live[sl] === 0) sumR[sl] = 0;
-      else sumR[sl] -= path[k + 1];
+    for (const path of paths[i]) {
+      for (let k = 0; k < path.length; k += 2) {
+        const sl = path[k];
+        used[sl] += path[k + 1] * x;
+        if (--live[sl] === 0) sumR[sl] = 0;
+        else sumR[sl] -= path[k + 1];
+      }
     }
   };
 
@@ -771,12 +801,13 @@ export function contend(model, flows, opts = {}) {
   let wanted = 0;
   let held = 0;
   const out = routed.map((flow, i) => {
-    const path = paths[i];
-    for (let k = 0; k < path.length; k += 2) {
-      const o = owner[path[k]];
-      if (!o.link) continue;
-      into(loads, o.link, o.dir, path[k + 1] * rate[i]);
-      into(offeredLoads, o.link, o.dir, path[k + 1] * demand[i]);
+    for (const path of paths[i]) {
+      for (let k = 0; k < path.length; k += 2) {
+        const o = owner[path[k]];
+        if (!o.link) continue;
+        into(loads, o.link, o.dir, path[k + 1] * rate[i]);
+        into(offeredLoads, o.link, o.dir, path[k + 1] * demand[i]);
+      }
     }
     carried += rate[i];
     wanted += demand[i];
@@ -1272,6 +1303,12 @@ export function generateFlows(model, gen, opts = {}) {
     return result([], { why: `${unit} cannot be added to ${base.unit || 'the metric’s unit'}` });
   }
 
+  // What one flow carries: each host's amount shared over the hosts it sends
+  // to, or -- per peer -- all of it to every one of them, so more peers is
+  // more load. A metric's reading is a host's total, never per peer.
+  const perPeer = gen.per === 'peer' && !opts.amounts;
+  const share = (amount, k) => (perPeer ? amount : amount / k);
+
   const reach = gen.reach && gen.reach !== 'any' ? gen.reach : null;
   const groupOf = (el) => {
     for (let p = el.parent; p; p = p.parent) if (p.kind === reach) return p;
@@ -1313,7 +1350,7 @@ export function generateFlows(model, gen, opts = {}) {
       const to = into.filter((dst) => apart(src, dst));
       const amount = sends(src);
       if (!(amount > 0)) { if (unit === '%') noCapacity++; continue; }
-      for (const dst of to) flows.push({ id: GEN_IDS + flows.length, src, dst, value: amount / to.length, gen: true });
+      for (const dst of to) flows.push({ id: GEN_IDS + flows.length, src, dst, value: share(amount, to.length), gen: true });
     }
     return result(flows, { noCapacity });
   }
@@ -1334,7 +1371,7 @@ export function generateFlows(model, gen, opts = {}) {
       const amount = sends(src);
       if (!(amount > 0)) { if (unit === '%') noCapacity++; continue; }
       const to = hosts.filter((dst) => dst !== src && apart(src, dst));
-      for (const dst of to) flows.push({ id: GEN_IDS + flows.length, src, dst, value: amount / to.length, gen: true });
+      for (const dst of to) flows.push({ id: GEN_IDS + flows.length, src, dst, value: share(amount, to.length), gen: true });
     }
     return result(flows, { noCapacity });
   }
@@ -1401,7 +1438,7 @@ export function generateFlows(model, gen, opts = {}) {
   const flows = [];
   hosts.forEach((src, i) => {
     if (!(amounts[i] > 0) || !to[i].size) return;
-    for (const j of to[i]) flows.push({ id: GEN_IDS + flows.length, src, dst: hosts[j], value: amounts[i] / to[i].size, gen: true });
+    for (const j of to[i]) flows.push({ id: GEN_IDS + flows.length, src, dst: hosts[j], value: share(amounts[i], to[i].size), gen: true });
   });
   return result(flows, { noCapacity });
 }

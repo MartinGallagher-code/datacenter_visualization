@@ -1193,6 +1193,20 @@ await test('the load generator', async () => {
      'the cable load panel says what it is showing');
   ok(/R0\d\/tor[ab] → R0\d\/s\d\s+12\.5G\/25G · 50%/.test(loaded), 'and half of every server’s NIC is in use');
 
+  // Per peer: every flow carries the whole amount, so the NICs are past full
+  // and contention holds them back.
+  await page.fill('#load-gen input.gen-value', '1');
+  await page.locator('#load-gen input.gen-value').dispatchEvent('change');
+  await page.locator('#load-gen select.gen-per').selectOption('peer');
+  await page.waitForTimeout(400);
+  ok(/32 of 32 hosts send · 992 flows · 496Gb\/s/.test(await gen()), `per peer: 1% of a host's 50G to each of 31 others  (${(await gen()).split('\n').pop()})`);
+  ok(/generated: all-to-all, 1% of its NICs from each host to each other host/.test(await panel()), 'and the panel says so');
+  await page.locator('#load-gen select.gen-per').selectOption('host');
+  await page.fill('#load-gen input.gen-value', '50');
+  await page.locator('#load-gen input.gen-value').dispatchEvent('change');
+  await page.waitForTimeout(400);
+  ok(/992 flows · 800Gb\/s/.test(await gen()), 'and in all again, 50% is the host’s total');
+
   await page.locator('#load-gen select.gen-reach').selectOption('rack');
   await page.waitForTimeout(400);
   ok(/768 flows/.test(await gen()), 'outside its own rack: no flow stays inside one');
@@ -1223,6 +1237,31 @@ await test('the load generator', async () => {
   await page.fill('#load-gen input.gen-hosts', 'role=server not in:P1');
   await page.waitForTimeout(400);
   eq(await count(), '16 hosts', 'and not: every server outside pod 1');
+}, { url: '?layout=examples/dual-plane.dc' });
+
+// A hundred thousand flows and more: a random load at a few hundred peers
+// over a few hundred servers. Spreading that many flows into one push()
+// overflowed the stack, and the page went blank.
+await test('a random load of 160k flows', async () => {
+  const big = readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8')
+    .replace('pod [1..2]', 'pod [1..8]').replace('u=24', 'u=40')
+    .replace('at=24', 'at=40').replace('at=23', 'at=39').replace('s[1..8] u=2', 's[1..36] u=1');
+  await openLayout(big);
+  const gen = () => page.evaluate(() => document.querySelector('#load-gen').innerText);
+  await page.locator('#load-gen select.gen-pattern').selectOption('random');
+  await page.waitForTimeout(300);
+  await page.fill('#load-gen input.gen-peers', '280');
+  await page.locator('#load-gen input.gen-peers').dispatchEvent('change');
+  await page.waitForTimeout(300);
+  await page.locator('#load-gen button', { hasText: 'Run' }).click();
+  await page.waitForFunction(() => /flows/.test(document.querySelector('#cable-load').innerText), null, { timeout: 60000 });
+  ok(/576 of 576 hosts send · 161280 flows/.test(await gen()), 'every server sends to 280 others, and the page is still there');
+  const text = await page.evaluate(() => document.querySelector('#cable-load').innerText);
+  // This fabric's spines each run 24 parallel plane cables, so an even split
+  // crosses too many to share out here: the page says so and draws what is
+  // offered, rather than hanging.
+  ok(/Busiest cables[\s\S]*SP\d\/spine\d → R\d\d\/tor[ab]/.test(text) && /too many flows to share out here/.test(text),
+     'the cables are drawn, and the panel says it could not share them out');
 }, { url: '?layout=examples/dual-plane.dc' });
 
 // Hovering a cable used to show whatever box lay under it -- a server's

@@ -29,7 +29,8 @@ function expandRangeSpec(spec) {
   // range: [1..4,7..10] declares racks 1-4 and 7-10 without a second block.
   if (spec.includes(',')) {
     const out = [];
-    for (const part of spec.split(',')) if (part !== '') out.push(...expandRangeSpec(part));
+    // Not push(...): a segment of a few hundred thousand overflows the stack.
+    for (const part of spec.split(',')) if (part !== '') for (const v of expandRangeSpec(part)) out.push(v);
     return out;
   }
   if (spec.includes('|')) return spec.split('|');

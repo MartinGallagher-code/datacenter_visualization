@@ -85,7 +85,7 @@ const state = {
     // Gb/s; hosts is a filter, empty for every device not tagged +switch.
     // `from` names a per-host metric the servers send what they read, at
     // `value` % of it, in place of an amount of its own.
-    gen: { on: false, pattern: 'all', value: 50, unit: null, peers: 1, reach: 'any', hosts: '', seed: 1, from: null },
+    gen: { on: false, pattern: 'all', value: 50, unit: null, per: 'host', peers: 1, reach: 'any', hosts: '', seed: 1, from: null },
     // A full cable shares out what it carries, as TCP does, and holds back
     // the flows crossing it; off, the cables show what the flows offer.
     contention: true,
@@ -350,7 +350,7 @@ function modelSource(withDown) {
   const testKey = test ? `${test.value}\u0001${test.unit}` : '';
   // Incast sends to the first pick, or failing that the selection.
   const target = gen && gen.pattern === 'incast' ? state.picked[0] || state.selected || null : null;
-  const genKey = gen ? JSON.stringify([gen.pattern, gen.value, genUnit(), gen.peers, gen.reach, gen.hosts, gen.seed,
+  const genKey = gen ? JSON.stringify([gen.pattern, gen.value, genUnit(), gen.per, gen.peers, gen.reach, gen.hosts, gen.seed,
     target && target.key, gen.from]) : '';
   // A metric the generator reads: re-read when its file is, so by object.
   const from = gen && gen.from ? genSource() : null;
@@ -414,7 +414,7 @@ function modelSource(withDown) {
       : generateFlows(state.model, { ...gen, unit: genUnit() }, { match, target, base: unit, amounts });
     genFlows = g.flows;
     genRun = {
-      ...g, flows: g.flows.length, target, unit: genUnit(), pattern: gen.pattern, value: gen.value,
+      ...g, flows: g.flows.length, target, unit: genUnit(), pattern: gen.pattern, value: gen.value, per: gen.from ? 'host' : gen.per,
       from: from ? from.overlay : null,
     };
   }
@@ -467,7 +467,11 @@ function modelSource(withDown) {
     // Routed even when empty, so the panel has a result to say why.
     if (gen) result = mergeResults(result, routeTraffic(state.model, genFlows, opts));
     if (test) result = mergeResults(result, routeTraffic(state.model, testFlowsNow, opts));
-    routed.push(...genFlows, ...testFlowsNow);
+    // Not push(...genFlows): a random generator at a hundred peers makes a
+    // hundred thousand flows, and spreading that many arguments overflows
+    // the stack.
+    for (const flow of genFlows) routed.push(flow);
+    for (const flow of testFlowsNow) routed.push(flow);
   }
   const value = {
     overlay: metric, kind: metric ? kind : gen ? 'gen' : 'test', result, loads: result.loads, toGbps: unit.toGbps,

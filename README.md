@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.8.0** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.9.0** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -565,6 +565,14 @@ steady state:
 Untick it to see what the flows offer: then a cable can read past 100%, in
 magenta, which says how oversubscribed it is rather than what it carries.
 
+Sharing out costs in proportion to the cables every flow crosses, added up
+over the flows. Flows that leave the same switches for the same server share
+that part of the work, and the page shares out up to twelve million
+crossings: a thousand servers each sending to 150 random peers over a
+four-plane fabric is about nine million, and takes a few seconds. Past that
+the panel says **too many flows to share out here**, and draws what the flows
+offer, as if contention were unticked.
+
 The model is the steady state, and real fabrics are rougher. TCP favours
 flows with shorter round trips; an incast of many senders can lose packets
 all at once and collapse well below the fair share while senders wait out
@@ -678,6 +686,20 @@ off.
   **% of its NICs** — a share of what the host's own cables can carry, their
   `gbps=` added up — which is the default once the cables have a `gbps=`.
   50% of two 25G NICs is 25 Gb/s.
+- **in all** or **to each peer** — who that amount is for:
+  - **in all**, the default, makes it the host's total, whatever the
+    pattern: **more random peers spread the same load thinner** — at ×8
+    each flow is an eighth of it, at ×150 a 150th — so the cables carry much
+    the same at any count, and only the number of flows changes;
+  - **to each peer** (**to each other host** for all-to-all, **to each
+    target device** for incast) gives every flow the whole amount, so a host
+    sends it times its peers and **every peer adds load**: 1 Gb/s to each of
+    150 peers is 150 Gb/s from every server, past two 25G NICs, and
+    contention shows where it gives. A share of the NICs works the same way:
+    1% to each of 150 peers is 150% of them.
+
+  Read off a metric, the amount is always the host's total: a reading is
+  what the server sent in all.
 - **to hosts** — **anywhere**, or **outside its own rack** (row, pod, room —
   the kinds in your layout): every flow leaves the sender's rack, which loads
   the uplinks and nothing inside a rack.
