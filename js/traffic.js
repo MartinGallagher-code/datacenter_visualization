@@ -168,19 +168,34 @@ export function flowsOf(overlay, model) {
 /**
  * The hosts a per-host total was measured on: devices with cables, each with
  * its value under the metric's aggregation. A reading on a rack or a room is
- * not a host's, and is counted rather than spread.
+ * not a host's, and is counted rather than spread. `duplex` reads each as a
+ * total of both directions, half of it sent; `over` is the hosts that read
+ * past what their cables carry one way, which a measurement cannot.
  */
-export function hostsOf(overlay, model) {
+export function hostsOf(overlay, model, duplex = !!overlay.duplex) {
   const hosts = [];
   let containers = 0;
+  // A duplex total adds both directions: half of it is what the host sent.
+  const share = duplex ? 0.5 : 1;
+  // A measured host cannot send more than its cables carry, one way: one
+  // that reads past it is counted, the likeliest reason a duplex total read
+  // as what was sent.
+  const unit = loadUnit(overlay, 'hosts');
+  const over = [];
   for (const el of model.all) {
     if (!overlay.direct.has(el.key)) continue;
     if (el.children.length || !el.links.length) { containers++; continue; }
     const reading = overlayValue(overlay, el);
     if (!reading || !reading.numeric || !Number.isFinite(reading.value)) continue;
-    hosts.push({ el, value: Math.max(0, reading.value) });
+    const value = Math.max(0, reading.value) * share;
+    hosts.push({ el, value });
+    if (unit.toGbps !== null) {
+      const capacity = hostCapacity(model, el);
+      if (capacity && value * unit.toGbps > capacity * (1 + 1e-6)) over.push({ el, gbps: value * unit.toGbps, capacity });
+    }
   }
-  return { hosts, skipped: containers };
+  over.sort((a, b) => b.gbps / b.capacity - a.gbps / a.capacity);
+  return { hosts, skipped: containers, duplex, over };
 }
 
 const other = (link, node) => (link.a === node ? link.b : link.a);
@@ -1349,12 +1364,14 @@ export function hostsFor(model, match = null) {
  * Whether the load generator can read a metric as what each server sends:
  * a per-host rate, read in Gb/s, or a per-host percentage, read as that share
  * of the host's own NICs -- a NIC utilization, say. Returns { overlay,
- * toGbps, percent }, or null for anything else.
+ * toGbps, percent, duplex }, or null for anything else; a duplex rate is
+ * read at half, what the host sent.
  */
-export function readsAsLoad(overlay) {
+export function readsAsLoad(overlay, duplex = !!overlay.duplex) {
   if (!overlay || trafficKind(overlay) !== 'hosts') return null;
   const unit = loadUnit(overlay, 'hosts');
-  if (unit.ok && unit.toGbps !== null) return { overlay, toGbps: unit.toGbps, percent: false };
+  // A duplex total is half what the host sent: see hostsOf.
+  if (unit.ok && unit.toGbps !== null) return { overlay, toGbps: unit.toGbps * (duplex ? 0.5 : 1), percent: false, duplex };
   if (/^\s*(%|percent|pct)\s*$/i.test(String(overlay.unit || ''))) return { overlay, toGbps: 1, percent: true };
   return null;
 }

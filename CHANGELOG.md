@@ -11,6 +11,24 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.12.0 — 2026-10-16
+
+Duplex totals.
+
+- **treat as duplex.** A per-host rate that adds both directions — iperf's
+  bidirectional total — was read whole as what each server sent, so a
+  server measured at 309 Gb/s over two 100G NICs read as sending 309 and
+  receiving as much, 155% of them. A box in the cable load panel (and in
+  the load generator, when it reads the metric) reads each total as half
+  sent, half received. It ticks itself when the metric's name says
+  `duplex` or `bidir`, or `duplex=yes` is on its `!test` line, a new key
+  (`duplex=no` says it is not); it is offered unticked when hosts read past
+  what their cables carry one way, which a measurement cannot, and the
+  panel names the worst of them in red.
+- The load generator reading a metric no longer routes everything again on
+  every redraw: each read of the metric was a new object, so its cache
+  never matched.
+
 ## 1.11.0 — 2026-10-16
 
 A headline for all of it, and what a server sends and receives, on hover.

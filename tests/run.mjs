@@ -2131,6 +2131,26 @@ const segsOf = (cache, net) => {
   const asLoad = (name) => readsAsLoad(bindOverlay(raw.get(name), m));
   eq([asLoad('egress') && asLoad('egress').percent, asLoad('nic_util') && asLoad('nic_util').percent, asLoad('temp')], [false, true, null],
      'a rate reads as Gb/s, a percentage as a share of the NICs, a temperature not at all');
+
+  // Duplex totals: a rate that adds both directions, as iperf --bidir gives
+  // it. Read whole, a server sends more than its NICs carry -- 77G of 50G --
+  // which a measurement cannot, so it is counted as a suspect.
+  const iperf = parseResults('!test iperf_total_mbps unit=Mb/s\niperf_total_mbps\tR01/s1\t77000\niperf_total_mbps\tR01/s2\t30000\n'
+    + '!test iperf_bidir_mbps unit=Mb/s\niperf_bidir_mbps\tR01/s1\t77000\n'
+    + '!test xfer_mbps unit=Mb/s duplex=yes\nxfer_mbps\tR01/s1\t77000\n'
+    + '!test duplex_rate_mbps unit=Mb/s duplex=no\nduplex_rate_mbps\tR01/s1\t30000\n');
+  const bound = (name) => bindOverlay(iperf.get(name), m);
+  eq(['iperf_total_mbps', 'iperf_bidir_mbps', 'xfer_mbps', 'duplex_rate_mbps'].map((n) => bound(n).duplex), [false, true, true, false],
+     'duplex is read from the name (bidir, duplex) or from duplex= on the !test line, which wins');
+  const whole = hostsOf(bound('iperf_total_mbps'), m);
+  eq([whole.duplex, whole.over.length, whole.over[0] && whole.over[0].el.name, Math.round(whole.over[0].gbps)], [false, 1, 's1', 77],
+     'read as sent, the 77G server reads past its 50G, and is counted');
+  const halved = hostsOf(bound('iperf_total_mbps'), m, true);
+  eq([halved.hosts.map((h) => h.value), halved.over.length], [[38500, 15000], 0], 'read as duplex, each is half, and none is past its cables');
+  eq(hostsOf(bound('xfer_mbps'), m).hosts[0].value, 38500, 'duplex=yes halves it by itself');
+  const asSent = readsAsLoad(bound('xfer_mbps'));
+  eq([asSent.duplex, asSent.toGbps], [true, 0.0005], 'and the generator reads it at half: 38.5G of 77,000 Mb/s');
+  eq(readsAsLoad(bound('xfer_mbps'), false).toGbps, 0.001, 'unless told it is not');
 }
 
 // --------------------------------------------------------------- findings

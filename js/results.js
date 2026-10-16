@@ -194,6 +194,10 @@ const TEST_KEYS = {
   // What a reading on a host says went wrong there, for the findings list:
   // read from the metric's name when not given, and `no` to say it is not.
   finding: ['drops', 'lockups', 'errors', 'verdict', 'no'],
+  // A per-host rate that adds both directions -- iperf's bidirectional
+  // total -- read as half out and half in: read from the name (duplex,
+  // bidir) when not given, and `no` to say it is not.
+  duplex: ['true', 'yes', 'y', 'on', '1', 'false', 'no', 'n', 'off', '0'],
 };
 
 function checkNumberMeta(key, value, spec, name, where, warnings) {
@@ -651,6 +655,9 @@ export function bindOverlay(overlay, model) {
     // folded to underscores; the card prints it, and the filter accepts either.
     slug: slugify(meta.slug || overlay.name),
     finding: String(meta.finding || '').toLowerCase(),
+    duplex: meta.duplex !== undefined
+      ? flagged(meta.duplex)
+      : /duplex|bidir/i.test(`${overlay.name} ${meta.label || ''}`),
     wide: !!overlay.wide,
     unit: meta.unit || '',
     numeric,

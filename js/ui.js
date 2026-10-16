@@ -888,6 +888,33 @@ function renderHeadline(state, view, box) {
   if (wrap.childNodes.length) box.append(wrap);
 }
 
+/**
+ * The box that reads a per-host rate as duplex totals -- both directions
+ * added, so half of each is what the host sent. Ticked by itself when the
+ * metric's name or !test line says duplex; shown unticked when hosts read
+ * past what their cables carry one way, which a measurement cannot; and
+ * kept once set by hand. Null when there is no reason to ask.
+ */
+function duplexBox(state, overlay, actions) {
+  const d = state.duplexState ? state.duplexState(overlay) : null;
+  if (!d || loadUnit(overlay, 'hosts').toGbps === null) return null;
+  if (!(d.on || d.auto || d.suspect || d.set)) return null;
+  const label = el('label', 'chk duplex');
+  const check = el('input');
+  check.type = 'checkbox';
+  check.checked = d.on;
+  check.addEventListener('change', () => actions.setDuplex(overlay, check.checked));
+  label.append(check, el('span', null, 'treat as duplex'));
+  let why = '';
+  if (d.auto && !d.set) why = 'its name says so';
+  else if (d.suspect && !d.on) why = `${d.suspect} host${d.suspect === 1 ? ' reads' : 's read'} past ${d.suspect === 1 ? 'its' : 'their'} cables one way`;
+  if (why) label.append(el('span', 'muted', ` — ${why}`));
+  label.title = 'A duplex total adds what a host sent and what it received, as iperf --bidir reports. '
+    + 'Ticked, half of each reading is what the host sent and half what it received; unticked, all of it '
+    + 'is what it sent. duplex=yes or duplex=no on the metric’s !test line says it in the file.';
+  return label;
+}
+
 /** How many cables are past full, in a set of loads. */
 function overFull(loads, toGbps) {
   let n = 0;
@@ -999,7 +1026,7 @@ export function renderCableLoad(state, host, actions) {
     if (model.gen) {
       const g = model.gen;
       lines.append(el('div', null, `generated: ${PATTERN_LABELS[g.pattern] || g.pattern}, `
-        + `${g.from ? `${trimNum(g.value)}% of what ${g.from.label} says` : genAmount(g.value, g.unit)}`
+        + `${g.from ? `${trimNum(g.value)}% of what ${g.from.label} says${g.from.duplex ? ' (a duplex total, halved)' : ''}` : genAmount(g.value, g.unit)}`
         + ` from each host${g.per === 'peer' ? ` ${GEN_PER_LABELS[g.pattern].peer}` : ''}`
         + ` · ${g.flows} flows · ${formatLoad(model, g.offered)}`));
     }
@@ -1012,6 +1039,18 @@ export function renderCableLoad(state, host, actions) {
         lines.append(el('div', 'muted', 'an estimate is routed as an even split: hashing a guess would read as a measurement'));
       }
       if (model.skipped) lines.append(el('div', 'muted', `${model.skipped} readings on racks or rooms left out`));
+      const box = duplexBox(state, model.overlay, actions);
+      if (box) lines.append(box);
+      // Measured, a host cannot send more than its cables carry one way.
+      if (model.over && model.over.length) {
+        const [worst] = model.over;
+        lines.append(el('div', 'bad', `${model.over.length} host${model.over.length === 1 ? ' reads' : 's read'} more than `
+          + `${model.over.length === 1 ? 'its' : 'their'} cables carry one way — ${shortPath(worst.el)}: `
+          + `${formatGbps(worst.gbps)}b/s of ${formatGbps(worst.capacity)}. `
+          + (model.duplex
+            ? 'Even halved as a duplex total: check the unit, or the cables’ gbps=.'
+            : 'A measurement cannot: if it adds both directions, tick treat as duplex.')));
+      }
     } else {
       const own = model.own || r;
       lines.append(el('div', null, model.between
@@ -1275,6 +1314,9 @@ export function renderLoadGen(state, host, actions, { unit } = {}) {
       + 'a percentage as that share of each server’s NICs. The pattern says where it goes.';
     src.append(pick);
     box.append(src);
+    const from = g.from ? state.overlays.get(g.from) : null;
+    const duplex = from && from.enabled ? duplexBox(state, from, actions) : null;
+    if (duplex) box.append(duplex);
   }
 
   // How much: in a unit of its own with nothing loaded, in the metric's when

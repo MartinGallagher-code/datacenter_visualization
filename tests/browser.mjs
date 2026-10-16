@@ -114,6 +114,10 @@ const fixtures = new Map([
   // The dual-plane fabric with one spine that can forward only 150G.
   ['/fx/slow-spine.dc', readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8')
     .replace('node spine1 at=6 u=2 role=spine plane=1 +switch', 'node spine1 at=6 u=2 role=spine plane=1 +switch gbps=150')],
+  // Every dual-plane server measured at 77,000 Mb/s, both directions added,
+  // under a name that does not say so.
+  ['/fx/iperf-total.tsv', `!test iperf_total_mbps unit=Mb/s label="iperf total"\n${
+    [1, 2, 3, 4].flatMap((r) => [1, 2, 3, 4, 5, 6, 7, 8].map((n) => `iperf_total_mbps\tR0${r}/s${n}\t77000\n`)).join('')}`],
   // The dual-plane fabric with each server's two NICs bonded.
   ['/fx/bonded.dc', readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8')
     .replace(/^(net nica .*)$/m, '$1 bond=nic').replace(/^(net nicb .*)$/m, '$1 bond=nic')],
@@ -1374,6 +1378,26 @@ await test('servers make the load their metric says', async () => {
   ok(/generated: all-to-all, 100% of what Egress per server says from each host/.test(
     await page.evaluate(() => document.querySelector('#cable-load').innerText)), 'and the cable load panel says so');
 }, { url: '?layout=examples/dual-plane.dc&results=examples/dual-plane-hosts.tsv' });
+
+// A duplex total read as what a server sent is more than its NICs carry:
+// the panel suspects it, offers the box, and ticking it halves the load.
+await test('treat as duplex', async () => {
+  const panel = () => page.evaluate(() => document.querySelector('#cable-load').innerText);
+  await page.locator('#overlays .overlay-head input[type=checkbox]').first().check();
+  await page.waitForTimeout(200);
+  await page.locator('#overlays label', { hasText: /^load the cables$/ }).locator('input').check();
+  await page.waitForTimeout(400);
+  let text = await panel();
+  const box = page.locator('#cable-load label.duplex input');
+  ok(await box.count() === 1 && !(await box.isChecked()) && /treat as duplex — 32 hosts read past their cables one way/.test(text),
+     'read whole, every server reads past its NICs, and the box is offered unticked');
+  ok(/32 hosts read more than their cables carry one way — R0\d\/s\d: 77Gb\/s of 50G/.test(text), 'with the reason, in red');
+  await box.check();
+  await page.waitForTimeout(400);
+  text = await panel();
+  ok(await page.locator('#cable-load label.duplex input').isChecked() && !/read more than/.test(text)
+     && /^1\.2Tb\/s$/m.test(text), `ticked, each reading is half sent, and nothing reads past its NICs  (${text.split('\n').slice(1, 3).join(' | ')})`);
+}, { url: '?layout=examples/dual-plane.dc&results=fx/iperf-total.tsv' });
 
 // Findings: the health file beside the flows, the panel and the tooltip.
 await test('findings', async () => {

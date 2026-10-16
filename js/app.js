@@ -80,6 +80,9 @@ const state = {
     // and a test flow from the first pick to the second.
     betweenOnly: false,
     test: { on: false, value: 100, unit: 'Gb/s' },
+    // Per metric, by key: treat its per-host totals as duplex (both
+    // directions added) or not, where the viewer's own guess is overruled.
+    duplex: new Map(),
     // The load generator: a made-up load, on its own or on top of a metric.
     // unit null is '%' of each host's NICs where cables have a gbps=, else
     // Gb/s; hosts is a filter, empty for every device not tagged +switch.
@@ -227,6 +230,19 @@ const state = {
     return value;
   },
 
+  // Whether a per-host metric is read as duplex, and why the box for it is
+  // shown: guessed from its name or !test line, suspected because hosts read
+  // past their cables, or set by hand.
+  duplexState(overlay) {
+    if (!overlay) return null;
+    return {
+      on: duplexOf(overlay),
+      auto: !!overlay.duplex,
+      suspect: duplexSuspect(overlay),
+      set: state.traffic.duplex.has(overlay.key),
+    };
+  },
+
   // What is taken out, as elements and cables of the current layout.
   takenOut() {
     const els = [];
@@ -354,12 +370,13 @@ function modelSource(withDown) {
     target && target.key, gen.from]) : '';
   // A metric the generator reads: re-read when its file is, so by object.
   const from = gen && gen.from ? genSource() : null;
+  const duplexKey = metric && kind === 'hosts' ? duplexOf(metric) : null;
   const slot = withDown ? 'model' : 'base';
   const c = state.trafficCache[slot];
   if (c && c.overlay === metric && c.layout === state.model && c.agg === (metric && metric.agg)
       && c.split === t.split && c.seed === t.seed && c.spread === t.spread && c.down === downKey
       && c.picks === pickKey && c.test === testKey && c.between === between && c.gen === genKey
-      && c.from === from && c.contention === t.contention) {
+      && sameSource(c.from, from) && c.contention === t.contention && c.duplex === duplexKey) {
     return c.value;
   }
   // Nothing taken out: the model and its baseline are one routing.
@@ -378,6 +395,8 @@ function modelSource(withDown) {
   let total = 0;
   let unresolved = 0;
   let skipped = 0;
+  let duplex = false;
+  let over = [];
 
   // What there is to route: the metric's flows, or its per-host totals to
   // estimate from; a generated load; a test flow.
@@ -390,11 +409,13 @@ function modelSource(withDown) {
     total = f.flows.length;
     unresolved = f.unresolved;
   } else if (metric) {
-    const h = hostsOf(metric, state.model);
+    const h = hostsOf(metric, state.model, duplexOf(metric));
     hosts = h.hosts;
     count = hosts.length;
     total = count;
     skipped = h.skipped;
+    duplex = h.duplex;
+    over = h.over;
   }
   let genFlows = [];
   let genRun = null;
@@ -476,11 +497,11 @@ function modelSource(withDown) {
   const value = {
     overlay: metric, kind: metric ? kind : gen ? 'gen' : 'test', result, loads: result.loads, toGbps: unit.toGbps,
     unit: unit.unit, count, total, unresolved, skipped, between, test: testRun, gen: genRun, own,
-    flows: routed, opts, estimated: !!metric && kind === 'hosts', contentionWhy,
+    flows: routed, opts, estimated: !!metric && kind === 'hosts', contentionWhy, duplex, over,
   };
   state.trafficCache[slot] = {
     overlay: metric, layout: state.model, agg: metric && metric.agg, split: t.split, seed: t.seed, spread: t.spread,
-    down: downKey, picks: pickKey, test: testKey, between, gen: genKey, from, contention: t.contention, value,
+    down: downKey, picks: pickKey, test: testKey, between, gen: genKey, from, contention: t.contention, duplex: duplexKey, value,
   };
   return value;
 }
@@ -512,7 +533,30 @@ const genBase = (unit) => (unit === '%' ? 'Gb/s' : unit);
  */
 function genSource() {
   const overlay = state.overlays.get(state.traffic.gen.from);
-  return overlay && overlay.enabled ? readsAsLoad(overlay) : null;
+  return overlay && overlay.enabled ? readsAsLoad(overlay, duplexOf(overlay)) : null;
+}
+
+// Two reads of the generator's metric are one source when they read the
+// same overlay the same way: readsAsLoad makes a new object every call.
+const sameSource = (a, b) => a === b
+  || !!(a && b && a.overlay === b.overlay && a.toGbps === b.toGbps && a.percent === b.percent);
+
+/** Whether a metric's per-host totals are read as duplex: as set, or as guessed. */
+function duplexOf(overlay) {
+  const set = state.traffic.duplex.get(overlay.key);
+  return set === undefined ? !!overlay.duplex : set;
+}
+
+// Hosts that read past their cables one way, read as sent: worked out once
+// per metric object, since the file re-binds it when it changes.
+const suspectCache = new WeakMap();
+function duplexSuspect(overlay) {
+  let n = suspectCache.get(overlay);
+  if (n === undefined) {
+    n = hostsOf(overlay, state.model, false).over.length;
+    suspectCache.set(overlay, n);
+  }
+  return n;
 }
 
 function testUnit(unit) {
@@ -897,6 +941,14 @@ const actions = {
   // the flows offer.
   setContention(on) {
     state.traffic.contention = on;
+    refreshPanels();
+    invalidate();
+  },
+
+  // A per-host metric read as duplex totals -- half sent, half received --
+  // or not, overruling the viewer's guess.
+  setDuplex(overlay, on) {
+    state.traffic.duplex.set(overlay.key, on);
     refreshPanels();
     invalidate();
   },

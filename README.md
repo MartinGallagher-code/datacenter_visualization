@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.11.0** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.12.0** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -815,6 +815,15 @@ other hosts measured, then routed like flows.
   and the panel says how many were.
 - The metric must be a rate (`unit=Gb/s`, `pps`, …, or a name like
   `mx_egress_gbps`). A temperature or a bare count is not offered.
+- **treat as duplex** reads each total as both directions added — what
+  `iperf --bidir` reports — so half of it is what the host sent and half
+  what it received. It is ticked by itself when the metric's name says
+  `duplex` or `bidir`, or its `!test` line says `duplex=yes` (`duplex=no`
+  says it is not). It is offered unticked when hosts read past what their
+  cables carry one way — a measured 309 Gb/s from a server with two 100G
+  NICs cannot be what it sent, and the panel says so in red, naming the
+  worst. Ticked or unticked by hand, it stays as set for that metric. The
+  same box sits in the load generator when it reads the metric.
 
 `examples/dual-plane-hosts.tsv` gives each server of `examples/dual-plane.dc`
 a total: a busy rack, and one hot server in a quiet one.
@@ -1008,7 +1017,9 @@ ramp: viridis, magma, plasma, turbo, health, cool, ember, gray, rdbu;
 `agg=` presets the aggregation; `decimals=` fixes formatting, 0 to 10 places;
 `finding=drops|lockups|errors|verdict` says what trouble a metric reports, for
 the [findings](#findings-what-went-wrong-and-whether-the-load-explains-it)
-list, where its name does not — and `finding=no` that it reports none.
+list, where its name does not — and `finding=no` that it reports none;
+`duplex=yes|no` says whether a per-host rate adds both directions, where its
+name does not say `duplex` or `bidir`.
 `min=`/`max=` must be numbers with `min` below `max`; anything else is
 reported in the load report and ignored rather than quietly applied.)
 
