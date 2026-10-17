@@ -742,6 +742,7 @@ function contendedText(c) {
   if (c.full.size) parts.push(`${n(c.full.size, 'cable')} full`);
   if (c.switches && c.switches.size) parts.push(`${n(c.switches.size, 'switch')} full`);
   if (c.packets && c.packets.full.size) parts.push(`${n(c.packets.full.size, 'switch')} out of packets`);
+  if (c.packets && c.packets.hostsFull && c.packets.hostsFull.size) parts.push(`${n(c.packets.hostsFull.size, 'host')} out of packets`);
   return parts.join(' and ') || 'nothing full';
 }
 
@@ -849,6 +850,20 @@ export function hostTip(state, node, view) {
       lines.push(`  ${e.name} to ${shortPath(e.far)}: out ${formatLoad(view, e.out)} · in ${formatLoad(view, e.in)}`
         + `${u !== null ? ` · ${pct(u)}` : ''}`);
     }
+  }
+  // Its packet rate, where it has a pps= and the load knows its packets:
+  // what it sends and takes in of what it can, each way.
+  const rate = Number(node.attrs && node.attrs.pps);
+  const pk = c && c.packets && c.packets.hosts ? c.packets.hosts.get(node) : null;
+  if (rate > 0 && pk) {
+    const full = (c.packets.hostsFull && c.packets.hostsFull.get(node)) || { out: 0, in: 0 };
+    lines.push(`packets: sending ${formatPps(pk.out[0])}, receiving ${formatPps(pk.in[0])} of the ${formatPps(rate)} it can each way`
+      + ` (${pct(Math.max(pk.out[0], pk.in[0]) / rate)})`);
+    if (full.out || full.in) {
+      lines.push(`out of packets — holding back ${full.out + full.in} flow${full.out + full.in === 1 ? '' : 's'} itself`);
+    }
+  } else if (rate > 0) {
+    lines.push(`can pass ${formatPps(rate)} each way: no load here knows its packets — give pps a packet size`);
   }
   // Its own flows, from the model: how many each way, and held back.
   const flows = view.model && view.model.flows;

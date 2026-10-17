@@ -11,6 +11,17 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.16.0 — 2026-10-17
+
+Packet rates on servers. 1.12.0–1.15.0 ride the same pull request and are
+not published on their own.
+
+- **`pps=` on a server** (or any host) is the packets a second it can send,
+  and separately take in. With a load that knows its packets, contention
+  holds the server's own flows back at that rate each way; its tooltip says
+  how many it sends and receives of what it can, and how many flows it holds
+  back, and the panel counts `N hosts out of packets`. In the completions
+  and the Syntax panel.
 ## 1.15.0 — 2026-10-16
 
 More ways to route, more to send, and packet-rate limits. 1.12.0–1.14.0

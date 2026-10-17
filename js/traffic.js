@@ -786,6 +786,19 @@ export function contend(model, flows, opts = {}) {
     }
     return i;
   };
+  // And each host with a pps= as two: the packets it can send, and those it
+  // can take in -- a NIC's, or a CPU's, packet rate, each way.
+  const hostPktOf = new Map();
+  const hostPktSlot = (el, side) => {
+    const key = side === 'out' ? 0 : 1;
+    let pair = hostPktOf.get(el);
+    if (!pair) {
+      pair = [owner.length, owner.length + 1];
+      hostPktOf.set(el, pair);
+      owner.push({ el, pps: true, side: 'out' }, { el, pps: true, side: 'in' });
+    }
+    return pair[key];
+  };
 
   // Every flow as its legs, gathered by where each leg is going.
   const routed = [];
@@ -925,6 +938,14 @@ export function contend(model, flows, opts = {}) {
       if (size > CONTEND_LIMITS.crossings) return null;
     }
   }
+  // Each flow out of a host with a pps=, and into one: all of the flow's
+  // packets, whichever way it went.
+  routed.forEach((flow, i) => {
+    if (!(flow.pps > 0 && flow.value > 0) || f.forwards(flow.src) || f.forwards(flow.dst)) return;
+    const ppf = flow.pps / flow.value;
+    if (switchPps(flow.src)) part(i, [hostPktSlot(flow.src, 'out'), 1], ppf);
+    if (switchPps(flow.dst)) part(i, [hostPktSlot(flow.dst, 'in'), 1], ppf);
+  });
 
   const slots = owner.length;
   const cap = new Float64Array(slots).fill(Infinity);
@@ -1036,6 +1057,7 @@ export function contend(model, flows, opts = {}) {
   let wanted = 0;
   let held = 0;
   const ppsThrough = new Map();   // switch -> [packets carried, offered] a second
+  const hostPkts = new Map();     // host -> { out, in: [packets carried, offered] }
   const out = routed.map((flow, i) => {
     const parts = paths[i];
     for (let p = 0; p < parts.length; p += 2) {
@@ -1043,6 +1065,14 @@ export function contend(model, flows, opts = {}) {
       const scale = parts[p + 1];
       for (let k = 0; k < path.length; k += 2) {
         const o = owner[path[k]];
+        if (o.pps && o.side) {
+          // Packets out of, or into, a host with a pps=: carried, and offered.
+          let h = hostPkts.get(o.el);
+          if (!h) hostPkts.set(o.el, (h = { out: [0, 0], in: [0, 0] }));
+          h[o.side][0] += path[k + 1] * scale * rate[i];
+          h[o.side][1] += path[k + 1] * scale * demand[i];
+          continue;
+        }
         if (o.pps) {
           // Packets through a switch with a pps=: carried, and offered.
           const p2 = ppsThrough.get(o.el) || [0, 0];
@@ -1069,10 +1099,15 @@ export function contend(model, flows, opts = {}) {
   const fullMap = new Map();
   const fullSwitches = new Map();
   const fullPps = new Map();
+  const hostFull = new Map();
   for (const [sl, k] of holds) {
     const o = owner[sl];
     if (o.link) into(fullMap, o.link, o.dir, k);
-    else if (o.pps) fullPps.set(o.el, k);
+    else if (o.pps && o.side) {
+      const h = hostFull.get(o.el) || { out: 0, in: 0 };
+      h[o.side] = k;
+      hostFull.set(o.el, h);
+    } else if (o.pps) fullPps.set(o.el, k);
     else fullSwitches.set(o.el, k);
   }
 
@@ -1083,14 +1118,16 @@ export function contend(model, flows, opts = {}) {
     contention: {
       offered: offeredLoads, full: fullMap, switches: fullSwitches, flows: out, held, wanted, carried,
       // Switches with a pps=: the packets they pass, and those full of them.
-      packets: { through: ppsThrough, full: fullPps },
+      packets: { through: ppsThrough, full: fullPps, hosts: hostPkts, hostsFull: hostFull },
     },
   };
 }
 
 /**
- * A switch's packet rate, in packets a second: its pps=, or null. Small
- * packets can fill it while its bandwidth has room to spare.
+ * An element's packet rate, in packets a second: its pps=, or null. On a
+ * switch, what it can forward -- small packets can fill it while its
+ * bandwidth has room to spare; on a host, what it can send, and again what
+ * it can take in.
  */
 export function switchPps(el) {
   const raw = el.attrs && el.attrs.pps;

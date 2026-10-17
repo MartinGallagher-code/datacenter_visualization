@@ -2064,6 +2064,29 @@ const segsOf = (cache, net) => {
   eq([bits.contention.held, bits.contention.packets.full.size], [0, 0], 'a load in bits alone leaves pps= alone');
 }
 
+// pps= on a server: what it can send, and separately take in, each second.
+// Its own packets hold its flows back before any switch is involved.
+{
+  const text = readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8')
+    .replace('node s[1..8] u=2 role=server +x86', 'node s[1..8] u=2 role=server +x86 pps=500000');
+  const m = parseLayout(text);
+  eq(m.warnings, [], 'pps= on a server');
+  const s1 = m.resolve('R01/s1');
+  eq(Number(s1.attrs.pps), 500000, 'set on each server the range makes');
+  const plain = generateFlows(m, { pattern: 'all', value: 1000000, unit: 'pps', reach: 'rack' }, { base: { toGbps: null, unit: 'pps' } });
+  const flows = plain.flows.map((f) => ({ ...f, value: f.value * packetGb(64), pps: f.value }));
+  const c = contend(m, flows, { split: 'even', toGbps: 1 });
+  const hosts = c.contention.packets.hosts;
+  ok(c.contention.held > 0 && c.contention.packets.hostsFull.size > 0, 'servers out of packets hold their flows back');
+  ok([...hosts.values()].every((h) => h.out[0] <= 500000 * (1 + 1e-6) && h.in[0] <= 500000 * (1 + 1e-6)),
+     'no server sends or takes in more than its pps=');
+  const one = hosts.get(s1);
+  ok(one && one.out[1] > one.out[0] && Math.abs(one.out[0] - 500000) < 1, `and a full one sends exactly its rate  (${one && Math.round(one.out[0])} of ${one && Math.round(one.out[1])} offered)`);
+  eq(c.contention.packets.full.size, 0, 'no switch is short of packets: the servers were');
+  const bits = contend(m, flows.map(({ pps, ...f }) => f), { split: 'even', toGbps: 1 });
+  eq([bits.contention.held, bits.contention.packets.hostsFull.size], [0, 0], 'a load in bits alone leaves a server’s pps= alone');
+}
+
 // ------------------------------------------------------------------ bursts
 // A steady average that fits can still overflow in a clump: burstRisk lists
 // the cables a burst of N times the average would overflow, fullest first.

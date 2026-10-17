@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.15.0** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.16.0** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -650,6 +650,21 @@ node spine1 role=spine +switch gbps=12800
 
 ```text
 node superspine role=superspine +switch gbps=51200 pps=8000000000
+```
+
+- **`pps=` on a server** (or any host) is the packets a second it can send,
+  and separately take in — what its NICs and network stack manage, which is
+  often the real limit on a test of small packets. Contention holds its own
+  flows back at that rate each way, before any switch is involved. Over
+  `examples/dual-plane.dc` with `pps=500000` on every server and the same
+  million 64-byte requests a second, a server's tooltip reads `packets:
+  sending 500,000 pps, receiving 500,000 pps of the 500,000 pps it can each
+  way (100%)` and `out of packets — holding back 48 flows itself`, and the
+  panel's contention line says `32 hosts out of packets`. Like a switch's,
+  it needs a load that knows its packets; one in bits alone leaves it be.
+
+```text
+node s[1..16] role=server pps=20000000
 ```
 
 A `gbps=` on a rack or a room is not passed down to what is in it.

@@ -34,7 +34,7 @@ const ELEMENT_KEYS = [
   ['color=', 'fill colour: #4fa3ff, teal, rgb(1,2,3)'],
   ['seq=', 'count per enclosing kind (seq=room) or by name (seq=net)'],
   ['gbps=', 'a switch’s own forwarding capacity, in Gb/s: gbps=12800'],
-  ['pps=', 'a switch’s packet rate, in packets a second: pps=8000000000'],
+  ['pps=', 'packet rate, in packets a second: what a switch forwards, or a server sends and takes in (pps=8000000000)'],
 ];
 
 const NET_KEYS = [
@@ -411,6 +411,7 @@ const REFERENCE = [
     ['+switch', 'only elements tagged switch forward traffic', true],
     ['node spine role=spine +switch gbps=12800', 'a switch that can forward 12.8 Tb/s in all, whatever its ports add up to'],
     ['node spine role=spine +switch pps=8000000000', 'and 8 billion packets a second: small packets can fill it before its bandwidth'],
+    ['node s[1..16] role=server pps=20000000', 'a server that sends, and takes in, 20 million packets a second each way'],
     ['gbps=1 gbps=10 gbps=25 gbps=40 gbps=100 gbps=200 gbps=400 gbps=800', 'common port speeds', true],
   ]],
   ['Selectors', 'For link rules and the filter bar.', [

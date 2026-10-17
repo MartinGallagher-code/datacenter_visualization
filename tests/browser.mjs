@@ -122,6 +122,10 @@ const fixtures = new Map([
   ['/fx/pps-spines.dc', readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8')
     .replace('node spine1 at=6 u=2 role=spine plane=1 +switch', 'node spine1 at=6 u=2 role=spine plane=1 +switch pps=2000000')
     .replace('node spine2 at=2 u=2 role=spine plane=2 +switch', 'node spine2 at=2 u=2 role=spine plane=2 +switch pps=2000000')],
+  // The dual-plane fabric with servers that send and take in half a million
+  // packets a second each way.
+  ['/fx/pps-servers.dc', readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8')
+    .replace('node s[1..8] u=2 role=server +x86', 'node s[1..8] u=2 role=server +x86 pps=500000')],
   // The dual-plane fabric with each server's two NICs bonded.
   ['/fx/bonded.dc', readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8')
     .replace(/^(net nica .*)$/m, '$1 bond=nic').replace(/^(net nicb .*)$/m, '$1 bond=nic')],
@@ -1497,6 +1501,37 @@ await test('switches out of packets', async () => {
   ok(/contention: 4 switches out of packets, holding back/.test(text), `the spines run out of packets  (${(/contention: .*/.exec(text) || [''])[0]})`);
   ok(/Busiest switches\s+SP\d\/spine\d\s+[^\n]*100% of its pps/.test(text), 'and lead the busiest switches, full of packets');
 }, { url: '?layout=fx/pps-spines.dc' });
+
+await test('servers out of packets', async () => {
+  const panel = () => page.evaluate(() => document.querySelector('#cable-load').innerText);
+  await page.locator('#load-gen select.gen-unit').selectOption('pps');
+  await page.waitForTimeout(200);
+  for (const [cls, value] of [['gen-value', '1000000'], ['gen-bytes', '64']]) {
+    await page.fill(`#load-gen input.${cls}`, value);
+    await page.locator(`#load-gen input.${cls}`).dispatchEvent('change');
+    await page.waitForTimeout(200);
+  }
+  await page.locator('#load-gen select.gen-reach').selectOption('rack');
+  await page.locator('#load-gen button', { hasText: 'Run' }).click();
+  await page.waitForTimeout(500);
+  const text = await panel();
+  ok(/contention: 32 hosts out of packets, holding back/.test(text), `the servers run out of packets  (${(/contention: .*/.exec(text) || [''])[0]})`);
+  const tip = await page.evaluate(() => {
+    const c = document.querySelector('#view');
+    const r = c.getBoundingClientRect();
+    for (let y = 10; y < r.height; y += 7) {
+      for (let x = 4; x < r.width; x += 2) {
+        c.dispatchEvent(new PointerEvent('pointermove', { clientX: r.left + x, clientY: r.top + y, bubbles: true }));
+        const t = document.querySelector('#tooltip');
+        if (!t.hidden && /^s\d   \(node\)/.test(t.textContent)) return t.textContent;
+      }
+    }
+    return '';
+  });
+  ok(/packets: sending 500,000 pps, receiving 500,000 pps of the 500,000 pps it can each way \(100%\)/.test(tip)
+     && /out of packets — holding back \d+ flows itself/.test(tip),
+     `a server's tooltip says how many packets it moves of its pps=  (${tip.replace(/\n/g, ' | ')})`);
+}, { url: '?layout=fx/pps-servers.dc' });
 
 // Findings: the health file beside the flows, the panel and the tooltip.
 await test('findings', async () => {
