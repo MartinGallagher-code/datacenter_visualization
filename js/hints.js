@@ -34,12 +34,12 @@ const ELEMENT_KEYS = [
   ['if=', 'make this line only where it holds: if={row}=1, if={row}!=1'],
   ['color=', 'fill colour: #4fa3ff, teal, rgb(1,2,3)'],
   ['seq=', 'count per enclosing kind (seq=room) or by name (seq=net)'],
-  ['gbps=', 'a switch’s own forwarding capacity, in Gb/s: gbps=12800'],
+  ['gbps=', 'a switch’s own forwarding capacity, or what a server’s NICs move each way, in Gb/s: gbps=12800'],
   ['pps=', 'packet rate, in packets a second: what a switch forwards, or a server sends and takes in (pps=8000000000)'],
   ['buffer=', 'a switch’s shared packet buffer: buffer=132MB -- what a burst can queue in before it drops'],
   ['ports=', 'a device’s ports, so many of so many Gb/s: ports=32x400,2x10 -- its cables are checked against them'],
   ['breakout=', 'the most ports of each speed it breaks out to, from its datasheet: breakout=200:64,100:128,50:144'],
-  ['latency=', 'a switch’s own latency per packet: latency=900ns'],
+  ['latency=', 'a switch’s own latency per packet, or a host’s NIC and stack: latency=900ns'],
   ['model=', 'a device defined by a model line: its settings and tags are this one’s too'],
 ];
 
@@ -425,6 +425,7 @@ const REFERENCE = [
     ['node s[1..16] role=server pps=20000000', 'a server that sends, and takes in, 20 million packets a second each way'],
     ['node leaf +switch buffer=132MB', 'a shared packet buffer: what bursts queue in before they drop'],
     ['node leaf +switch latency=900ns', 'its latency per packet, added up along a route between picks'],
+    ['node s[1..16] role=server gbps=200', 'a server whose NICs move 200 Gb/s each way, whatever its cables add up to (a PCIe slot)'],
     ['node leaf +switch ports=32x400,2x10', 'its ports: its cables are checked against them, breakout included (one 400G port is four 100G cables)'],
     ['node leaf +switch breakout=200:64,100:128,50:144', 'the datasheet’s most ports of each speed: no more cables of a speed than that'],
     ['gbps=1 gbps=10 gbps=25 gbps=40 gbps=100 gbps=200 gbps=400 gbps=800', 'common port speeds', true],
@@ -432,7 +433,9 @@ const REFERENCE = [
   ['Device models', 'A datasheet written once: every element with model= its name takes its settings and tags, where it does not set its own.', [
     ['model 7050DX4-32S u=1 +switch gbps=12800 pps=5300000000 buffer=132MB latency=900ns ports=32x400,2x10,1x1 breakout=400:32,200:64,100:128,50:144,40:64,25:128,10:130', 'Arista 7050DX4-32S, from its datasheet'],
     ['model 7060DX5-64S u=2 +switch gbps=25600 pps=10600000000 buffer=114MB latency=825ns ports=64x400,2x10,1x1 breakout=400:64,200:128,100:256,50:256,25:256,10:258', 'Arista 7060DX5-64S, from its datasheet'],
+    ['model P2100G ports=2x100 gbps=200 pps=106000000', 'a Broadcom BCM57508 card, 2x100G: its line rate, and its DPDK packet rate at 64 B'],
     ['node leaf[1..8] model=7050DX4-32S', 'eight of them: 1U, forwarding, with its packet rate, buffer, latency and ports'],
+    ['node s[1..16] role=server model=P2100G', 'servers with one such card each'],
     ['node leaf9 model=7050DX4-32S buffer=64MB', 'its own setting wins over the model’s'],
   ]],
   ['Selectors', 'For link rules and the filter bar.', [

@@ -1361,7 +1361,11 @@ await test('buffers, latency and device models', async () => {
   await page.fill('#cable-load input.burst-length', '1000');
   await page.locator('#cable-load input.burst-length').dispatchEvent('change');
   await page.waitForTimeout(400);
-  ok(/64 drop — more than their switch’s buffer holds/.test(await panel()), 'a millisecond one drops');
+  const dropping = await panel();
+  ok(/64 drop — more than their switch’s buffer holds: 35\.8 MB lost a burst, 7% of what they carry while it lasts/.test(dropping),
+     `a millisecond one drops, and says how much  (${(/64 drop.*/.exec(dropping) || [''])[0]})`);
+  ok(/a 2\.5× burst for 1000 µs drops 35\.8 MB on 64 cables — 7% of what they carry while it lasts/.test(
+    await page.evaluate(() => document.querySelector('#cable-load .headline').innerText)), 'and the headline says what bursts lose');
 
   const pick = async (name, nth) => {
     await page.fill('#filter', name);
@@ -1378,6 +1382,8 @@ await test('buffers, latency and device models', async () => {
   const picks = await page.evaluate(() => document.querySelector('#inspector').innerText);
   ok(/latency: 2\.78 µs at 64 B, 3\.7 µs at 1500 B · 3 switches/.test(picks),
      `between the picks, the floor of a packet's trip  (${(/latency.*/.exec(picks) || [''])[0]})`);
+  ok(/under this load: [\d.]+ µs at 64 B, [\d.]+ µs at 1500 B/.test(picks) && !/full cable/.test(picks),
+     `and under the load the cables show, the queues on the way added  (${(/under this load.*/.exec(picks) || [''])[0]})`);
 }, { url: '?layout=fx/modelled.dc' });
 
 // Bonded NICs, as LACP (layer3+4) runs them: hashed, each connection keeps
@@ -1545,7 +1551,9 @@ await test('generated requests and replies', async () => {
   const panel = () => page.evaluate(() => document.querySelector('#cable-load').innerText);
   await page.locator('#load-gen select.gen-unit').selectOption('pps');
   await page.waitForTimeout(200);
-  eq(await page.inputValue('#load-gen input.gen-bytes'), '1500', 'choosing pps starts from a full-size packet, never a bare count');
+  eq(await page.inputValue('#load-gen input.gen-bytes'), '316', 'choosing pps starts from the IMIX mix, never a bare count');
+  eq(await page.locator('#load-gen .size-picks button').allTextContents(), ['64 B', 'IMIX', '1500 B'], 'with the usual sizes a click away');
+  ok(await page.locator('#load-gen .size-picks button.active', { hasText: 'IMIX' }).count() === 1, 'IMIX the one chosen');
   for (const [cls, value] of [['gen-value', '1000000'], ['gen-bytes', '500'], ['gen-reply', '4096']]) {
     await page.fill(`#load-gen input.${cls}`, value);
     await page.locator(`#load-gen input.${cls}`).dispatchEvent('change');

@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.18.0** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.19.0** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -644,6 +644,13 @@ of each:
 - A cable's tooltip says what the burst would need of it, how much queues
   where, of how much: `78.1 KB queued at R03/tora, of the 222.2 KB its
   buffer gives this port: absorbed`.
+- **What drops is lost**: the excess past the port's share, out of what the
+  burst sends onto the cable while it lasts. The panel and the headline give
+  it in all — the same load in 1000 µs bursts reads `a 2.5× burst for 1000
+  µs drops 35.8 MB on 64 cables — 7% of what they carry while it lasts` —
+  and a dropping cable's tooltip gives its own. It is a loss per burst, not
+  a rate: how often bursts come is the traffic's, and TCP backs off after
+  each, which the steady average does not see.
 
 The buffer is the one figure that tells an incast a switch rides through
 from one that loses packets; real switches add per-queue reserves and
@@ -717,6 +724,12 @@ node superspine role=superspine +switch gbps=51200 pps=8000000000
 node s[1..16] role=server pps=20000000
 ```
 
+- **`gbps=` on a server** is what its NICs can move each way, whatever its
+  cables add up to — a card in a PCIe slot narrower than its ports, two cards
+  sharing one. Contention holds its own flows back there, as at a full
+  cable, and its tooltip says `its NICs: 100% of the 20G they can move each
+  way — full, holding back 62 flows itself`; the panel counts `N hosts full`.
+
 A `gbps=` on a rack or a room is not passed down to what is in it.
 
 #### Device models: a datasheet written once
@@ -759,6 +772,23 @@ node leaf9 model=7050DX4-32S buffer=64MB      # its own setting wins
 - **`buffer=`** is the shared packet buffer bursts queue in (see bursts,
   above), and **`latency=`** the switch's own time per packet (see
   [Between picks](#between-picks-only-their-flows-and-a-test-flow)).
+
+A server's NICs are specified the same way, on the server: `ports=`,
+`gbps=` each way, `pps=` each way and `latency=`. A Broadcom **BCM57508**
+card in its 2 × 100G form (P2100G; 1 × 200G as the P1200G) sits on a PCIe
+4.0 x16 slot, about 250 Gb/s each way before overhead — enough for its 200G.
+Broadcom's DPDK reports measure it at about 106 million 64-byte packets a
+second with no loss across both ports, which is the card's ceiling; a
+kernel network stack is well below it, so measure your own servers for
+`pps=` where the matrix runs use sockets:
+
+```text
+model P2100G ports=2x100 gbps=200 pps=106000000
+node s[1..16] role=server model=P2100G
+```
+
+A server with two such cards has twice each figure: `ports=4x100
+gbps=400 pps=212000000`, or a card a net if they are cabled apart.
 
 What the datasheets also give and the viewer does not model: power draw,
 fans and power supplies, memory, table sizes (128-way ECMP, routes, MACs),
@@ -831,9 +861,22 @@ packet first because the cable out is faster than the cable in. Over
 `examples/dual-plane.dc` with `latency=900ns` on its switches, two servers
 in one rack are `942 ns at 64 B, 1.4 µs at 1500 B · 1 switch`; in two racks,
 `2.78 µs at 64 B, 3.7 µs at 1500 B · 3 switches` — the ToR stores each packet
-where 25G steps up to 100G. Not counted: the hosts' own stacks, the cables'
-length (about 5 ns a metre) and any queueing; a switch with no `latency=` is
-counted as none, and said so.
+where 25G steps up to 100G. A `latency=` on either host — its NIC and
+stack — is added too. Not counted: the cables' length (about 5 ns a metre);
+a switch with no `latency=` is counted as none, and said so.
+
+With a load on the cables, a second line gives the trip **under this
+load**: each cable's queue added. A cable a fraction ρ full holds a packet
+about ρ/(1−ρ) of the load's packet times — the single queue's textbook
+figure, 9 at 90% and 99 at 99% — and a full one as long as its port's share
+of the sending switch's `buffer=` takes to drain, which is also the most
+any queue can hold it. The load's packets are its own size where it says
+one, else IMIX. Over the dual-plane fabric with `buffer=2MB` on its ToRs,
+two racks apart, a load of 150% shared out fills the ToR's downlink, and a
+1500-byte packet takes about 75 µs where it took 3.7 — 71 of them waiting
+for 222 KB to drain at 25G. A full cable at a switch with no `buffer=` is
+said to have no ceiling known, and a host's own full NIC queues in the host,
+which is not counted.
 
 #### The load generator: a load with no file
 
@@ -893,8 +936,16 @@ off.
   the packets beside the bits. Over `examples/dual-plane.dc`, all-to-all at
   1,000,000 pps of 500 B requests and 4096 B replies is 32 Mpps each way and
   fills every server's NICs to 76%, almost all of it the replies coming back.
-  Choosing pps starts at 1500 B requests and no replies; with the request
-  size emptied, pps is plain packets, drawn by load alone.
+  Choosing pps starts at **IMIX** requests and no replies: 316 B of payload,
+  the average of the standard 7:4:1 mix of 64, 594 and 1518-byte frames.
+  Real datacentre traffic is two-humped — small acks and requests beside
+  full-size data — and averages a few hundred bytes, and switches are rated
+  for their packet rate at about this size; 1500 B would make a packet-rate
+  limit look harmless. One average size is exact here: bits and packets both
+  add up linearly, so a mix and its mean load the cables the same. **64 B ·
+  IMIX · 1500 B** beside the box set each at a click, here and on a measured
+  packet rate's own row. With the request size emptied, pps is plain
+  packets, drawn by load alone.
 - **to hosts** — **anywhere**, or **outside its own rack** (row, pod, room —
   the kinds in your layout): every flow leaves the sender's rack, which loads
   the uplinks and nothing inside a rack.

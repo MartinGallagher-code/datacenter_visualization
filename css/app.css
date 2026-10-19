@@ -770,3 +770,6 @@ body.resizing-rows { cursor: row-resize; user-select: none; }
 .btnrow .conns input { width: 44px; padding: 1px 4px; font-size: 11.5px; }
 .overlay-body .why { font-size: 11px; margin: 0 0 4px 22px; }
 .gen-row input.burst-length { width: 56px; }
+.size-picks { display: inline-flex; gap: 3px; margin-left: 4px; }
+.size-picks button { font-size: 10.5px; padding: 1px 5px; }
+.size-picks button.active { border-color: #4fa3ff; color: #8cc4ff; }

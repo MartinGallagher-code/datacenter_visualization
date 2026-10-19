@@ -16,7 +16,7 @@ import {
 } from './render.js';
 import {
   biggestChanges, burstRisk, busiest, cablesOf, formatGbps, GEN_UNITS, hostsFor, loadable, loadUnit, PATTERNS, reachKinds, TARGETED,
-  CONNECTION_LIMITS, PER_CONNECTION, readsAsLoad, SPLITS, SPREADS, TEST_UNITS, trafficKind, utilOf,
+  CONNECTION_LIMITS, IMIX_BYTES, PACKET_PICKS, PER_CONNECTION, readsAsLoad, SPLITS, SPREADS, TEST_UNITS, trafficKind, utilOf,
 } from './traffic.js';
 
 const el = (tag, cls, text) => {
@@ -748,6 +748,7 @@ function contendedText(c) {
   if (c.full.size) parts.push(`${n(c.full.size, 'cable')} full`);
   if (c.switches && c.switches.size) parts.push(`${n(c.switches.size, 'switch')} full`);
   if (c.packets && c.packets.full.size) parts.push(`${n(c.packets.full.size, 'switch')} out of packets`);
+  if (c.hosts && c.hosts.full && c.hosts.full.size) parts.push(`${n(c.hosts.full.size, 'host')} full`);
   if (c.packets && c.packets.hostsFull && c.packets.hostsFull.size) parts.push(`${n(c.packets.hostsFull.size, 'host')} out of packets`);
   return parts.join(' and ') || 'nothing full';
 }
@@ -759,12 +760,21 @@ export function formatPps(v) {
   return `${Math.round(v).toLocaleString('en-US')} pps`;
 }
 
+// Whether an element passes traffic on: tagged +switch, or -- where nothing
+// is tagged -- anything.
+function forwardsHere(state, el) {
+  if (el.tagsAll && el.tagsAll.has('switch')) return true;
+  return !state.model.all.some((x) => x.tags && x.tags.has('switch'));
+}
+
 /** What a burst's excess comes to at the switch sending it, and its fate. */
 function burstNeed(r) {
   if (r.fate === 'host') return ' — it queues in the host sending it';
   const queue = `${formatBytes(r.need)} queued at ${shortPath(r.from)}`;
   if (r.fate === 'unknown') return ` — ${queue}, which has no buffer= to say whether it holds`;
-  return ` — ${queue}, of the ${formatBytes(r.have)} its buffer gives this port: ${r.fate === 'drops' ? 'drops' : 'absorbed'}`;
+  if (r.fate === 'absorbed') return ` — ${queue}, of the ${formatBytes(r.have)} its buffer gives this port: absorbed`;
+  return ` — ${queue}, of the ${formatBytes(r.have)} its buffer gives this port: drops ${formatBytes(r.lost)} a burst, `
+    + `${pct(r.lost / r.sent)} of what it carries while it lasts`;
 }
 
 /** A size in bytes, as a datasheet gives it: 1.2 MB, 640 KB. */
@@ -866,6 +876,14 @@ export function hostTip(state, node, view) {
     line += ` — ${pct((Math.max(sent[0], got[0]) * view.toGbps) / capacity)} of its ${formatGbps(capacity)}`;
   }
   lines.push(line);
+  // Its own gbps=, where it has one: what its NICs can move each way,
+  // whatever its cables add up to -- a PCIe slot's ceiling, say.
+  const own = Number(node.attrs && node.attrs.gbps);
+  if (own > 0 && view.toGbps !== null && !forwardsHere(state, node)) {
+    const full = c && c.hosts && c.hosts.full ? c.hosts.full.get(node) : null;
+    lines.push(`its NICs: ${pct((Math.max(sent[0], got[0]) * view.toGbps) / own)} of the ${formatGbps(own)} they can move each way`
+      + (full ? ` — full, holding back ${full.out + full.in} flow${full.out + full.in === 1 ? '' : 's'} itself` : ''));
+  }
   if (each.length > 1) {
     for (const e of each) {
       const u = utilOf(e.link, e.link.a === node ? [e.out, e.in] : [e.in, e.out], view.toGbps);
@@ -942,6 +960,24 @@ function renderHeadline(state, view, box) {
       if (model.packets.why) wrap.append(el('div', 'bad', model.packets.why));
     }
   }
+  // What a burst loses, beside what is delivered on average.
+  const burst = state.traffic.burst || 1;
+  if (burst > 1 && !view.compare && view.toGbps !== null) {
+    const us = state.traffic.burstUs || 100;
+    let lost = 0;
+    let sentOn = 0;
+    let cables = 0;
+    for (const r of burstRisk(view.loads, view.toGbps, burst, us * 1e-6)) {
+      if (r.fate !== 'drops') continue;
+      lost += r.lost;
+      sentOn += r.sent;
+      cables++;
+    }
+    if (cables) {
+      wrap.append(el('div', 'bad', `a ${trimNum(burst)}× burst for ${trimNum(us)} µs drops ${formatBytes(lost)} on ${cables} cable${cables === 1 ? '' : 's'}`
+        + ` — ${pct(lost / sentOn)} of what they carry while it lasts`));
+    }
+  }
   // Each net's cables, both ways, against what they carry both ways.
   const nets = new Map();
   for (const [link, l] of view.loads) {
@@ -981,6 +1017,20 @@ function renderHeadline(state, view, box) {
  * line) or here -- a rate in pps becomes a bit rate, framing added, set
  * against the cables' gbps=, and every request comes back as its reply.
  */
+// A request size at a click: 64 B, the IMIX mix, or full-size packets.
+function sizePicks(current, pick) {
+  const wrap = el('span', 'size-picks');
+  for (const [bytes, label] of PACKET_PICKS) {
+    const b = el('button', current === bytes ? 'active' : null, label);
+    b.title = bytes === IMIX_BYTES
+      ? `The standard IMIX mix -- seven 64-byte frames to four of 594 and one of 1518 -- as its average: ${bytes} B of payload`
+      : `${bytes}-byte requests`;
+    b.addEventListener('click', () => pick(bytes));
+    wrap.append(b);
+  }
+  return wrap;
+}
+
 function packetsRow(state, overlay, actions) {
   const p = state.packetsOf ? state.packetsOf(overlay) : null;
   if (!p) return null;
@@ -1005,7 +1055,8 @@ function packetsRow(state, overlay, actions) {
     el('span', null, 'B, replies of'),
     field(p.reply, 'The reply each request gets, in bytes, routed back the other way. Empty or 0: no replies.',
       (v) => actions.setPackets(overlay, { bytes: p.bytes, reply: v })),
-    el('span', null, 'B'));
+    el('span', null, 'B'),
+    sizePicks(p.bytes, (v) => actions.setPackets(overlay, { bytes: v, reply: p.reply })));
   row.title = `Payloads, in bytes: each packet carries ${66} more on the wire (Ethernet, IP, UDP, preamble and gap). `
     + 'With a size, a packet rate is a bit rate: set against gbps=, shared out where full, and every request '
     + 'is answered by a reply the other way. mx export says the sizes in its header (run shape), and bytes= '
@@ -1276,7 +1327,13 @@ export function renderCableLoad(state, host, actions) {
       const fates = { drops: 0, absorbed: 0, unknown: 0, host: 0 };
       for (const r of risks) fates[r.fate]++;
       const parts = [];
-      if (fates.drops) parts.push(`${fates.drops} drop — more than their switch’s buffer holds`);
+      let lost = 0;
+      let sentOn = 0;
+      for (const r of risks) if (r.fate === 'drops') { lost += r.lost; sentOn += r.sent; }
+      if (fates.drops) {
+        parts.push(`${fates.drops} drop — more than their switch’s buffer holds: ${formatBytes(lost)} lost a burst, `
+          + `${pct(lost / sentOn)} of what they carry while it lasts`);
+      }
       if (fates.absorbed) parts.push(`${fates.absorbed} absorbed by their switch’s buffer`);
       if (fates.unknown) parts.push(`${fates.unknown} at switches with no buffer= to say`);
       if (fates.host) parts.push(`${fates.host} queued in the host sending`);
@@ -1581,10 +1638,10 @@ export function renderLoadGen(state, host, actions, { unit } = {}) {
   if (base) units = base.toGbps === null ? [base.unit] : ['%', 'Gb/s', 'Mb/s', 'pps'];
   if (unit && !units.includes(unit)) units = [...units, unit];
   if (!g.from) {
-    // Packets with no size are only a count: choosing pps starts from a
-    // full-size packet, so the load reads against the cables at once.
+    // Packets with no size are only a count: choosing pps starts from the
+    // IMIX mix, so the load reads against the cables at once.
     const unitPick = choose(units, GEN_UNIT_LABELS, unit,
-      (v) => actions.setGen(v === 'pps' && !(g.bytes > 0) ? { unit: v, bytes: 1500 } : { unit: v }));
+      (v) => actions.setGen(v === 'pps' && !(g.bytes > 0) ? { unit: v, bytes: IMIX_BYTES } : { unit: v }));
     unitPick.className = 'gen-unit';
     unitPick.title = base
       ? `Added to ${metric.label}, so in a unit that adds up with ${base.unit || 'it'}`
@@ -1612,7 +1669,8 @@ export function renderLoadGen(state, host, actions, { unit } = {}) {
         el('span', null, 'B, replies of'),
         field(g.reply, 'gen-reply', 'The reply each request gets, in bytes, sent back the other way. Empty or 0: no replies.',
           (v) => actions.setGen({ reply: v })),
-        el('span', null, 'B'));
+        el('span', null, 'B'),
+        sizePicks(g.bytes, (v) => actions.setGen({ bytes: v })));
       packets.title = 'Requests and replies, as matrix_orchestrator sends them: with a request size, each host’s packet '
         + 'rate is a bit rate on the cables -- set against gbps=, shared out where full -- and every request is '
         + 'answered by a reply of its own size, the other way.';
@@ -2257,12 +2315,27 @@ function latencyLine({ small, full }) {
     + (small.unknown ? `, ${small.unknown} with no latency= (counted as none)` : ''));
   line.title = 'One packet with nothing queued: each switch’s latency=, and each cable’s time to send it -- once '
     + 'per run of cut-through hops, again wherever a switch must store the whole packet because the cable out '
-    + 'is faster than the cable in. Not the hosts’ own stacks, nor the cables’ length, nor any queueing: the '
+    + 'is faster than the cable in, and a latency= on either host. Not the cables’ length, nor any queueing: the '
     + 'floor a latency test can reach.'
     + (small.capped ? ` The first ${small.routes.toLocaleString()} shortest routes.` : ` Over ${small.routes.toLocaleString()} shortest route${small.routes === 1 ? '' : 's'}.`)
     + (small.noSpeed ? ' A cable on the way has no gbps=, and is counted as taking no time.' : '');
   if (small.unknown === small.switches && small.switches) line.className = 'muted';
-  return line;
+  if (!full.loaded) return line;
+  // Under the load the cables show: the queues on the way added.
+  const box = el('div');
+  const l = full.loaded;
+  const notes = [];
+  if (l.full) notes.push(`${l.full} full cable${l.full === 1 ? '' : 's'} on the way`);
+  if (l.unbounded) notes.push(`${l.unbounded} of them with no buffer= to bound the wait`);
+  if (l.hosts) notes.push('a host’s own NIC full, its queue not counted');
+  const under = el('div', l.full ? 'bad' : null, `under this load: ${span(small.loaded)} at 64 B, ${span(l)} at 1500 B`
+    + (notes.length ? ` · ${notes.join(', ')}` : ''));
+  under.title = 'With each cable’s queue added: a cable a fraction ρ full holds a packet about ρ/(1−ρ) of the '
+    + 'load’s packet times (9 at 90%, 99 at 99%), and a full one as long as its share of the sending switch’s '
+    + 'buffer= takes to drain -- which is also the most any queue can hold it. The load’s packets are its own '
+    + 'size where it says one, else the IMIX mix.';
+  box.append(line, under);
+  return box;
 }
 
 /**

@@ -35,7 +35,7 @@ import {
 } from '../js/render.js';
 import {
   betweenPicks, biggestChanges, bitRate, burstRisk, busiest, cableKeys, cablesOf, compareLoads, countersOf, devicesOf,
-  adaptiveWeights, BUFFER_ALPHA, CONNECTION_LIMITS, contend, pathLatency, switchBuffer, switchLatency, switchPps, CONTEND_LIMITS, estimateFlows, findingKind, findingsOf, flowsOf, flowsOver, formatGbps, GEN_LIMITS,
+  adaptiveWeights, BUFFER_ALPHA, CONNECTION_LIMITS, FRAMING_BYTES, IMIX_BYTES, PACKET_PICKS, contend, pathLatency, switchBuffer, switchLatency, switchPps, CONTEND_LIMITS, estimateFlows, findingKind, findingsOf, flowsOf, flowsOver, formatGbps, GEN_LIMITS,
   generateFlows, hostCapacity,
   hostsFor, hostsOf, loadable, loadUnit, mergeResults, packetGb, reachKinds, readsAsLoad, routeEstimate, routeTraffic,
   switchCapacity, switchLoads, testFlows, trafficKind, utilOf, viewOf as cableView,
@@ -2204,6 +2204,75 @@ link up role=server leaf
   const none = pathLatency(own, own.resolve('R01/s1'), own.resolve('R02/s1'), 64);
   eq([none.switches, none.unknown], [3, 3], 'switches with no latency= are counted, and said so');
   eq(pathLatency(m, s1, s1, 64), null, 'no trip to itself');
+}
+
+// --------------------------------------------------------------- IMIX
+// The default packet size: simple IMIX's average frame, in payload terms.
+{
+  const frame = (7 * 64 + 4 * 594 + 1518) / 12;
+  eq(IMIX_BYTES, Math.round(frame + 20 - FRAMING_BYTES), `IMIX is the 7:4:1 mix's ${frame.toFixed(1)}-byte average frame, as payload`);
+  eq(PACKET_PICKS.map(([b]) => b), [64, IMIX_BYTES, 1500], 'offered beside the smallest and the largest');
+}
+
+// ------------------------------------------------------- what bursts lose
+// A burst past what the buffer holds loses the excess: the panel counts it.
+{
+  const m = parseLayout(readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8')
+    .replace(/(node tor[ab] at=\d+ role=tor nic=[ab] \+switch)/g, '$1 buffer=2MB'));
+  const r = routeTraffic(m, generateFlows(m, { pattern: 'all', value: 50, unit: '%' }).flows, { split: 'even' });
+  const [x] = burstRisk(r.loads, 1, 2.5, 1e-3);
+  // 781 KB queues on a 25G downlink in a millisecond, 222 KB fits: the rest
+  // is lost, of 3.9 MB sent onto it that way and as much the other.
+  const lost = 781250 - 2e6 / 9;
+  ok(x.fate === 'drops' && Math.abs(x.lost - lost) < 1 && Math.abs(x.sent - 2 * 3906250) < 1,
+     `a millisecond burst loses what its share of the buffer cannot hold  (${Math.round(x.lost)} of ${Math.round(x.sent)} B)`);
+  ok(burstRisk(r.loads, 1, 2.5, 100e-6).every((y) => y.lost === 0), 'one that fits loses nothing');
+}
+
+// --------------------------------------------------- latency under a load
+// The queues a load builds: rho/(1-rho) packet times on a cable rho full,
+// and a full one as long as its port's share of the buffer takes to drain.
+{
+  const m = parseLayout(readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8').replace(/\+switch/g, '+switch latency=900ns buffer=2MB'));
+  const [a, b] = ['R01/s1', 'R02/s1'].map((p) => m.resolve(p));
+  const at = (value) => {
+    const r = routeTraffic(m, generateFlows(m, { pattern: 'all', value, unit: '%' }).flows, { split: 'even' });
+    return pathLatency(m, a, b, 1500, { load: { loads: r.loads, toGbps: 1 } });
+  };
+  const idle = pathLatency(m, a, b, 1500);
+  eq(idle.loaded, null, 'with no load, only the floor');
+  const [low, high] = [at(10), at(90)];
+  ok(low.min === idle.min && low.loaded.min > idle.min && high.loaded.min > low.loaded.min,
+     `the fuller the cables, the longer the wait  (${(idle.min * 1e6).toFixed(2)} → ${(low.loaded.min * 1e6).toFixed(2)} → ${(high.loaded.min * 1e6).toFixed(2)} µs)`);
+  const c = contend(m, generateFlows(m, { pattern: 'all', value: 150, unit: '%' }).flows, { split: 'even', toGbps: 1 });
+  const full = pathLatency(m, a, b, 1500, { load: { loads: c.loads, toGbps: 1 } });
+  const drain = (2e6 / 9) * 8 / 25e9;
+  ok(full.loaded.full === 1 && full.loaded.hosts === 1 && full.loaded.unbounded === 0 && full.loaded.max <= idle.min + drain * 1.0001 + 1e-6,
+     `full, a ToR's downlink holds a packet as long as its share of 2 MB takes to drain  (${(full.loaded.min * 1e6).toFixed(1)} µs)`);
+  const bare = parseLayout(readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8'));
+  const cb = contend(bare, generateFlows(bare, { pattern: 'all', value: 150, unit: '%' }).flows, { split: 'even', toGbps: 1 });
+  eq(pathLatency(bare, bare.resolve('R01/s1'), bare.resolve('R02/s1'), 1500, { load: { loads: cb.loads, toGbps: 1 } }).loaded.unbounded, 1,
+     'with no buffer=, a full cable is said to have no ceiling known');
+}
+
+// ------------------------------------------------------- a server's NICs
+// gbps= on a server: what its NICs move each way, whatever its cables add up
+// to; latency= on one: its NIC and stack, at either end of a trip.
+{
+  const text = readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8')
+    .replace('node s[1..8] u=2 role=server +x86', 'node s[1..8] u=2 role=server +x86 gbps=20 latency=2us');
+  const m = parseLayout(text);
+  eq(m.warnings, [], 'gbps= and latency= on servers');
+  const c = contend(m, generateFlows(m, { pattern: 'all', value: 50, unit: '%' }).flows, { split: 'even', toGbps: 1 });
+  const hosts = c.contention.hosts;
+  ok(hosts.full.size === 32 && [...hosts.through.values()].every((h) => h.out[0] <= 20 + 1e-6 && h.in[0] <= 20 + 1e-6),
+     'servers asked for 25 hold to their 20 each way, and say so');
+  const s1 = m.resolve('R01/s1');
+  ok(Math.abs(hosts.through.get(s1).out[1] - 25) < 1e-9, 'having offered 25');
+  const lat = pathLatency(m, s1, m.resolve('R01/s2'), 64);
+  const plain = parseLayout(readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8'));
+  const base = pathLatency(plain, plain.resolve('R01/s1'), plain.resolve('R01/s2'), 64);
+  ok(Math.abs(lat.min - base.min - 4e-6) < 1e-12, 'a latency= at each end adds both to the trip');
 }
 
 // ------------------------------------------------------------------ bursts

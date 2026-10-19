@@ -184,16 +184,26 @@ const state = {
     return state.betweenCache.value;
   },
 
-  // How long a packet takes from one pick to the other, with nothing
-  // queued: small and full-size, over the fabric as it stands (what is
-  // taken out left out). Null where either is not a device with cables.
+  // How long a packet takes from one pick to the other: small and
+  // full-size, over the fabric as it stands (what is taken out left out),
+  // with nothing queued and -- where the cables show a load in bits --
+  // under that load. Null where either is not a device with cables.
   latencyBetween(a, b) {
     if (!a.links.length || !b.links.length) return null;
+    const view = state.cableView();
+    const shown = view && !view.compare && view.toGbps !== null && view.toGbps !== undefined ? view : null;
     const key = `${state.version}\u0000${a.key}\u0000${b.key}`;
-    const cache = state.latencyCache || (state.latencyCache = new Map());
+    // Kept per load shown: a new load is a new map.
+    const caches = state.latencyCache || (state.latencyCache = new WeakMap());
+    const owner = shown || state.model;
+    let cache = caches.get(owner);
+    if (!cache) caches.set(owner, (cache = new Map()));
     if (!cache.has(key)) {
-      if (cache.size > 64) cache.clear();
-      const opts = { down: state.takenOut() };
+      const packets = shown && shown.model && shown.model.packets;
+      const opts = {
+        down: state.takenOut(),
+        load: shown ? { loads: shown.loads, toGbps: shown.toGbps, packetBytes: packets ? packets.bytes : 0 } : null,
+      };
       const small = pathLatency(state.model, a, b, 64, opts);
       cache.set(key, small ? { small, full: pathLatency(state.model, a, b, 1500, opts) } : null);
     }

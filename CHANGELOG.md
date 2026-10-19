@@ -11,6 +11,28 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.19.0 — 2026-10-19
+
+What a load costs: packets of a realistic size, what bursts lose, how long
+packets wait, and a server's own NICs. 1.17.0 and 1.18.0 ride the same pull
+request and are not published on their own.
+
+- **IMIX is the default packet size.** Choosing pps starts at 316 B
+  requests, the average of the standard 64/594/1518-byte mix, rather than
+  1500 B, which made a packet-rate limit look harmless. **64 B · IMIX ·
+  1500 B** are a click away, on the generator and on a measured packet
+  rate's row.
+- **Bursts count what they lose**: the excess past a port's share of its
+  switch's buffer, out of what the burst sends while it lasts. The panel,
+  the headline and the cable's tooltip give it.
+- **Latency under the load.** Between two picked devices, a second line
+  adds each cable's queue: about rho/(1-rho) packet times on a cable rho
+  full, and on a full one as long as its share of the buffer takes to
+  drain -- the buffer is the ceiling on every queue.
+- **A server's NICs.** `gbps=` on a server is what its NICs move each way,
+  held to in contention (`N hosts full`); `latency=` on a host is added at
+  either end of a trip. The README specifies a Broadcom BCM57508 card.
+
 ## 1.18.0 — 2026-10-19
 
 A switch's datasheet, in the layout. 1.17.0 rides the same pull request and

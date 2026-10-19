@@ -900,6 +900,18 @@ export function contend(model, flows, opts = {}) {
     }
     return i;
   };
+  // And each host with a gbps= of its own as two: what its NICs can send,
+  // and take in, each way -- a PCIe slot's ceiling, say, below its ports.
+  const hostBitOf = new Map();
+  const hostBitSlot = (el, side) => {
+    let pair = hostBitOf.get(el);
+    if (!pair) {
+      pair = [owner.length, owner.length + 1];
+      hostBitOf.set(el, pair);
+      owner.push({ el, host: true, side: 'out' }, { el, host: true, side: 'in' });
+    }
+    return pair[side === 'out' ? 0 : 1];
+  };
   // And each host with a pps= as two: the packets it can send, and those it
   // can take in -- a NIC's, or a CPU's, packet rate, each way.
   const hostPktOf = new Map();
@@ -1060,13 +1072,15 @@ export function contend(model, flows, opts = {}) {
       if (size > CONTEND_LIMITS.crossings) return null;
     }
   }
-  // Each flow out of a host with a pps=, and into one: all of the flow's
-  // packets, whichever way it went.
+  // Each flow out of a host with a gbps= or a pps=, and into one: all of
+  // the flow, and all of its packets, whichever way it went.
   routed.forEach((flow, i) => {
-    if (!(flow.pps > 0 && flow.value > 0) || f.forwards(flow.src) || f.forwards(flow.dst)) return;
+    if (!(flow.value > 0)) return;
+    const ends = [[flow.src, 'out'], [flow.dst, 'in']].filter(([el]) => !f.forwards(el));
+    for (const [el, side] of ends) if (switchCapacity(el)) part(i, [hostBitSlot(el, side), 1], 1);
+    if (!(flow.pps > 0)) return;
     const ppf = flow.pps / flow.value;
-    if (switchPps(flow.src)) part(i, [hostPktSlot(flow.src, 'out'), 1], ppf);
-    if (switchPps(flow.dst)) part(i, [hostPktSlot(flow.dst, 'in'), 1], ppf);
+    for (const [el, side] of ends) if (switchPps(el)) part(i, [hostPktSlot(el, side), 1], ppf);
   });
 
   const slots = owner.length;
@@ -1181,6 +1195,7 @@ export function contend(model, flows, opts = {}) {
   let held = 0;
   const ppsThrough = new Map();   // switch -> [packets carried, offered] a second
   const hostPkts = new Map();     // host -> { out, in: [packets carried, offered] }
+  const hostBits = new Map();     // host with a gbps= -> { out, in: [carried, offered] }
   // Each flow's connections summed: what it carries, what it offered, and
   // where the first of them held back was held.
   const sums = taken.map(() => ({ carried: 0, wanted: 0, at: null }));
@@ -1191,6 +1206,14 @@ export function contend(model, flows, opts = {}) {
       const scale = parts[p + 1];
       for (let k = 0; k < path.length; k += 2) {
         const o = owner[path[k]];
+        if (o.host) {
+          // Out of, or into, a host with a gbps=: carried, and offered.
+          let h = hostBits.get(o.el);
+          if (!h) hostBits.set(o.el, (h = { out: [0, 0], in: [0, 0] }));
+          h[o.side][0] += path[k + 1] * scale * rate[i];
+          h[o.side][1] += path[k + 1] * scale * demand[i];
+          continue;
+        }
         if (o.pps && o.side) {
           // Packets out of, or into, a host with a pps=: carried, and offered.
           let h = hostPkts.get(o.el);
@@ -1233,9 +1256,15 @@ export function contend(model, flows, opts = {}) {
   const fullSwitches = new Map();
   const fullPps = new Map();
   const hostFull = new Map();
+  const hostBitsFull = new Map();
   for (const [sl, k] of holds) {
     const o = owner[sl];
     if (o.link) into(fullMap, o.link, o.dir, k);
+    else if (o.host) {
+      const h = hostBitsFull.get(o.el) || { out: 0, in: 0 };
+      h[o.side] = k;
+      hostBitsFull.set(o.el, h);
+    }
     else if (o.pps && o.side) {
       const h = hostFull.get(o.el) || { out: 0, in: 0 };
       h[o.side] = k;
@@ -1252,6 +1281,8 @@ export function contend(model, flows, opts = {}) {
       offered: offeredLoads, full: fullMap, switches: fullSwitches, flows: out, held, wanted, carried,
       // Switches with a pps=: the packets they pass, and those full of them.
       packets: { through: ppsThrough, full: fullPps, hosts: hostPkts, hostsFull: hostFull },
+      // Hosts with a gbps= of their own: what they move, and those full.
+      hosts: { through: hostBits, full: hostBitsFull },
     },
   };
 }
@@ -1370,6 +1401,17 @@ const ESTIMATE_IDS = 3000000;
 export const FRAMING_BYTES = 66;
 /** What one packet of `bytes` payload is on the wire, in Gb. */
 export const packetGb = (bytes) => ((bytes + FRAMING_BYTES) * 8) / 1e9;
+// The standard test mix, simple IMIX: seven 64-byte frames to four of 594
+// and one of 1518, averaging 361.8 bytes a frame -- 381.8 on the wire with
+// preamble and gap, so 316 bytes of payload in the terms above. Real
+// datacentre traffic is two-humped, small acks and requests beside full
+// data, and averages a few hundred bytes; switches are rated for their
+// packet rate at about this size. One average size is exact here: bits and
+// packets both add up linearly, so a mix and its mean load the same.
+export const IMIX_BYTES = 316;
+// The sizes offered at a click: the worst case for a packet rate, the mix,
+// and full-size packets.
+export const PACKET_PICKS = [[64, '64 B'], [IMIX_BYTES, 'IMIX'], [1500, '1500 B']];
 // A reply's flow id: its request's, moved out of every other range.
 export const REPLY_IDS = 1000000000;
 
@@ -1986,16 +2028,29 @@ export const LATENCY_LIMITS = { routes: 20000 };
  * while it is still arriving -- unless the cable out is faster than the
  * cable in, where it must hold the whole packet first (store and forward).
  * So a run of cut-through hops costs the packet's time on its slowest
- * cable once, and every step up in speed starts a new run. Not counted:
- * the hosts' own stacks, the time in the cables themselves (about 5 ns a
- * metre), and any queueing.
+ * cable once, and every step up in speed starts a new run. A latency= on
+ * either end -- a host's NIC and stack -- is added too. Not counted: the
+ * time in the cables themselves (about 5 ns a metre).
  *
- * @returns { min, max, routes, capped, switches, unknown, noSpeed } -- in
- *          seconds over every shortest route walked; `switches` how many a
- *          route crosses, `unknown` how many of those have no latency= (the
- *          most on any one route),
- *          `noSpeed` whether a cable on the way has no gbps= (counted as
- *          taking no time) -- or null when there is no route
+ * Under a load (`opts.load`: { loads, toGbps, packetBytes }), each cable's
+ * queue adds its wait: a cable a fraction rho full holds a packet about
+ * rho / (1 - rho) of the load's packet times -- the single queue's
+ * textbook figure, 9 at 90%, 99 at 99% -- and a full one holds it as long
+ * as the buffer can: the port's share of the sending switch's buffer=
+ * (shared as burstRisk shares it, by every full port there) drained at
+ * the cable's rate. That is also the ceiling on any queue. A full cable
+ * with no buffer= to say is counted apart, as having no ceiling known; a
+ * host's own full NIC queues in the host, and is counted apart as well.
+ *
+ * @returns { min, max, routes, capped, switches, unknown, noSpeed, loaded }
+ *          -- in seconds over every shortest route walked; `switches` how
+ *          many a route crosses, `unknown` how many of those have no
+ *          latency= (the most on any one route), `noSpeed` whether a cable
+ *          on the way has no gbps= (counted as taking no time), and under a
+ *          load `loaded`: { min, max, full, unbounded, hosts } -- with the
+ *          queues, and the most full cables, full cables with no buffer=,
+ *          and full host NICs on any one route -- or null when there is no
+ *          route
  */
 export function pathLatency(model, src, dst, bytes, opts = {}) {
   const f = fabric(model, opts);
@@ -2004,6 +2059,44 @@ export function pathLatency(model, src, dst, bytes, opts = {}) {
   if (!route.dist.has(src)) return null;
   const bits = (bytes + FRAMING_BYTES) * 8;
   const time = (gbps) => (gbps ? bits / (gbps * 1e9) : 0);
+  // Under a load: each cable's wait, each way, and how many full ports
+  // share each switch's buffer.
+  const load = opts.load && opts.load.loads && opts.load.toGbps ? opts.load : null;
+  const fullOut = new Map();
+  if (load) {
+    for (const [link, l] of load.loads) {
+      if (!link.gbps) continue;
+      for (let d = 0; d < 2; d++) {
+        if ((l[d] * load.toGbps) / link.gbps < FULL_QUEUE) continue;
+        const from = d ? link.b : link.a;
+        fullOut.set(from, (fullOut.get(from) || 0) + 1);
+      }
+    }
+  }
+  const loadBits = ((load && load.packetBytes > 0 ? load.packetBytes : IMIX_BYTES) + FRAMING_BYTES) * 8;
+  // [seconds, full, no ceiling known, a host's own full NIC] for the queue
+  // onto `link` out of `u`.
+  const NONE = [0, 0, 0, 0];
+  const queueOf = (link, u) => {
+    if (!load || !link.gbps) return NONE;
+    const l = load.loads.get(link);
+    if (!l) return NONE;
+    const rho = (l[link.a === u ? 0 : 1] * load.toGbps) / link.gbps;
+    if (!(rho > 0)) return NONE;
+    if (rho >= FULL_QUEUE && !f.forwards(u)) return [0, 0, 0, 1];
+    const rate = link.gbps * 1e9;
+    const buffer = switchBuffer(u);
+    const ceiling = buffer === null ? null
+      : ((buffer * BUFFER_ALPHA) / (1 + Math.max(1, fullOut.get(u) || 0) * BUFFER_ALPHA)) * 8 / rate;
+    if (rho >= FULL_QUEUE) return ceiling === null ? [0, 1, 1, 0] : [ceiling, 1, 0, 0];
+    const wait = (rho / (1 - rho)) * (loadBits / rate);
+    return [ceiling === null ? wait : Math.min(wait, ceiling), 0, 0, 0];
+  };
+  let qMin = Infinity;
+  let qMax = -Infinity;
+  let full = 0;
+  let unbounded = 0;
+  let hostsFull = 0;
   let min = Infinity;
   let max = -Infinity;
   let routes = 0;
@@ -2011,7 +2104,7 @@ export function pathLatency(model, src, dst, bytes, opts = {}) {
   let noSpeed = false;
   let unknown = 0;
   let switches = 0;
-  const walk = (u, inGbps, slowest, total, crossed, unsaid) => {
+  const walk = (u, inGbps, slowest, total, crossed, unsaid, queued) => {
     if (routes >= LATENCY_LIMITS.routes) { capped = true; return; }
     for (const link of route.next(u)) {
       const out = link.gbps || 0;
@@ -2020,6 +2113,8 @@ export function pathLatency(model, src, dst, bytes, opts = {}) {
       let run = slowest;
       let hops = crossed;
       let blank = unsaid;
+      const [wait, isFull, open, host] = queueOf(link, u);
+      const q = [queued[0] + wait, queued[1] + isFull, queued[2] + open, queued[3] + host];
       if (u !== src) {
         hops++;
         const own = switchLatency(u);
@@ -2036,18 +2131,29 @@ export function pathLatency(model, src, dst, bytes, opts = {}) {
         const whole = t + time(run);
         if (whole < min) min = whole;
         if (whole > max) max = whole;
+        if (whole + q[0] < qMin) qMin = whole + q[0];
+        if (whole + q[0] > qMax) qMax = whole + q[0];
+        full = Math.max(full, q[1]);
+        unbounded = Math.max(unbounded, q[2]);
+        hostsFull = Math.max(hostsFull, q[3]);
         switches = Math.max(switches, hops);
         unknown = Math.max(unknown, blank);
         routes++;
         if (routes >= LATENCY_LIMITS.routes) { capped = true; return; }
       } else {
-        walk(v, out, run, t, hops, blank);
+        walk(v, out, run, t, hops, blank, q);
       }
     }
   };
-  walk(src, 0, 0, 0, 0, 0);
-  return routes ? { min, max, routes, capped, switches, unknown, noSpeed } : null;
+  const ends = (switchLatency(src) || 0) + (switchLatency(dst) || 0);
+  walk(src, 0, 0, ends, 0, 0, [0, 0, 0, 0]);
+  if (!routes) return null;
+  const loaded = load ? { min: qMin, max: qMax, full, unbounded, hosts: hostsFull } : null;
+  return { min, max, routes, capped, switches, unknown, noSpeed, loaded };
 }
+
+// A cable this full counts as full: its queue sits at the buffer's limit.
+export const FULL_QUEUE = 0.999;
 
 // How much of the free buffer one queue may take, as a switch's dynamic
 // threshold sets it: with alpha 1, one congested port can fill half the
@@ -2065,11 +2171,15 @@ export const BUFFER_ALPHA = 1;
  * share, and drops if not. A host sending more than its NIC takes queues
  * in the host, and drops nothing on the wire.
  *
- * @returns [{ link, util, from, need, have, fate }] fullest first -- `from`
- *          the element sending the busier overflowing way, `need` the bytes
- *          that queue there, `have` the buffer its port can take (null where
- *          unknown), and `fate` 'drops', 'absorbed', 'host' or 'unknown'
- *          (a switch with no buffer=)
+ * What drops is lost: the excess past the port's share, out of what the
+ * burst sends onto the cable while it lasts.
+ *
+ * @returns [{ link, util, from, need, have, fate, lost, sent }] fullest
+ *          first -- `from` the element sending the busier overflowing way,
+ *          `need` the bytes that queue there, `have` the buffer its port can
+ *          take (null where unknown), `fate` 'drops', 'absorbed', 'host' or
+ *          'unknown' (a switch with no buffer=), and `lost` of `sent` the
+ *          bytes one burst drops of those it sends onto the cable, both ways
  */
 export function burstRisk(loads, toGbps, burst, seconds = 100e-6) {
   if (!(burst > 1) || toGbps === null || toGbps === undefined) return [];
@@ -2083,7 +2193,8 @@ export function burstRisk(loads, toGbps, burst, seconds = 100e-6) {
       if (!(u * burst > 1 + 1e-9)) continue;
       const from = d ? link.b : link.a;
       const need = ((u * burst - 1) * link.gbps * 1e9 / 8) * seconds;
-      const o = { link, util: u, from, need };
+      const sent = ((u * burst) * link.gbps * 1e9 / 8) * seconds;
+      const o = { link, util: u, from, need, sent };
       over.push(o);
       bySender.set(from, (bySender.get(from) || 0) + 1);
     }
@@ -2097,10 +2208,18 @@ export function burstRisk(loads, toGbps, burst, seconds = 100e-6) {
     o.have = buffer === null ? null : (buffer * BUFFER_ALPHA) / (1 + queues * BUFFER_ALPHA);
     if (buffer !== null) o.fate = o.need <= o.have ? 'absorbed' : 'drops';
     else o.fate = forwarder(o.from) ? 'unknown' : 'host';
-    // One entry a cable: its worse direction, by what happens, then by how full.
+    o.lost = o.fate === 'drops' ? o.need - o.have : 0;
+    // One entry a cable: its worse direction, by what happens, then by how
+    // full; what is lost and sent, both ways added.
     const was = byLink.get(o.link);
     if (!was || rank[o.fate] > rank[was.fate] || (rank[o.fate] === rank[was.fate] && o.util > was.util)) {
-      byLink.set(o.link, { ...o, util: was ? Math.max(was.util, o.util) : o.util });
+      byLink.set(o.link, {
+        ...o, util: was ? Math.max(was.util, o.util) : o.util,
+        lost: o.lost + (was ? was.lost : 0), sent: o.sent + (was ? was.sent : 0),
+      });
+    } else {
+      was.lost += o.lost;
+      was.sent += o.sent;
     }
   }
   return [...byLink.values()].sort((a, b) => b.util - a.util);
