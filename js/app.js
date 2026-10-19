@@ -22,7 +22,7 @@ import { attachHints, renderReference } from './hints.js';
 import { layoutFromHosts, matchesPattern, recordsSince, tailRecords } from './tsv.js';
 import { routesBetween } from './paths.js';
 import {
-  adaptiveWeights, betweenPicks, bitRate, cableKeys, CONNECTION_LIMITS, contend, countersOf, estimateFlows, flowsOf, flowsOver, GEN_LIMITS,
+  adaptiveWeights, betweenPicks, pathLatency, bitRate, cableKeys, CONNECTION_LIMITS, contend, countersOf, estimateFlows, flowsOf, flowsOver, GEN_LIMITS,
   findingsOf, generateFlows, hostCapacity, hostsOf, TARGETED, loadable, loadUnit, mergeResults, packetGb, readsAsLoad, REPLY_IDS, routeEstimate,
   routeTraffic, switchLoads, testFlows, trafficKind, viewOf,
 } from './traffic.js';
@@ -99,8 +99,10 @@ const state = {
     // the flows crossing it; off, the cables show what the flows offer.
     contention: true,
     // How bursty the load is: a burst of this many times the average, to
-    // flag the cables it would overflow. 1: steady, nothing flagged.
+    // flag the cables it would overflow. 1: steady, nothing flagged. And
+    // how long one lasts, in microseconds: what a switch's buffer must hold.
     burst: 1,
+    burstUs: 100,
     listed: 8,                // rows in the busiest-cables list
   },
   trafficCache: { model: null, base: null, counters: null, view: null, switches: null, findings: null },
@@ -180,6 +182,22 @@ const state = {
       state.betweenCache = { key, value };
     }
     return state.betweenCache.value;
+  },
+
+  // How long a packet takes from one pick to the other, with nothing
+  // queued: small and full-size, over the fabric as it stands (what is
+  // taken out left out). Null where either is not a device with cables.
+  latencyBetween(a, b) {
+    if (!a.links.length || !b.links.length) return null;
+    const key = `${state.version}\u0000${a.key}\u0000${b.key}`;
+    const cache = state.latencyCache || (state.latencyCache = new Map());
+    if (!cache.has(key)) {
+      if (cache.size > 64) cache.clear();
+      const opts = { down: state.takenOut() };
+      const small = pathLatency(state.model, a, b, 64, opts);
+      cache.set(key, small ? { small, full: pathLatency(state.model, a, b, 1500, opts) } : null);
+    }
+    return cache.get(key);
   },
 
   // What the cables are showing, worked out once per layout, metric,
@@ -1050,14 +1068,22 @@ const actions = {
     refreshPanels();
   },
 
-  // Whether full cables share out what they carry, or the cables show what
-  // the flows offer.
+  // How bursty the load is, and how long a burst lasts.
   setBurst(burst) {
     state.traffic.burst = Math.max(1, Number(burst) || 1);
     refreshPanels();
     invalidate();
   },
 
+  setBurstLength(us) {
+    const n = Number(us);
+    state.traffic.burstUs = Number.isFinite(n) && n > 0 ? Math.min(n, 1e6) : 100;
+    refreshPanels();
+    invalidate();
+  },
+
+  // Whether full cables share out what they carry, or the cables show what
+  // the flows offer.
   setContention(on) {
     state.traffic.contention = on;
     refreshPanels();

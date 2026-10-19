@@ -769,3 +769,4 @@ body.resizing-rows { cursor: row-resize; user-select: none; }
 .btnrow .conns { display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; color: var(--ink-dim); }
 .btnrow .conns input { width: 44px; padding: 1px 4px; font-size: 11.5px; }
 .overlay-body .why { font-size: 11px; margin: 0 0 4px 22px; }
+.gen-row input.burst-length { width: 56px; }

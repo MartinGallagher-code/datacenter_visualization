@@ -19,7 +19,9 @@ import { fileURLToPath } from 'node:url';
 
 import { expand, subst } from '../js/expand.js';
 import { compileSelector } from '../js/select.js';
-import { parseLayout, isColor, looksLikeLayout, LINK_OPTS, NUMBERS } from '../js/parse.js';
+import {
+  parseLayout, isColor, looksLikeLayout, LINK_OPTS, NUMBERS, portsUsed, readBreakout, readBytes, readDuration, readPorts,
+} from '../js/parse.js';
 import {
   parseResults, bindOverlay, overlayValue, AGGREGATIONS, extent,
   recomputeStats, zScore, formatValue, unitFor, zRangeOf, paletteOf, invertedOf, overlayKey,
@@ -33,7 +35,7 @@ import {
 } from '../js/render.js';
 import {
   betweenPicks, biggestChanges, bitRate, burstRisk, busiest, cableKeys, cablesOf, compareLoads, countersOf, devicesOf,
-  adaptiveWeights, CONNECTION_LIMITS, contend, CONTEND_LIMITS, estimateFlows, findingKind, findingsOf, flowsOf, flowsOver, formatGbps, GEN_LIMITS,
+  adaptiveWeights, BUFFER_ALPHA, CONNECTION_LIMITS, contend, pathLatency, switchBuffer, switchLatency, switchPps, CONTEND_LIMITS, estimateFlows, findingKind, findingsOf, flowsOf, flowsOver, formatGbps, GEN_LIMITS,
   generateFlows, hostCapacity,
   hostsFor, hostsOf, loadable, loadUnit, mergeResults, packetGb, reachKinds, readsAsLoad, routeEstimate, routeTraffic,
   switchCapacity, switchLoads, testFlows, trafficKind, utilOf, viewOf as cableView,
@@ -2085,6 +2087,123 @@ const segsOf = (cache, net) => {
   eq(c.contention.packets.full.size, 0, 'no switch is short of packets: the servers were');
   const bits = contend(m, flows.map(({ pps, ...f }) => f), { split: 'even', toGbps: 1 });
   eq([bits.contention.held, bits.contention.packets.hostsFull.size], [0, 0], 'a load in bits alone leaves a server’s pps= alone');
+}
+
+// ------------------------------------------------------------ device models
+// A switch's datasheet, written once with a model line and used by name:
+// every element with model= takes its settings and tags where it does not
+// set its own -- the ones that do not inherit (u=, gbps=, pps=) included.
+{
+  const text = `model 7050DX4-32S u=1 +switch gbps=12800 pps=5300000000 buffer=132MB latency=900ns ports=32x400,2x10,1x1 breakout=400:32,200:64,100:128,50:144,40:64,25:128,10:130
+dc D
+  rack R u=42
+    node leaf[1..2] model=7050DX4-32S
+    node leaf3 model=7050dx4-32s buffer=64MB
+    node other model=some-note
+  rack S u=42
+    node s[1..8] role=server
+net up gbps=100
+link up role=server leaf*
+`;
+  const m = parseLayout(text);
+  eq(m.warnings, [], 'a model line and its uses parse clean');
+  ok(looksLikeLayout(text), 'and a file that starts with one is a layout');
+  const leaf = m.resolve('R/leaf1');
+  eq([leaf.attrs.gbps, leaf.attrs.pps, leaf.attrs.buffer, leaf.uSize, leaf.tagsAll.has('switch')],
+     ['12800', '5300000000', '132MB', 1, true], 'the model’s settings and tags are the element’s');
+  eq([switchBuffer(leaf), switchLatency(leaf), switchPps(leaf)], [132e6, 900e-9, 5.3e9], 'and read as the datasheet says');
+  eq(switchBuffer(m.resolve('R/leaf3')), 64e6, 'an element’s own setting wins, and the name is matched in any case');
+  eq(m.resolve('R/other').attrs.model, 'some-note', 'a model= no model line defines is kept as a note');
+  ok(/model=7050DX4-32 is not a model defined here -- did you mean 7050DX4-32S\?/.test(parseLayout(text.replace('model=7050DX4-32S', 'model=7050DX4-32')).warnings.join('\n')),
+     'and one a letter off a defined name is named as a typo');
+  ok(/model needs a name/.test(parseLayout('model u=1\ndc D').warnings.join('\n')), 'a model line needs a name');
+  ok(/model "x" is defined twice/.test(parseLayout('model x u=1\nmodel x u=2\ndc D').warnings.join('\n')), 'and is defined once');
+  const bad = parseLayout('model x buffer=lots latency=soon ports=many breakout=all\ndc D\n  node n model=x').warnings.join('\n');
+  ok(['buffer=lots is not a size', 'latency=soon is not a time', 'ports=many is not a list of ports', 'breakout=all is not a breakout table']
+    .every((w) => bad.includes(w)) && (bad.match(/line 1:/g) || []).length === 4,
+     'a setting that cannot be read is named once, on the model’s line');
+  eq([readBytes('132MB'), readBytes('64MiB'), readBytes('1.5GB'), readBytes('4096'), readBytes('x')],
+     [132e6, 64 * 1024 ** 2, 1.5e9, 4096, null], 'sizes read as a datasheet writes them');
+  const times = [readDuration('900ns'), readDuration('0.9us'), readDuration('0.9µs'), readDuration('1ms'), readDuration('825')];
+  ok([900e-9, 900e-9, 900e-9, 1e-3, 825e-9].every((t, i) => Math.abs(times[i] - t) < 1e-15) && readDuration('soon') === null,
+     'times too, a bare number in nanoseconds');
+  eq(readPorts('32x400,2x10G'), [{ count: 32, gbps: 400 }, { count: 2, gbps: 10 }], 'ports as so many of a speed');
+  eq([...readBreakout('200:64,100:128')], [[200, 64], [100, 128]], 'and a breakout table as the most of each speed');
+}
+
+// ------------------------------------------------------------------- ports
+// ports= checks a device's cables against what it has: each cable takes a
+// port at least as fast, a fast port breaks out into several slower cables,
+// and breakout= caps each speed at the datasheet's figure.
+{
+  const layout = (n, gbps, more = '') => parseLayout(`model sw +switch ports=32x400,2x10,1x1 breakout=400:32,200:64,100:128,50:144,40:64,25:128,10:130 ${more}
+dc D
+  rack R u=42
+    node leaf model=sw
+  rack S u=300
+    node s[1..${n}] role=server
+net up gbps=${gbps}
+link up role=server leaf
+`);
+  const use = (m) => portsUsed(m.resolve('R/leaf'));
+  eq(use(layout(32, 400)), { needed: 32, have: 35, faster: null, over: null }, 'thirty-two 400G cables fill the 400G ports');
+  eq(use(layout(128, 100)).needed, 32, 'four 100G cables to a 400G port');
+  eq(layout(128, 100).warnings, [], 'and 128 of them fit');
+  ok(/leaf has 129 cables of 100G, and breaks out to 128 of them at most/.test(layout(129, 100).warnings.join('\n')), 'a 129th does not');
+  ok(/leaf's 33 cables need 33 ports, breakout included, and it has 32/.test(
+    parseLayout(`dc D\n  node leaf +switch ports=32x400\n  rack S u=300\n    node s[1..33] role=server\nnet up gbps=400\nlink up role=server leaf`).warnings.join('\n')),
+  'more cables than ports is named');
+  ok(/leaf has a 800G cable and no port that fast/.test(layout(1, 800).warnings.join('\n')), 'a cable faster than any port is named');
+  eq(use(layout(2, 10)).needed, 2, '10G cables take the SFP+ ports first');
+  const many = parseLayout(`dc D\n  rack R u=42\n    node leaf[1..4] +switch ports=1x100\n  node s[1..2] role=server\nnet up gbps=100\nlink up role=server leaf*`);
+  eq(many.warnings.length, 1, 'said once for the line, however many devices it made');
+  ok(/4 devices, leaf1 among them/.test(many.warnings[0]), 'and how many');
+}
+
+// ------------------------------------------------------------- buffers
+// A burst's excess queues at the switch sending onto the cable; buffer= is
+// what it has to hold it, shared by every port overflowing there at once.
+{
+  const text = readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8')
+    .replace(/(node tor[ab] at=\d+ role=tor nic=[ab] \+switch)/g, '$1 buffer=2MB');
+  const m = parseLayout(text);
+  eq(m.warnings, [], 'buffer= on the ToRs');
+  const r = routeTraffic(m, generateFlows(m, { pattern: 'all', value: 50, unit: '%' }).flows, { split: 'even' });
+  const fates = (us) => {
+    const c = {};
+    for (const x of burstRisk(r.loads, 1, 2.5, us * 1e-6)) c[x.fate] = (c[x.fate] || 0) + 1;
+    return c;
+  };
+  // A 25G NIC at half full, in a 2.5x burst: 6.25 Gb/s over, 78 KB in 100 us,
+  // against 2 MB shared by the eight ports overflowing at its ToR.
+  const [first] = burstRisk(r.loads, 1, 2.5, 100e-6);
+  ok(Math.abs(first.need - 78125) < 1 && Math.abs(first.have - 2e6 * BUFFER_ALPHA / (1 + 8 * BUFFER_ALPHA)) < 1,
+     `the excess and the port's share of the buffer  (${Math.round(first.need)} B of ${Math.round(first.have)} B)`);
+  eq(fates(100), { absorbed: 64 }, 'a 100 µs burst fits every ToR’s buffer');
+  eq(fates(1000), { drops: 64 }, 'a millisecond one does not');
+  const bare = parseLayout(readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8'));
+  const plain = routeTraffic(bare, generateFlows(bare, { pattern: 'all', value: 50, unit: '%' }).flows, { split: 'even' });
+  ok(burstRisk(plain.loads, 1, 2.5).every((x) => x.fate === 'unknown' || x.fate === 'host'), 'with no buffer=, nothing is said to fit or drop');
+}
+
+// ------------------------------------------------------------------ latency
+// The floor of a packet's trip: each switch's latency=, and each cable's
+// time to send it -- once per run of cut-through hops, again wherever a
+// switch must hold the whole packet because the cable out is faster.
+{
+  const m = parseLayout(readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8').replace(/\+switch/g, '+switch latency=900ns'));
+  const [s1, s2, far] = ['R01/s1', 'R01/s2', 'R02/s1'].map((p) => m.resolve(p));
+  const near = pathLatency(m, s1, s2, 64);
+  ok(Math.abs(near.min - (900e-9 + (130 * 8) / 25e9)) < 1e-12 && near.switches === 1 && near.unknown === 0,
+     `in one rack: the ToR's 900 ns and 64 B (130 on the wire) onto 25G  (${near.min * 1e9} ns)`);
+  const across = pathLatency(m, s1, far, 1500);
+  const sendOn25 = (1566 * 8) / 25e9;
+  ok(Math.abs(across.min - (3 * 900e-9 + 2 * sendOn25)) < 1e-12 && across.min === across.max && across.routes === 8,
+     `across racks, the ToR stores the packet where 25G steps up to 100G: two 25G sends and three switches  (${(across.min * 1e6).toFixed(3)} µs)`);
+  const own = parseLayout(readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8'));
+  const none = pathLatency(own, own.resolve('R01/s1'), own.resolve('R02/s1'), 64);
+  eq([none.switches, none.unknown], [3, 3], 'switches with no latency= are counted, and said so');
+  eq(pathLatency(m, s1, s1, 64), null, 'no trip to itself');
 }
 
 // ------------------------------------------------------------------ bursts

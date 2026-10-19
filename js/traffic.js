@@ -49,6 +49,7 @@
 // it crosses (max-min fairness), and a flow held back at one full cable
 // carries less on every other cable along its path too.
 
+import { readBytes, readDuration } from './parse.js';
 import { AGGREGATIONS, DEFAULT_AGG, overlayValue } from './results.js';
 
 // The ways a fabric shares a flow out where several cables continue its
@@ -1964,20 +1965,145 @@ export function generateFlows(model, gen, opts = {}) {
   return result(flows, { noCapacity });
 }
 
+/** A switch's shared packet buffer, in bytes: its buffer=, or null. */
+export function switchBuffer(el) {
+  return el && el.attrs ? readBytes(el.attrs.buffer) : null;
+}
+
+/** A device's own latency per packet, in seconds: its latency=, or null. */
+export function switchLatency(el) {
+  return el && el.attrs && el.attrs.latency !== undefined ? readDuration(el.attrs.latency) : null;
+}
+
+// How many routes pathLatency walks before it settles for those.
+export const LATENCY_LIMITS = { routes: 20000 };
+
 /**
- * The cables a burst would overflow: the load is a steady average, and a
- * burst of `burst` times it -- traffic that arrives in clumps, a synchronised
- * start -- needs that much more for as long as it lasts. Each cable whose
- * busier direction times the burst passes its gbps=, fullest first.
+ * How long one packet of `bytes` takes from one device to another over the
+ * shortest routes, with nothing queued: the floor a latency test can reach.
+ * Each switch on the way adds its latency=; each cable adds the time to
+ * put the packet on it, but a switch cuts through -- sends the packet on
+ * while it is still arriving -- unless the cable out is faster than the
+ * cable in, where it must hold the whole packet first (store and forward).
+ * So a run of cut-through hops costs the packet's time on its slowest
+ * cable once, and every step up in speed starts a new run. Not counted:
+ * the hosts' own stacks, the time in the cables themselves (about 5 ns a
+ * metre), and any queueing.
+ *
+ * @returns { min, max, routes, capped, switches, unknown, noSpeed } -- in
+ *          seconds over every shortest route walked; `switches` how many a
+ *          route crosses, `unknown` how many of those have no latency= (the
+ *          most on any one route),
+ *          `noSpeed` whether a cable on the way has no gbps= (counted as
+ *          taking no time) -- or null when there is no route
  */
-export function burstRisk(loads, toGbps, burst) {
+export function pathLatency(model, src, dst, bytes, opts = {}) {
+  const f = fabric(model, opts);
+  if (src === dst || cannotStart(src, dst, f)) return null;
+  const route = f.route(dst);
+  if (!route.dist.has(src)) return null;
+  const bits = (bytes + FRAMING_BYTES) * 8;
+  const time = (gbps) => (gbps ? bits / (gbps * 1e9) : 0);
+  let min = Infinity;
+  let max = -Infinity;
+  let routes = 0;
+  let capped = false;
+  let noSpeed = false;
+  let unknown = 0;
+  let switches = 0;
+  const walk = (u, inGbps, slowest, total, crossed, unsaid) => {
+    if (routes >= LATENCY_LIMITS.routes) { capped = true; return; }
+    for (const link of route.next(u)) {
+      const out = link.gbps || 0;
+      if (!out) noSpeed = true;
+      let t = total;
+      let run = slowest;
+      let hops = crossed;
+      let blank = unsaid;
+      if (u !== src) {
+        hops++;
+        const own = switchLatency(u);
+        if (own === null) blank++;
+        else t += own;
+        // Faster out than in: the whole packet is in before it goes on.
+        if (out && inGbps && out > inGbps) { t += time(run); run = out; }
+        else if (out) run = run ? Math.min(run, out) : out;
+      } else {
+        run = out;
+      }
+      const v = other(link, u);
+      if (v === dst) {
+        const whole = t + time(run);
+        if (whole < min) min = whole;
+        if (whole > max) max = whole;
+        switches = Math.max(switches, hops);
+        unknown = Math.max(unknown, blank);
+        routes++;
+        if (routes >= LATENCY_LIMITS.routes) { capped = true; return; }
+      } else {
+        walk(v, out, run, t, hops, blank);
+      }
+    }
+  };
+  walk(src, 0, 0, 0, 0, 0);
+  return routes ? { min, max, routes, capped, switches, unknown, noSpeed } : null;
+}
+
+// How much of the free buffer one queue may take, as a switch's dynamic
+// threshold sets it: with alpha 1, one congested port can fill half the
+// buffer, two a third each, n of them 1/(n+1) each.
+export const BUFFER_ALPHA = 1;
+
+/**
+ * The cables a burst would overflow, and whether the switch sending onto
+ * each can hold it. The load is a steady average; a burst of `burst` times
+ * it -- a synchronised start, an incast all answering at once -- needs that
+ * much more for as long as it lasts (`seconds`). What does not fit the
+ * cable queues at the switch sending onto it, in its shared buffer=, which
+ * every port overflowing at that switch shares by the dynamic threshold
+ * (BUFFER_ALPHA): the burst is absorbed if its excess fits this port's
+ * share, and drops if not. A host sending more than its NIC takes queues
+ * in the host, and drops nothing on the wire.
+ *
+ * @returns [{ link, util, from, need, have, fate }] fullest first -- `from`
+ *          the element sending the busier overflowing way, `need` the bytes
+ *          that queue there, `have` the buffer its port can take (null where
+ *          unknown), and `fate` 'drops', 'absorbed', 'host' or 'unknown'
+ *          (a switch with no buffer=)
+ */
+export function burstRisk(loads, toGbps, burst, seconds = 100e-6) {
   if (!(burst > 1) || toGbps === null || toGbps === undefined) return [];
-  const out = [];
+  // Every direction that overflows, by the element sending it.
+  const over = [];
+  const bySender = new Map();
   for (const [link, l] of loads) {
-    const u = utilOf(link, l, toGbps);
-    if (u !== null && u * burst > 1 + 1e-9) out.push({ link, util: u });
+    if (!link.gbps) continue;
+    for (let d = 0; d < 2; d++) {
+      const u = (l[d] * toGbps) / link.gbps;
+      if (!(u * burst > 1 + 1e-9)) continue;
+      const from = d ? link.b : link.a;
+      const need = ((u * burst - 1) * link.gbps * 1e9 / 8) * seconds;
+      const o = { link, util: u, from, need };
+      over.push(o);
+      bySender.set(from, (bySender.get(from) || 0) + 1);
+    }
   }
-  return out.sort((a, b) => b.util - a.util);
+  const forwarder = (el) => el.tagsAll && el.tagsAll.has('switch');
+  const rank = { drops: 3, unknown: 2, absorbed: 1, host: 0 };
+  const byLink = new Map();
+  for (const o of over) {
+    const buffer = switchBuffer(o.from);
+    const queues = bySender.get(o.from);
+    o.have = buffer === null ? null : (buffer * BUFFER_ALPHA) / (1 + queues * BUFFER_ALPHA);
+    if (buffer !== null) o.fate = o.need <= o.have ? 'absorbed' : 'drops';
+    else o.fate = forwarder(o.from) ? 'unknown' : 'host';
+    // One entry a cable: its worse direction, by what happens, then by how full.
+    const was = byLink.get(o.link);
+    if (!was || rank[o.fate] > rank[was.fate] || (rank[o.fate] === rank[was.fate] && o.util > was.util)) {
+      byLink.set(o.link, { ...o, util: was ? Math.max(was.util, o.util) : o.util });
+    }
+  }
+  return [...byLink.values()].sort((a, b) => b.util - a.util);
 }
 
 export const VIEWS = ['model', 'change', 'measured', 'diff'];

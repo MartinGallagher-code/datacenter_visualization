@@ -759,6 +759,22 @@ export function formatPps(v) {
   return `${Math.round(v).toLocaleString('en-US')} pps`;
 }
 
+/** What a burst's excess comes to at the switch sending it, and its fate. */
+function burstNeed(r) {
+  if (r.fate === 'host') return ' — it queues in the host sending it';
+  const queue = `${formatBytes(r.need)} queued at ${shortPath(r.from)}`;
+  if (r.fate === 'unknown') return ` — ${queue}, which has no buffer= to say whether it holds`;
+  return ` — ${queue}, of the ${formatBytes(r.have)} its buffer gives this port: ${r.fate === 'drops' ? 'drops' : 'absorbed'}`;
+}
+
+/** A size in bytes, as a datasheet gives it: 1.2 MB, 640 KB. */
+export function formatBytes(n) {
+  if (n >= 1e9) return `${trimNum(Math.round(n / 1e8) / 10)} GB`;
+  if (n >= 1e6) return `${trimNum(Math.round(n / 1e5) / 10)} MB`;
+  if (n >= 1e3) return `${trimNum(Math.round(n / 1e2) / 10)} KB`;
+  return `${Math.round(n)} B`;
+}
+
 /** A utilization's colour: shared out, a full cable is the contended one. */
 const utilColor = (view, util) => (view.contention && util >= 0.9995 ? LOAD_COLORS.over : loadColor(util));
 
@@ -1140,10 +1156,18 @@ export function renderCableLoad(state, host, actions) {
       burst.step = '0.5';
       burst.value = String(state.traffic.burst || 1);
       burst.addEventListener('change', () => actions.setBurst(burst.value));
-      burstRow.append(el('span', null, 'bursts of ×'), burst, el('span', 'muted', 'the average'));
+      const length = el('input', 'burst-length');
+      length.type = 'number';
+      length.min = '1';
+      length.step = '10';
+      length.value = String(state.traffic.burstUs || 100);
+      length.addEventListener('change', () => actions.setBurstLength(length.value));
+      burstRow.append(el('span', null, 'bursts of ×'), burst, el('span', 'muted', 'the average, for'), length, el('span', 'muted', 'µs'));
       burstRow.title = 'The load is a steady average; real traffic comes in clumps -- a synchronised start, an '
         + 'incast all answering at once. Above 1, the cables a burst this many times the average would overflow '
-        + 'are counted, and their tooltips say what it would need. 1: steady, nothing flagged.';
+        + 'are counted, and their tooltips say what it would need. What does not fit a cable queues in the '
+        + 'buffer= of the switch sending onto it for as long as the burst lasts: absorbed if it fits that port’s '
+        + 'share, dropped if not. 1: steady, nothing flagged.';
       share.title = 'A cable cannot carry more than its gbps=. Ticked, every full cable is shared out between '
         + 'the flows crossing it, as TCP shares it, and a flow held back there carries less on the rest of its '
         + 'path too. Unticked, the cables show what the flows offer, which can be more than 100%.';
@@ -1244,14 +1268,27 @@ export function renderCableLoad(state, host, actions) {
   // overflow, where the average fits.
   const burst = state.traffic.burst || 1;
   if (burst > 1 && !view.compare && view.toGbps !== null) {
-    const risks = burstRisk(view.loads, view.toGbps, burst);
+    const us = state.traffic.burstUs || 100;
+    const risks = burstRisk(view.loads, view.toGbps, burst, us * 1e-6);
+    const bursts = `with bursts of ${trimNum(burst)}× the average for ${trimNum(us)} µs`;
     if (risks.length) {
       const [worst] = risks;
-      lines.append(el('div', 'bad', `with bursts of ${trimNum(burst)}× the average, ${risks.length} cable${risks.length === 1 ? '' : 's'} `
-        + `would overflow — the fullest, ${shortPath(worst.link.a)} ↔ ${shortPath(worst.link.b)}, is ${pct(worst.util)} on average, `
-        + `${pct(worst.util * burst)} in a burst`));
+      const fates = { drops: 0, absorbed: 0, unknown: 0, host: 0 };
+      for (const r of risks) fates[r.fate]++;
+      const parts = [];
+      if (fates.drops) parts.push(`${fates.drops} drop — more than their switch’s buffer holds`);
+      if (fates.absorbed) parts.push(`${fates.absorbed} absorbed by their switch’s buffer`);
+      if (fates.unknown) parts.push(`${fates.unknown} at switches with no buffer= to say`);
+      if (fates.host) parts.push(`${fates.host} queued in the host sending`);
+      lines.append(el('div', fates.drops || fates.unknown ? 'bad' : 'muted',
+        `${bursts}, ${risks.length} cable${risks.length === 1 ? '' : 's'} would overflow: ${parts.join(', ')}`));
+      const dropping = risks.find((r) => r.fate === 'drops');
+      const named = dropping || worst;
+      lines.append(el('div', 'muted', `${dropping ? 'the fullest that drops' : 'the fullest'}, `
+        + `${shortPath(named.from)} → ${shortPath(named.link.a === named.from ? named.link.b : named.link.a)}: `
+        + `${pct(named.util)} on average, ${pct(named.util * burst)} in a burst${burstNeed(named)}`));
     } else {
-      lines.append(el('div', 'muted', `with bursts of ${trimNum(burst)}× the average, no cable would overflow`));
+      lines.append(el('div', 'muted', `${bursts}, no cable would overflow`));
     }
   }
   box.append(lines);
@@ -1888,7 +1925,12 @@ export function cableTip(state, hit, view, flows) {
         : `${pct(worst)} full, the busier way${over}`);
       const burst = (state.traffic && state.traffic.burst) || 1;
       if (burst > 1 && worst * burst > 1 && worst <= 1.0005) {
-        lines.push(`a ${trimNum(burst)}× burst would need ${pct(worst * burst)} of it`);
+        const us = (state.traffic && state.traffic.burstUs) || 100;
+        // Judged against every port overflowing at the same switch, since
+        // they share its buffer.
+        const mine = new Set(links);
+        const risk = burstRisk(view.loads, view.toGbps, burst, us * 1e-6).find((r) => mine.has(r.link));
+        lines.push(`a ${trimNum(burst)}× burst would need ${pct(worst * burst)} of it${risk ? burstNeed(risk) : ''}`);
       }
     } else if (load[0] > 0 || load[1] > 0) {
       lines.push(view.toGbps === null
@@ -2188,6 +2230,8 @@ function renderPicks(state, host, actions) {
         }
         dd.append(line);
       }
+      const lat = state.latencyBetween ? state.latencyBetween(pair.a, pair.b) : null;
+      if (lat) dd.append(latencyLine(lat));
       dl.append(dd);
     }
     box.append(dl);
@@ -2196,6 +2240,29 @@ function renderPicks(state, host, actions) {
     renderPickTraffic(state, box, actions);
   }
   host.append(box);
+}
+
+/** A time, at the scale a packet's trip is: 940 ns, 3.7 µs, 1.2 ms. */
+export function formatTime(t) {
+  if (t >= 1e-3) return `${trimNum(Math.round(t * 1e5) / 100)} ms`;
+  if (t >= 1e-6) return `${trimNum(Math.round(t * 1e8) / 100)} µs`;
+  return `${Math.round(t * 1e9)} ns`;
+}
+
+// The floor of the trip between two picks, at 64 B and 1500 B.
+function latencyLine({ small, full }) {
+  const span = (r) => (r.max - r.min > 1e-12 ? `${formatTime(r.min)}–${formatTime(r.max)}` : formatTime(r.min));
+  const line = el('div', null, `latency: ${span(small)} at 64 B, ${span(full)} at 1500 B`
+    + ` · ${small.switches} switch${small.switches === 1 ? '' : 'es'}`
+    + (small.unknown ? `, ${small.unknown} with no latency= (counted as none)` : ''));
+  line.title = 'One packet with nothing queued: each switch’s latency=, and each cable’s time to send it -- once '
+    + 'per run of cut-through hops, again wherever a switch must store the whole packet because the cable out '
+    + 'is faster than the cable in. Not the hosts’ own stacks, nor the cables’ length, nor any queueing: the '
+    + 'floor a latency test can reach.'
+    + (small.capped ? ` The first ${small.routes.toLocaleString()} shortest routes.` : ` Over ${small.routes.toLocaleString()} shortest route${small.routes === 1 ? '' : 's'}.`)
+    + (small.noSpeed ? ' A cable on the way has no gbps=, and is counted as taking no time.' : '');
+  if (small.unknown === small.switches && small.switches) line.className = 'muted';
+  return line;
 }
 
 /**

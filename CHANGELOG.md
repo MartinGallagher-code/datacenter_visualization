@@ -11,6 +11,29 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.18.0 — 2026-10-19
+
+A switch's datasheet, in the layout. 1.17.0 rides the same pull request and
+is not published on its own.
+
+- **Device models.** A `model` line defines a device once -- `model
+  7050DX4-32S u=1 +switch gbps=12800 pps=5300000000 buffer=132MB
+  latency=900ns ...` -- and every element with `model=` its name takes its
+  settings and tags where it does not set its own. A layout may now start
+  with a `model` line.
+- **`buffer=`**: a switch's shared packet buffer. Bursts now last a set time
+  (`for … µs`, 100 by default), and each cable a burst overflows is judged
+  against the buffer of the switch sending onto it, shared by every port
+  overflowing there: absorbed, or dropped. The panel counts each, and a
+  cable's tooltip says how much queues where, of how much.
+- **`ports=` and `breakout=`**: what a device has, so many ports of so many
+  Gb/s, and the datasheet's most ports of each speed. Its cables are checked
+  against them, breakout included, and a device with too many is a warning.
+- **`latency=`**: a switch's own time per packet. Between two picked
+  devices, the panel gives the floor of a packet's trip at 64 and 1500
+  bytes: switch latencies, and cable sending times with cut-through and
+  store-and-forward where speed steps up.
+
 ## 1.17.0 — 2026-10-19
 
 Routing as a real fabric does it.

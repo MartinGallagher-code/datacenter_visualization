@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.17.0** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.18.0** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -620,15 +620,34 @@ steady state:
 Untick it to see what the flows offer: then a cable can read past 100%, in
 magenta, which says how oversubscribed it is rather than what it carries.
 
-**bursts of ×** says how bursty the load is. The model is a steady average,
-and real traffic comes in clumps — a synchronised start, an incast all
-answering at once — that last microseconds and overflow a shallow buffer
-while the second's average looks easy. Above 1, the panel counts the cables
-a burst that many times the average would overflow, naming the fullest —
-all-to-all at 50% over `examples/dual-plane.dc` reads `with bursts of 4× the
-average, 80 cables would overflow — the fullest, R03/tora ↔ R03/s1, is 50%
-on average, 200% in a burst` — and a cable's tooltip says what such a burst
-would need of it.
+**bursts of × … for … µs** says how bursty the load is. The model is a
+steady average, and real traffic comes in clumps — a synchronised start, an
+incast all answering at once — that last microseconds and overflow a
+cable while the second's average looks easy. Above 1, the panel counts the
+cables a burst that many times the average would overflow, and what becomes
+of each:
+
+- What a cable cannot take at once **queues at the switch sending onto it**,
+  in its shared packet buffer, `buffer=` (`buffer=132MB`). Every port
+  overflowing at that switch shares it as a switch's dynamic threshold
+  shares it: with one port congested it may fill half the buffer, with n of
+  them 1/(n+1) each. A burst whose excess over its length fits that share is
+  **absorbed**; one that does not **drops**.
+- All-to-all at 50% over `examples/dual-plane.dc` with `buffer=2MB` on the
+  ToRs, in 2.5× bursts: each 25G NIC is 6.25 Gb/s over for the burst, 78 KB
+  in 100 µs, against the 222 KB its ToR gives each of its eight overflowing
+  ports — `64 absorbed by their switch’s buffer`. At 1000 µs it is 781 KB,
+  and `64 drop — more than their switch’s buffer holds`.
+- A switch with no `buffer=` is counted apart (`at switches with no buffer=
+  to say`), and a host sending more than its NIC takes queues in the host,
+  dropping nothing on the wire.
+- A cable's tooltip says what the burst would need of it, how much queues
+  where, of how much: `78.1 KB queued at R03/tora, of the 222.2 KB its
+  buffer gives this port: absorbed`.
+
+The buffer is the one figure that tells an incast a switch rides through
+from one that loses packets; real switches add per-queue reserves and
+priority queues the model leaves out, so read it as which bursts are close.
 
 Sharing out costs in proportion to the cables every flow crosses, added up
 over the flows. Flows that leave the same switches for the same server share
@@ -700,6 +719,54 @@ node s[1..16] role=server pps=20000000
 
 A `gbps=` on a rack or a room is not passed down to what is in it.
 
+#### Device models: a datasheet written once
+
+A `model` line defines a device once, and every element with `model=` its
+name takes its settings and tags — `u=`, `+switch`, `gbps=`, `pps=`,
+`buffer=`, `latency=`, `ports=`, `breakout=` and anything else — wherever it
+does not set its own. Names match in any case; a `model=` no `model` line
+defines is kept as a note, and one a letter off a defined name is named as
+a typo. The two Arista switches, from their datasheets:
+
+```text
+model 7050DX4-32S u=1 +switch gbps=12800 pps=5300000000 buffer=132MB latency=900ns ports=32x400,2x10,1x1 breakout=400:32,200:64,100:128,50:144,40:64,25:128,10:130
+model 7060DX5-64S u=2 +switch gbps=25600 pps=10600000000 buffer=114MB latency=825ns ports=64x400,2x10,1x1 breakout=400:64,200:128,100:256,50:256,25:256,10:258
+
+node leaf[1..8]  model=7050DX4-32S
+node spine[1..4] model=7060DX5-64S
+node leaf9 model=7050DX4-32S buffer=64MB      # its own setting wins
+```
+
+- **`gbps=` is one direction**: what the ports add up to, 32 × 400G = 12.8T.
+  Datasheets also quote the two directions added (25.6 and 51.2 Tbps);
+  that is not the figure. These two are non-blocking, so `gbps=` never
+  binds; it is there for one that is oversubscribed.
+- **`pps=` is the forwarding rate** — 5.3 and 10.6 billion packets a second.
+  Both are rated with packets averaging over about 295 bytes: from there up
+  they forward at line rate, and below it packets, not bits, are the limit.
+  5.3 billion 64-byte requests a second, with framing, are about 5.5 Tb/s:
+  a matrix run of small packets fills a 7050DX4-32S's packet rate at under
+  half its bandwidth (see `pps=` above).
+- **`ports=`** is what the device has, so many of so many Gb/s (`1x1` is
+  the management port, for a `gbps=1` mgmt net). Its cables are checked
+  against it: each takes a port at least as fast, and a fast port breaks out
+  into several slower cables — a 400G port is four 100G cables, two 200G or
+  eight 50G. **`breakout=`** is the datasheet's most ports of each speed,
+  which is a limit of the chip as much as of the cages: a 7050DX4-32S breaks
+  out to 128 × 100G but 144 × 50G, not 256. Too many cables, a cable faster
+  than any port, or more of a speed than `breakout=` allows is a warning on
+  the device's line, once however many devices the line made.
+- **`buffer=`** is the shared packet buffer bursts queue in (see bursts,
+  above), and **`latency=`** the switch's own time per packet (see
+  [Between picks](#between-picks-only-their-flows-and-a-test-flow)).
+
+What the datasheets also give and the viewer does not model: power draw,
+fans and power supplies, memory, table sizes (128-way ECMP, routes, MACs),
+queues per port and QoS (PFC, ECN), MACsec, and the load-balancing features
+the 7060X5 adds — dynamic load balancing is close to **adaptive routing**,
+and Cluster Load Balancing places RDMA flows with a view of both leaf and
+spine. Write any of them as attributes for the inspector.
+
 #### Findings: what went wrong, and whether the load explains it
 
 The **Findings** box under the cable load lists, by kind, every server
@@ -755,6 +822,18 @@ picks the picks box offers two things more:
 A single test flow, hashed as the page routes it by default, takes one
 uplink, so every cable from server to server is drawn the same width; the
 ideal even split shares it over every uplink — four spines, a quarter each.
+
+Between two devices the picks box also gives the **latency** floor of one
+packet's trip, at 64 and 1500 bytes, over every shortest route: each
+switch's `latency=`, and each cable's time to send the packet — once for a
+run of cut-through hops, and again wherever a switch must hold the whole
+packet first because the cable out is faster than the cable in. Over
+`examples/dual-plane.dc` with `latency=900ns` on its switches, two servers
+in one rack are `942 ns at 64 B, 1.4 µs at 1500 B · 1 switch`; in two racks,
+`2.78 µs at 64 B, 3.7 µs at 1500 B · 3 switches` — the ToR stores each packet
+where 25G steps up to 100G. Not counted: the hosts' own stacks, the cables'
+length (about 5 ns a metre) and any queueing; a switch with no `latency=` is
+counted as none, and said so.
 
 #### The load generator: a load with no file
 

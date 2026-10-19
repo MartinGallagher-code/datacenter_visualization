@@ -126,6 +126,10 @@ const fixtures = new Map([
   // packets a second each way.
   ['/fx/pps-servers.dc', readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8')
     .replace('node s[1..8] u=2 role=server +x86', 'node s[1..8] u=2 role=server +x86 pps=500000')],
+  // The dual-plane fabric with its switches defined once by a model line:
+  // 900 ns and a 2 MB buffer each.
+  ['/fx/modelled.dc', `model fabric-switch +switch latency=900ns buffer=2MB\n${readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8')
+    .replace(/\+switch/g, 'model=fabric-switch')}`],
   // The dual-plane fabric with each server's two NICs bonded.
   ['/fx/bonded.dc', readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8')
     .replace(/^(net nica .*)$/m, '$1 bond=nic').replace(/^(net nicb .*)$/m, '$1 bond=nic')],
@@ -1339,6 +1343,43 @@ await test('why a metric cannot load the cables', async () => {
      `and says why where it can be read  (${(/can’t load.*/.exec(text) || [''])[0]})`);
 }, { url: '?layout=examples/dual-plane.dc' });
 
+// A switch's buffer decides whether a burst it cannot send on at once is
+// held or dropped, and its latency what a packet's trip costs at least.
+await test('buffers, latency and device models', async () => {
+  const panel = () => page.evaluate(() => document.querySelector('#cable-load').innerText);
+  await page.locator('#load-gen button', { hasText: 'Run' }).click();
+  await page.waitForTimeout(400);
+  await ideal();
+  await page.fill('#cable-load input.burst', '2.5');
+  await page.locator('#cable-load input.burst').dispatchEvent('change');
+  await page.waitForTimeout(400);
+  const absorbed = await panel();
+  ok(/with bursts of 2\.5× the average for 100 µs, 64 cables would overflow: 64 absorbed by their switch’s buffer/.test(absorbed),
+     `a 100 µs burst fits the ToRs' buffers  (${(/with bursts.*/.exec(absorbed) || [''])[0]})`);
+  ok(/78\.1 KB queued at R0\d\/tor[ab], of the 222\.2 KB its buffer gives this port: absorbed/.test(absorbed),
+     'and says how much it queues, of how much');
+  await page.fill('#cable-load input.burst-length', '1000');
+  await page.locator('#cable-load input.burst-length').dispatchEvent('change');
+  await page.waitForTimeout(400);
+  ok(/64 drop — more than their switch’s buffer holds/.test(await panel()), 'a millisecond one drops');
+
+  const pick = async (name, nth) => {
+    await page.fill('#filter', name);
+    await page.waitForTimeout(400);
+    await page.locator('#tree .tree-row:not(.nomatch)', {
+      has: page.locator('.tree-name', { hasText: new RegExp(`^${name}$`) }),
+    }).nth(nth).click({ modifiers: ['Shift'] });
+    await page.waitForTimeout(200);
+  };
+  await pick('s1', 0);   // R01/s1
+  await pick('s1', 1);   // R02/s1
+  await page.fill('#filter', '');
+  await page.waitForTimeout(300);
+  const picks = await page.evaluate(() => document.querySelector('#inspector').innerText);
+  ok(/latency: 2\.78 µs at 64 B, 3\.7 µs at 1500 B · 3 switches/.test(picks),
+     `between the picks, the floor of a packet's trip  (${(/latency.*/.exec(picks) || [''])[0]})`);
+}, { url: '?layout=fx/modelled.dc' });
+
 // Bonded NICs, as LACP (layer3+4) runs them: hashed, each connection keeps
 // to one NIC, so with one connection a flow the two drift apart and with
 // many they even out; the ideal split shares every flow over both exactly.
@@ -1541,7 +1582,8 @@ await test('splits, patterns, bursts and packet rates', async () => {
   await page.fill('#cable-load input.burst', '2.5');
   await page.locator('#cable-load input.burst').dispatchEvent('change');
   await page.waitForTimeout(300);
-  ok(/with bursts of 2\.5× the average, \d+ cables would overflow/.test(await panel()), 'a 2.5× burst overflows the half-full NICs');
+  ok(/with bursts of 2\.5× the average for 100 µs, \d+ cables would overflow: \d+ at switches with no buffer= to say/.test(await panel()),
+     `a 2.5× burst overflows the half-full NICs, at switches that do not say what they hold  (${(/with bursts.*/.exec(await panel()) || [''])[0]})`);
 
   await page.locator('#load-gen select.gen-pattern').selectOption('shift');
   await page.waitForTimeout(300);
