@@ -204,6 +204,13 @@ const drop = (name, text) => page.evaluate(([n, t]) => {
   document.body.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true }));
 }, [name, text]);
 
+// The ideal even split, where a check's numbers are its rather than a
+// hash's: the page routes hashed per connection unless told otherwise.
+const ideal = async () => {
+  await page.locator('#cable-load .btnrow select').first().selectOption('even');
+  await page.waitForTimeout(300);
+};
+
 const openLayout = async (text = LAYOUT) => {
   await page.click('#btn-edit');
   await page.evaluate((t) => {
@@ -1024,6 +1031,7 @@ await test('a flow metric loads the cables', async () => {
   ok(await box.isEnabled(), 'a flow metric in Gb/s offers to load the cables');
   await box.check();
   await page.waitForTimeout(400);
+  await ideal();
   const text = await panel();
   ok(/17 of 17 flows routed/.test(text), `every flow is routed  (${text.slice(0, 120).replace(/\n/g, ' | ')})`);
   // A cable carries no more than it can: the incast's two NICs are full,
@@ -1090,6 +1098,7 @@ await test('counters, the model, and taking a spine out', async () => {
   ok(/127 cables measured/.test(await panel()), 'the counters land on their cables');
   await page.locator('#cable-load select.cable-view').selectOption('diff');
   await page.waitForTimeout(400);
+  await ideal();
   ok(/Biggest differences from the model\s+R01\/torb → SP1\/spine1\s+\+120G · \+120%/.test(await panel()),
      'measured against the model, the hashed uplink stands out');
 
@@ -1203,6 +1212,7 @@ await test('the load generator', async () => {
   await page.locator('#load-gen button', { hasText: 'Run' }).click();
   await page.waitForTimeout(400);
   ok(/32 of 32 hosts send · 992 flows · 800Gb\/s/.test(await gen()), 'all-to-all at 50%: every server to every other');
+  await ideal();
   const loaded = await panel();
   ok(/Generated all-to-all/.test(loaded) && /generated: all-to-all, 50% of its NICs from each host/.test(loaded),
      'the cable load panel says what it is showing');
@@ -1283,19 +1293,73 @@ await test('a random load of 160k flows', async () => {
      `the cables are drawn, and shared out  (${summary})`);
 }, { url: '?layout=examples/dual-plane.dc' });
 
-// Bonded NICs carry the same, hashed or not: each flow is split over the
-// bond, where unbonded a hashed flow rides one NIC all the way.
+// Routing as real switches do it: hashed per connection by default, the
+// number of connections a setting of its own, adaptive routing as switches
+// run it, and the ideal named as the ideal.
+await test('routing as a real fabric does it', async () => {
+  const panel = () => page.evaluate(() => document.querySelector('#cable-load').innerText);
+  await page.locator('#load-gen select.gen-pattern').selectOption('shift');
+  await page.waitForTimeout(200);
+  await page.locator('#load-gen button', { hasText: 'Run' }).click();
+  await page.waitForTimeout(400);
+  const split = page.locator('#cable-load .btnrow select').first();
+  eq(await split.inputValue(), 'hashed', 'the switches hash per connection unless told otherwise');
+  const labels = await split.locator('option').allTextContents();
+  ok(labels[0] === 'ECMP: hashed per connection' && labels.includes('ideal: even split') && labels.includes('adaptive routing (per packet)'),
+     `what each is, by what real fabrics do  (${labels.join(' | ')})`);
+  ok(/connection a flow/.test(await panel()) && await page.inputValue('#cable-load input.connections') === '1',
+     'one connection a flow, said so');
+  const busiest = async () => Number((/Busiest cables\s+\S+ → \S+\s+[\d.]+G\/\d+G · (\d+)%/.exec(await panel()) || [0, 0])[1]);
+  const one = await busiest();
+  await page.fill('#cable-load input.connections', '32');
+  await page.locator('#cable-load input.connections').dispatchEvent('change');
+  await page.waitForTimeout(500);
+  const many = await busiest();
+  ok(many < one, `more connections a flow, hashing evens out  (${one}% → ${many}%)`);
+  await split.selectOption('adaptive');
+  await page.waitForTimeout(500);
+  ok(/Busiest cables/.test(await panel()) && await page.locator('#cable-load input.connections').count() === 1,
+     'adaptive routes it too, and its hosts still hash, so the connections stay');
+  await split.selectOption('even');
+  await page.waitForTimeout(300);
+  eq(await page.locator('#cable-load input.connections').count(), 0, 'the ideal split has no connections to count');
+}, { url: '?layout=examples/dual-plane.dc' });
+
+// A metric that is not a rate cannot load the cables: greyed, it says why
+// on the page.
+await test('why a metric cannot load the cables', async () => {
+  await drop('loss.tsv', '!test loss_pct unit=% label="Loss"\nloss_pct\tR01/s1\t2\tpeer=R03/s1\n');
+  await page.waitForTimeout(500);
+  await page.locator('#overlays .overlay-head input[type=checkbox]').last().check();
+  await page.waitForTimeout(300);
+  const box = page.locator('#overlays label', { hasText: 'load the cables' }).last().locator('input');
+  ok(await box.isDisabled(), 'a loss in % is greyed out');
+  const text = await page.evaluate(() => document.querySelector('#overlays').innerText);
+  ok(/can’t load the cables: % is not a rate or a volume, so it does not add up along a cable/.test(text),
+     `and says why where it can be read  (${(/can’t load.*/.exec(text) || [''])[0]})`);
+}, { url: '?layout=examples/dual-plane.dc' });
+
+// Bonded NICs, as LACP (layer3+4) runs them: hashed, each connection keeps
+// to one NIC, so with one connection a flow the two drift apart and with
+// many they even out; the ideal split shares every flow over both exactly.
 await test('bonded NICs', async () => {
   await page.locator('#load-gen button', { hasText: 'Run' }).click();
   await page.waitForTimeout(400);
-  await page.locator('#cable-load .btnrow select').first().selectOption('hashed');
-  await page.waitForTimeout(400);
-  const nics = await page.evaluate(() => {
+  const nics = () => page.evaluate(() => {
     const text = document.querySelector('#cable-load').innerText;
-    return [...text.matchAll(/R0\d\/tor[ab] → R0\d\/s\d\s+([^\n✕]+)/g)].map((m) => m[1].trim());
+    return [...text.matchAll(/R0\d\/tor[ab] → R0\d\/s\d\s+[\d.]+G\/25G · (\d+)%/g)].map((m) => Number(m[1]));
   });
-  ok(nics.length > 0 && nics.every((t) => t === '12.5G/25G · 50%'),
-     `hashed, every NIC in the busiest cables carries exactly half its 25G  (${[...new Set(nics)].join(', ')})`);
+  const one = await nics();
+  ok(one.length > 0 && Math.max(...one) > 55, `hashed, one connection a flow, the busiest NICs carry more than half  (${one.join(', ')}%)`);
+  await page.fill('#cable-load input.connections', '64');
+  await page.locator('#cable-load input.connections').dispatchEvent('change');
+  await page.waitForTimeout(500);
+  const many = await nics();
+  ok(many.length > 0 && Math.max(...many) < Math.max(...one) && Math.max(...many) <= 56,
+     `64 connections a flow even them out  (${many.join(', ')}%)`);
+  await ideal();
+  const even = await nics();
+  ok(even.length > 0 && even.every((x) => x === 50), `the ideal split carries exactly half on each  (${even.join(', ')}%)`);
 }, { url: '?layout=fx/bonded.dc' });
 
 // Hovering a cable used to show whatever box lay under it -- a server's
@@ -1303,6 +1367,7 @@ await test('bonded NICs', async () => {
 await test('hovering a cable', async () => {
   await page.locator('#load-gen button', { hasText: 'Run' }).click();
   await page.waitForTimeout(400);
+  await ideal();
   // Sweep the floor the way a pointer would until a tooltip matches.
   const sweep = (want) => page.evaluate((want) => {
     const c = document.querySelector('#view');
@@ -1447,6 +1512,7 @@ await test('generated requests and replies', async () => {
   }
   await page.locator('#load-gen button', { hasText: 'Run' }).click();
   await page.waitForTimeout(500);
+  await ideal();
   const text = await panel();
   ok(/32 Mpps requests · 32 Mpps replies — 500 B out, 4096 B back, framing included/.test(text),
      'every server’s million requests a second, and as many replies');
@@ -1542,6 +1608,7 @@ await test('findings', async () => {
   await page.waitForTimeout(200);
   await page.locator('#overlays label', { hasText: /^load the cables$/ }).locator('input').check();
   await page.waitForTimeout(400);
+  await ideal();
   const text = await panel();
   ok(/dropping packets: 2 servers/.test(text) && /1 with room — loss the load does not explain · 1 where contention explains it/.test(text),
      'with the load on, drops say which the load explains');

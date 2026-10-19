@@ -11,6 +11,31 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.17.0 — 2026-10-19
+
+Routing as a real fabric does it.
+
+- **Hashed per connection is the default**, as nearly every Ethernet fabric
+  routes out of the box. The routing choices are renamed for what real
+  switches do: ECMP hashed per connection, ECMP polarized, adaptive routing,
+  weighted by capacity (WCMP), and the ideal even split, now labelled as
+  the ideal rather than as ECMP.
+- **Connections a flow.** Each flow between two hosts can be several
+  connections (`iperf -P`, parallel streams, queue pairs), each hashed on its
+  own and each its own fair share of a full cable under contention. One, the
+  default, is hashing's worst case; dozens come out near the even split.
+- **Adaptive routing is per packet**, as InfiniBand AR, Spectrum-X and
+  dynamic load balancing do it: every switch leans on its emptier cables
+  until its choices are about as full as each other, seeing only its own
+  cables. It used to place whole flows one at a time, and so could come out
+  worse than the even split; now it is at least as good as the even split
+  on an even fabric, and better where a switch's own cables differ.
+- **Bonds hash as LACP layer3+4 does**: under hashed and adaptive routing
+  each connection keeps to one NIC, so two NICs can be a flow apart with one
+  connection a flow and even out with many. Under the ideal even split
+  every flow is shared over the bond exactly, as before.
+- **A greyed "load the cables" says why** under it, not only on hover.
+
 ## 1.16.0 — 2026-10-17
 
 Packet rates on servers. 1.12.0–1.15.0 ride the same pull request and are

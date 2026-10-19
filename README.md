@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.16.0** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.17.0** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -475,7 +475,8 @@ Where the capacity shows:
 A flow metric (samples tagged `peer=` — what `iperf_orchestrator`, `mx export
 --peers` and any `a -> b` table write) says how much one host sent to another.
 Tick **load the cables** on its card and the viewer works out which cables
-that traffic crossed and draws each one by what it carries:
+that traffic crossed and draws each one by what it carries. (Greyed out, it
+says why under it: a percentage or a latency does not add up along a path.)
 
 - **Width** is the traffic through that piece of cable. A rack's lane
   thickens on its way to the ToR, as it gathers its servers' cables.
@@ -508,22 +509,50 @@ is end to end, and only switch counters see the cables themselves:
 - **`traffic=no`** on a net keeps it out: out-of-band mgmt beside the data
   fabric would otherwise take an equal share of every flow it ties with.
 - Where several cables continue a shortest route the flow is **shared**, by
-  the panel's choice:
-  - **even split (ECMP)** — an equal share per cable, as a fluid;
-  - **split by capacity** — shares in proportion to `gbps=`, as weighted ECMP
-    spreads over unequal links;
-  - **hashed: one path per flow** — each flow takes *one* cable at every
-    fork, picked pseudo-randomly per flow, which is what ECMP hashing really
-    does: a handful of big flows can land on the same uplink and overload it
-    while its neighbour idles. **Re-roll** hashes again with another seed.
-  - **hashed alike at every tier (polarized)** — one path per flow, hashed
-    the same way at every switch, as switches sharing one hash seed do: two
-    flows that collide on a ToR's uplink collide again on the spine's, so
-    the hot spots line up tier after tier instead of averaging out;
-  - **adaptive: each flow where there is room** — one path per flow, each
-    placed in turn on the cable with the most room as the load then stands:
-    congestion-aware routing (flowlets, adaptive routing on newer fabrics),
-    the opposite extreme to hashing and the best this fabric could do.
+  the panel's choice. The model tries to do what a real fabric does, so the
+  choices are what real switches are set to do, and the default is what
+  nearly every Ethernet fabric does out of the box:
+  - **ECMP: hashed per connection** (the default) — each connection takes
+    *one* cable at every fork, picked by a hash of its 5-tuple with a seed
+    of each switch's own, as Arista, Cisco, Juniper and SONiC switches do. A
+    handful of big flows can land on one uplink and overload it while its
+    neighbour idles. **Re-roll** hashes again with another seed: the spread
+    between rolls is the luck of the hash.
+  - **ECMP, hashed alike at every tier (polarized)** — the same hash at
+    every switch, as switches left on one factory seed (or one config
+    copied to every tier) do: flows that collide on a ToR's uplink collide
+    again on the spine's, so the hot spots line up tier after tier. A
+    misconfiguration to test for, and one of the first things to suspect
+    when superspines flood while the average looks fine.
+  - **adaptive routing (per packet)** — InfiniBand adaptive routing,
+    Spectrum-X, a switch's dynamic load balancing: each packet goes out of
+    the emptier port, so every switch leans on its emptier cables until its
+    choices are about as full as each other. A switch sees only its own
+    cables, though: congestion further on is avoided only where an earlier
+    choice leads round it, so with a ToR's uplink out the spine left
+    carrying its traffic is no better off than under an even split. With
+    one uplink degraded to 40G in `examples/dual-plane.dc`, all-to-all at
+    40% fills the busiest uplink to 44% where an even split fills it to 77%.
+    A host does not route adaptively: a bonded one still hashes.
+  - **weighted by capacity (WCMP)** — shares in proportion to `gbps=`, as
+    weighted ECMP (UCMP, the BGP link-bandwidth community) spreads over
+    unequal links;
+  - **ideal: even split** — not something switches do: every flow shared
+    equally over every route, as a fluid. It is the long-run average of
+    hashing with endless connections, and the best any balancing could do
+    on a symmetric fabric: if a cable is full here, nothing will save it.
+- **connections a flow**, beside the routing, is how many connections each
+  flow between two hosts is made of — `iperf -P`, a test's parallel streams,
+  an RDMA job's queue pairs — **1 by default**. Each is hashed on its own,
+  so this is the biggest single thing a hashed fabric's outcome turns on:
+  in `examples/dual-plane.dc`, every server sending half its NICs to the
+  one sixteen places on (the **shift** pattern) fills the busiest uplink to
+  125% at one connection a flow, 75% at four, 63% at thirty-two, and 50%
+  split evenly. Under contention each connection is its own share of a full
+  cable, as TCP shares it: a flow of eight beside a flow of one gets eight
+  shares, and a flow is held back only on the connections whose own path is
+  full. One connection a flow is also what a hash on the IP addresses alone
+  does, however many connections there are.
 - **`weight=`** on a link rule scales its cables' share in every mode —
   `weight=3` takes three times what a weight-1 cable beside it does.
 - **`count=`** on a link rule makes that many cables between each pair — a
@@ -533,15 +562,17 @@ is end to end, and only switch counters see the cables themselves:
   bundle reads 60% — what one 2.4T cable cannot show.
 - **`bond=`** on nets bonds a host's cables on them: `net nica gbps=100
   bond=nic` and `net nicb gbps=100 bond=nic` make every server's NIC a and
-  NIC b one bond. A flow from or to a bonded host is split over the bond by
-  capacity — two equal NICs half each — **sending and receiving, under every
-  split**, hashed included, where unbonded a hashed flow rides one NIC all
-  the way and the two come out a flow or so apart. Between two bonded hosts
-  each NIC's half keeps to its own side, NIC a to NIC a, so in one rack it
-  never leaves the ToR; beyond that, each half is routed (and hashed) on its
-  own. Take a ToR or a NIC's cable out and the rest of the bond carries
-  everything. Only hosts bond: a switch's cables on the same nets are what
-  the hosts hang off. A host with cables in two bonds uses the bigger.
+  NIC b one bond, run as LACP with the layer3+4 hash: **each connection
+  keeps to one NIC**, picked by its own hash in proportion to the NICs'
+  capacity — under hashed and adaptive routing alike, since a host's bond
+  hashes whatever its switches do. With one connection a flow two NICs can
+  come out a flow or so apart; with many they even out, and under the ideal
+  even split every flow is shared over the bond exactly. A connection
+  arrives on the same side it left, NIC a to NIC a, so in one rack it never
+  leaves the ToR. Take a ToR or a NIC's cable out and the rest of the bond
+  carries everything. Only hosts bond: a switch's cables on the same nets
+  are what the hosts hang off. A host with cables in two bonds uses the
+  bigger.
 - A pair's samples are reduced by the card's own aggregation (the mean of a
   run's passes, by default). The metric must be a rate (`unit=Gb/s`, `Mb/s`,
   `MB/s`, `pps`, … — or a name like `iperf_mbps_out`) or a volume; a bit or
@@ -553,8 +584,8 @@ is end to end, and only switch counters see the cables themselves:
 `examples/dual-plane-flows.tsv` loads `examples/dual-plane.dc`: one rack's
 servers sending 40 Gb/s each across the planes — 80% of their NICs and their
 rack's uplinks — and an incast of eight servers into one, 160% of the two
-NICs it lands on. Switch to **hashed** and each 40 Gb/s flow takes one NIC,
-not two.
+NICs it lands on. Hashed, each 40 Gb/s flow takes one NIC, not two; under
+the ideal even split it is shared over both.
 
 #### Contention: a full cable shares itself out
 
@@ -582,9 +613,9 @@ steady state:
   *of* what was offered, and each flow over it, held back or not.
 - The **split** matters more with contention. **Even** shares every flow
   over every route, so a flow is held to its slowest one; **hashed** puts
-  each flow on one path, as ECMP does with TCP, so only the flows hashed onto
-  a full cable slow down — and two big flows hashed onto one uplink can
-  leave its neighbour idle.
+  each connection on one path, as ECMP does with TCP, so only the
+  connections hashed onto a full cable slow down — and two big flows hashed
+  onto one uplink can leave its neighbour idle.
 
 Untick it to see what the flows offer: then a cable can read past 100%, in
 magenta, which says how oversubscribed it is rather than what it carries.
@@ -721,10 +752,9 @@ picks the picks box offers two things more:
   receives) it shared evenly over its devices. **Stop**, Esc or Clear ends
   it.
 
-For a single test flow, **hashed: one path per flow** is usually what you
-want: it puts the whole flow on one uplink, so every cable from server to
-server is drawn the same width, where even split shares it over every
-uplink — four spines, a quarter each.
+A single test flow, hashed as the page routes it by default, takes one
+uplink, so every cable from server to server is drawn the same width; the
+ideal even split shares it over every uplink — four spines, a quarter each.
 
 #### The load generator: a load with no file
 
@@ -883,8 +913,8 @@ other hosts measured, then routed like flows.
 - **evenly to every other host** sends each the same share.
 - Every host still sends exactly its total; what is a guess is only where it
   goes. The panel says the load is estimated and from how many hosts, and an
-  estimate is always shared as a fluid — **hashed** routes it as an even
-  split, since one path per guessed flow would read as a measurement.
+  estimate is always shared as a fluid — hashed or adaptive routes it as an
+  even split, since one path per guessed flow would read as a measurement.
 - Only devices count as hosts: a reading on a rack or a room is left out,
   and the panel says how many were.
 - The metric must be a rate (`unit=Gb/s`, `pps`, …, or a name like
@@ -1810,7 +1840,8 @@ quietly left stale.
 - **Cable load and capacity** — with a metric loaded onto the cables, the
   Networks panel holds what the cables show (model, counters, the two
   compared, or the change since taking something out), the colour key, the
-  split (even, by capacity, or hashed with **Re-roll**), the spread for an
+  routing (hashed per connection with **Re-roll** and the connections a
+  flow, polarized, adaptive, by capacity, or the ideal even split), the spread for an
   estimate, the what-if, and the busiest cables or biggest changes; **width
   by capacity** draws each cable by its `gbps=` instead. See
   [Capacity](#capacity-what-a-cable-carries) and
@@ -1872,8 +1903,9 @@ examples/mx/              every layout construct, painted by a real mx run
 examples/live/            three wide TSV tables in one folder: the format that
                           needs no layout file, and what "Load all" loads
 js/traffic.js             cable load: flows routed over the fabric (shortest
-                          routes, through +switch elements, shared evenly, by
-                          capacity, or hashed), per-host totals estimated by
+                          routes, through +switch elements, hashed per
+                          connection, adaptively, by capacity or evenly),
+                          per-host totals estimated by
                           the gravity model, switch counters onto their
                           cables, comparisons, and what-if
 js/tsv.js                 the wide-table reader: detection, the arrow that

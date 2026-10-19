@@ -45,7 +45,7 @@ const NET_KEYS = [
   ['show=', 'true/false: start visible or unticked'],
   ['gbps=', 'what each cable carries, in Gb/s: gbps=100'],
   ['traffic=', 'no: drawn, but carries no routed traffic (mgmt)'],
-  ['bond=', 'name: a host’s cables on nets with the same bond share every flow by capacity'],
+  ['bond=', 'name: a host’s cables on nets with the same bond are one LACP bond: each connection keeps to one, by hash'],
 ];
 
 // Every option a link rule takes, and only those. The parser's own LINK_OPTS
@@ -405,7 +405,7 @@ const REFERENCE = [
     ['net fabric gbps=100', 'every cable of the net carries 100 Gb/s'],
     ['link nica role=server role=tor scope=rack gbps=25', 'this rule’s cables, over the net’s'],
     ['net mgmt gbps=1 traffic=no', 'drawn, but carries none of the routed traffic'],
-    ['net nica gbps=100 bond=nic', 'bonded with every net of bond=nic: a server’s NICs share each flow by capacity, sending and receiving'],
+    ['net nica gbps=100 bond=nic', 'bonded with every net of bond=nic, as LACP layer3+4: each connection keeps to one NIC, many even them out'],
     ['link fabric role=tor role=spine weight=2', 'twice the share of a flow where routes fork'],
     ['link plane1 role=spine role=superspine count=6 gbps=400', 'a bundle: six 400G members per pair, each hashed onto by itself'],
     ['+switch', 'only elements tagged switch forward traffic', true],

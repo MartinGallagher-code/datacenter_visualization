@@ -51,9 +51,19 @@
 
 import { AGGREGATIONS, DEFAULT_AGG, overlayValue } from './results.js';
 
-export const SPLITS = ['even', 'capacity', 'hashed', 'polarized', 'adaptive'];
-// The splits that put each flow on one path, picked at every fork (picker).
-export const SINGLE_PATH = new Set(['hashed', 'polarized', 'adaptive']);
+// The ways a fabric shares a flow out where several cables continue its
+// route, in the order the panel offers them: what real switches do first,
+// the ideal last.
+export const SPLITS = ['hashed', 'polarized', 'adaptive', 'capacity', 'even'];
+// The splits that put each connection on one path, picked at every fork
+// (picker).
+export const SINGLE_PATH = new Set(['hashed', 'polarized']);
+// The splits under which each connection keeps to one NIC of a bond, as
+// LACP (layer3+4) hashes it: everything but the ideal fluid ones. Adaptive
+// routing is the switches'; the host still hashes.
+export const PER_CONNECTION = new Set(['hashed', 'polarized', 'adaptive']);
+// How many connections a flow can be routed as, each hashed on its own.
+export const CONNECTION_LIMITS = { max: 64 };
 // The units a test flow can be given when no metric sets one.
 export const TEST_UNITS = ['Gb/s', 'Mb/s', 'pps'];
 export const SPREADS = ['gravity', 'even'];
@@ -285,6 +295,7 @@ function fabric(model, opts) {
   const routes = new Map();
   const f = {
     carries, cables, forwards, switches, loads, add, out, noRoute, shared: new Map(), bondOf,
+    seed: (opts.seed || 0) >>> 0,
     // The way to each destination, worked out once per pass.
     route: (dst) => {
       let r = routes.get(dst);
@@ -306,10 +317,14 @@ function fabric(model, opts) {
  * whole bond. A leg with no way to its cable's switch is routed to the host
  * itself instead.
  *
+ * Hashed (`one`), a connection takes just one of those legs, picked by its
+ * own hash in proportion to the shares: LACP's layer3+4 policy, where every
+ * connection keeps to one NIC and only many of them even the NICs out.
+ *
  * @returns [{ src, dst, share, pre, post, id }] -- `id` hashes the leg, the
  *          flow's own where it is one leg -- or null when there is no route
  */
-function legsOf(flow, f) {
+function legsOf(flow, f, one = false) {
   const out = f.bondOf(flow.src);
   const into = f.bondOf(flow.dst);
   if (!out && !into) {
@@ -326,6 +341,16 @@ function legsOf(flow, f) {
   } else {
     into.links.forEach((n, j) => plan.push([null, n, into.shares[j]]));
   }
+  if (one && plan.length > 1) {
+    let r = mix(f.seed ^ 0x1ac9, flow.id | 0, 0x3a7);
+    let pick = plan[plan.length - 1];
+    for (const entry of plan) {
+      r -= entry[2];
+      if (r < 0) { pick = entry; break; }
+    }
+    plan.length = 0;
+    plan.push([pick[0], pick[1], 1]);
+  }
   const legs = [];
   for (const [pre, wanted, share] of plan) {
     const src = pre ? other(pre, flow.src) : flow.src;
@@ -337,6 +362,34 @@ function legsOf(flow, f) {
   }
   return legs;
 }
+
+/**
+ * A flow as the connections that carry it. Real traffic between two hosts
+ * is one or more connections -- iperf -P, a test's parallel streams, an
+ * RDMA job's queue pairs -- and ECMP and LACP hash each one on its own, so
+ * a flow of `k` connections is routed as `k` equal parts, each with an id
+ * of its own: one connection is the worst case for hashing, many come out
+ * near an even split. Where nothing is hashed it stays whole.
+ *
+ * Each part keeps `of`, the flow it is part of.
+ */
+function connectionsOf(flow, how, k) {
+  if (!(k > 1) || !PER_CONNECTION.has(how)) return [flow];
+  const parts = new Array(k);
+  for (let j = 0; j < k; j++) {
+    parts[j] = {
+      src: flow.src, dst: flow.dst, split: flow.split, of: flow,
+      id: j ? (Math.imul((flow.id | 0) ^ 0x5bd1e995, 0x01000193) + Math.imul(j, 0x9e3779b1)) >>> 0 : flow.id,
+      value: flow.value / k,
+      wanted: flow.wanted === undefined ? undefined : flow.wanted / k,
+      pps: flow.pps > 0 ? flow.pps / k : flow.pps,
+    };
+  }
+  return parts;
+}
+
+/** The connections a flow is routed as, from opts.connections. */
+const connectionCount = (opts) => Math.max(1, Math.min(CONNECTION_LIMITS.max, Math.round(Number(opts.connections) || 1)));
 
 /**
  * Hop counts to `dst`, travelling only through elements that forward, and
@@ -438,41 +491,31 @@ function hashedHop(hops, seed, id, n) {
 }
 
 /**
- * How a flow on one path picks its cable at a fork, for the splits that
- * keep a flow on one path:
- *   hashed     a hash of the flow at each switch, as ECMP hashes a 5-tuple;
+ * How a connection on one path picks its cable at a fork, for the splits
+ * that keep a connection on one path:
+ *   hashed     a hash of the connection at each switch, its own seed at
+ *              each, as ECMP hashes a 5-tuple;
  *   polarized  the same hash at every tier, as switches sharing one hash
- *              seed do -- flows that collide at one tier collide at the next;
- *   adaptive   the cable with the most room, as the load stands when the
- *              flow is placed -- congestion-aware routing, flows placed in
- *              order, ties broken by the hash.
- * One picker per routing pass: adaptive remembers what it has placed, so
- * two passes over the same flows in the same order pick the same cables.
+ *              seed do -- flows that collide at one tier collide at the next.
  */
 function picker(how, seed) {
   if (how === 'polarized') return (hops, u, id) => hashedHop(hops, seed, id, 0);
-  if (how !== 'adaptive') return (hops, u, id) => hashedHop(hops, seed, id, u.n);
-  const placed = new Map();
-  return (hops, u, id, value) => {
-    let best = null;
-    let bestFill = Infinity;
-    const tie = hashedHop(hops, seed, id, u.n);
-    for (const link of hops) {
-      const l = placed.get(link);
-      const fill = ((l ? l[link.a === u ? 0 : 1] : 0) + value) / ((link.gbps || 1) * (link.weight || 1));
-      if (fill < bestFill - 1e-12 || (Math.abs(fill - bestFill) <= 1e-12 && link === tie)) { best = link; bestFill = fill; }
-    }
-    let l = placed.get(best);
-    if (!l) placed.set(best, (l = [0, 0]));
-    l[best.a === u ? 0 : 1] += value;
-    return best;
-  };
+  return (hops, u, id) => hashedHop(hops, seed, id, u.n);
 }
 
-/** Each cable's share of what leaves an element, in the split asked for. */
-function sharesOf(hops, split) {
+/**
+ * Each cable's share of what leaves an element, in the split asked for.
+ * Adaptive shares by `weights` -- each cable's, out of `u`, from
+ * adaptiveWeights -- or, without them, by capacity.
+ */
+function sharesOf(hops, split, u = null, weights = null) {
   let w;
-  if (split === 'capacity') {
+  if (split === 'adaptive' && weights && u) {
+    w = hops.map((link) => {
+      const pair = weights.get(link);
+      return pair ? pair[link.a === u ? 0 : 1] : (link.gbps || 1) * (link.weight || 1);
+    });
+  } else if (split === 'capacity' || split === 'adaptive') {
     // A cable with no capacity counts as the smallest one beside it: unknown
     // is not zero, and should not soak up the flow either.
     let least = Infinity;
@@ -492,7 +535,7 @@ function sharesOf(hops, split) {
  * reaches an element is passed on in shares, farthest elements first, so
  * each is handled once however many flows cross it.
  */
-function spill(route, dst, amount, split, f) {
+function spill(route, dst, amount, split, f, weights = null) {
   const { dist, next } = route;
   // Only where there is something to pass on, farthest first: one bucket
   // per hop count, filled as the fluid moves nearer.
@@ -508,7 +551,7 @@ function spill(route, dst, amount, split, f) {
       const a = amount.get(u);
       if (!a) continue;
       const hops = next(u);
-      const shares = sharesOf(hops, split);
+      const shares = sharesOf(hops, split, u, weights);
       for (let k = 0; k < hops.length; k++) {
         const s = a * shares[k];
         f.add(hops[k], u, s);
@@ -551,7 +594,10 @@ function cannotStart(src, dst, f) {
  *
  * @param model  a parsed layout
  * @param flows  [{ id, src, dst, value }], as flowsOf returns
- * @param opts   { split: 'even'|'capacity'|'hashed', seed, down: { els, links } }
+ * @param opts   { split (one of SPLITS), seed, down: { els, links },
+ *                 connections: how many each flow is hashed as, weights:
+ *                 adaptive's, from adaptiveWeights -- worked out here when
+ *                 adaptive routes any flow and they are not given }
  * @returns      { loads: Map(link -> [a to b, b to a]), routed, offered,
  *                 delivered, unrouted: [{ flow, why }], missed: { count,
  *                 amount, byWhy }, switches, split, seed }
@@ -559,6 +605,8 @@ function cannotStart(src, dst, f) {
 export function routeTraffic(model, flows, opts = {}) {
   const split = SPLITS.includes(opts.split) ? opts.split : 'even';
   const seed = (opts.seed || 0) >>> 0;
+  const conns = connectionCount(opts);
+  const weights = opts.weights || weightsFor(model, flows, opts, split);
   const f = fabric(model, opts);
   const miss = misses();
 
@@ -572,19 +620,20 @@ export function routeTraffic(model, flows, opts = {}) {
     offered += flow.value;
     const why = cannotStart(flow.src, flow.dst, f);
     if (why) { miss.note(flow.src, flow.dst, flow.value, why); continue; }
-    const legs = legsOf(flow, f);
-    if (!legs) { miss.note(flow.src, flow.dst, flow.value, f.noRoute); continue; }
+    if (!legsOf(flow, f)) { miss.note(flow.src, flow.dst, flow.value, f.noRoute); continue; }
     routed++;
     delivered += flow.value;
-    for (const leg of legs) {
-      const value = flow.value * leg.share;
-      if (leg.pre) f.add(leg.pre, flow.src, value);
-      if (leg.post) f.add(leg.post, leg.dst, value);
-      if (leg.src === leg.dst) continue;
-      const how = flow.split || split;
-      const list = byDst.get(leg.dst);
-      if (list) list.push([leg, value, how]);
-      else byDst.set(leg.dst, [[leg, value, how]]);
+    const how = flow.split || split;
+    for (const conn of connectionsOf(flow, how, conns)) {
+      for (const leg of legsOf(conn, f, PER_CONNECTION.has(how))) {
+        const value = conn.value * leg.share;
+        if (leg.pre) f.add(leg.pre, flow.src, value);
+        if (leg.post) f.add(leg.post, leg.dst, value);
+        if (leg.src === leg.dst) continue;
+        const list = byDst.get(leg.dst);
+        if (list) list.push([leg, value, how]);
+        else byDst.set(leg.dst, [[leg, value, how]]);
+      }
     }
   }
 
@@ -599,7 +648,7 @@ export function routeTraffic(model, flows, opts = {}) {
       if (SINGLE_PATH.has(how)) {
         const pick = pickFor(how);
         for (let u = leg.src; u !== dst;) {
-          const link = pick(route.next(u), u, leg.id, value);
+          const link = pick(route.next(u), u, leg.id);
           f.add(link, u, value);
           u = other(link, u);
         }
@@ -609,7 +658,7 @@ export function routeTraffic(model, flows, opts = {}) {
       if (!amount) amounts.set(how, (amount = new Map()));
       amount.set(leg.src, (amount.get(leg.src) || 0) + value);
     }
-    for (const [how, amount] of amounts) spill(route, dst, amount, how, f);
+    for (const [how, amount] of amounts) spill(route, dst, amount, how, f, weights);
   }
 
   const missed = miss.done();
@@ -617,6 +666,59 @@ export function routeTraffic(model, flows, opts = {}) {
     loads: f.loads, routed, offered, delivered, unrouted: missed.examples, missed,
     switches: f.switches, split, seed,
   };
+}
+
+// How many rounds adaptive routing settles over: see adaptiveWeights.
+export const ADAPTIVE = { rounds: 8 };
+
+/**
+ * Adaptive routing's weights: how strongly each switch leans on each of its
+ * cables, each way. Real adaptive routing (InfiniBand's, Spectrum-X's, a
+ * switch's dynamic load balancing) sends each packet or flowlet out of the
+ * port with the shortest queue, so a switch shifts traffic from its fuller
+ * cables to its emptier ones until the choices are about as full as each
+ * other. Settled here the same way: route by the weights, then turn each
+ * cable's weight down where it is fuller than the fabric's average and up
+ * where it is emptier, a damped step at a time, ADAPTIVE.rounds times. Only
+ * a switch's own choices move: it cannot see past its neighbours, so a full
+ * cable further on is avoided only where an earlier choice leads round it.
+ * A host does not route adaptively: its cables share by capacity (or by
+ * LACP's hash, bonded).
+ *
+ * Settled on what the flows offer, before any contention.
+ *
+ * @returns Map(link -> [weight from a, weight from b])
+ */
+export function adaptiveWeights(model, flows, opts = {}) {
+  const weights = new Map();
+  const offered = flows.map((flow) => (flow.wanted === undefined ? flow : { ...flow, value: flow.wanted }));
+  const room = (link) => (link.gbps || 1) * (link.weight || 1);
+  const { forwards } = forwarding(model);
+  for (let r = 0; r < ADAPTIVE.rounds; r++) {
+    const { loads } = routeTraffic(model, offered, { ...opts, weights });
+    let sum = 0;
+    let n = 0;
+    for (const [link, l] of loads) for (const v of l) if (v > 0) { sum += v / room(link); n++; }
+    if (!n) break;
+    const slack = 0.05 * (sum / n);
+    for (const [link, l] of loads) {
+      const cap = room(link);
+      let w = weights.get(link);
+      if (!w) weights.set(link, (w = [cap, cap]));
+      for (let d = 0; d < 2; d++) {
+        if (!forwards(d ? link.b : link.a)) continue;
+        const step = Math.sqrt((sum / n + slack) / (l[d] / cap + slack));
+        w[d] = Math.min(cap * 1e3, Math.max(cap * 1e-3, w[d] * step));
+      }
+    }
+  }
+  return weights;
+}
+
+// Adaptive's weights where any flow is routed adaptively, or null.
+function weightsFor(model, flows, opts, split) {
+  if (split !== 'adaptive' && !flows.some((flow) => flow.split === 'adaptive')) return null;
+  return adaptiveWeights(model, flows, { ...opts, split: 'adaptive' });
 }
 
 /**
@@ -635,6 +737,8 @@ export function routeTraffic(model, flows, opts = {}) {
 export function flowsOver(model, flows, links, opts = {}) {
   const split = SPLITS.includes(opts.split) ? opts.split : 'even';
   const seed = (opts.seed || 0) >>> 0;
+  const conns = connectionCount(opts);
+  const weights = opts.weights || weightsFor(model, flows, opts, split);
   const targets = links instanceof Set ? links : new Set(links);
   const f = fabric(model, opts);
   // How many of the cables each flow crosses, its legs' shares added up: a
@@ -643,15 +747,19 @@ export function flowsOver(model, flows, links, opts = {}) {
   const cross = (flow, c) => { if (c) crossed.set(flow, (crossed.get(flow) || 0) + c); };
   const byDst = new Map();
   for (const flow of flows) {
-    if (!(flow.value > 0) || cannotStart(flow.src, flow.dst, f)) continue;
-    const legs = legsOf(flow, f);
-    if (!legs) continue;
-    for (const leg of legs) {
-      cross(flow, leg.share * ((leg.pre && targets.has(leg.pre) ? 1 : 0) + (leg.post && targets.has(leg.post) ? 1 : 0)));
-      if (leg.src === leg.dst) continue;
-      const list = byDst.get(leg.dst);
-      if (list) list.push([flow, leg]);
-      else byDst.set(leg.dst, [[flow, leg]]);
+    if (!(flow.value > 0) || cannotStart(flow.src, flow.dst, f) || !legsOf(flow, f)) continue;
+    const how = flow.split || split;
+    const parts = connectionsOf(flow, how, conns);
+    for (const conn of parts) {
+      // A connection's crossings count for the flow, each at its part.
+      for (const leg of legsOf(conn, f, PER_CONNECTION.has(how))) {
+        const part = { ...leg, share: leg.share / parts.length };
+        cross(flow, part.share * ((leg.pre && targets.has(leg.pre) ? 1 : 0) + (leg.post && targets.has(leg.post) ? 1 : 0)));
+        if (leg.src === leg.dst) continue;
+        const list = byDst.get(leg.dst);
+        if (list) list.push([flow, part]);
+        else byDst.set(leg.dst, [[flow, part]]);
+      }
     }
   }
   const pickers = new Map();
@@ -671,7 +779,7 @@ export function flowsOver(model, flows, links, opts = {}) {
       const known = through.get(u);
       if (known !== undefined) return known;
       const hops = route.next(u);
-      const shares = sharesOf(hops, how);
+      const shares = sharesOf(hops, how, u, weights);
       let p = 0;
       for (let k = 0; k < hops.length; k++) {
         p += shares[k] * ((targets.has(hops[k]) ? 1 : 0) + throughOf(how, other(hops[k], u)));
@@ -685,9 +793,7 @@ export function flowsOver(model, flows, links, opts = {}) {
       let crossings = 0;
       const pick = pickFor(how);
       for (let u = leg.src; u !== dst;) {
-        // Placed by what it offered, as it was routed: a flow held back
-        // since carries less, but took its path before.
-        const link = pick(route.next(u), u, leg.id, (flow.wanted ?? flow.value) * leg.share);
+        const link = pick(route.next(u), u, leg.id);
         if (targets.has(link)) crossings++;
         u = other(link, u);
       }
@@ -730,12 +836,17 @@ export const CONTEND_LIMITS = { crossings: 2e7 };
  * a bottleneck (real TCP is rougher: shorter round trips get more, and
  * synchronised losses can collapse an incast below the fair share).
  *
+ * Shared out, as TCP shares it, by connection: a flow of several
+ * (opts.connections) is that many, each its own share of a full cable and
+ * held back only where its own path is full, and what the flow carries is
+ * what they carry between them.
+ *
  * Only cables with a gbps= limit anything, and only a load that is a bit
  * rate (`toGbps`) can be set against them.
  *
  * @param flows  [{ id, src, dst, value, split? }] -- `split` routes one flow
  *               its own way (an estimate's pairs are never hashed)
- * @param opts   { split, seed, down, toGbps }
+ * @param opts   { split, seed, down, connections, weights, toGbps }
  * @returns as routeTraffic, with `loads` what is carried, and contention:
  *          { offered: Map(link -> [ab, ba]) before sharing, full: Map(link
  *          -> [ab, ba]) the flows held back there each way -- a cable that
@@ -747,6 +858,8 @@ export const CONTEND_LIMITS = { crossings: 2e7 };
 export function contend(model, flows, opts = {}) {
   const split = SPLITS.includes(opts.split) ? opts.split : 'even';
   const seed = (opts.seed || 0) >>> 0;
+  const conns = connectionCount(opts);
+  const weights = opts.weights || weightsFor(model, flows, opts, split);
   const toGbps = opts.toGbps;
   const f = fabric(model, opts);
   const miss = misses();
@@ -800,22 +913,30 @@ export function contend(model, flows, opts = {}) {
     return pair[key];
   };
 
-  // Every flow as its legs, gathered by where each leg is going.
-  const routed = [];
+  // Every flow as its connections, and each of those as its legs, gathered
+  // by where each leg is going. What is shared out is the connections.
+  const taken = [];    // the flows routed
+  const routed = [];   // their connections
+  const flowOf = [];   // each connection's flow, in taken
   const byDst = new Map();
   let offered = 0;
   for (const flow of flows) {
     offered += flow.value;
     const why = cannotStart(flow.src, flow.dst, f);
     if (why) { miss.note(flow.src, flow.dst, flow.value, why); continue; }
-    const legs = legsOf(flow, f);
-    if (!legs) { miss.note(flow.src, flow.dst, flow.value, f.noRoute); continue; }
-    const i = routed.length;
-    routed.push(flow);
-    for (const leg of legs) {
-      const list = byDst.get(leg.dst);
-      if (list) list.push([i, leg]);
-      else byDst.set(leg.dst, [[i, leg]]);
+    if (!legsOf(flow, f)) { miss.note(flow.src, flow.dst, flow.value, f.noRoute); continue; }
+    const how = flow.split || split;
+    const t = taken.length;
+    taken.push(flow);
+    for (const conn of connectionsOf(flow, how, conns)) {
+      const i = routed.length;
+      routed.push(conn);
+      flowOf.push(t);
+      for (const leg of legsOf(conn, f, PER_CONNECTION.has(how))) {
+        const list = byDst.get(leg.dst);
+        if (list) list.push([i, leg]);
+        else byDst.set(leg.dst, [[i, leg]]);
+      }
     }
   }
 
@@ -855,7 +976,7 @@ export function contend(model, flows, opts = {}) {
         const nearer = new Map();
         for (const [u, a] of level) {
           const hops = route.next(u);
-          const shares = sharesOf(hops, how);
+          const shares = sharesOf(hops, how, u, weights);
           for (let k = 0; k < hops.length; k++) {
             const r = a * shares[k];
             path.push(slot(hops[k], u), r);
@@ -903,7 +1024,7 @@ export function contend(model, flows, opts = {}) {
         if (leg.pre && switchPps(leg.src)) pkt.push(pktSlot(leg.src), 1);
         const pick = pickFor(how);
         for (let u = leg.src; u !== dst;) {
-          const link = pick(route.next(u), u, leg.id, flow.value * leg.share);
+          const link = pick(route.next(u), u, leg.id);
           path.push(slot(link, u), 1);
           u = other(link, u);
           if (u !== dst && switchCapacity(u)) path.push(nodeSlot(u), 1);
@@ -923,7 +1044,7 @@ export function contend(model, flows, opts = {}) {
         const head = ends;
         const first = new Map();
         const hops = route.next(leg.src);
-        const shares = sharesOf(hops, how);
+        const shares = sharesOf(hops, how, leg.src, weights);
         for (let k = 0; k < hops.length; k++) {
           head.push(slot(hops[k], leg.src), shares[k]);
           const v = other(hops[k], leg.src);
@@ -1037,10 +1158,11 @@ export function contend(model, flows, opts = {}) {
     for (const sl of filled) {
       for (const i of crossing[sl]) if (!frozen[i]) settle(i, level, sl);
     }
+    // Counted by flow: a flow's connections held at one cable are one flow.
     for (const sl of filled) {
-      let k = 0;
-      for (const i of crossing[sl]) if (round[i] === rounds && heldAt[i] >= 0) k++;
-      if (k) holds.set(sl, k);
+      const flowsHeld = new Set();
+      for (const i of crossing[sl]) if (round[i] === rounds && heldAt[i] >= 0) flowsHeld.add(flowOf[i]);
+      if (flowsHeld.size) holds.set(sl, flowsHeld.size);
     }
     if (active === before) break;   // nothing moved: rounding, never a real case
   }
@@ -1058,7 +1180,10 @@ export function contend(model, flows, opts = {}) {
   let held = 0;
   const ppsThrough = new Map();   // switch -> [packets carried, offered] a second
   const hostPkts = new Map();     // host -> { out, in: [packets carried, offered] }
-  const out = routed.map((flow, i) => {
+  // Each flow's connections summed: what it carries, what it offered, and
+  // where the first of them held back was held.
+  const sums = taken.map(() => ({ carried: 0, wanted: 0, at: null }));
+  routed.forEach((conn, i) => {
     const parts = paths[i];
     for (let p = 0; p < parts.length; p += 2) {
       const path = parts[p];
@@ -1086,12 +1211,19 @@ export function contend(model, flows, opts = {}) {
         into(offeredLoads, o.link, o.dir, path[k + 1] * scale * demand[i]);
       }
     }
-    carried += rate[i];
-    wanted += demand[i];
-    const short = rate[i] < demand[i] * (1 - 1e-9);
+    const sum = sums[flowOf[i]];
+    sum.carried += rate[i];
+    sum.wanted += demand[i];
+    if (!sum.at && rate[i] < demand[i] * (1 - 1e-9) && heldAt[i] >= 0) sum.at = owner[heldAt[i]];
+  });
+  const out = taken.map((flow, t) => {
+    const sum = sums[t];
+    carried += sum.carried;
+    wanted += sum.wanted;
+    const short = sum.carried < sum.wanted * (1 - 1e-9);
     if (short) held++;
-    const at = short && heldAt[i] >= 0 ? owner[heldAt[i]] : null;
-    return { ...flow, value: rate[i], wanted: demand[i], heldAt: at ? at.link || at.el : null };
+    const at = short ? sum.at : null;
+    return { ...flow, value: sum.carried, wanted: sum.wanted, heldAt: at ? at.link || at.el : null };
   });
   // The full cables, by how many flows each holds back each way, and the
   // full switches by how many in all. One filled exactly, holding nothing
@@ -1113,7 +1245,7 @@ export function contend(model, flows, opts = {}) {
 
   const missed = miss.done();
   return {
-    loads, routed: n, offered, delivered: carried, unrouted: missed.examples, missed,
+    loads, routed: taken.length, offered, delivered: carried, unrouted: missed.examples, missed,
     switches: f.switches, split, seed,
     contention: {
       offered: offeredLoads, full: fullMap, switches: fullSwitches, flows: out, held, wanted, carried,

@@ -16,7 +16,7 @@ import {
 } from './render.js';
 import {
   biggestChanges, burstRisk, busiest, cablesOf, formatGbps, GEN_UNITS, hostsFor, loadable, loadUnit, PATTERNS, reachKinds, TARGETED,
-  readsAsLoad, SINGLE_PATH, SPLITS, SPREADS, TEST_UNITS, trafficKind, utilOf,
+  CONNECTION_LIMITS, PER_CONNECTION, readsAsLoad, SPLITS, SPREADS, TEST_UNITS, trafficKind, utilOf,
 } from './traffic.js';
 
 const el = (tag, cls, text) => {
@@ -510,6 +510,8 @@ function overlayCard(state, overlay, actions) {
           + 'than routed -- and beside a routed metric, compared with it.',
       }[kind];
     body.append(lrow);
+    // Greyed, it says why where it can be read, not only on hover.
+    if (!unit.ok) body.append(el('div', 'muted why', `can’t load the cables: ${unit.why}`));
   }
 
   const stats = el('div', 'overlay-stats');
@@ -665,21 +667,25 @@ export function formatLoad(src, value) {
 }
 
 const SPLIT_LABELS = {
-  even: 'even split (ECMP)',
-  capacity: 'split by capacity',
-  hashed: 'hashed: one path per flow',
-  polarized: 'hashed alike at every tier (polarized)',
-  adaptive: 'adaptive: each flow where there is room',
+  hashed: 'ECMP: hashed per connection',
+  polarized: 'ECMP, hashed alike at every tier (polarized)',
+  adaptive: 'adaptive routing (per packet)',
+  capacity: 'weighted by capacity (WCMP)',
+  even: 'ideal: even split',
 };
 // What each split stands for, on its option.
 const SPLIT_TITLES = {
-  even: 'Every flow shared equally over every shortest route, as a fluid: the ideal average of ECMP',
-  capacity: 'Shared in proportion to each cable’s gbps=, as weighted ECMP',
-  hashed: 'Each flow on one path, picked by a hash at every switch, as ECMP hashes a 5-tuple: big flows can land together',
-  polarized: 'Each flow on one path, hashed the same way at every tier, as switches sharing one hash seed do: flows that '
-    + 'collide at one tier collide again at the next',
-  adaptive: 'Each flow on one path, placed in turn on the cable with the most room as the load stands: congestion-aware '
-    + 'routing, the opposite extreme to hashing',
+  hashed: 'What standard Ethernet switches do: each connection on one path, picked by a hash of its 5-tuple at every '
+    + 'switch, each with its own seed. Big flows can land together; more connections a flow even it out. A bonded '
+    + 'host hashes each connection onto one NIC, as LACP layer3+4 does',
+  polarized: 'Each connection on one path, hashed the same way at every tier, as switches sharing one hash seed do: '
+    + 'flows that collide at one tier collide again at the next. A misconfiguration to test for',
+  adaptive: 'Per-packet adaptive routing (InfiniBand AR, Spectrum-X, dynamic load balancing): each switch leans on its '
+    + 'emptier cables until its choices are about as full as each other. It sees only its own cables, not '
+    + 'congestion further on. Hosts still hash, as LACP does',
+  capacity: 'Weighted ECMP: every flow shared over its paths in proportion to each cable’s gbps=, as a fluid',
+  even: 'Not something switches do: every flow shared equally over every shortest route, as a fluid -- the long-run '
+    + 'average of hashing with endless connections, and the best any balancing could do here',
 };
 
 const SPREAD_LABELS = {
@@ -1081,12 +1087,27 @@ export function renderCableLoad(state, host, actions) {
       opt.selected = state.traffic.split === split;
       select.append(opt);
     }
-    select.title = 'Where several cables continue a shortest route, how a flow is shared between them';
+    select.title = 'How the switches share traffic out where several cables continue a shortest route';
     select.addEventListener('change', () => actions.setTrafficSplit(select.value));
     row.append(select);
-    if ((state.traffic.split === 'hashed' || state.traffic.split === 'polarized') && model.kind !== 'hosts') {
+    if (PER_CONNECTION.has(state.traffic.split) && model.kind !== 'hosts') {
+      // How many connections each flow is: hashing's whole outcome turns on it.
+      const conns = el('label', 'conns');
+      const input = el('input', 'connections');
+      input.type = 'number';
+      input.min = '1';
+      input.max = String(CONNECTION_LIMITS.max);
+      input.value = String(state.traffic.connections);
+      input.addEventListener('change', () => actions.setConnections(input.value));
+      conns.append(input, el('span', null, state.traffic.connections === 1 ? 'connection a flow' : 'connections a flow'));
+      conns.title = 'How many connections each flow between two hosts is made of -- iperf -P, a test’s parallel '
+        + 'streams, an RDMA job’s queue pairs. Each is hashed on its own, and shares a full cable as one: one is '
+        + 'hashing’s worst case (and what a hash on the IP addresses alone does), dozens come out near the even split';
+      row.append(conns);
+    }
+    if (PER_CONNECTION.has(state.traffic.split) && model.kind !== 'hosts') {
       const roll = el('button', null, 'Re-roll');
-      roll.title = 'Hash every flow onto its paths again, with a different seed';
+      roll.title = 'Hash every connection onto its paths again, with a different seed';
       roll.addEventListener('click', () => actions.rerollTraffic());
       row.append(roll);
     }
@@ -1160,7 +1181,7 @@ export function renderCableLoad(state, host, actions) {
     } else if (model.kind === 'hosts') {
       lines.append(el('div', null, `estimated from ${model.count} hosts’ totals, sent `
         + `${SPREAD_LABELS[state.traffic.spread] || SPREAD_LABELS.gravity} · ${formatLoad(model, (model.own || r).delivered)}`));
-      if (SINGLE_PATH.has(state.traffic.split)) {
+      if (PER_CONNECTION.has(state.traffic.split)) {
         lines.append(el('div', 'muted', 'an estimate is routed as an even split: one path per guessed flow would read as a measurement'));
       }
       if (model.skipped) lines.append(el('div', 'muted', `${model.skipped} readings on racks or rooms left out`));
