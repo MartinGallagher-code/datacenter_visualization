@@ -34,6 +34,7 @@ const ELEMENT_KEYS = [
   ['color=', 'fill colour: #4fa3ff, teal, rgb(1,2,3)'],
   ['seq=', 'count per enclosing kind (seq=room) or by name (seq=net)'],
   ['gbps=', 'a switch’s own forwarding capacity, in Gb/s: gbps=12800'],
+  ['pps=', 'packet rate, in packets a second: what a switch forwards, or a server sends and takes in (pps=8000000000)'],
 ];
 
 const NET_KEYS = [
@@ -59,6 +60,7 @@ const LINK_KEYS = [
   ['splice=', 'gather every N consecutive matches into one cable'],
   ['gbps=', 'what each of these cables carries, in Gb/s, over the net’s'],
   ['weight=', 'share of a flow at a fork, against the other cables (default 1)'],
+  ['count=', 'cables per pair: a bundle of members, each of gbps= (count=6 gbps=400)'],
 ];
 
 const MODES = ['star', 'mesh', 'chain', 'ring', 'pair'];
@@ -405,8 +407,11 @@ const REFERENCE = [
     ['net mgmt gbps=1 traffic=no', 'drawn, but carries none of the routed traffic'],
     ['net nica gbps=100 bond=nic', 'bonded with every net of bond=nic: a server’s NICs share each flow by capacity, sending and receiving'],
     ['link fabric role=tor role=spine weight=2', 'twice the share of a flow where routes fork'],
+    ['link plane1 role=spine role=superspine count=6 gbps=400', 'a bundle: six 400G members per pair, each hashed onto by itself'],
     ['+switch', 'only elements tagged switch forward traffic', true],
     ['node spine role=spine +switch gbps=12800', 'a switch that can forward 12.8 Tb/s in all, whatever its ports add up to'],
+    ['node spine role=spine +switch pps=8000000000', 'and 8 billion packets a second: small packets can fill it before its bandwidth'],
+    ['node s[1..16] role=server pps=20000000', 'a server that sends, and takes in, 20 million packets a second each way'],
     ['gbps=1 gbps=10 gbps=25 gbps=40 gbps=100 gbps=200 gbps=400 gbps=800', 'common port speeds', true],
   ]],
   ['Selectors', 'For link rules and the filter bar.', [

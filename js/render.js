@@ -675,7 +675,9 @@ export class Renderer {
     ctx.save();
     ctx.setLineDash([]);
     for (const [el, rec] of loads) {
-      if (rec.util === null || state.drawnEndpoint(el) !== el) continue;
+      // The fuller way of the two: what it switches, or the packets it passes.
+      const util = Math.max(rec.util ?? -1, rec.ppsUtil ?? -1);
+      if (util < 0 || state.drawnEndpoint(el) !== el) continue;
       const b = el.box;
       if (!b || !this.intersects(b) || b.w * scale < GAUGE_MIN_PX) continue;
       const h = Math.max(2.5 / scale, Math.min(b.h * 0.22, 6 / scale));
@@ -683,12 +685,12 @@ export class Renderer {
       ctx.globalAlpha = 0.85;
       ctx.fillStyle = THEME.gaugeTrack;
       ctx.fillRect(b.x, y, b.w, h);
-      const full = rec.held > 0 || rec.fullPorts > 0 || rec.util > 1.0005;
-      ctx.fillStyle = full && rec.util >= 0.9995 ? LOAD_COLORS.over : loadColor(Math.min(1, rec.util));
+      const full = rec.held > 0 || (rec.packets && rec.packets.held > 0) || rec.fullPorts > 0 || util > 1.0005;
+      ctx.fillStyle = full && util >= 0.9995 ? LOAD_COLORS.over : loadColor(Math.min(1, util));
       ctx.globalAlpha = 1;
-      ctx.fillRect(b.x, y, b.w * Math.min(1, rec.util), h);
+      ctx.fillRect(b.x, y, b.w * Math.min(1, util), h);
       // A full port on a switch that is not full itself: a tick at the end.
-      if (rec.fullPorts && rec.util < 0.9995) {
+      if (rec.fullPorts && util < 0.9995) {
         ctx.fillStyle = LOAD_COLORS.over;
         ctx.fillRect(b.x + b.w - h, y, h, h);
       }

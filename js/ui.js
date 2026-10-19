@@ -15,8 +15,8 @@ import {
   capacityWidth, changeColor, countDescendants, FINDING_COLORS, LOAD_COLORS, loadColor, linkSummary, spliceSummary,
 } from './render.js';
 import {
-  biggestChanges, busiest, cablesOf, formatGbps, GEN_UNITS, hostsFor, loadable, loadUnit, PATTERNS, reachKinds,
-  readsAsLoad, SPLITS, SPREADS, TEST_UNITS, trafficKind, utilOf,
+  biggestChanges, burstRisk, busiest, cablesOf, formatGbps, GEN_UNITS, hostsFor, loadable, loadUnit, PATTERNS, reachKinds, TARGETED,
+  readsAsLoad, SINGLE_PATH, SPLITS, SPREADS, TEST_UNITS, trafficKind, utilOf,
 } from './traffic.js';
 
 const el = (tag, cls, text) => {
@@ -668,6 +668,18 @@ const SPLIT_LABELS = {
   even: 'even split (ECMP)',
   capacity: 'split by capacity',
   hashed: 'hashed: one path per flow',
+  polarized: 'hashed alike at every tier (polarized)',
+  adaptive: 'adaptive: each flow where there is room',
+};
+// What each split stands for, on its option.
+const SPLIT_TITLES = {
+  even: 'Every flow shared equally over every shortest route, as a fluid: the ideal average of ECMP',
+  capacity: 'Shared in proportion to each cable’s gbps=, as weighted ECMP',
+  hashed: 'Each flow on one path, picked by a hash at every switch, as ECMP hashes a 5-tuple: big flows can land together',
+  polarized: 'Each flow on one path, hashed the same way at every tier, as switches sharing one hash seed do: flows that '
+    + 'collide at one tier collide again at the next',
+  adaptive: 'Each flow on one path, placed in turn on the cable with the most room as the load stands: congestion-aware '
+    + 'routing, the opposite extreme to hashing',
 };
 
 const SPREAD_LABELS = {
@@ -727,9 +739,18 @@ function viewLabel(view, name) {
 function contendedText(c) {
   const n = (k, what) => `${k} ${what}${k === 1 ? '' : what.endsWith('h') ? 'es' : 's'}`;
   const parts = [];
-  if (c.full.size) parts.push(n(c.full.size, 'cable'));
-  if (c.switches && c.switches.size) parts.push(n(c.switches.size, 'switch'));
-  return parts.join(' and ') || 'nothing';
+  if (c.full.size) parts.push(`${n(c.full.size, 'cable')} full`);
+  if (c.switches && c.switches.size) parts.push(`${n(c.switches.size, 'switch')} full`);
+  if (c.packets && c.packets.full.size) parts.push(`${n(c.packets.full.size, 'switch')} out of packets`);
+  if (c.packets && c.packets.hostsFull && c.packets.hostsFull.size) parts.push(`${n(c.packets.hostsFull.size, 'host')} out of packets`);
+  return parts.join(' and ') || 'nothing full';
+}
+
+/** A packet rate, readably: 8 Gpps, 4.7 Mpps, 12,000 pps. */
+export function formatPps(v) {
+  if (v >= 1e9) return `${trimNum(Math.round(v / 1e8) / 10)} Gpps`;
+  if (v >= 1e6) return `${trimNum(Math.round(v / 1e5) / 10)} Mpps`;
+  return `${Math.round(v).toLocaleString('en-US')} pps`;
 }
 
 /** A utilization's colour: shared out, a full cable is the contended one. */
@@ -742,7 +763,10 @@ function heldBy(view, link) {
 }
 
 /** A switch's colour: how full it is, and the contended colour when it holds flows back. */
-export const switchColor = (rec) => (rec.held || rec.util > 1.0005 ? LOAD_COLORS.over : loadColor(Math.min(1, rec.util)));
+export const switchColor = (rec) => {
+  const util = Math.max(rec.util ?? 0, rec.ppsUtil ?? 0);
+  return rec.held || (rec.packets && rec.packets.held) || util > 1.0005 ? LOAD_COLORS.over : loadColor(Math.min(1, util));
+};
 
 /**
  * How full a switch is, as short lines for its tooltip and the inspector:
@@ -762,6 +786,18 @@ export function switchTip(rec, view) {
   if (rec.fullPorts) lines.push(`${rec.fullPorts} of ${rec.ports} ports full`);
   if (rec.declared && rec.portGbps > rec.declared) {
     lines.push(`its ports add up to ${formatGbps(rec.portGbps)}: oversubscribed ${trimNum(Math.round((rec.portGbps / rec.declared) * 10) / 10)}:1`);
+  }
+  // Its packet rate: what it passes of what it can, where the load knows
+  // its packets -- small packets fill it before its bandwidth.
+  if (rec.pps) {
+    if (rec.packets) {
+      const p = rec.packets;
+      lines.push(`passing ${formatPps(p.through)} of the ${formatPps(rec.pps)} it can (${pct(rec.ppsUtil)})`
+        + `${p.offered > p.through * (1 + 1e-9) ? `, of ${formatPps(p.offered)} offered` : ''}`);
+      if (p.held) lines.push(`out of packets — holding back ${p.held} flow${p.held === 1 ? '' : 's'} itself`);
+    } else {
+      lines.push(`can pass ${formatPps(rec.pps)}: no load here knows its packets — give pps a packet size`);
+    }
   }
   return lines;
 }
@@ -815,6 +851,20 @@ export function hostTip(state, node, view) {
         + `${u !== null ? ` · ${pct(u)}` : ''}`);
     }
   }
+  // Its packet rate, where it has a pps= and the load knows its packets:
+  // what it sends and takes in of what it can, each way.
+  const rate = Number(node.attrs && node.attrs.pps);
+  const pk = c && c.packets && c.packets.hosts ? c.packets.hosts.get(node) : null;
+  if (rate > 0 && pk) {
+    const full = (c.packets.hostsFull && c.packets.hostsFull.get(node)) || { out: 0, in: 0 };
+    lines.push(`packets: sending ${formatPps(pk.out[0])}, receiving ${formatPps(pk.in[0])} of the ${formatPps(rate)} it can each way`
+      + ` (${pct(Math.max(pk.out[0], pk.in[0]) / rate)})`);
+    if (full.out || full.in) {
+      lines.push(`out of packets — holding back ${full.out + full.in} flow${full.out + full.in === 1 ? '' : 's'} itself`);
+    }
+  } else if (rate > 0) {
+    lines.push(`can pass ${formatPps(rate)} each way: no load here knows its packets — give pps a packet size`);
+  }
   // Its own flows, from the model: how many each way, and held back.
   const flows = view.model && view.model.flows;
   if (flows && flows.length) {
@@ -846,7 +896,8 @@ function renderHeadline(state, view, box) {
     const c = r.contention;
     const delivered = c ? c.carried : r.delivered;
     const offered = c ? c.wanted : r.delivered;
-    const flows = model.flows ? model.flows.length : r.routed;
+    // A reply is its request coming back, not a flow of its own.
+    const flows = model.flows ? model.flows.filter((flow) => !flow.reply).length : r.routed;
     wrap.append(el('div', 'headline-big', formatLoad(model, delivered)));
     let sub = model.estimated && !c ? 'between hosts, estimated' : 'delivered between hosts';
     if (offered > delivered * (1 + 1e-9)) sub += ` of ${formatLoad(model, offered)} offered (${pct(delivered / offered)})`;
@@ -854,6 +905,20 @@ function renderHeadline(state, view, box) {
     const missed = r.missed && r.missed.count;
     if (missed) sub += ` · ${missed.toLocaleString()} not routed`;
     wrap.append(el('div', 'muted', sub));
+    // A packet rate sized into bits: its packets, requests and replies, as
+    // carried -- a flow held back carries its packets in the same share.
+    if (model.packets && model.flows) {
+      const pps = [0, 0];
+      for (const flow of model.flows) {
+        if (!flow.pps) continue;
+        const share = flow.wanted > 0 ? flow.value / flow.wanted : 1;
+        pps[flow.reply ? 1 : 0] += flow.pps * share;
+      }
+      const mpps = (v) => (v >= 1e6 ? `${trimNum(Math.round(v / 1e5) / 10)} Mpps` : `${Math.round(v).toLocaleString()} pps`);
+      wrap.append(el('div', 'muted', `${mpps(pps[0])} requests${pps[1] ? ` · ${mpps(pps[1])} replies` : ''}`
+        + ` — ${model.packets.bytes} B out${model.packets.reply ? `, ${model.packets.reply} B back` : ''}, framing included`));
+      if (model.packets.why) wrap.append(el('div', 'bad', model.packets.why));
+    }
   }
   // Each net's cables, both ways, against what they carry both ways.
   const nets = new Map();
@@ -886,6 +951,73 @@ function renderHeadline(state, view, box) {
     wrap.append(table);
   }
   if (wrap.childNodes.length) box.append(wrap);
+}
+
+/**
+ * A packet rate's packets: each request's payload and the reply it gets, in
+ * bytes. Set -- by the file (mx export's run shape, or bytes= on the !test
+ * line) or here -- a rate in pps becomes a bit rate, framing added, set
+ * against the cables' gbps=, and every request comes back as its reply.
+ */
+function packetsRow(state, overlay, actions) {
+  const p = state.packetsOf ? state.packetsOf(overlay) : null;
+  if (!p) return null;
+  const row = el('div', 'gen-row packets');
+  const field = (value, title, onChange) => {
+    const input = el('input');
+    input.type = 'number';
+    input.min = '0';
+    input.step = '1';
+    input.value = value ? String(value) : '';
+    input.placeholder = '—';
+    input.title = title;
+    input.addEventListener('change', () => {
+      const v = Math.max(0, Math.floor(Number(input.value) || 0));
+      onChange(v);
+    });
+    return input;
+  };
+  row.append(el('span', null, 'packets of'),
+    field(p.bytes, 'Each request’s payload, in bytes. Empty: the rate stays in pps, drawn by load alone.',
+      (v) => actions.setPackets(overlay, { bytes: v, reply: p.reply })),
+    el('span', null, 'B, replies of'),
+    field(p.reply, 'The reply each request gets, in bytes, routed back the other way. Empty or 0: no replies.',
+      (v) => actions.setPackets(overlay, { bytes: p.bytes, reply: v })),
+    el('span', null, 'B'));
+  row.title = `Payloads, in bytes: each packet carries ${66} more on the wire (Ethernet, IP, UDP, preamble and gap). `
+    + 'With a size, a packet rate is a bit rate: set against gbps=, shared out where full, and every request '
+    + 'is answered by a reply the other way. mx export says the sizes in its header (run shape), and bytes= '
+    + 'and reply_bytes= on a !test line say them in any file.';
+  if (!p.bytes) row.append(el('span', 'muted', ' — give a size to set pps against capacity'));
+  else if (p.file) row.append(el('span', 'muted', ' — from the file'));
+  return row;
+}
+
+/**
+ * The box that reads a per-host rate as duplex totals -- both directions
+ * added, so half of each is what the host sent. Ticked by itself when the
+ * metric's name or !test line says duplex; shown unticked when hosts read
+ * past what their cables carry one way, which a measurement cannot; and
+ * kept once set by hand. Null when there is no reason to ask.
+ */
+function duplexBox(state, overlay, actions) {
+  const d = state.duplexState ? state.duplexState(overlay) : null;
+  if (!d || loadUnit(overlay, 'hosts').toGbps === null) return null;
+  if (!(d.on || d.auto || d.suspect || d.set)) return null;
+  const label = el('label', 'chk duplex');
+  const check = el('input');
+  check.type = 'checkbox';
+  check.checked = d.on;
+  check.addEventListener('change', () => actions.setDuplex(overlay, check.checked));
+  label.append(check, el('span', null, 'treat as duplex'));
+  let why = '';
+  if (d.auto && !d.set) why = 'its name says so';
+  else if (d.suspect && !d.on) why = `${d.suspect} host${d.suspect === 1 ? ' reads' : 's read'} past ${d.suspect === 1 ? 'its' : 'their'} cables one way`;
+  if (why) label.append(el('span', 'muted', ` — ${why}`));
+  label.title = 'A duplex total adds what a host sent and what it received, as iperf --bidir reports. '
+    + 'Ticked, half of each reading is what the host sent and half what it received; unticked, all of it '
+    + 'is what it sent. duplex=yes or duplex=no on the metric’s !test line says it in the file.';
+  return label;
 }
 
 /** How many cables are past full, in a set of loads. */
@@ -944,6 +1076,7 @@ export function renderCableLoad(state, host, actions) {
     const select = el('select');
     for (const split of SPLITS) {
       const opt = el('option', null, SPLIT_LABELS[split]);
+      opt.title = SPLIT_TITLES[split] || '';
       opt.value = split;
       opt.selected = state.traffic.split === split;
       select.append(opt);
@@ -951,7 +1084,7 @@ export function renderCableLoad(state, host, actions) {
     select.title = 'Where several cables continue a shortest route, how a flow is shared between them';
     select.addEventListener('change', () => actions.setTrafficSplit(select.value));
     row.append(select);
-    if (state.traffic.split === 'hashed' && model.kind !== 'hosts') {
+    if ((state.traffic.split === 'hashed' || state.traffic.split === 'polarized') && model.kind !== 'hosts') {
       const roll = el('button', null, 'Re-roll');
       roll.title = 'Hash every flow onto its paths again, with a different seed';
       roll.addEventListener('click', () => actions.rerollTraffic());
@@ -979,11 +1112,29 @@ export function renderCableLoad(state, host, actions) {
       check.checked = !!state.traffic.contention;
       check.addEventListener('change', () => actions.setContention(check.checked));
       share.append(check, el('span', null, 'contention: full cables share out'));
+      const burstRow = el('div', 'gen-row bursts');
+      const burst = el('input', 'burst');
+      burst.type = 'number';
+      burst.min = '1';
+      burst.step = '0.5';
+      burst.value = String(state.traffic.burst || 1);
+      burst.addEventListener('change', () => actions.setBurst(burst.value));
+      burstRow.append(el('span', null, 'bursts of ×'), burst, el('span', 'muted', 'the average'));
+      burstRow.title = 'The load is a steady average; real traffic comes in clumps -- a synchronised start, an '
+        + 'incast all answering at once. Above 1, the cables a burst this many times the average would overflow '
+        + 'are counted, and their tooltips say what it would need. 1: steady, nothing flagged.';
       share.title = 'A cable cannot carry more than its gbps=. Ticked, every full cable is shared out between '
         + 'the flows crossing it, as TCP shares it, and a flow held back there carries less on the rest of its '
         + 'path too. Unticked, the cables show what the flows offer, which can be more than 100%.';
       box.append(share);
+      box.append(burstRow);
     }
+  }
+
+  // A packet rate: the size of its packets, which makes it a bit rate.
+  if (model && model.overlay) {
+    const row = packetsRow(state, model.overlay, actions);
+    if (row) box.append(row);
   }
 
   renderLoadKey(view, box);
@@ -999,7 +1150,8 @@ export function renderCableLoad(state, host, actions) {
     if (model.gen) {
       const g = model.gen;
       lines.append(el('div', null, `generated: ${PATTERN_LABELS[g.pattern] || g.pattern}, `
-        + `${g.from ? `${trimNum(g.value)}% of what ${g.from.label} says` : genAmount(g.value, g.unit)}`
+        + `${g.from ? `${trimNum(g.value)}% of what ${g.from.label} says${g.from.duplex ? ' (a duplex total, halved)' : ''}` : genAmount(g.value, g.unit)}`
+        + `${g.packets ? ` of ${g.packets.bytes} B requests${g.packets.reply ? `, ${g.packets.reply} B replies` : ''}` : ''}`
         + ` from each host${g.per === 'peer' ? ` ${GEN_PER_LABELS[g.pattern].peer}` : ''}`
         + ` · ${g.flows} flows · ${formatLoad(model, g.offered)}`));
     }
@@ -1008,10 +1160,22 @@ export function renderCableLoad(state, host, actions) {
     } else if (model.kind === 'hosts') {
       lines.append(el('div', null, `estimated from ${model.count} hosts’ totals, sent `
         + `${SPREAD_LABELS[state.traffic.spread] || SPREAD_LABELS.gravity} · ${formatLoad(model, (model.own || r).delivered)}`));
-      if (state.traffic.split === 'hashed') {
-        lines.append(el('div', 'muted', 'an estimate is routed as an even split: hashing a guess would read as a measurement'));
+      if (SINGLE_PATH.has(state.traffic.split)) {
+        lines.append(el('div', 'muted', 'an estimate is routed as an even split: one path per guessed flow would read as a measurement'));
       }
       if (model.skipped) lines.append(el('div', 'muted', `${model.skipped} readings on racks or rooms left out`));
+      const box = duplexBox(state, model.overlay, actions);
+      if (box) lines.append(box);
+      // Measured, a host cannot send more than its cables carry one way.
+      if (model.over && model.over.length) {
+        const [worst] = model.over;
+        lines.append(el('div', 'bad', `${model.over.length} host${model.over.length === 1 ? ' reads' : 's read'} more than `
+          + `${model.over.length === 1 ? 'its' : 'their'} cables carry one way — ${shortPath(worst.el)}: `
+          + `${formatGbps(worst.gbps)}b/s of ${formatGbps(worst.capacity)}. `
+          + (model.duplex
+            ? 'Even halved as a duplex total: check the unit, or the cables’ gbps=.'
+            : 'A measurement cannot: if it adds both directions, tick treat as duplex.')));
+      }
     } else {
       const own = model.own || r;
       lines.append(el('div', null, model.between
@@ -1025,7 +1189,7 @@ export function renderCableLoad(state, host, actions) {
     if (c) {
       const where = contendedText(c);
       lines.append(el('div', c.held ? 'bad' : null, c.held
-        ? `contention: ${where} full, holding back ${c.held} of ${c.flows.length} flows · `
+        ? `contention: ${where}, holding back ${c.held} of ${c.flows.length} flows · `
           + `${formatLoad(model, c.carried)} carried of ${formatLoad(model, c.wanted)} offered (${pct(c.wanted ? c.carried / c.wanted : 1)})`
         : 'contention: nothing is full · every flow carries all it offers'));
     } else if (model.contentionWhy && state.traffic.contention) {
@@ -1054,6 +1218,20 @@ export function renderCableLoad(state, host, actions) {
       lines.append(miss);
     }
     if (c.unresolved) lines.append(el('div', 'bad', `${c.unresolved} samples name a link= not in the layout`));
+  }
+  // Bursts: what a clump of traffic this many times the average would
+  // overflow, where the average fits.
+  const burst = state.traffic.burst || 1;
+  if (burst > 1 && !view.compare && view.toGbps !== null) {
+    const risks = burstRisk(view.loads, view.toGbps, burst);
+    if (risks.length) {
+      const [worst] = risks;
+      lines.append(el('div', 'bad', `with bursts of ${trimNum(burst)}× the average, ${risks.length} cable${risks.length === 1 ? '' : 's'} `
+        + `would overflow — the fullest, ${shortPath(worst.link.a)} ↔ ${shortPath(worst.link.b)}, is ${pct(worst.util)} on average, `
+        + `${pct(worst.util * burst)} in a burst`));
+    } else {
+      lines.append(el('div', 'muted', `with bursts of ${trimNum(burst)}× the average, no cable would overflow`));
+    }
   }
   box.append(lines);
 
@@ -1136,19 +1314,22 @@ export function renderCableLoad(state, host, actions) {
 
   // The switches passing the most, against what they can pass.
   const sw = state.switchLoads ? state.switchLoads() : null;
+  // The fuller way of the two, bandwidth or packets.
+  const fill = (r) => Math.max(r.util ?? -1, r.ppsUtil ?? -1);
   const fullest = sw ? [...sw].filter(([, r]) => r.through > 0)
-    .sort(([, x], [, y]) => ((y.util ?? -1) - (x.util ?? -1)) || (y.through - x.through)).slice(0, SWITCHES_SHOWN) : [];
+    .sort(([, x], [, y]) => (fill(y) - fill(x)) || (y.through - x.through)).slice(0, SWITCHES_SHOWN) : [];
   if (fullest.length) {
     box.append(el('div', 'load-title', 'Busiest switches'));
     const list = el('div', 'load-list switch-list');
     for (const [node, rec] of fullest) {
       const item = el('div', 'load-row');
       const dot = el('span', 'dot');
-      dot.style.background = rec.util !== null ? switchColor(rec) : LOAD_COLORS.unknown;
+      dot.style.background = rec.util !== null || rec.ppsUtil !== null ? switchColor(rec) : LOAD_COLORS.unknown;
       item.append(dot, el('span', 'load-ends', shortPath(node)));
       const amount = view.toGbps !== null ? formatGbps(rec.through * view.toGbps) : formatNum(rec.through);
       item.append(el('span', 'val', `${amount}${rec.capacity ? `/${formatGbps(rec.capacity)}` : ''}`
-        + `${rec.util !== null ? ` · ${pct(rec.util)}` : ''}${rec.held ? ` · ${rec.held} held` : ''}`));
+        + `${rec.util !== null ? ` · ${pct(rec.util)}` : ''}${rec.held ? ` · ${rec.held} held` : ''}`
+        + `${rec.ppsUtil !== null ? ` · ${pct(rec.ppsUtil)} of its pps` : ''}`));
       item.title = `${node.path}\n${switchTip(rec, view).join('\n')}\nClick to select it`;
       item.addEventListener('click', () => { actions.select(node); actions.focus(node); });
       list.append(item);
@@ -1166,6 +1347,10 @@ const PATTERN_LABELS = {
   all: 'all-to-all',
   random: 'to random hosts',
   incast: 'incast: all to one',
+  outcast: 'one to many',
+  hotspot: 'hotspot: a share to one',
+  shift: 'shift: each to one, k on',
+  ring: 'ring: each to the next',
 };
 const PATTERN_TITLES = {
   all: 'Every host sends to every other host, an equal share each',
@@ -1173,6 +1358,14 @@ const PATTERN_TITLES = {
     + 'more than another. The way to load a fabric too big for all-to-all. New peers draws them again',
   incast: 'Every host sends to one target -- the first pick, or the selection -- the way many '
     + 'clients answering one request fill the target’s own cable',
+  outcast: 'The target -- the first pick, or the selection -- sends to every other host, as a storage '
+    + 'server feeding its clients does: its own cables fill outward',
+  hotspot: 'Every host sends a share of its load to the target -- the first pick, or the selection -- '
+    + 'and the rest to random peers: a few servers everyone calls, over a background',
+  shift: 'Every host sends all of its load to the host k places on, in the layout’s order: one peer each, '
+    + 'sent to by one. Half the hosts on, every flow crosses the middle of the fabric -- the classic worst case',
+  ring: 'Every host sends to the next one in the layout’s order, the last to the first: how an all-reduce '
+    + 'passes its data round',
 };
 const GEN_UNIT_LABELS = { '%': '% of its NICs' };
 // Who the amount is for: the host's total, or each host it sends to.
@@ -1180,9 +1373,14 @@ const GEN_PER_LABELS = {
   all: { host: 'in all', peer: 'to each other host' },
   random: { host: 'in all', peer: 'to each peer' },
   incast: { host: 'in all', peer: 'to each target device' },
+  outcast: { host: 'in all', peer: 'to each host' },
+  hotspot: { host: 'in all', peer: 'in all' },
+  shift: { host: 'in all', peer: 'to its one peer' },
+  ring: { host: 'in all', peer: 'to its one peer' },
 };
 // "50% of its NICs", "40 Gb/s".
-const genAmount = (value, unit) => (unit === '%' ? `${trimNum(value)}% of its NICs` : `${trimNum(value)} ${unit}`);
+const genAmount = (value, unit) => (unit === '%' ? `${trimNum(value)}% of its NICs`
+  : `${unit === 'pps' ? Number(value).toLocaleString('en-US') : trimNum(value)} ${unit}`);
 
 // The kinds a load can be kept out of, per layout: worked out once, since a
 // floor of a quarter of a million elements is walked to find them.
@@ -1255,7 +1453,29 @@ export function renderLoadGen(state, host, actions, { unit } = {}) {
     roll.addEventListener('click', () => actions.rerollGen());
     shape.append(roll);
   }
+  if (g.pattern === 'shift') {
+    const k = number(g.shift || '', 1, (v) => actions.setGen({ shift: Math.max(1, Math.floor(v)) }));
+    k.className = 'gen-shift';
+    k.step = '1';
+    k.placeholder = 'half';
+    k.title = 'How many hosts on each one sends to. Empty: half of them, so every flow crosses the middle';
+    shape.append(el('span', null, 'k'), k);
+  }
   box.append(shape);
+  // hotspot: what share goes to the hot devices, and how many random peers
+  // the rest is spread over.
+  if (g.pattern === 'hotspot') {
+    const row = el('div', 'gen-row');
+    const hot = number(g.hot ?? 20, 0, (v) => actions.setGen({ hot: Math.min(100, v) }));
+    hot.className = 'gen-hot';
+    hot.title = 'The share of each host’s load sent to the hot devices';
+    const peers = number(g.peers, 1, (v) => actions.setGen({ peers: Math.max(1, Math.floor(v)) }));
+    peers.className = 'gen-peers';
+    peers.step = '1';
+    peers.title = 'How many random peers the rest is spread over';
+    row.append(hot, el('span', null, '% to the target, the rest to ×'), peers, el('span', null, 'random peers'));
+    box.append(row);
+  }
 
   // What the servers send: an amount of the generator's own, or what a
   // per-host metric says each one sends -- a rate, or a share of its NICs.
@@ -1275,6 +1495,9 @@ export function renderLoadGen(state, host, actions, { unit } = {}) {
       + 'a percentage as that share of each server’s NICs. The pattern says where it goes.';
     src.append(pick);
     box.append(src);
+    const from = g.from ? state.overlays.get(g.from) : null;
+    const duplex = from && from.enabled ? duplexBox(state, from, actions) : null;
+    if (duplex) box.append(duplex);
   }
 
   // How much: in a unit of its own with nothing loaded, in the metric's when
@@ -1293,17 +1516,49 @@ export function renderLoadGen(state, host, actions, { unit } = {}) {
   }
   const overlay = state.traffic.key ? state.overlays.get(state.traffic.key) : null;
   const metric = overlay && overlay.enabled && trafficKind(overlay) !== 'cables' && loadable(overlay) ? overlay : null;
-  const base = metric ? loadUnit(metric, trafficKind(metric)) : null;
+  const unitOf = (o) => (state.metricUnit ? state.metricUnit(o, trafficKind(o)) : loadUnit(o, trafficKind(o)));
+  const base = metric ? unitOf(metric) : null;
   let units = GEN_UNITS;
-  if (base) units = base.toGbps === null ? [base.unit] : ['%', 'Gb/s', 'Mb/s'];
+  // On a bit rate, pps too: requests and replies of a size add up with it.
+  if (base) units = base.toGbps === null ? [base.unit] : ['%', 'Gb/s', 'Mb/s', 'pps'];
   if (unit && !units.includes(unit)) units = [...units, unit];
   if (!g.from) {
-    const unitPick = choose(units, GEN_UNIT_LABELS, unit, (v) => actions.setGen({ unit: v }));
+    // Packets with no size are only a count: choosing pps starts from a
+    // full-size packet, so the load reads against the cables at once.
+    const unitPick = choose(units, GEN_UNIT_LABELS, unit,
+      (v) => actions.setGen(v === 'pps' && !(g.bytes > 0) ? { unit: v, bytes: 1500 } : { unit: v }));
     unitPick.className = 'gen-unit';
     unitPick.title = base
       ? `Added to ${metric.label}, so in a unit that adds up with ${base.unit || 'it'}`
       : '% of its NICs: a share of what the host’s own cables can carry (gbps=)';
     size.append(unitPick);
+    // A packet rate: requests of a size, and the reply each one gets, on a
+    // row of its own under the amount.
+    let packets = null;
+    if (unit === 'pps') {
+      packets = el('div', 'gen-row packets');
+      const field = (value, cls, title, onChange) => {
+        const input = el('input', cls);
+        input.type = 'number';
+        input.min = '0';
+        input.step = '1';
+        input.value = value ? String(value) : '';
+        input.placeholder = '—';
+        input.title = title;
+        input.addEventListener('change', () => onChange(Math.max(0, Math.floor(Number(input.value) || 0))));
+        return input;
+      };
+      packets.append(el('span', null, 'requests of'),
+        field(g.bytes, 'gen-bytes', 'Each request’s payload, in bytes; it carries 66 more on the wire. Empty: plain packets, drawn by load alone.',
+          (v) => actions.setGen({ bytes: v })),
+        el('span', null, 'B, replies of'),
+        field(g.reply, 'gen-reply', 'The reply each request gets, in bytes, sent back the other way. Empty or 0: no replies.',
+          (v) => actions.setGen({ reply: v })),
+        el('span', null, 'B'));
+      packets.title = 'Requests and replies, as matrix_orchestrator sends them: with a request size, each host’s packet '
+        + 'rate is a bit rate on the cables -- set against gbps=, shared out where full -- and every request is '
+        + 'answered by a reply of its own size, the other way.';
+    }
     // In all, more peers spread the same load thinner; to each, every peer
     // adds its own.
     const labels = GEN_PER_LABELS[g.pattern] || GEN_PER_LABELS.all;
@@ -1313,6 +1568,7 @@ export function renderLoadGen(state, host, actions, { unit } = {}) {
       + `${labels.peer[0].toUpperCase()}${labels.peer.slice(1)}: every flow carries the whole amount, so the host sends it times the peers.`;
     size.append(per);
     box.append(size);
+    if (packets) box.append(packets);
   }
 
   const kinds = reachOf(state.model);
@@ -1359,11 +1615,13 @@ export function renderLoadGen(state, host, actions, { unit } = {}) {
   who.append(hosts, count);
   box.append(who);
 
-  if (g.pattern === 'incast') {
+  if (TARGETED.has(g.pattern)) {
     const target = state.picked[0] || state.selected || null;
+    const which = target ? `${shortPath(target)} (${state.picked[0] ? 'the first pick' : 'the selection'})` : '';
     box.append(target
-      ? el('div', 'muted', `all to ${shortPath(target)} (${state.picked[0] ? 'the first pick' : 'the selection'})`)
-      : el('div', 'bad', 'pick or select where it all goes'));
+      ? el('div', 'muted', g.pattern === 'outcast' ? `from ${which} to every host`
+        : g.pattern === 'hotspot' ? `the hot devices: ${which}` : `all to ${which}`)
+      : el('div', 'bad', g.pattern === 'outcast' ? 'pick or select who sends' : 'pick or select where it goes'));
   }
 
   const shown = g.on && state.cableView ? state.cableView() : null;
@@ -1607,6 +1865,10 @@ export function cableTip(state, hit, view, flows) {
       lines.push(links.length > 1
         ? `the fullest is ${pct(worst)} full, the busier way${over}`
         : `${pct(worst)} full, the busier way${over}`);
+      const burst = (state.traffic && state.traffic.burst) || 1;
+      if (burst > 1 && worst * burst > 1 && worst <= 1.0005) {
+        lines.push(`a ${trimNum(burst)}× burst would need ${pct(worst * burst)} of it`);
+      }
     } else if (load[0] > 0 || load[1] > 0) {
       lines.push(view.toGbps === null
         ? `${view.unit || 'this unit'} cannot be set against gbps=`
@@ -1723,7 +1985,7 @@ function renderWhatIf(state, host, actions, down, view) {
     const lost = model.result.missed.count - view.base.result.missed.count;
     // Shared out, nothing is past full: what counts is how many are full.
     const shared = model.result.contention && view.base.result.contention;
-    const fullOf = (c) => c.full.size + (c.switches ? c.switches.size : 0);
+    const fullOf = (c) => c.full.size + (c.switches ? c.switches.size : 0) + (c.packets ? c.packets.full.size : 0);
     const now = shared ? fullOf(model.result.contention) : overFull(model.loads, model.toGbps);
     const before = shared ? fullOf(view.base.result.contention) : overFull(view.base.loads, view.base.toGbps);
     const nowText = shared ? contendedText(model.result.contention) : '';
@@ -1731,7 +1993,7 @@ function renderWhatIf(state, host, actions, down, view) {
     const facts = [];
     facts.push(lost > 0 ? `${lost} ${model.kind === 'hosts' ? 'host pairs' : 'flows'} lost their route` : 'every flow still has a route');
     if (model.toGbps !== null && shared) {
-      facts.push(`${nowText} full${nowText !== beforeText ? ` (was ${beforeText})` : ''}`);
+      facts.push(`${nowText}${nowText !== beforeText ? ` (was ${beforeText.replace(/ full$/, '')})` : ''}`);
     } else if (model.toGbps !== null) {
       facts.push(`${now} cable${now === 1 ? '' : 's'} past full${now !== before ? ` (was ${before})` : ''}`);
     }
@@ -1955,7 +2217,8 @@ function renderPickTraffic(state, box, actions) {
   const shown = !metric && t.gen.on && state.cableView ? state.cableView() : null;
   if (metric) {
     // On top of a metric, in its unit: the two add up on every cable.
-    send.append(el('span', 'muted', loadUnit(metric, trafficKind(metric)).unit || 'units'));
+    const u = state.metricUnit ? state.metricUnit(metric, trafficKind(metric)) : loadUnit(metric, trafficKind(metric));
+    send.append(el('span', 'muted', u.unit || 'units'));
   } else if (shown && shown.model) {
     send.append(el('span', 'muted', shown.model.unit));
   } else {
