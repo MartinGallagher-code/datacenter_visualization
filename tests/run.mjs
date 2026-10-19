@@ -2150,6 +2150,9 @@ link up role=server leaf
   eq(use(layout(128, 100)).needed, 32, 'four 100G cables to a 400G port');
   eq(layout(128, 100).warnings, [], 'and 128 of them fit');
   ok(/leaf has 129 cables of 100G, and breaks out to 128 of them at most/.test(layout(129, 100).warnings.join('\n')), 'a 129th does not');
+  const fast = layout(33, 400).warnings.join('\n');
+  ok(/leaf has 33 cables of 400G, and breaks out to 32 of them at most/.test(fast) && !/need \d+ ports/.test(fast),
+     'too many of one speed is said as that, not as ports in all -- the SFP+ and management ports cannot take a 400G cable');
   ok(/leaf's 33 cables need 33 ports, breakout included, and it has 32/.test(
     parseLayout(`dc D\n  node leaf +switch ports=32x400\n  rack S u=300\n    node s[1..33] role=server\nnet up gbps=400\nlink up role=server leaf`).warnings.join('\n')),
   'more cables than ports is named');

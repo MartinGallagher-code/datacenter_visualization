@@ -1270,9 +1270,13 @@ function checkPorts(model) {
   for (const [line, list] of byLine) {
     const [el, use] = list[0];
     const many = list.length > 1 ? `${list.length} devices, ${el.id} among them: ` : '';
+    // The plainest reason first: a cable too fast, a speed past its
+    // datasheet figure, then too few ports in all.
     let why;
     if (use.faster !== null) why = `${many}${el.id} has a ${use.faster}G cable and no port that fast (ports=${el.attrs.ports})`;
-    else if (use.needed > use.have) {
+    else if (use.over && use.over.gbps !== null) {
+      why = `${many}${el.id} has ${use.over.count} cables of ${use.over.gbps}G, and breaks out to ${use.over.max} of them at most (breakout=${el.attrs.breakout})`;
+    } else if (use.needed > use.have) {
       why = `${many}${el.id}'s ${el.links.length} cables need ${use.needed} ports, breakout included, and it has ${use.have} (ports=${el.attrs.ports})`;
     } else if (use.over.gbps === null) {
       why = `${many}${el.id} has ${use.over.count} cables, and breaks out to ${use.over.max} at most (breakout=${el.attrs.breakout})`;

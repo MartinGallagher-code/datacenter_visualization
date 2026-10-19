@@ -11,6 +11,13 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.19.1 — 2026-10-19
+
+- A device with more cables of one speed than its `breakout=` allows is
+  told so first -- `has 68 cables of 400G, and breaks out to 64 of them at
+  most` -- rather than as too few ports in all, a count that took in its
+  SFP+ and management ports, which no 400G cable can use.
+
 ## 1.19.0 — 2026-10-19
 
 What a load costs: packets of a realistic size, what bursts lose, how long
