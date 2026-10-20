@@ -1055,6 +1055,14 @@ await test('a flow metric loads the cables', async () => {
   await page.locator('#cable-load button', { hasText: 'Show fewer' }).click();
   await page.waitForTimeout(200);
   eq(await rows(), 8, 'and Show fewer goes back to eight');
+  const total = Number((/Show more \((\d+) in all\)/.exec(await panel()) || [0, 0])[1]);
+  await page.locator('#cable-load button', { hasText: 'Show all' }).click();
+  await page.waitForTimeout(200);
+  ok(total > 8 && await rows() === total, `Show all lists every one  (${total})`);
+  ok(await page.locator('#cable-load button', { hasText: /Show more|Show all/ }).count() === 0, 'and offers no more');
+  await page.locator('#cable-load button', { hasText: 'Show fewer' }).click();
+  await page.waitForTimeout(200);
+  eq(await rows(), 8, 'Show fewer goes back to eight from there too');
   // Unticked, the cables show what the flows offer, past full.
   await page.locator('#cable-load label.contention input').uncheck();
   await page.waitForTimeout(300);

@@ -695,6 +695,9 @@ const SPREAD_LABELS = {
 
 const BUSIEST_SHOWN = 8;
 const MORE_STEP = 25;
+// The most rows Show all lists: past it a page of cables is too long to read
+// and slow to draw, so it lists that many and says so.
+const SHOW_ALL_MAX = 10000;
 
 // "40G/25G · 160%": a load against a capacity, short enough for a list row.
 function loadAgainst(src, value, gbps, util) {
@@ -1362,6 +1365,12 @@ export function renderCableLoad(state, host, actions) {
       b.title = `Show ${Math.min(MORE_STEP, total - shown)} more ${title}`;
       b.addEventListener('click', () => actions.setListed(shown + MORE_STEP));
       bar.append(b);
+      const every = Math.min(total, SHOW_ALL_MAX);
+      const all = el('button', null, total <= SHOW_ALL_MAX ? 'Show all' : `Show ${every.toLocaleString()}`);
+      all.title = total <= SHOW_ALL_MAX ? `Show all ${total.toLocaleString()} ${title}`
+        : `Show the first ${every.toLocaleString()} of ${total.toLocaleString()} ${title}: more is too long to read and slow to draw`;
+      all.addEventListener('click', () => actions.setListed(every));
+      bar.append(all);
     }
     if (shown > BUSIEST_SHOWN) {
       const b = el('button', null, 'Show fewer');

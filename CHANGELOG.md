@@ -11,6 +11,13 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.21.0 — 2026-10-20
+
+- **Show all** beside Show more, on the busiest cables and the biggest
+  changes: every row at once, up to 10,000 -- past that it lists that many
+  and says so, since a page of half a million cables is too long to read and
+  slow to draw. Show fewer goes back to eight.
+
 ## 1.20.0 — 2026-10-20
 
 - **`balance=` on a bond's nets** says how it shares what it carries:

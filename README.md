@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.20.0** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.21.0** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -489,7 +489,8 @@ says why under it: a percentage or a latency does not add up along a path.)
   cable.
 - **The panel** names the busiest cables (`R02/torb → R02/s5 25G/25G · 100%
   · 8 held`; click one to go to it) — **Show more** lists more of them, 25 at
-  a time — and the busiest switches, how many flows were routed, and any
+  a time, and **Show all** every one (up to 10,000; past that it says so) —
+  and the busiest switches, how many flows were routed, and any
   that could not be and why. **The inspector** gives the selected element's
   traffic out and in against its capacity, per net — for a rack, over its
   uplinks — and its busiest cables.
