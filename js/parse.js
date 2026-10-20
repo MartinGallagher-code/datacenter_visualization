@@ -281,7 +281,10 @@ function checkUnits(attrs, what, model, line) {
 }
 
 // Everything a `net` line takes; `on=` is the old spelling of `show=`.
-const NET_KEYS = ['label', 'color', 'style', 'width', 'show', 'on', 'gbps', 'traffic', 'bond'];
+const NET_KEYS = ['label', 'color', 'style', 'width', 'show', 'on', 'gbps', 'traffic', 'bond', 'balance'];
+// How a bond shares what it carries: hash keeps each connection on one cable,
+// as LACP's layer3+4 policy does; even shares every flow over them all.
+const BALANCES = ['hash', 'even'];
 
 /**
  * One reading of a number attribute, so the check and the use cannot drift
@@ -1079,6 +1082,19 @@ const truthy = (value) => {
             traffic = true;
           }
         }
+        // balance=: how a bond shares a flow over its cables.
+        let balance = 'hash';
+        if (child.attrs.balance !== undefined) {
+          const b = String(child.attrs.balance).toLowerCase();
+          if (BALANCES.includes(b)) balance = b;
+          else {
+            model.warnings.push(`line ${child.line}: net "${name}": balance=${child.attrs.balance} is neither `
+              + `${BALANCES.join(' nor ')} -- hashing each connection`);
+          }
+          if (!child.attrs.bond) {
+            model.warnings.push(`line ${child.line}: net "${name}": balance= says how a bond shares, and this net has no bond=`);
+          }
+        }
         model.nets.set(name, {
           name,
           label: child.attrs.label || name,
@@ -1087,9 +1103,11 @@ const truthy = (value) => {
           width: numAttr(child.attrs.width, 1, NET_NUMBERS.width),
           gbps: numAttr(child.attrs.gbps, null, NET_NUMBERS.gbps),
           traffic,
-          // bond=: a host's cables on nets with the same bond are one bond,
-          // and every flow from or to it is spread over them by capacity.
+          // bond=: a host's cables on nets with the same bond are one bond;
+          // balance= how it shares a flow over them -- each connection on
+          // one cable by its hash, or every flow over them all.
           bond: child.attrs.bond || null,
+          balance,
           enabled,
         });
       } else if (child.kind === 'link') {

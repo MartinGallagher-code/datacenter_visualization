@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.19.1** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.20.0** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -569,7 +569,11 @@ is end to end, and only switch counters see the cables themselves:
   come out a flow or so apart; with many they even out, and under the ideal
   even split every flow is shared over the bond exactly. A connection
   arrives on the same side it left, NIC a to NIC a, so in one rack it never
-  leaves the ToR. Take a ToR or a NIC's cable out and the rest of the bond
+  leaves the ToR. **`balance=even`** on the bond's nets (`net nica gbps=100
+  bond=nic balance=even`) shares every flow over the bond by capacity instead,
+  under every routing — for a bond whose NICs carry the same whatever the
+  connections, as round-robin bonding and some NIC drivers do; `balance=hash`
+  is the default. Take a ToR or a NIC's cable out and the rest of the bond
   carries everything. Only hosts bond: a switch's cables on the same nets
   are what the hosts hang off. A host with cables in two bonds uses the
   bigger.

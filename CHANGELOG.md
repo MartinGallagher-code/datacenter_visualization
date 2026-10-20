@@ -11,6 +11,15 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.20.0 — 2026-10-20
+
+- **`balance=` on a bond's nets** says how it shares what it carries:
+  `hash`, the default, keeps each connection on one NIC as LACP's layer3+4
+  policy does; `even` shares every flow over the bond by capacity, under
+  every routing -- a bond whose NICs carry the same whatever the
+  connections. A value it does not know, or one on a net with no `bond=`, is
+  named. In the completions and the Syntax panel.
+
 ## 1.19.1 — 2026-10-19
 
 - A device with more cables of one speed than its `breakout=` allows is

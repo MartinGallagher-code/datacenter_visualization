@@ -271,7 +271,12 @@ function fabric(model, opts) {
   // uses the biggest. Worked out once per pass, after what-if: a cable taken
   // out leaves the rest of its bond to carry everything.
   const bondNets = new Map();
-  for (const net of model.nets.values()) if (net.bond) bondNets.set(net.name, net.bond);
+  const evenNets = new Set();
+  for (const net of model.nets.values()) {
+    if (!net.bond) continue;
+    bondNets.set(net.name, net.bond);
+    if (net.balance === 'even') evenNets.add(net.name);
+  }
   const bonded = new Map();
   const bondOf = (el) => {
     if (!bondNets.size || forwards(el)) return null;
@@ -280,7 +285,8 @@ function fabric(model, opts) {
     for (const link of cables(el)) {
       const name = bondNets.get(link.net);
       if (name === undefined) continue;
-      const g = groups.get(name) || { links: [], weights: [], total: 0 };
+      const g = groups.get(name) || { links: [], weights: [], total: 0, even: false };
+      if (evenNets.has(link.net)) g.even = true;
       const w = (link.gbps || 1) * (link.weight || 1);
       g.links.push(link);
       g.weights.push(w);
@@ -289,7 +295,7 @@ function fabric(model, opts) {
     }
     let best = null;
     for (const g of groups.values()) if (!best || g.total > best.total) best = g;
-    const bond = best ? { links: best.links, shares: best.weights.map((w) => w / best.total) } : null;
+    const bond = best ? { links: best.links, shares: best.weights.map((w) => w / best.total), even: best.even } : null;
     bonded.set(el, bond);
     return bond;
   };
@@ -320,7 +326,10 @@ function fabric(model, opts) {
  *
  * Hashed (`one`), a connection takes just one of those legs, picked by its
  * own hash in proportion to the shares: LACP's layer3+4 policy, where every
- * connection keeps to one NIC and only many of them even the NICs out.
+ * connection keeps to one NIC and only many of them even the NICs out --
+ * unless the bond that chooses is balance=even, which shares every flow
+ * over all of them whatever the routing. The sending host's bond chooses;
+ * with none, the receiving host's.
  *
  * @returns [{ src, dst, share, pre, post, id }] -- `id` hashes the leg, the
  *          flow's own where it is one leg -- or null when there is no route
@@ -342,7 +351,8 @@ function legsOf(flow, f, one = false) {
   } else {
     into.links.forEach((n, j) => plan.push([null, n, into.shares[j]]));
   }
-  if (one && plan.length > 1) {
+  const chooser = out || into;
+  if (one && plan.length > 1 && !chooser.even) {
     let r = mix(f.seed ^ 0x1ac9, flow.id | 0, 0x3a7);
     let pick = plan[plan.length - 1];
     for (const entry of plan) {

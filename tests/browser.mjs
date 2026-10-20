@@ -130,6 +130,9 @@ const fixtures = new Map([
   // 900 ns and a 2 MB buffer each.
   ['/fx/modelled.dc', `model fabric-switch +switch latency=900ns buffer=2MB\n${readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8')
     .replace(/\+switch/g, 'model=fabric-switch')}`],
+  // The same, with the bond sharing every flow evenly.
+  ['/fx/bonded-even.dc', readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8')
+    .replace(/^(net nica .*)$/m, '$1 bond=nic balance=even').replace(/^(net nicb .*)$/m, '$1 bond=nic balance=even')],
   // The dual-plane fabric with each server's two NICs bonded.
   ['/fx/bonded.dc', readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8')
     .replace(/^(net nica .*)$/m, '$1 bond=nic').replace(/^(net nicb .*)$/m, '$1 bond=nic')],
@@ -1411,6 +1414,19 @@ await test('bonded NICs', async () => {
 
 // Hovering a cable used to show whatever box lay under it -- a server's
 // tooltip where a cable crossed one, nothing where it crossed the floor.
+// A bond that shares every flow evenly: hashed routing, one connection a
+// flow, and still each NIC carries exactly half.
+await test('a bond with balance=even', async () => {
+  await page.locator('#load-gen button', { hasText: 'Run' }).click();
+  await page.waitForTimeout(400);
+  eq(await page.locator('#cable-load .btnrow select').first().inputValue(), 'hashed', 'routed hashed, as by default');
+  const nics = await page.evaluate(() => {
+    const text = document.querySelector('#cable-load').innerText;
+    return [...text.matchAll(/R0\d\/tor[ab] → R0\d\/s\d\s+[\d.]+G\/25G · (\d+)%/g)].map((m) => Number(m[1]));
+  });
+  ok(nics.length > 0 && nics.every((x) => x === 50), `every NIC carries exactly half  (${nics.join(', ')}%)`);
+}, { url: '?layout=fx/bonded-even.dc' });
+
 await test('hovering a cable', async () => {
   await page.locator('#load-gen button', { hasText: 'Run' }).click();
   await page.waitForTimeout(400);

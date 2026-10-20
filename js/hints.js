@@ -52,6 +52,7 @@ const NET_KEYS = [
   ['gbps=', 'what each cable carries, in Gb/s: gbps=100'],
   ['traffic=', 'no: drawn, but carries no routed traffic (mgmt)'],
   ['bond=', 'name: a host’s cables on nets with the same bond are one LACP bond: each connection keeps to one, by hash'],
+  ['balance=', 'how a bond shares a flow: hash (each connection on one cable, the default) or even (every flow over them all)'],
 ];
 
 // Every option a link rule takes, and only those. The parser's own LINK_OPTS
@@ -167,7 +168,7 @@ export function suggestionsFor(text, caret) {
 
     if (kind === 'net') {
       if (key) {
-        options = valueOptions(key, { style: STYLES, show: YES_NO, traffic: YES_NO, gbps: SPEEDS }, h);
+        options = valueOptions(key, { style: STYLES, show: YES_NO, traffic: YES_NO, gbps: SPEEDS, balance: ['hash', 'even'] }, h);
       } else {
         options = [];
         if (idPosition) {
@@ -417,6 +418,7 @@ const REFERENCE = [
     ['link nica role=server role=tor scope=rack gbps=25', 'this rule’s cables, over the net’s'],
     ['net mgmt gbps=1 traffic=no', 'drawn, but carries none of the routed traffic'],
     ['net nica gbps=100 bond=nic', 'bonded with every net of bond=nic, as LACP layer3+4: each connection keeps to one NIC, many even them out'],
+    ['net nica gbps=100 bond=nic balance=even', 'a bond that shares every flow evenly over its NICs, whatever the routing'],
     ['link fabric role=tor role=spine weight=2', 'twice the share of a flow where routes fork'],
     ['link plane1 role=spine role=superspine count=6 gbps=400', 'a bundle: six 400G members per pair, each hashed onto by itself'],
     ['+switch', 'only elements tagged switch forward traffic', true],

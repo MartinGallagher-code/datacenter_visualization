@@ -2460,6 +2460,27 @@ link up role=server leaf
        && (hashed ? over.flows.every((x) => Math.abs(x.amount - x.flow.value) < 1e-9) : over.count === 6),
        hashed ? `${split}: the flows over one NIC are whole ones` : `${split}: the flows over one NIC are the server's six, half of each`);
   }
+  // balance=even: the bond shares every flow over its NICs, hashed or not.
+  const evenText = text.replace(/bond=nic/g, 'bond=nic balance=even');
+  const even = parseLayout(evenText);
+  eq(even.warnings, [], 'balance=even on a bond');
+  for (const split of ['hashed', 'polarized', 'adaptive']) {
+    const r = routeTraffic(even, gen.flows.map((f) => ({ ...f, src: even.resolve(f.src.key), dst: even.resolve(f.dst.key) })), { split, seed: 4 });
+    const sv = hostsFor(even).hosts;
+    const worst = Math.max(...sv.map((s) => {
+      const [a, b] = ['nica', 'nicb'].map((net) => {
+        const link = s.links.find((l) => l.net === net);
+        const x = r.loads.get(link) || [0, 0];
+        return link.a === s ? x : [x[1], x[0]];
+      });
+      return Math.max(Math.abs(a[0] - b[0]), Math.abs(a[1] - b[1]));
+    }));
+    ok(worst < 1e-9, `${split}, balance=even: every server's two NICs carry exactly the same, one connection a flow or not`);
+  }
+  ok(/balance=fair is neither hash nor even/.test(parseLayout(text.replace('bond=nic', 'bond=nic balance=fair')).warnings.join('\n')),
+     'a balance= it does not know is named');
+  ok(/balance= says how a bond shares, and this net has no bond=/.test(
+    parseLayout(text.replace(/^(net fabric .*)$/m, '$1 balance=even')).warnings.join('\n')), 'and one on a net with no bond');
   // Many connections a flow, LACP evens the NICs out.
   const lacp = (conns) => gap(routeTraffic(m, gen.flows, { split: 'hashed', seed: 4, connections: conns }));
   ok(lacp(64) < lacp(1) / 3, `64 connections a flow bring the NICs near even  (${lacp(64).toFixed(2)} apart, against ${lacp(1).toFixed(2)})`);
