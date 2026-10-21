@@ -1430,14 +1430,16 @@ await test('explaining results by the network', async () => {
   await page.waitForTimeout(400);
   await ideal();
   await page.locator('#cable-load label.explain input').check();
+  await page.waitForTimeout(200);
+  // The results were all-to-all: explained so, set in the panel itself.
+  await page.locator('#cable-load select.explain-pattern').selectOption('all');
   let text = '';
   for (let i = 0; i < 40; i++) {
     await page.waitForTimeout(250);
     text = await panel();
-    if (/What would explain these results/.test(text) && !/working it out/.test(text)) break;
+    if (/What would explain these results/.test(text) && !/working it out/.test(text) && /every other host/.test(text)) break;
   }
-  ok(/if every server tried [\d.]+Gb\/s \(above the best result of 34\.7G: even the best was held back\) to every other host: 32 of 32 fell short/.test(text)
-     || /if every server tried [\d.]+Gb\/s \(above the best result/.test(text),
+  ok(/if every server tried [\d.]+Gb\/s \(above the best result of 34\.7G: even the best was held back\) to every other host: 32 of 32 fell short/.test(text),
      `every server assumed to try the same, above the best result  (${(/if every server.*/.exec(text) || [''])[0]})`);
   ok(/R02\/tora → SP1\/spine1\s+runs at (2[6-9]|3[0-3])(\.\d)?G of its 100G/.test(text),
      `and the bad cable named, at about the 30G it was set to  (${(/R02\/tora → SP1\/spine1.*/.exec(text) || [''])[0]})`);
@@ -1445,6 +1447,32 @@ await test('explaining results by the network', async () => {
      'the explanation reproduces every server');
   const views = await page.locator('#cable-load select.cable-view option').allTextContents();
   ok(views.some((v) => /explained by the network/.test(v)), `and the cables can show it  (${views.join(' | ')})`);
+
+  // Set up as the test ran: two layers, each its own peers and scope.
+  await page.locator('#cable-load select.explain-pattern').selectOption('random');
+  await page.waitForTimeout(200);
+  await page.fill('#cable-load input.explain-peers', '4');
+  await page.locator('#cable-load input.explain-peers').dispatchEvent('change');
+  await page.waitForTimeout(200);
+  await page.locator('#cable-load select.explain-reach').selectOption('in:rack');
+  await page.waitForTimeout(200);
+  await page.locator('#cable-load button.explain-add').click();
+  await page.waitForTimeout(200);
+  await page.locator('#cable-load input.explain-peers').nth(1).fill('8');
+  await page.locator('#cable-load input.explain-peers').nth(1).dispatchEvent('change');
+  await page.waitForTimeout(200);
+  await page.locator('#cable-load select.explain-reach').nth(1).selectOption('any');
+  await page.waitForTimeout(200);
+  await page.locator('#cable-load input.explain-share').nth(1).fill('300');
+  await page.locator('#cable-load input.explain-share').nth(1).dispatchEvent('change');
+  for (let i = 0; i < 40; i++) {
+    await page.waitForTimeout(250);
+    text = await panel();
+    if (!/working it out/.test(text) && /\+ to 8/.test(text)) break;
+  }
+  ok(/to 4 random peers within its own rack \(25%\) \+ to 8 random peers \(75%\): \d+ of 32 fell short/.test(text),
+     `two layers, as set in the panel  (${(/if every server tried.*/.exec(text) || [''])[0]})`);
+  ok((await page.locator('#cable-load .explain-layer').count()) === 2, 'one row each');
 }, { url: '?layout=examples/dual-plane.dc&results=fx/explain.tsv' });
 
 // Results that stop at one figure the network would carry more than: the

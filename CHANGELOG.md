@@ -11,6 +11,18 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.26.0 — 2026-10-21
+
+- **Explaining results is set up in its own panel**, to match how the test
+  ran, rather than borrowing the Load generator's settings: the pattern,
+  **× peers**, and **where** -- anywhere, within its own rack (row, room,
+  …) or outside it.
+- **Layers**: **+ layer** adds another set of peers on top, each with its
+  share of every server's traffic -- iperf to 4 peers in the rack beside mx
+  to 8 anywhere. Each layer draws peers of its own; **New peers** draws
+  them again, and **From the Load generator** starts from its settings.
+- 1.25.0 and 1.26.0 share one pull request.
+
 ## 1.25.0 — 2026-10-21
 
 - **Within its own rack** (row, room, … — every kind in the layout) in the

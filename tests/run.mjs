@@ -36,7 +36,7 @@ import {
 import {
   betweenPicks, biggestChanges, bitRate, burstRisk, busiest, cableKeys, cablesOf, compareLoads, countersOf, devicesOf,
   adaptiveWeights, BUFFER_ALPHA, CONNECTION_LIMITS, EXPLAIN, explainResults, sendersOver, FRAMING_BYTES, IMIX_BYTES, PACKET_PICKS, contend, pathLatency, switchBuffer, switchLatency, switchPps, CONTEND_LIMITS, estimateFlows, findingKind, findingsOf, flowsOf, flowsOver, formatGbps, GEN_LIMITS,
-  generateFlows, hostCapacity, hostLimits, busyable, busyOf,
+  generateFlows, hostCapacity, hostLimits, busyable, busyOf, layersOf, EXPLAIN_PATTERNS,
   hostsFor, hostsOf, loadable, loadUnit, mergeResults, packetGb, reachKinds, readsAsLoad, routeEstimate, routeTraffic,
   switchCapacity, switchLoads, testFlows, trafficKind, utilOf, viewOf as cableView,
 } from '../js/traffic.js';
@@ -2351,6 +2351,37 @@ link up role=server leaf
      'every server at the target: nothing to explain');
   ok(/fewer than two/.test(explainResults(m, [{ el: hostsFor(m).hosts[0], value: 1 }], { gen }).why), 'one reading is not enough');
   ok(EXPLAIN.budget > 0, 'and there is a time budget');
+
+  // Layers: two tests run at once, each its own peers, scope and share --
+  // iperf to three peers inside the rack, mx to three outside it.
+  eq(EXPLAIN_PATTERNS, ['all', 'random', 'shift', 'ring'], 'every server can be assumed to send in any pattern with no target');
+  const spec = { layers: [{ pattern: 'random', peers: 3, reach: 'in:rack', share: 50 }, { pattern: 'random', peers: 3, reach: 'rack', share: 50 }], layerSeed: 5 };
+  const layers = layersOf(spec);
+  ok(layers.length === 2 && layers[0].seed === 5 && layers[1].seed !== 5 && layers[1].reach === 'rack',
+     'layers keep their own scope, each with peers of its own');
+  eq(layersOf({ gen: { pattern: 'incast', peers: 0, seed: 9 } }), [{ pattern: 'random', peers: 1, reach: 'any', shift: undefined, share: 1, seed: 9 }],
+     'with no layers, the generator’s settings are one -- a targeted pattern read as random peers');
+  const layered = [];
+  for (const l of layers) {
+    for (const f of generateFlows(m, { ...l, value: 20, unit: 'Gb/s', per: 'host' }).flows) layered.push({ ...f, id: 2000000 + layered.length });
+  }
+  const link = bad(m);
+  link.gbps = 30;
+  let mixed;
+  try {
+    mixed = contend(m, layered, { split: 'even', toGbps: 1 });
+  } finally {
+    link.gbps = 100;
+  }
+  const sums = new Map();
+  for (const f of mixed.contention.flows) sums.set(f.src, (sums.get(f.src) || 0) + f.value);
+  const readings = [...sums].map(([el, value]) => ({ el, value }));
+  const two = explainResults(m, readings, { ...spec, split: 'even' });
+  ok(two.suspects.length === 1 && two.suspects[0].link === link && Math.abs(two.suspects[0].capacity - 30) < 3 && two.fit.within === 32,
+     `explained in the same two layers: the bad cable at its 30G, every server reproduced  (${two.suspects.map((v) => v.capacity.toFixed(1))}, ${two.fit.within} of 32)`);
+  eq(two.layers.map((l) => [l.reach, l.share]), [['in:rack', 50], ['rack', 50]], 'and it says which layers it assumed');
+  const single = explainResults(m, readings, { layers: [{ pattern: 'random', peers: 3 }], layerSeed: 5, split: 'even' });
+  ok(single.fit.within < two.fit.within, `in one layer anywhere instead, it fits worse  (${single.fit.within} of 32)`);
 }
 
 // ---------------------------------------------------- a server's own limits
