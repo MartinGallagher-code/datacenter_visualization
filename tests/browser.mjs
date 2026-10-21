@@ -138,6 +138,12 @@ const fixtures = new Map([
   // explaining by the network.
   ['/fx/explain.tsv', `!test achieved_gbps unit=Gb/s label="Achieved"\n${[1, 2, 3, 4].flatMap((r) => [1, 2, 3, 4, 5, 6, 7, 8]
     .map((n) => `achieved_gbps\tR0${r}/s${n}\t${r === 2 ? '24.032' : '34.677'}\n`)).join('')}`],
+  // Every dual-plane server at the same 30 Gb/s: a limit of their own.
+  ['/fx/own.tsv', `!test achieved_gbps unit=Gb/s label="Achieved"\n${[1, 2, 3, 4].flatMap((r) => [1, 2, 3, 4, 5, 6, 7, 8]
+    .map((n) => `achieved_gbps\tR0${r}/s${n}\t30\n`)).join('')}`],
+  // Its servers with limits of their own: 10G a connection, 60G of CPU.
+  ['/fx/cpu-servers.dc', readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8')
+    .replace('node s[1..8] u=2 role=server +x86', 'node s[1..8] u=2 role=server +x86 stream=10 cpugbps=60')],
   // The dual-plane fabric with each server's two NICs bonded.
   ['/fx/bonded.dc', readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8')
     .replace(/^(net nica .*)$/m, '$1 bond=nic').replace(/^(net nicb .*)$/m, '$1 bond=nic')],
@@ -1428,6 +1434,58 @@ await test('explaining results by the network', async () => {
   const views = await page.locator('#cable-load select.cable-view option').allTextContents();
   ok(views.some((v) => /explained by the network/.test(v)), `and the cables can show it  (${views.join(' | ')})`);
 }, { url: '?layout=examples/dual-plane.dc&results=fx/explain.tsv' });
+
+// Results that stop at one figure the network would carry more than: the
+// servers' own limit, and what would reproduce it.
+await test('explaining results by the servers themselves', async () => {
+  const panel = () => page.evaluate(() => document.querySelector('#cable-load').innerText);
+  await page.locator('#overlays .overlay-head input[type=checkbox]').first().check();
+  await page.waitForTimeout(200);
+  await page.locator('#overlays label', { hasText: 'load the cables (estimated)' }).locator('input').check();
+  await page.waitForTimeout(400);
+  await ideal();
+  await page.locator('#cable-load label.explain input').check();
+  let text = '';
+  for (let i = 0; i < 40; i++) {
+    await page.waitForTimeout(250);
+    text = await panel();
+    if (/What would explain these results/.test(text) && !/working it out/.test(text)) break;
+  }
+  ok(/32 of 32 servers stop at about 30Gb\/s, where the network would carry [\d.]+Gb\/s of the same load — the limit is in the servers/.test(text),
+     `every server stopped by itself  (${(/\d+ of 32 servers stop.*/.exec(text) || [''])[0]})`);
+  ok(/stream=[\d.]+ on the servers would reproduce it .* or cpugbps=60 \(sending and receiving 30G at once\)/.test(text),
+     `with the stream= or cpugbps= that would  (${(/stream=.*/.exec(text) || [''])[0]})`);
+  ok(!/nothing to explain/.test(text), 'and it is not "nothing to explain"');
+}, { url: '?layout=examples/dual-plane.dc&results=fx/own.tsv' });
+
+await test('a server’s CPU and connections', async () => {
+  const panel = () => page.evaluate(() => document.querySelector('#cable-load').innerText);
+  await page.locator('#load-gen select.gen-unit').selectOption('Gb/s');
+  await page.waitForTimeout(200);
+  await page.fill('#load-gen input.gen-value', '40');
+  await page.locator('#load-gen input.gen-value').dispatchEvent('change');
+  await page.waitForTimeout(200);
+  await page.locator('#load-gen select.gen-reach').selectOption('rack');
+  await page.locator('#load-gen button', { hasText: 'Run' }).click();
+  await page.waitForTimeout(500);
+  const text = await panel();
+  ok(/contention: .*32 hosts out of CPU/.test(text), `sending and receiving 40 each, the servers run out of CPU  (${(/contention: .*/.exec(text) || [''])[0]})`);
+  const tip = await page.evaluate(() => {
+    const c = document.querySelector('#view');
+    const r = c.getBoundingClientRect();
+    for (let y = 10; y < r.height; y += 7) {
+      for (let x = 4; x < r.width; x += 2) {
+        c.dispatchEvent(new PointerEvent('pointermove', { clientX: r.left + x, clientY: r.top + y, bubbles: true }));
+        const t = document.querySelector('#tooltip');
+        if (!t.hidden && /^s\d   \(node\)/.test(t.textContent)) return t.textContent;
+      }
+    }
+    return '';
+  });
+  ok(/one connection carries at most 10Gb\/s \(stream=\)/.test(tip), `its tooltip gives its per-connection ceiling  (${tip.replace(/\n/g, ' | ')})`);
+  ok(/its CPU: 100% of the 60G it can send and receive together — full, holding back \d+ flows itself/.test(tip),
+     'and its CPU, full');
+}, { url: '?layout=fx/cpu-servers.dc' });
 
 // Bonded NICs, as LACP (layer3+4) runs them: hashed, each connection keeps
 // to one NIC, so with one connection a flow the two drift apart and with

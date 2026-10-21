@@ -15,7 +15,7 @@ import {
   capacityWidth, changeColor, countDescendants, FINDING_COLORS, LOAD_COLORS, loadColor, linkSummary, spliceSummary,
 } from './render.js';
 import {
-  biggestChanges, burstRisk, busiest, cablesOf, formatGbps, GEN_UNITS, hostsFor, loadable, loadUnit, PATTERNS, reachKinds, TARGETED,
+  biggestChanges, burstRisk, busiest, cablesOf, formatGbps, hostLimits, GEN_UNITS, hostsFor, loadable, loadUnit, PATTERNS, reachKinds, TARGETED,
   CONNECTION_LIMITS, IMIX_BYTES, PACKET_PICKS, PER_CONNECTION, readsAsLoad, SPLITS, SPREADS, TEST_UNITS, trafficKind, utilOf,
 } from './traffic.js';
 
@@ -755,6 +755,8 @@ function contendedText(c) {
   if (c.packets && c.packets.full.size) parts.push(`${n(c.packets.full.size, 'switch')} out of packets`);
   if (c.hosts && c.hosts.full && c.hosts.full.size) parts.push(`${n(c.hosts.full.size, 'host')} full`);
   if (c.packets && c.packets.hostsFull && c.packets.hostsFull.size) parts.push(`${n(c.packets.hostsFull.size, 'host')} out of packets`);
+  if (c.hosts && c.hosts.cpuFull && c.hosts.cpuFull.size) parts.push(`${n(c.hosts.cpuFull.size, 'host')} out of CPU`);
+  if (c.hosts && c.hosts.streams && c.hosts.streams.size) parts.push(`${n(c.hosts.streams.size, 'host')} at ${c.hosts.streams.size === 1 ? 'its' : 'their'} stream=`);
   return parts.join(' and ') || 'nothing full';
 }
 
@@ -800,7 +802,8 @@ function renderExplain(state, box, actions) {
     + `${x.short} of ${x.servers} fell short`));
   wrap.append(el('div', 'muted', 'the pattern is the Load generator’s: change it there'));
   if (!x.short) {
-    wrap.append(el('div', 'muted', 'every server reached it: nothing to explain'));
+    if (x.own) for (const line of ownLines(x.own, false)) wrap.append(line);
+    else wrap.append(el('div', 'muted', 'every server reached it: nothing to explain'));
     box.append(wrap);
     return;
   }
@@ -833,6 +836,7 @@ function renderExplain(state, box, actions) {
       + `held back by ${x.alone.length === 1 ? 'itself' : 'themselves'} (NIC, CPU, stack): `
       + `${x.alone.slice(0, 4).map(shortPath).join(', ')}${x.alone.length > 4 ? ', …' : ''}`));
   }
+  if (x.own) for (const line of ownLines(x.own, true)) wrap.append(line);
   if (x.fit) {
     wrap.append(el('div', x.fit.mean < 0.05 ? 'muted' : 'bad', `with these, the model reproduces the results to within `
       + `${pct(x.fit.mean)} of the target on average · ${x.fit.within} of ${x.fit.n} servers within 5%`));
@@ -841,6 +845,26 @@ function renderExplain(state, box, actions) {
     wrap.append(el('div', 'muted', 'stopped after twenty seconds: what it found so far, the cables it was surest of first'));
   }
   box.append(wrap);
+}
+
+/**
+ * The servers' own limit, as explainResults reads it: most stop at one
+ * result the network would carry more than, and the stream= or cpugbps= that
+ * would reproduce it. `or` when cables explain the results too.
+ */
+function ownLines(own, or) {
+  const round = (v) => trimNum(v >= 10 ? Math.round(v) : Math.round(v * 10) / 10);
+  const plural = (k, what) => `${trimNum(Math.round(k * 10) / 10)} ${what}${k === 1 ? '' : 's'}`;
+  const head = el('div', null, `${or ? 'Or the servers themselves: ' : ''}${own.same} of ${own.servers} servers stop at about `
+    + `${formatGbps(own.at)}b/s, where the network would carry ${formatGbps(own.carries)}b/s of the same load — `
+    + 'the limit is in the servers: their CPU, or one core per connection');
+  head.title = 'The network, as the layout has it, offered as much as the servers’ cables carry in the same pattern, '
+    + 'gives the typical server more than the best one got. So what stopped them all at one figure is not a cable.';
+  const how = el('div', 'muted', `stream=${round(own.stream)} on the servers would reproduce it `
+    + `(${plural(own.flows, 'flow')} × ${plural(own.connections, 'connection')} of ${formatGbps(own.stream)} each), `
+    + `or cpugbps=${round(own.cpu)} (sending and receiving ${formatGbps(own.at)} at once) — `
+    + 'an iperf run at -P 1, 4 and 8 tells the two apart: more connections help only a per-connection limit');
+  return [head, how];
 }
 
 /** What a burst's excess comes to at the switch sending it, and its fate. */
@@ -959,6 +983,22 @@ export function hostTip(state, node, view) {
     const full = c && c.hosts && c.hosts.full ? c.hosts.full.get(node) : null;
     lines.push(`its NICs: ${pct((Math.max(sent[0], got[0]) * view.toGbps) / own)} of the ${formatGbps(own)} they can move each way`
       + (full ? ` — full, holding back ${full.out + full.in} flow${full.out + full.in === 1 ? '' : 's'} itself` : ''));
+  }
+  // Its own limits beyond its NICs: one connection's ceiling, and its CPU.
+  const lim = hostLimits(node);
+  if (lim.stream && !forwardsHere(state, node)) {
+    const k = c && c.hosts && c.hosts.streams ? c.hosts.streams.get(node) : 0;
+    lines.push(`one connection carries at most ${formatGbps(lim.stream)}b/s (stream=)`
+      + (k ? ` — holding back ${k} flow${k === 1 ? '' : 's'} itself` : ''));
+  }
+  if (lim.cpu && !forwardsHere(state, node)) {
+    const cpu = c && c.hosts && c.hosts.cpu ? c.hosts.cpu.get(node) : null;
+    const k = c && c.hosts && c.hosts.cpuFull ? c.hosts.cpuFull.get(node) : 0;
+    const rx = lim.rxcost !== 1 ? `, receiving costing ${trimNum(lim.rxcost)}×` : '';
+    lines.push(cpu && view.toGbps !== null
+      ? `its CPU: ${pct((cpu[0] * view.toGbps) / lim.cpu)} of the ${formatGbps(lim.cpu)} it can send and receive together${rx}`
+        + (k ? ` — full, holding back ${k} flow${k === 1 ? '' : 's'} itself` : '')
+      : `its CPU can send and receive ${formatGbps(lim.cpu)} together${rx} (cpugbps=)`);
   }
   if (each.length > 1) {
     for (const e of each) {

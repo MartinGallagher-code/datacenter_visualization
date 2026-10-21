@@ -36,7 +36,7 @@ import {
 import {
   betweenPicks, biggestChanges, bitRate, burstRisk, busiest, cableKeys, cablesOf, compareLoads, countersOf, devicesOf,
   adaptiveWeights, BUFFER_ALPHA, CONNECTION_LIMITS, EXPLAIN, explainResults, sendersOver, FRAMING_BYTES, IMIX_BYTES, PACKET_PICKS, contend, pathLatency, switchBuffer, switchLatency, switchPps, CONTEND_LIMITS, estimateFlows, findingKind, findingsOf, flowsOf, flowsOver, formatGbps, GEN_LIMITS,
-  generateFlows, hostCapacity,
+  generateFlows, hostCapacity, hostLimits,
   hostsFor, hostsOf, loadable, loadUnit, mergeResults, packetGb, reachKinds, readsAsLoad, routeEstimate, routeTraffic,
   switchCapacity, switchLoads, testFlows, trafficKind, utilOf, viewOf as cableView,
 } from '../js/traffic.js';
@@ -2336,6 +2336,62 @@ link up role=server leaf
      'every server at the target: nothing to explain');
   ok(/fewer than two/.test(explainResults(m, [{ el: hostsFor(m).hosts[0], value: 1 }], { gen }).why), 'one reading is not enough');
   ok(EXPLAIN.budget > 0, 'and there is a time budget');
+}
+
+// ---------------------------------------------------- a server's own limits
+// stream= caps each connection at either end, one core's worth; cpugbps= is
+// one budget for sending and receiving together, receiving at rxcost= times
+// the cost. Both hold flows back in contention as a cable does, and explain
+// reads them back out of results that stop at one figure.
+{
+  const m = parseLayout(`
+net fabric gbps=100
+node tor +switch
+node a role=server stream=30
+node b role=server cpugbps=120 rxcost=2
+node c role=server cpu=epyc-9654
+link fabric role=server tor
+`);
+  eq(m.warnings, [], 'stream=, cpugbps= and rxcost= are element keys, and cpu= still names the part');
+  const [a, b, c] = ['a', 'b', 'c'].map((n) => m.resolve(n));
+  eq([hostLimits(a), hostLimits(b), hostLimits(c)], [
+    { stream: 30, cpu: null, rxcost: 1 }, { stream: null, cpu: 120, rxcost: 2 }, { stream: null, cpu: null, rxcost: 1 },
+  ], 'hostLimits reads them, receiving costing what sending does unless it says');
+  ok(/rxcost=50 is outside/.test(parseLayout('node x rxcost=50').warnings.join('\n')), 'rxcost= is checked against its range');
+  const one = (flows, o = {}) => contend(m, flows, { toGbps: 1, ...o });
+  const f = (src, dst, value, id = 1) => ({ id, src, dst, value });
+  let r = one([f(a, c, 80)]);
+  eq([r.contention.flows[0].value, r.contention.flows[0].wanted, r.contention.flows[0].heldAt === a, r.contention.hosts.streams.get(a)],
+     [30, 80, true, 1], 'one connection of a stream=30 server carries 30 of the 80 it wanted, held back by the server itself');
+  eq(one([f(a, c, 80)], { connections: 2 }).contention.flows[0].value, 60, 'two connections carry twice that, kept whole by an even split');
+  eq(one([f(a, c, 80)], { connections: 2, split: 'hashed' }).contention.flows[0].value, 60, 'and as two hashed connections, each capped');
+  eq(one([f(c, a, 80)]).contention.flows[0].value, 30, 'stream= holds at the receiving end too');
+  eq(contend(m, [f(a, c, 80)], {}).contention.flows[0].value, 80, 'a load that is not a bit rate has no stream= to set against');
+  r = one([f(b, c, 80), f(c, b, 80, 2)]);
+  eq([...r.contention.flows.map((x) => x.value), r.contention.hosts.cpuFull.get(b), r.contention.hosts.cpu.get(b)],
+     [40, 40, 2, [120, 240]], 'cpugbps=120 at rxcost=2: sending 40 and receiving 40 fill it, holding both flows back');
+  r = one([f(b, c, 100)]);
+  eq([r.contention.flows[0].value, r.contention.hosts.cpuFull.size], [100, 0], 'sending alone, it reaches its NIC');
+
+  // Results that stop at one figure, from servers limited by stream=, read
+  // back on a layout that does not say so: the servers' own limit.
+  const text = readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8');
+  const plain = parseLayout(text);
+  const limited = parseLayout(text.replace(/role=server/, 'role=server stream=10'));
+  const gen = { pattern: 'random', peers: 3, seed: 5 };
+  const c2 = contend(limited, generateFlows(limited, { ...gen, value: 80, unit: 'Gb/s', per: 'host' }).flows, { split: 'even', toGbps: 1 });
+  const got = new Map();
+  for (const x of c2.contention.flows) got.set(x.src.path, (got.get(x.src.path) || 0) + x.value);
+  eq([...new Set(got.values())], [30], 'three peers of one 10G connection each: every server at 30');
+  const x = explainResults(plain, hostsFor(plain).hosts.map((el) => ({ el, value: got.get(el.path) })), { gen, split: 'even' });
+  ok(x.short === 0 && x.own && x.own.at === 30 && x.own.carries > 30 && x.own.same === 32,
+     `explained: all 32 stop at 30, where the network carries ${x.own && x.own.carries}`);
+  eq(x.own && [x.own.flows, x.own.connections, x.own.stream, x.own.cpu], [3, 1, 10, 60],
+     'and stream=10 (three flows of one connection) or cpugbps=60 would reproduce it');
+  const y = explainResults(limited, hostsFor(limited).hosts.map((el) => ({ el, value: got.get(el.path) })), { gen, split: 'even' });
+  eq([y.short, y.own], [0, null], 'with stream=10 written, the layout already explains it: nothing to say');
+  const spread = explainResults(plain, hostsFor(plain).hosts.map((el, i) => ({ el, value: 10 + i })), { gen, split: 'even' });
+  eq(spread.own, null, 'results spread out are not one shared limit');
 }
 
 // ------------------------------------------------------------------ bursts

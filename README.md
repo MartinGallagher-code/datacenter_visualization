@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.22.0** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.23.0** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -800,6 +800,33 @@ node s[1..16] role=server model=P2100G
 A server with two such cards has twice each figure: `ports=4x100
 gbps=400 pps=212000000`, or a card a net if they are cabled apart.
 
+A server is more than its NICs, and two of its own limits usually set what
+a test reaches well before they do:
+
+- **`stream=`** — the most one connection carries, in Gb/s. On a kernel
+  stack a TCP stream is mostly one core's work, and tops out around 30–50
+  Gb/s however empty the cables. It holds at either end, and a flow carries
+  at most its connections (the routing box's *connections per flow*) times
+  it: `stream=40` and four connections is 160.
+- **`cpugbps=`** — what its CPU can send and receive together, in Gb/s:
+  one budget for both directions, since the same cores do both. A server
+  with `cpugbps=310` sends its 200 alone, but sending and receiving at once
+  it manages 155 each way. **`rxcost=`** says how many times more receiving
+  costs than sending (1 unless set): at `rxcost=1.3` it is about 135 each
+  way.
+  (`cpu=` stays free to name the part, `cpu=epyc-9654`, as layouts already
+  use it.)
+
+Both hold flows back in [contention](#contention-a-full-cable-shares-itself-out)
+just as a full cable does; hovering a server says which it is at, and the
+headline counts *hosts out of CPU* and *hosts at their stream=*. Telling the
+two apart is one test: an iperf run with `-P 1`, `-P 4` and `-P 8` gains with
+each extra connection only where the limit is per connection.
+
+```text
+model P2100Gx2 ports=4x100 gbps=400 pps=212000000 stream=40 cpugbps=310
+```
+
 What the datasheets also give and the viewer does not model: power draw,
 fans and power supplies, memory, table sizes (128-way ECMP, routes, MACs),
 queues per port and QoS (PFC, ECN), MACsec, and the load-balancing features
@@ -1097,6 +1124,14 @@ look like to produce these results?*
   its sending end; hover for the servers it explains.
 - A server no shared cable explains is **held back by itself** — its NIC,
   CPU or stack — and is named as such rather than blamed on a cable.
+- **The servers themselves**: when most of them stop at the same result,
+  and the network as the layout has it would carry more of the same load,
+  the limit is theirs — "32 of 32 servers stop at about 155Gb/s, where the
+  network would carry 200Gb/s". It gives the `stream=` (the result over
+  each server's flows and connections) or `cpugbps=` (sending and receiving
+  the result at once) that would reproduce it; write either on the servers
+  and the panel has nothing left to explain. Where cables explain the
+  results too, it is offered as the other answer, after them.
 - When even the best server sits on a degraded path (all-to-all, where every
   server crosses the bad cable), the best result is not what was tried: the
   search tries higher targets and says so — "above the best result of 31G:

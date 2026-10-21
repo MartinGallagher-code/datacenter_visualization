@@ -11,6 +11,22 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.23.0 — 2026-10-21
+
+- **A server's own limits**, beyond its NICs. `stream=` is the most one
+  connection carries -- one core's worth on a kernel stack -- at either end,
+  so a flow carries at most its connections times it. `cpugbps=` is what
+  its CPU can send and receive together, one budget for both directions,
+  with `rxcost=` for receiving costing more than sending. Both hold flows
+  back in contention as a full cable does; the headline counts hosts out of
+  CPU and at their stream=, and hovering a server says where it stands.
+  (`cpu=` is left to name the part, as layouts already use it.)
+- **Explain these results** gains the other answer: when most servers stop
+  at one result the network would carry more than, the limit is in the
+  servers, and it gives the `stream=` or `cpugbps=` that would reproduce
+  it. 1.22.0 and 1.23.0 share one pull request, so 1.22.0 is not published
+  on its own.
+
 ## 1.22.0 — 2026-10-21
 
 - **Explain these results by the network**, under a per-host load: assume
