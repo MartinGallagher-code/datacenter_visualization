@@ -36,7 +36,7 @@ import {
 import {
   betweenPicks, biggestChanges, bitRate, burstRisk, busiest, cableKeys, cablesOf, compareLoads, countersOf, devicesOf,
   adaptiveWeights, BUFFER_ALPHA, CONNECTION_LIMITS, EXPLAIN, explainResults, sendersOver, FRAMING_BYTES, IMIX_BYTES, PACKET_PICKS, contend, pathLatency, switchBuffer, switchLatency, switchPps, CONTEND_LIMITS, estimateFlows, findingKind, findingsOf, flowsOf, flowsOver, formatGbps, GEN_LIMITS,
-  generateFlows, hostCapacity, hostLimits, busyable, busyOf, layersOf, EXPLAIN_PATTERNS,
+  generateFlows, hostCapacity, hostLimits, busyable, busyOf, layersOf, EXPLAIN_PATTERNS, pairedFlows,
   hostsFor, hostsOf, loadable, loadUnit, mergeResults, packetGb, reachKinds, readsAsLoad, routeEstimate, routeTraffic,
   switchCapacity, switchLoads, testFlows, trafficKind, utilOf, viewOf as cableView,
 } from '../js/traffic.js';
@@ -2329,28 +2329,45 @@ link up role=server leaf
 
   const m = fresh();
   const gen = { pattern: 'random', peers: 3, seed: 5 };
-  const x = explainResults(m, measure(m, gen, 40), { gen, split: 'even' });
+  const x = await explainResults(m, measure(m, gen, 40), { gen, split: 'even' });
   const [s] = x.suspects;
   ok(x.suspects.length === 1 && s.link === bad(m) && s.verdict === 'degraded' && Math.abs(s.capacity - 30) < 3,
      `random peers: the one bad cable, running at the 30G of its 100G it was set to  (${x.suspects.length} named, ${s && s.capacity.toFixed(1)}G)`);
   ok(x.target === 40 && x.short === s.hosts.length && x.alone.length === 0 && x.fit.within === x.fit.n,
      `every short server explained by it, and the whole set reproduced  (${x.fit.within} of ${x.fit.n})`);
   ok(m.links.every((l) => l.gbps === (l.net === 'fabric' ? 100 : l.gbps)) && bad(m).gbps === 100, 'and the layout is left as it was');
+  ok(x instanceof Object && typeof explainResults(m, [], {}).then === 'function', 'it works in turns, giving the page its own between passes');
+  const overfull = [...x.loads].filter(([l, v]) => l !== s.link && l.gbps && Math.max(...v) > l.gbps * (1 + 1e-6));
+  eq(overfull.length, 0, 'what the cables carry in it is shared out: none past its capacity but the suspect');
 
   // All-to-all: one bad cable slows everyone, the best included, so the
   // target is searched above the best result.
-  const all = explainResults(m, measure(m, { pattern: 'all' }, 40), { gen: { pattern: 'all' }, split: 'even' });
+  const all = await explainResults(m, measure(m, { pattern: 'all' }, 40), { gen: { pattern: 'all' }, split: 'even' });
   ok(all.target > all.best && all.suspects.some((v) => v.link === bad(m) && Math.abs(v.capacity - 30) < 3),
      `all-to-all: the best was held back too, and the bad cable is found  (target ${all.target.toFixed(1)} above ${all.best.toFixed(1)})`);
 
   // A server slow on its own is no cable's doing.
-  const alone = explainResults(m, hostsFor(m).hosts.map((el, i) => ({ el, value: i === 5 ? 12 : 40 })), { gen, split: 'even' });
+  const alone = await explainResults(m, hostsFor(m).hosts.map((el, i) => ({ el, value: i === 5 ? 12 : 40 })), { gen, split: 'even' });
   eq([alone.suspects.length, alone.alone.length, alone.alone[0] === hostsFor(m).hosts[5]], [0, 1, true],
      'a server short on its own is held back by itself');
-  eq(explainResults(m, hostsFor(m).hosts.map((el) => ({ el, value: 40 })), { gen, split: 'even' }).suspects, [],
+  eq((await explainResults(m, hostsFor(m).hosts.map((el) => ({ el, value: 40 })), { gen, split: 'even' })).suspects, [],
      'every server at the target: nothing to explain');
-  ok(/fewer than two/.test(explainResults(m, [{ el: hostsFor(m).hosts[0], value: 1 }], { gen }).why), 'one reading is not enough');
+  ok(/fewer than two/.test((await explainResults(m, [{ el: hostsFor(m).hosts[0], value: 1 }], { gen })).why), 'one reading is not enough');
   ok(EXPLAIN.budget > 0, 'and there is a time budget');
+
+  // Per-host totals paired as the test paired them: each server's total to
+  // its peers, a few flows each where every pair would be a million.
+  const totals = hostsFor(m).hosts.map((el, i) => ({ el, value: 10 + i }));
+  const paired = pairedFlows(m, totals, { layers: [{ pattern: 'random', peers: 3 }], layerSeed: 2 });
+  const sentBy = new Map();
+  for (const f of paired.flows) sentBy.set(f.src, (sentBy.get(f.src) || 0) + f.value);
+  ok(paired.flows.length === 96 && totals.every((h) => Math.abs(sentBy.get(h.el) - h.value) < 1e-9) && paired.flows.every((f) => f.estimate),
+     'paired to three peers: 96 flows, and every server sends exactly its total');
+  const twoWays = pairedFlows(m, totals, { layers: [{ pattern: 'random', peers: 2, reach: 'in:rack', share: 1 }, { pattern: 'random', peers: 2, share: 3 }], layerSeed: 2 });
+  const inRack = twoWays.flows.filter((f) => f.src.parent === f.dst.parent).reduce((a, f) => a + f.value, 0);
+  const totalSent = twoWays.flows.reduce((a, f) => a + f.value, 0);
+  ok(inRack >= totalSent * 0.25 - 1e-9 && Math.abs(totalSent - totals.reduce((a, h) => a + h.value, 0)) < 1e-6,
+     'and in layers: a quarter of it at least inside the rack, all of it sent');
 
   // Layers: two tests run at once, each its own peers, scope and share --
   // iperf to three peers inside the rack, mx to three outside it.
@@ -2376,11 +2393,11 @@ link up role=server leaf
   const sums = new Map();
   for (const f of mixed.contention.flows) sums.set(f.src, (sums.get(f.src) || 0) + f.value);
   const readings = [...sums].map(([el, value]) => ({ el, value }));
-  const two = explainResults(m, readings, { ...spec, split: 'even' });
+  const two = await explainResults(m, readings, { ...spec, split: 'even' });
   ok(two.suspects.length === 1 && two.suspects[0].link === link && Math.abs(two.suspects[0].capacity - 30) < 3 && two.fit.within === 32,
      `explained in the same two layers: the bad cable at its 30G, every server reproduced  (${two.suspects.map((v) => v.capacity.toFixed(1))}, ${two.fit.within} of 32)`);
   eq(two.layers.map((l) => [l.reach, l.share]), [['in:rack', 50], ['rack', 50]], 'and it says which layers it assumed');
-  const single = explainResults(m, readings, { layers: [{ pattern: 'random', peers: 3 }], layerSeed: 5, split: 'even' });
+  const single = await explainResults(m, readings, { layers: [{ pattern: 'random', peers: 3 }], layerSeed: 5, split: 'even' });
   ok(single.fit.within < two.fit.within, `in one layer anywhere instead, it fits worse  (${single.fit.within} of 32)`);
 }
 
@@ -2458,14 +2475,14 @@ link fabric role=server tor
   const got = new Map();
   for (const x of c2.contention.flows) got.set(x.src.path, (got.get(x.src.path) || 0) + x.value);
   eq([...new Set(got.values())], [30], 'three peers of one 10G connection each: every server at 30');
-  const x = explainResults(plain, hostsFor(plain).hosts.map((el) => ({ el, value: got.get(el.path) })), { gen, split: 'even' });
+  const x = await explainResults(plain, hostsFor(plain).hosts.map((el) => ({ el, value: got.get(el.path) })), { gen, split: 'even' });
   ok(x.short === 0 && x.own && x.own.at === 30 && x.own.carries > 30 && x.own.same === 32,
      `explained: all 32 stop at 30, where the network carries ${x.own && x.own.carries}`);
   eq(x.own && [x.own.flows, x.own.connections, x.own.stream, x.own.cpu], [3, 1, 10, 60],
      'and stream=10 (three flows of one connection) or cpugbps=60 would reproduce it');
-  const y = explainResults(limited, hostsFor(limited).hosts.map((el) => ({ el, value: got.get(el.path) })), { gen, split: 'even' });
+  const y = await explainResults(limited, hostsFor(limited).hosts.map((el) => ({ el, value: got.get(el.path) })), { gen, split: 'even' });
   eq([y.short, y.own], [0, null], 'with stream=10 written, the layout already explains it: nothing to say');
-  const spread = explainResults(plain, hostsFor(plain).hosts.map((el, i) => ({ el, value: 10 + i })), { gen, split: 'even' });
+  const spread = await explainResults(plain, hostsFor(plain).hosts.map((el, i) => ({ el, value: 10 + i })), { gen, split: 'even' });
   eq(spread.own, null, 'results spread out are not one shared limit');
 
   // Two servers busy elsewhere: short, and the layout's own limits already
@@ -2477,7 +2494,7 @@ link fabric role=server tor
   const c3 = contend(cpuM, generateFlows(cpuM, { ...gen, value: 30, unit: 'Gb/s', per: 'host' }).flows, { split: 'even', toGbps: 1, busy: busyMap });
   const got3 = new Map();
   for (const v of c3.contention.flows) got3.set(v.src, (got3.get(v.src) || 0) + v.value);
-  const z = explainResults(cpuM, servers.map((el) => ({ el, value: got3.get(el) })), { gen, split: 'even', busy: busyMap });
+  const z = await explainResults(cpuM, servers.map((el) => ({ el, value: got3.get(el) })), { gen, split: 'even', busy: busyMap });
   ok(z.short >= 2 && z.suspects.length === 0 && z.alone.length === 0
      && z.ownLoad.some((o) => o.el === servers[3] && o.busy === 0.5) && z.ownLoad.some((o) => o.el === servers[20]),
      `servers busy elsewhere are short by their own load, with no cable to blame  (${z.short} short, ${z.ownLoad.length} by their own load)`);

@@ -692,6 +692,7 @@ const SPLIT_TITLES = {
 const SPREAD_LABELS = {
   gravity: 'to each host by its own total',
   even: 'evenly to every other host',
+  peers: 'to its peers, as the test paired them',
 };
 
 const BUSIEST_SHOWN = 8;
@@ -804,7 +805,11 @@ function renderExplain(state, box, actions) {
   if (!x) return;
   const wrap = el('div', 'explain-box');
   wrap.append(el('div', 'load-title', 'What would explain these results'));
-  wrap.append(explainSetup(state, actions));
+  // One setup for both: where the estimate already shows it, it is not
+  // shown twice.
+  const view = state.cableView ? state.cableView() : null;
+  if (view && view.model && view.model.pairedBy) wrap.append(el('div', 'muted', 'paired as set above, with the estimate'));
+  else wrap.append(explainSetup(state, actions));
   if (x.working) {
     wrap.append(el('div', 'muted', 'working it out — a moment here, up to twenty seconds on thousands of servers'));
     box.append(wrap);
@@ -853,11 +858,11 @@ function renderExplain(state, box, actions) {
   if (x.ownLoad && x.ownLoad.length) {
     const busy = x.ownLoad.filter((o) => o.busy > 0);
     const name = (o) => `${shortPath(o.el)}${o.busy > 0 ? ` (${pct(o.busy)} busy)` : ''}`;
-    const line = el('div', null, `${x.ownLoad.length} server${x.ownLoad.length === 1 ? '' : 's'} short by ${x.ownLoad.length === 1 ? 'its' : 'their'} own load, `
-      + `as the layout gives it${busy.length ? ` — ${busy.length} busy elsewhere` : ''}: `
+    const line = el('div', null, `${x.ownLoad.length} server${x.ownLoad.length === 1 ? '' : 's'} short as the layout already has it — `
+      + `cables full as drawn, or ${x.ownLoad.length === 1 ? 'its' : 'their'} own limits${busy.length ? `; ${busy.length} busy elsewhere` : ''}: `
       + `${x.ownLoad.slice(0, 4).map(name).join(', ')}${x.ownLoad.length > 4 ? ', …' : ''}`);
-    line.title = 'Their own limits -- stream=, cpugbps= less what other work takes -- already hold them to what they '
-      + 'measured, with no cable to blame.';
+    line.title = 'The layout as it stands -- cables full at their gbps=, or the servers’ own stream=, cpugbps= and '
+      + 'busy= -- already holds these to what they measured, with no cable changed.';
     wrap.append(line);
   }
   if (x.alone.length) {
@@ -1515,7 +1520,13 @@ export function renderCableLoad(state, host, actions) {
       // A test flow or a generated load on its own: no metric to say more of.
     } else if (model.kind === 'hosts') {
       lines.append(el('div', null, `estimated from ${model.count} hosts’ totals, sent `
-        + `${SPREAD_LABELS[state.traffic.spread] || SPREAD_LABELS.gravity} · ${formatLoad(model, (model.own || r).delivered)}`));
+        + `${model.pairedBy ? `${layersText(state.traffic.explainLayers.map((l) => ({ ...l, share: Number(l.share) > 0 ? Number(l.share) : 1 })))}` : SPREAD_LABELS[state.traffic.spread] || SPREAD_LABELS.gravity}`
+        + ` · ${formatLoad(model, (model.own || r).delivered)}`));
+      if (model.pairedBy === 'size') {
+        lines.append(el('div', 'muted', `every pair of ${model.count.toLocaleString()} hosts would be `
+          + `${model.allPairs.toLocaleString()} flows, so each sends to its peers instead — set them below`));
+      }
+      if (model.pairedBy) lines.append(explainSetup(state, actions));
       if (PER_CONNECTION.has(state.traffic.split)) {
         lines.append(el('div', 'muted', 'an estimate is routed as an even split: one path per guessed flow would read as a measurement'));
       }

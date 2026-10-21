@@ -1160,6 +1160,21 @@ await test('per-host totals load the cables as an estimate', async () => {
   const text = await page.evaluate(() => document.querySelector('#cable-load').innerText);
   ok(/estimated from 32 hosts’ totals/.test(text), 'the panel says it is an estimate, and from how many hosts');
   ok(/R02\/s5 → R02\/tor[ab]\s+22\.5G\/25G · 90%/.test(text), 'the hot server’s NICs are the busiest cables');
+
+  // Paired as the test paired them: each server's total to its peers.
+  const spread = page.locator('#cable-load select').filter({ has: page.locator('option', { hasText: 'to its peers, as the test paired them' }) });
+  await spread.selectOption('peers');
+  await page.waitForTimeout(400);
+  await page.fill('#cable-load input.explain-peers', '3');
+  await page.locator('#cable-load input.explain-peers').dispatchEvent('change');
+  await page.waitForTimeout(400);
+  const paired = await page.evaluate(() => document.querySelector('#cable-load').innerText);
+  ok(/estimated from 32 hosts’ totals, sent to 3 random peers/.test(paired), `paired to three peers each  (${(/estimated from.*/.exec(paired) || [''])[0]})`);
+  ok(/96 flows/.test(paired) || /contention/.test(paired), 'routed as that many flows');
+  await page.locator('#cable-load label.explain input').check();
+  await page.waitForTimeout(300);
+  ok(/paired as set above, with the estimate/.test(await page.evaluate(() => document.querySelector('#cable-load').innerText)),
+     'and explaining uses the same pairing, set once');
 }, { url: '?layout=examples/dual-plane.dc&results=examples/dual-plane-hosts.tsv' });
 
 // Picks narrow the traffic too: only the flows between them, and a test flow

@@ -11,6 +11,26 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.27.0 — 2026-10-21
+
+- **Per-host totals paired as the test paired them**: a new choice beside
+  *to each host by its own total*, sending each server's total to its
+  random peers, in the same layers explaining uses. Taken by itself where
+  every pair would be too many to share out -- a thousand servers are a
+  million pairs -- so a room of mx results now shares out, and its
+  replies come back, where before they were left out.
+- **Much faster, and the page keeps answering.** Routes are kept between
+  passes while nothing is taken out, and contention sums its loads once
+  per cable rather than per crossing: about twice as fast on a room of a
+  thousand servers. Explaining works in turns, the page answering between
+  them, so the browser no longer offers to stop it.
+- Fixed: explaining a packet rate with its packets sized read packets a
+  second as Gb/s. It is now read in bits, requests and replies.
+- Fixed: the cables in *explained by the network* could read past 100%;
+  they now carry the load as the explanation shares it out.
+- The line for short servers the layout already holds back says so --
+  cables full as drawn, or their own limits -- rather than "their own load".
+
 ## 1.26.0 — 2026-10-21
 
 - **Explaining results is set up in its own panel**, to match how the test
