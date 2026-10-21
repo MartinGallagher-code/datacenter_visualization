@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.16.0** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.21.1** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -475,7 +475,8 @@ Where the capacity shows:
 A flow metric (samples tagged `peer=` — what `iperf_orchestrator`, `mx export
 --peers` and any `a -> b` table write) says how much one host sent to another.
 Tick **load the cables** on its card and the viewer works out which cables
-that traffic crossed and draws each one by what it carries:
+that traffic crossed and draws each one by what it carries. (Greyed out, it
+says why under it: a percentage or a latency does not add up along a path.)
 
 - **Width** is the traffic through that piece of cable. A rack's lane
   thickens on its way to the ToR, as it gathers its servers' cables.
@@ -488,7 +489,8 @@ that traffic crossed and draws each one by what it carries:
   cable.
 - **The panel** names the busiest cables (`R02/torb → R02/s5 25G/25G · 100%
   · 8 held`; click one to go to it) — **Show more** lists more of them, 25 at
-  a time — and the busiest switches, how many flows were routed, and any
+  a time, and **Show all** every one (up to 10,000; past that it says so) —
+  and the busiest switches, how many flows were routed, and any
   that could not be and why. **The inspector** gives the selected element's
   traffic out and in against its capacity, per net — for a rack, over its
   uplinks — and its busiest cables.
@@ -508,22 +510,55 @@ is end to end, and only switch counters see the cables themselves:
 - **`traffic=no`** on a net keeps it out: out-of-band mgmt beside the data
   fabric would otherwise take an equal share of every flow it ties with.
 - Where several cables continue a shortest route the flow is **shared**, by
-  the panel's choice:
-  - **even split (ECMP)** — an equal share per cable, as a fluid;
-  - **split by capacity** — shares in proportion to `gbps=`, as weighted ECMP
-    spreads over unequal links;
-  - **hashed: one path per flow** — each flow takes *one* cable at every
-    fork, picked pseudo-randomly per flow, which is what ECMP hashing really
-    does: a handful of big flows can land on the same uplink and overload it
-    while its neighbour idles. **Re-roll** hashes again with another seed.
-  - **hashed alike at every tier (polarized)** — one path per flow, hashed
-    the same way at every switch, as switches sharing one hash seed do: two
-    flows that collide on a ToR's uplink collide again on the spine's, so
-    the hot spots line up tier after tier instead of averaging out;
-  - **adaptive: each flow where there is room** — one path per flow, each
-    placed in turn on the cable with the most room as the load then stands:
-    congestion-aware routing (flowlets, adaptive routing on newer fabrics),
-    the opposite extreme to hashing and the best this fabric could do.
+  the panel's choice. The model tries to do what a real fabric does, so the
+  choices are what real switches are set to do, and the default is what
+  nearly every Ethernet fabric does out of the box:
+  - **ECMP: hashed per connection** (the default) — each connection takes
+    *one* cable at every fork, picked by a hash of its 5-tuple with a seed
+    of each switch's own, as Arista, Cisco, Juniper and SONiC switches do. A
+    handful of big flows can land on one uplink and overload it while its
+    neighbour idles. **Re-roll** hashes again with another seed: the spread
+    between rolls is the luck of the hash.
+  - **ECMP, hashed alike at every tier (polarized)** — the same hash at
+    every switch, as switches left on one factory seed (or one config
+    copied to every tier) do: flows that collide on a ToR's uplink collide
+    again on the spine's, so the hot spots line up tier after tier. A
+    misconfiguration to test for, and one of the first things to suspect
+    when superspines flood while the average looks fine.
+  - **adaptive routing (per packet)** — InfiniBand adaptive routing,
+    Spectrum-X, a switch's dynamic load balancing: each packet goes out of
+    the emptier port, so every switch leans on its emptier cables until its
+    choices are about as full as each other. A switch sees only its own
+    cables, though: congestion further on is avoided only where an earlier
+    choice leads round it, so with a ToR's uplink out the spine left
+    carrying its traffic is no better off than under an even split. With
+    one uplink degraded to 40G in `examples/dual-plane.dc`, all-to-all at
+    40% fills the busiest uplink to 44% where an even split fills it to 77%.
+    A host does not route adaptively: a bonded one still hashes.
+  - **weighted by capacity (WCMP)** — shares in proportion to `gbps=`, as
+    weighted ECMP (UCMP, the BGP link-bandwidth community) spreads over
+    unequal links;
+  - **packet spraying (even split)** — every flow's packets sprayed evenly
+    over every shortest route, round-robin or at random, whatever the load:
+    what a leaf that sprays does, its spines and superspines keeping to the
+    route each packet was given. It needs NICs that put packets back in order,
+    as RDMA NICs do. It is also the long-run average of hashing with endless
+    connections, and the best any balancing could do on an even fabric: if a
+    cable is full here, nothing will save it. Where spines also move traffic
+    off a busy route, adaptive routing is the closer model; where they move
+    it off a dead one, take that out with the what-if.
+- **connections a flow**, beside the routing, is how many connections each
+  flow between two hosts is made of — `iperf -P`, a test's parallel streams,
+  an RDMA job's queue pairs — **1 by default**. Each is hashed on its own,
+  so this is the biggest single thing a hashed fabric's outcome turns on:
+  in `examples/dual-plane.dc`, every server sending half its NICs to the
+  one sixteen places on (the **shift** pattern) fills the busiest uplink to
+  125% at one connection a flow, 75% at four, 63% at thirty-two, and 50%
+  split evenly. Under contention each connection is its own share of a full
+  cable, as TCP shares it: a flow of eight beside a flow of one gets eight
+  shares, and a flow is held back only on the connections whose own path is
+  full. One connection a flow is also what a hash on the IP addresses alone
+  does, however many connections there are.
 - **`weight=`** on a link rule scales its cables' share in every mode —
   `weight=3` takes three times what a weight-1 cable beside it does.
 - **`count=`** on a link rule makes that many cables between each pair — a
@@ -533,15 +568,21 @@ is end to end, and only switch counters see the cables themselves:
   bundle reads 60% — what one 2.4T cable cannot show.
 - **`bond=`** on nets bonds a host's cables on them: `net nica gbps=100
   bond=nic` and `net nicb gbps=100 bond=nic` make every server's NIC a and
-  NIC b one bond. A flow from or to a bonded host is split over the bond by
-  capacity — two equal NICs half each — **sending and receiving, under every
-  split**, hashed included, where unbonded a hashed flow rides one NIC all
-  the way and the two come out a flow or so apart. Between two bonded hosts
-  each NIC's half keeps to its own side, NIC a to NIC a, so in one rack it
-  never leaves the ToR; beyond that, each half is routed (and hashed) on its
-  own. Take a ToR or a NIC's cable out and the rest of the bond carries
-  everything. Only hosts bond: a switch's cables on the same nets are what
-  the hosts hang off. A host with cables in two bonds uses the bigger.
+  NIC b one bond, run as LACP with the layer3+4 hash: **each connection
+  keeps to one NIC**, picked by its own hash in proportion to the NICs'
+  capacity — under hashed and adaptive routing alike, since a host's bond
+  hashes whatever its switches do. With one connection a flow two NICs can
+  come out a flow or so apart; with many they even out, and under the ideal
+  even split every flow is shared over the bond exactly. A connection
+  arrives on the same side it left, NIC a to NIC a, so in one rack it never
+  leaves the ToR. **`balance=even`** on the bond's nets (`net nica gbps=100
+  bond=nic balance=even`) shares every flow over the bond by capacity instead,
+  under every routing — for a bond whose NICs carry the same whatever the
+  connections, as round-robin bonding and some NIC drivers do; `balance=hash`
+  is the default. Take a ToR or a NIC's cable out and the rest of the bond
+  carries everything. Only hosts bond: a switch's cables on the same nets
+  are what the hosts hang off. A host with cables in two bonds uses the
+  bigger.
 - A pair's samples are reduced by the card's own aggregation (the mean of a
   run's passes, by default). The metric must be a rate (`unit=Gb/s`, `Mb/s`,
   `MB/s`, `pps`, … — or a name like `iperf_mbps_out`) or a volume; a bit or
@@ -553,8 +594,8 @@ is end to end, and only switch counters see the cables themselves:
 `examples/dual-plane-flows.tsv` loads `examples/dual-plane.dc`: one rack's
 servers sending 40 Gb/s each across the planes — 80% of their NICs and their
 rack's uplinks — and an incast of eight servers into one, 160% of the two
-NICs it lands on. Switch to **hashed** and each 40 Gb/s flow takes one NIC,
-not two.
+NICs it lands on. Hashed, each 40 Gb/s flow takes one NIC, not two; under
+the even split it is shared over both.
 
 #### Contention: a full cable shares itself out
 
@@ -582,22 +623,48 @@ steady state:
   *of* what was offered, and each flow over it, held back or not.
 - The **split** matters more with contention. **Even** shares every flow
   over every route, so a flow is held to its slowest one; **hashed** puts
-  each flow on one path, as ECMP does with TCP, so only the flows hashed onto
-  a full cable slow down — and two big flows hashed onto one uplink can
-  leave its neighbour idle.
+  each connection on one path, as ECMP does with TCP, so only the
+  connections hashed onto a full cable slow down — and two big flows hashed
+  onto one uplink can leave its neighbour idle.
 
 Untick it to see what the flows offer: then a cable can read past 100%, in
 magenta, which says how oversubscribed it is rather than what it carries.
 
-**bursts of ×** says how bursty the load is. The model is a steady average,
-and real traffic comes in clumps — a synchronised start, an incast all
-answering at once — that last microseconds and overflow a shallow buffer
-while the second's average looks easy. Above 1, the panel counts the cables
-a burst that many times the average would overflow, naming the fullest —
-all-to-all at 50% over `examples/dual-plane.dc` reads `with bursts of 4× the
-average, 80 cables would overflow — the fullest, R03/tora ↔ R03/s1, is 50%
-on average, 200% in a burst` — and a cable's tooltip says what such a burst
-would need of it.
+**bursts of × … for … µs** says how bursty the load is. The model is a
+steady average, and real traffic comes in clumps — a synchronised start, an
+incast all answering at once — that last microseconds and overflow a
+cable while the second's average looks easy. Above 1, the panel counts the
+cables a burst that many times the average would overflow, and what becomes
+of each:
+
+- What a cable cannot take at once **queues at the switch sending onto it**,
+  in its shared packet buffer, `buffer=` (`buffer=132MB`). Every port
+  overflowing at that switch shares it as a switch's dynamic threshold
+  shares it: with one port congested it may fill half the buffer, with n of
+  them 1/(n+1) each. A burst whose excess over its length fits that share is
+  **absorbed**; one that does not **drops**.
+- All-to-all at 50% over `examples/dual-plane.dc` with `buffer=2MB` on the
+  ToRs, in 2.5× bursts: each 25G NIC is 6.25 Gb/s over for the burst, 78 KB
+  in 100 µs, against the 222 KB its ToR gives each of its eight overflowing
+  ports — `64 absorbed by their switch’s buffer`. At 1000 µs it is 781 KB,
+  and `64 drop — more than their switch’s buffer holds`.
+- A switch with no `buffer=` is counted apart (`at switches with no buffer=
+  to say`), and a host sending more than its NIC takes queues in the host,
+  dropping nothing on the wire.
+- A cable's tooltip says what the burst would need of it, how much queues
+  where, of how much: `78.1 KB queued at R03/tora, of the 222.2 KB its
+  buffer gives this port: absorbed`.
+- **What drops is lost**: the excess past the port's share, out of what the
+  burst sends onto the cable while it lasts. The panel and the headline give
+  it in all — the same load in 1000 µs bursts reads `a 2.5× burst for 1000
+  µs drops 35.8 MB on 64 cables — 7% of what they carry while it lasts` —
+  and a dropping cable's tooltip gives its own. It is a loss per burst, not
+  a rate: how often bursts come is the traffic's, and TCP backs off after
+  each, which the steady average does not see.
+
+The buffer is the one figure that tells an incast a switch rides through
+from one that loses packets; real switches add per-queue reserves and
+priority queues the model leaves out, so read it as which bursts are close.
 
 Sharing out costs in proportion to the cables every flow crosses, added up
 over the flows. Flows that leave the same switches for the same server share
@@ -667,7 +734,78 @@ node superspine role=superspine +switch gbps=51200 pps=8000000000
 node s[1..16] role=server pps=20000000
 ```
 
+- **`gbps=` on a server** is what its NICs can move each way, whatever its
+  cables add up to — a card in a PCIe slot narrower than its ports, two cards
+  sharing one. Contention holds its own flows back there, as at a full
+  cable, and its tooltip says `its NICs: 100% of the 20G they can move each
+  way — full, holding back 62 flows itself`; the panel counts `N hosts full`.
+
 A `gbps=` on a rack or a room is not passed down to what is in it.
+
+#### Device models: a datasheet written once
+
+A `model` line defines a device once, and every element with `model=` its
+name takes its settings and tags — `u=`, `+switch`, `gbps=`, `pps=`,
+`buffer=`, `latency=`, `ports=`, `breakout=` and anything else — wherever it
+does not set its own. Names match in any case; a `model=` no `model` line
+defines is kept as a note, and one a letter off a defined name is named as
+a typo. The two Arista switches, from their datasheets:
+
+```text
+model 7050DX4-32S u=1 +switch gbps=12800 pps=5300000000 buffer=132MB latency=900ns ports=32x400,2x10,1x1 breakout=400:32,200:64,100:128,50:144,40:64,25:128,10:130
+model 7060DX5-64S u=2 +switch gbps=25600 pps=10600000000 buffer=114MB latency=825ns ports=64x400,2x10,1x1 breakout=400:64,200:128,100:256,50:256,25:256,10:258
+
+node leaf[1..8]  model=7050DX4-32S
+node spine[1..4] model=7060DX5-64S
+node leaf9 model=7050DX4-32S buffer=64MB      # its own setting wins
+```
+
+- **`gbps=` is one direction**: what the ports add up to, 32 × 400G = 12.8T.
+  Datasheets also quote the two directions added (25.6 and 51.2 Tbps);
+  that is not the figure. These two are non-blocking, so `gbps=` never
+  binds; it is there for one that is oversubscribed.
+- **`pps=` is the forwarding rate** — 5.3 and 10.6 billion packets a second.
+  Both are rated with packets averaging over about 295 bytes: from there up
+  they forward at line rate, and below it packets, not bits, are the limit.
+  5.3 billion 64-byte requests a second, with framing, are about 5.5 Tb/s:
+  a matrix run of small packets fills a 7050DX4-32S's packet rate at under
+  half its bandwidth (see `pps=` above).
+- **`ports=`** is what the device has, so many of so many Gb/s (`1x1` is
+  the management port, for a `gbps=1` mgmt net). Its cables are checked
+  against it: each takes a port at least as fast, and a fast port breaks out
+  into several slower cables — a 400G port is four 100G cables, two 200G or
+  eight 50G. **`breakout=`** is the datasheet's most ports of each speed,
+  which is a limit of the chip as much as of the cages: a 7050DX4-32S breaks
+  out to 128 × 100G but 144 × 50G, not 256. Too many cables, a cable faster
+  than any port, or more of a speed than `breakout=` allows is a warning on
+  the device's line, once however many devices the line made.
+- **`buffer=`** is the shared packet buffer bursts queue in (see bursts,
+  above), and **`latency=`** the switch's own time per packet (see
+  [Between picks](#between-picks-only-their-flows-and-a-test-flow)).
+
+A server's NICs are specified the same way, on the server: `ports=`,
+`gbps=` each way, `pps=` each way and `latency=`. A Broadcom **BCM57508**
+card in its 2 × 100G form (P2100G; 1 × 200G as the P1200G) sits on a PCIe
+4.0 x16 slot, about 250 Gb/s each way before overhead — enough for its 200G.
+Broadcom's DPDK reports measure it at about 106 million 64-byte packets a
+second with no loss across both ports, which is the card's ceiling; a
+kernel network stack is well below it, so measure your own servers for
+`pps=` where the matrix runs use sockets:
+
+```text
+model P2100G ports=2x100 gbps=200 pps=106000000
+node s[1..16] role=server model=P2100G
+```
+
+A server with two such cards has twice each figure: `ports=4x100
+gbps=400 pps=212000000`, or a card a net if they are cabled apart.
+
+What the datasheets also give and the viewer does not model: power draw,
+fans and power supplies, memory, table sizes (128-way ECMP, routes, MACs),
+queues per port and QoS (PFC, ECN), MACsec, and the load-balancing features
+the 7060X5 adds — dynamic load balancing is close to **adaptive routing**,
+and Cluster Load Balancing places RDMA flows with a view of both leaf and
+spine. Write any of them as attributes for the inspector.
 
 #### Findings: what went wrong, and whether the load explains it
 
@@ -721,10 +859,34 @@ picks the picks box offers two things more:
   receives) it shared evenly over its devices. **Stop**, Esc or Clear ends
   it.
 
-For a single test flow, **hashed: one path per flow** is usually what you
-want: it puts the whole flow on one uplink, so every cable from server to
-server is drawn the same width, where even split shares it over every
-uplink — four spines, a quarter each.
+A single test flow, hashed as the page routes it by default, takes one
+uplink, so every cable from server to server is drawn the same width; the
+even split (packet spraying) shares it over every uplink — four spines, a quarter each.
+
+Between two devices the picks box also gives the **latency** floor of one
+packet's trip, at 64 and 1500 bytes, over every shortest route: each
+switch's `latency=`, and each cable's time to send the packet — once for a
+run of cut-through hops, and again wherever a switch must hold the whole
+packet first because the cable out is faster than the cable in. Over
+`examples/dual-plane.dc` with `latency=900ns` on its switches, two servers
+in one rack are `942 ns at 64 B, 1.4 µs at 1500 B · 1 switch`; in two racks,
+`2.78 µs at 64 B, 3.7 µs at 1500 B · 3 switches` — the ToR stores each packet
+where 25G steps up to 100G. A `latency=` on either host — its NIC and
+stack — is added too. Not counted: the cables' length (about 5 ns a metre);
+a switch with no `latency=` is counted as none, and said so.
+
+With a load on the cables, a second line gives the trip **under this
+load**: each cable's queue added. A cable a fraction ρ full holds a packet
+about ρ/(1−ρ) of the load's packet times — the single queue's textbook
+figure, 9 at 90% and 99 at 99% — and a full one as long as its port's share
+of the sending switch's `buffer=` takes to drain, which is also the most
+any queue can hold it. The load's packets are its own size where it says
+one, else IMIX. Over the dual-plane fabric with `buffer=2MB` on its ToRs,
+two racks apart, a load of 150% shared out fills the ToR's downlink, and a
+1500-byte packet takes about 75 µs where it took 3.7 — 71 of them waiting
+for 222 KB to drain at 25G. A full cable at a switch with no `buffer=` is
+said to have no ceiling known, and a host's own full NIC queues in the host,
+which is not counted.
 
 #### The load generator: a load with no file
 
@@ -784,8 +946,16 @@ off.
   the packets beside the bits. Over `examples/dual-plane.dc`, all-to-all at
   1,000,000 pps of 500 B requests and 4096 B replies is 32 Mpps each way and
   fills every server's NICs to 76%, almost all of it the replies coming back.
-  Choosing pps starts at 1500 B requests and no replies; with the request
-  size emptied, pps is plain packets, drawn by load alone.
+  Choosing pps starts at **IMIX** requests and no replies: 316 B of payload,
+  the average of the standard 7:4:1 mix of 64, 594 and 1518-byte frames.
+  Real datacentre traffic is two-humped — small acks and requests beside
+  full-size data — and averages a few hundred bytes, and switches are rated
+  for their packet rate at about this size; 1500 B would make a packet-rate
+  limit look harmless. One average size is exact here: bits and packets both
+  add up linearly, so a mix and its mean load the cables the same. **64 B ·
+  IMIX · 1500 B** beside the box set each at a click, here and on a measured
+  packet rate's own row. With the request size emptied, pps is plain
+  packets, drawn by load alone.
 - **to hosts** — **anywhere**, or **outside its own rack** (row, pod, room —
   the kinds in your layout): every flow leaves the sender's rack, which loads
   the uplinks and nothing inside a rack.
@@ -883,8 +1053,8 @@ other hosts measured, then routed like flows.
 - **evenly to every other host** sends each the same share.
 - Every host still sends exactly its total; what is a guess is only where it
   goes. The panel says the load is estimated and from how many hosts, and an
-  estimate is always shared as a fluid — **hashed** routes it as an even
-  split, since one path per guessed flow would read as a measurement.
+  estimate is always shared as a fluid — hashed or adaptive routes it as an
+  even split, since one path per guessed flow would read as a measurement.
 - Only devices count as hosts: a reading on a rack or a room is left out,
   and the panel says how many were.
 - The metric must be a rate (`unit=Gb/s`, `pps`, …, or a name like
@@ -1810,7 +1980,8 @@ quietly left stale.
 - **Cable load and capacity** — with a metric loaded onto the cables, the
   Networks panel holds what the cables show (model, counters, the two
   compared, or the change since taking something out), the colour key, the
-  split (even, by capacity, or hashed with **Re-roll**), the spread for an
+  routing (hashed per connection with **Re-roll** and the connections a
+  flow, polarized, adaptive, by capacity, or packet spraying), the spread for an
   estimate, the what-if, and the busiest cables or biggest changes; **width
   by capacity** draws each cable by its `gbps=` instead. See
   [Capacity](#capacity-what-a-cable-carries) and
@@ -1872,8 +2043,9 @@ examples/mx/              every layout construct, painted by a real mx run
 examples/live/            three wide TSV tables in one folder: the format that
                           needs no layout file, and what "Load all" loads
 js/traffic.js             cable load: flows routed over the fabric (shortest
-                          routes, through +switch elements, shared evenly, by
-                          capacity, or hashed), per-host totals estimated by
+                          routes, through +switch elements, hashed per
+                          connection, adaptively, by capacity or evenly),
+                          per-host totals estimated by
                           the gravity model, switch counters onto their
                           cables, comparisons, and what-if
 js/tsv.js                 the wide-table reader: detection, the arrow that

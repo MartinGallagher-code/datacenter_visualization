@@ -19,6 +19,7 @@ const KINDS = [
   ['node', 'a device'],
   ['net', 'declare a fabric to draw'],
   ['link', 'wire a fabric by rule'],
+  ['model', 'define a device once, for model= to use: model leaf u=1 +switch gbps=12800'],
 ];
 
 const ELEMENT_KEYS = [
@@ -33,8 +34,13 @@ const ELEMENT_KEYS = [
   ['if=', 'make this line only where it holds: if={row}=1, if={row}!=1'],
   ['color=', 'fill colour: #4fa3ff, teal, rgb(1,2,3)'],
   ['seq=', 'count per enclosing kind (seq=room) or by name (seq=net)'],
-  ['gbps=', 'a switch’s own forwarding capacity, in Gb/s: gbps=12800'],
+  ['gbps=', 'a switch’s own forwarding capacity, or what a server’s NICs move each way, in Gb/s: gbps=12800'],
   ['pps=', 'packet rate, in packets a second: what a switch forwards, or a server sends and takes in (pps=8000000000)'],
+  ['buffer=', 'a switch’s shared packet buffer: buffer=132MB -- what a burst can queue in before it drops'],
+  ['ports=', 'a device’s ports, so many of so many Gb/s: ports=32x400,2x10 -- its cables are checked against them'],
+  ['breakout=', 'the most ports of each speed it breaks out to, from its datasheet: breakout=200:64,100:128,50:144'],
+  ['latency=', 'a switch’s own latency per packet, or a host’s NIC and stack: latency=900ns'],
+  ['model=', 'a device defined by a model line: its settings and tags are this one’s too'],
 ];
 
 const NET_KEYS = [
@@ -45,7 +51,8 @@ const NET_KEYS = [
   ['show=', 'true/false: start visible or unticked'],
   ['gbps=', 'what each cable carries, in Gb/s: gbps=100'],
   ['traffic=', 'no: drawn, but carries no routed traffic (mgmt)'],
-  ['bond=', 'name: a host’s cables on nets with the same bond share every flow by capacity'],
+  ['bond=', 'name: a host’s cables on nets with the same bond are one LACP bond: each connection keeps to one, by hash'],
+  ['balance=', 'how a bond shares a flow: hash (each connection on one cable, the default) or even (every flow over them all)'],
 ];
 
 // Every option a link rule takes, and only those. The parser's own LINK_OPTS
@@ -78,6 +85,7 @@ const IDENT = /^[a-z_][\w-]*$/i;
 // KB (a hyperscale campus is one page), so a full pass per keystroke is free.
 function harvest(text) {
   const kinds = new Set();
+  const models = new Set();
   const nets = new Set();
   const tags = new Set();
   const keys = new Set();
@@ -89,6 +97,8 @@ function harvest(text) {
     const kind = tokens[0].toLowerCase();
     if (kind === 'net') {
       if (tokens[1] && !tokens[1].includes('=')) nets.add(tokens[1]);
+    } else if (kind === 'model') {
+      if (tokens[1] && !tokens[1].includes('=')) models.add(tokens[1]);
     } else if (kind !== 'link' && kind !== 'title') {
       kinds.add(kind);
     }
@@ -114,7 +124,7 @@ function harvest(text) {
       }
     }
   }
-  return { kinds, nets, tags, keys, values };
+  return { kinds, models, nets, tags, keys, values };
 }
 
 function valueOptions(key, special, h) {
@@ -158,7 +168,7 @@ export function suggestionsFor(text, caret) {
 
     if (kind === 'net') {
       if (key) {
-        options = valueOptions(key, { style: STYLES, show: YES_NO, traffic: YES_NO, gbps: SPEEDS }, h);
+        options = valueOptions(key, { style: STYLES, show: YES_NO, traffic: YES_NO, gbps: SPEEDS, balance: ['hash', 'even'] }, h);
       } else {
         options = [];
         if (idPosition) {
@@ -184,7 +194,9 @@ export function suggestionsFor(text, caret) {
       }
     } else {
       if (key) {
-        options = valueOptions(key, { dir: DIRS, align: ALIGNS, seq: [...h.kinds] }, h);
+        options = valueOptions(key, {
+          dir: DIRS, align: ALIGNS, seq: [...h.kinds], ...(h.models.size ? { model: [...h.models] } : {}),
+        }, h);
       } else {
         options = [];
         if (idPosition) {
@@ -405,14 +417,28 @@ const REFERENCE = [
     ['net fabric gbps=100', 'every cable of the net carries 100 Gb/s'],
     ['link nica role=server role=tor scope=rack gbps=25', 'this rule’s cables, over the net’s'],
     ['net mgmt gbps=1 traffic=no', 'drawn, but carries none of the routed traffic'],
-    ['net nica gbps=100 bond=nic', 'bonded with every net of bond=nic: a server’s NICs share each flow by capacity, sending and receiving'],
+    ['net nica gbps=100 bond=nic', 'bonded with every net of bond=nic, as LACP layer3+4: each connection keeps to one NIC, many even them out'],
+    ['net nica gbps=100 bond=nic balance=even', 'a bond that shares every flow evenly over its NICs, whatever the routing'],
     ['link fabric role=tor role=spine weight=2', 'twice the share of a flow where routes fork'],
     ['link plane1 role=spine role=superspine count=6 gbps=400', 'a bundle: six 400G members per pair, each hashed onto by itself'],
     ['+switch', 'only elements tagged switch forward traffic', true],
     ['node spine role=spine +switch gbps=12800', 'a switch that can forward 12.8 Tb/s in all, whatever its ports add up to'],
     ['node spine role=spine +switch pps=8000000000', 'and 8 billion packets a second: small packets can fill it before its bandwidth'],
     ['node s[1..16] role=server pps=20000000', 'a server that sends, and takes in, 20 million packets a second each way'],
+    ['node leaf +switch buffer=132MB', 'a shared packet buffer: what bursts queue in before they drop'],
+    ['node leaf +switch latency=900ns', 'its latency per packet, added up along a route between picks'],
+    ['node s[1..16] role=server gbps=200', 'a server whose NICs move 200 Gb/s each way, whatever its cables add up to (a PCIe slot)'],
+    ['node leaf +switch ports=32x400,2x10', 'its ports: its cables are checked against them, breakout included (one 400G port is four 100G cables)'],
+    ['node leaf +switch breakout=200:64,100:128,50:144', 'the datasheet’s most ports of each speed: no more cables of a speed than that'],
     ['gbps=1 gbps=10 gbps=25 gbps=40 gbps=100 gbps=200 gbps=400 gbps=800', 'common port speeds', true],
+  ]],
+  ['Device models', 'A datasheet written once: every element with model= its name takes its settings and tags, where it does not set its own.', [
+    ['model 7050DX4-32S u=1 +switch gbps=12800 pps=5300000000 buffer=132MB latency=900ns ports=32x400,2x10,1x1 breakout=400:32,200:64,100:128,50:144,40:64,25:128,10:130', 'Arista 7050DX4-32S, from its datasheet'],
+    ['model 7060DX5-64S u=2 +switch gbps=25600 pps=10600000000 buffer=114MB latency=825ns ports=64x400,2x10,1x1 breakout=400:64,200:128,100:256,50:256,25:256,10:258', 'Arista 7060DX5-64S, from its datasheet'],
+    ['model P2100G ports=2x100 gbps=200 pps=106000000', 'a Broadcom BCM57508 card, 2x100G: its line rate, and its DPDK packet rate at 64 B'],
+    ['node leaf[1..8] model=7050DX4-32S', 'eight of them: 1U, forwarding, with its packet rate, buffer, latency and ports'],
+    ['node s[1..16] role=server model=P2100G', 'servers with one such card each'],
+    ['node leaf9 model=7050DX4-32S buffer=64MB', 'its own setting wins over the model’s'],
   ]],
   ['Selectors', 'For link rules and the filter bar.', [
     ['+tag', 'tag (inherited too)', true],

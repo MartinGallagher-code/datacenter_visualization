@@ -42,7 +42,10 @@ const DEFAULT_CAP = 2000000;
 // Attributes that describe *this* element only and must not cascade to children.
 // gbps= on an element is a switch's own forwarding capacity, so a rack's
 // would say nothing about its servers.
-const NON_INHERITED = new Set(['id', 'name', 'at', 'u', 'cols', 'dir', 'gap', 'label', 'size', 'seq', 'align', 'if', 'gbps', 'pps']);
+const NON_INHERITED = new Set([
+  'id', 'name', 'at', 'u', 'cols', 'dir', 'gap', 'label', 'size', 'seq', 'align', 'if', 'gbps', 'pps',
+  'buffer', 'ports', 'breakout', 'latency',
+]);
 
 const DEFAULT_NET_COLORS = ['#4fa3ff', '#ff9f43', '#4dd4ac', '#c986ff', '#ff6b8b', '#f5d442'];
 
@@ -197,8 +200,91 @@ const NET_NUMBERS = { width: [0.1, 100], gbps: GBPS_RANGE };
 // pps=: what a switch can forward in packets a second -- a packet-rate
 // ceiling of its own, beside its gbps=.
 const ELEMENT_REALS = { gbps: GBPS_RANGE, pps: [1, 1e13] };
+// A device's datasheet figures that carry a unit, each read by one function
+// here so the check and every use agree.
+const BYTE_UNITS = {
+  b: 1, k: 1e3, kb: 1e3, m: 1e6, mb: 1e6, g: 1e9, gb: 1e9,
+  kib: 1024, mib: 1024 ** 2, gib: 1024 ** 3,
+};
+// Divisors, so 900ns reads as exactly 9e-7 s rather than 900 times 1e-9.
+const TIME_UNITS = { ns: 1e9, us: 1e6, 'µs': 1e6, 'μs': 1e6, ms: 1e3, s: 1 };
+
+/** A size in bytes -- `132MB`, `64MiB`, `1.5GB`, a bare number of bytes -- or null. */
+export function readBytes(raw) {
+  const m = /^\s*([0-9]*\.?[0-9]+(?:e[0-9]+)?)\s*([a-z]*)\s*$/i.exec(String(raw ?? ''));
+  if (!m) return null;
+  const unit = m[2].toLowerCase();
+  const scale = unit ? BYTE_UNITS[unit] : 1;
+  const n = Number(m[1]) * scale;
+  return scale && Number.isFinite(n) && n > 0 ? n : null;
+}
+
+/** A time in seconds -- `900ns`, `0.9us`, `1ms`, a bare number of nanoseconds -- or null. */
+export function readDuration(raw) {
+  const m = /^\s*([0-9]*\.?[0-9]+(?:e[0-9]+)?)\s*([a-zµμ]*)\s*$/i.exec(String(raw ?? ''));
+  if (!m) return null;
+  const unit = m[2].toLowerCase();
+  const per = unit ? TIME_UNITS[unit] : 1e9;
+  const n = Number(m[1]) / per;
+  return per && Number.isFinite(n) && n >= 0 ? n : null;
+}
+
+/**
+ * A device's ports -- `32x400,2x10`: so many of each speed, in Gb/s (a
+ * trailing G is fine) -- as [{ count, gbps }], or null.
+ */
+export function readPorts(raw) {
+  const out = [];
+  for (const part of String(raw ?? '').split(',')) {
+    const m = /^\s*(\d+)\s*[x×*]\s*([0-9]*\.?[0-9]+)\s*g?\s*$/i.exec(part);
+    if (!m) return null;
+    const count = Number(m[1]);
+    const gbps = Number(m[2]);
+    if (!(count >= 1 && count <= 100000 && gbps > 0 && gbps <= GBPS_RANGE[1])) return null;
+    out.push({ count, gbps });
+  }
+  return out.length ? out : null;
+}
+
+/**
+ * The most cables of each speed a device's ports break out into, as a
+ * datasheet's port table gives them -- `200:64,100:128,50:144` -- as a
+ * Map(gbps -> count), or null.
+ */
+export function readBreakout(raw) {
+  const out = new Map();
+  for (const part of String(raw ?? '').split(',')) {
+    const m = /^\s*([0-9]*\.?[0-9]+)\s*g?\s*:\s*(\d+)\s*$/i.exec(part);
+    if (!m) return null;
+    const gbps = Number(m[1]);
+    const count = Number(m[2]);
+    if (!(gbps > 0 && count >= 1)) return null;
+    out.set(gbps, count);
+  }
+  return out.size ? out : null;
+}
+
+// Each of them, with what it says when it cannot be read.
+const ELEMENT_UNITS = {
+  buffer: [readBytes, 'not a size -- write it as 132MB, 64MiB or a number of bytes'],
+  latency: [readDuration, 'not a time -- write it as 900ns, 0.9us or a number of nanoseconds'],
+  ports: [readPorts, 'not a list of ports -- write it as 32x400,2x10: so many ports of so many Gb/s'],
+  breakout: [readBreakout, 'not a breakout table -- write it as 200:64,100:128: the most ports of each speed'],
+};
+
+function checkUnits(attrs, what, model, line) {
+  for (const [key, [read, why]] of Object.entries(ELEMENT_UNITS)) {
+    const raw = attrs[key];
+    if (raw === undefined || read(raw) !== null) continue;
+    warnOnce(model, `unit\u0000${line}\u0000${key}\u0000${raw}`, `line ${line}: ${what}: ${key}=${raw} is ${why} -- ignored`);
+  }
+}
+
 // Everything a `net` line takes; `on=` is the old spelling of `show=`.
-const NET_KEYS = ['label', 'color', 'style', 'width', 'show', 'on', 'gbps', 'traffic', 'bond'];
+const NET_KEYS = ['label', 'color', 'style', 'width', 'show', 'on', 'gbps', 'traffic', 'bond', 'balance'];
+// How a bond shares what it carries: hash keeps each connection on one cable,
+// as LACP's layer3+4 policy does; even shares every flow over them all.
+const BALANCES = ['hash', 'even'];
 
 /**
  * One reading of a number attribute, so the check and the use cannot drift
@@ -594,9 +680,28 @@ function materialize(syn, parent, model) {
     checkAlign(attrs, wrote, model, syn.line);
     checkNumbers(attrs, wrote, model, syn.line);
     checkNumbers(attrs, wrote, model, syn.line, ELEMENT_REALS, false);
+    checkUnits(attrs, wrote, model, syn.line);
     checkColor(attrs, wrote, model, syn.line);
 
-    const el = makeElement(syn.kind, id, parent, attrs, tags, model, syn.line);
+    // model= names a device defined once with a `model` line: its settings
+    // and tags are this element's too, where it does not set its own.
+    // Checked on the model's own line, not again on every device using it.
+    let ownTags = tags;
+    if (attrs.model !== undefined && model.models.size) {
+      const def = model.models.get(String(attrs.model).toLowerCase());
+      if (def) {
+        attrs = { ...def.attrs, ...attrs };
+        ownTags = [...def.tags, ...tags];
+      } else {
+        const guess = nearest(String(attrs.model), [...model.models.values()].map((d) => d.name));
+        if (guess) {
+          warnOnce(model, `model\u0000${syn.line}`, `line ${syn.line}: ${wrote}: model=${attrs.model} is not a model `
+            + `defined here -- did you mean ${guess}? Kept as a note`);
+        }
+      }
+    }
+
+    const el = makeElement(syn.kind, id, parent, attrs, ownTags, model, syn.line);
 
     // U-slot bookkeeping. Auto-placed children take the lowest run of free slots
     // that fits, so an explicitly placed `tor at=42` does not shove the rest of
@@ -634,6 +739,7 @@ function materialize(syn, parent, model) {
       }
     }
 
+    el.line = syn.line;
     for (const child of syn.children) materialize(child, el, model);
 
     if (el.kind === 'rack') {
@@ -892,7 +998,7 @@ export function looksLikeLayout(text) {
   for (const raw of String(text || '').split(/\r?\n/)) {
     const line = raw.trim();
     if (!line || line.startsWith('#')) continue;
-    return /^(dc|title)\s+\S/i.test(line);
+    return /^(dc|title|model)\s+\S/i.test(line);
   }
   return false;
 }
@@ -908,6 +1014,8 @@ export function parseLayout(text) {
     warnings,
     title: 'datacenter',
     rootTagCache: new Map(),
+    // Devices defined once by a `model` line, by name in lower case.
+    models: new Map(),
   };
 
   const syntax = buildSyntaxTree(text, warnings);
@@ -974,6 +1082,19 @@ const truthy = (value) => {
             traffic = true;
           }
         }
+        // balance=: how a bond shares a flow over its cables.
+        let balance = 'hash';
+        if (child.attrs.balance !== undefined) {
+          const b = String(child.attrs.balance).toLowerCase();
+          if (BALANCES.includes(b)) balance = b;
+          else {
+            model.warnings.push(`line ${child.line}: net "${name}": balance=${child.attrs.balance} is neither `
+              + `${BALANCES.join(' nor ')} -- hashing each connection`);
+          }
+          if (!child.attrs.bond) {
+            model.warnings.push(`line ${child.line}: net "${name}": balance= says how a bond shares, and this net has no bond=`);
+          }
+        }
         model.nets.set(name, {
           name,
           label: child.attrs.label || name,
@@ -982,9 +1103,11 @@ const truthy = (value) => {
           width: numAttr(child.attrs.width, 1, NET_NUMBERS.width),
           gbps: numAttr(child.attrs.gbps, null, NET_NUMBERS.gbps),
           traffic,
-          // bond=: a host's cables on nets with the same bond are one bond,
-          // and every flow from or to it is spread over them by capacity.
+          // bond=: a host's cables on nets with the same bond are one bond;
+          // balance= how it shares a flow over them -- each connection on
+          // one cable by its hash, or every flow over them all.
           bond: child.attrs.bond || null,
+          balance,
           enabled,
         });
       } else if (child.kind === 'link') {
@@ -1013,6 +1136,23 @@ const truthy = (value) => {
         linkRules.push({ net: child.idSpec, line: child.line, selA, selB, ...opts });
       } else if (child.kind === 'title') {
         model.title = child.idSpec || child.attrs.name || model.title;
+      } else if (child.kind === 'model') {
+        // A device defined once -- a switch's datasheet -- for every element
+        // that says model= its name. Its settings are checked here, once.
+        const name = child.idSpec;
+        if (!name) {
+          model.warnings.push(`line ${child.line}: model needs a name, as in model 7050dx4 u=1 +switch gbps=12800`);
+        } else {
+          if (model.models.has(name.toLowerCase())) {
+            model.warnings.push(`line ${child.line}: model "${name}" is defined twice -- the later one is used`);
+          }
+          const what = `model "${name}"`;
+          checkNumbers(child.attrs, what, model, child.line);
+          checkNumbers(child.attrs, what, model, child.line, ELEMENT_REALS, false);
+          checkUnits(child.attrs, what, model, child.line);
+          checkColor(child.attrs, what, model, child.line);
+          model.models.set(name.toLowerCase(), { name, attrs: { ...child.attrs }, tags: child.tags, line: child.line });
+        }
       } else {
         into.push(child);
         continue;
@@ -1057,6 +1197,7 @@ const truthy = (value) => {
     }
   }
   model.links = buildLinks(rules, model);
+  checkPorts(model);
 
   // A declared fabric that draws nothing looks like a broken rule, so nets
   // start visible -- except on a floor big enough that half a million cables
@@ -1067,6 +1208,101 @@ const truthy = (value) => {
   }
   model.resolve = makeResolver(model);
   return model;
+}
+
+// --------------------------------------------------------------------- ports
+
+// How many cables one port can break out into: eight lanes on a 200G and
+// faster port (QSFP-DD, OSFP), four on 40-100G (QSFP), one below.
+const lanesOf = (gbps) => (gbps >= 200 ? 8 : gbps >= 40 ? 4 : 1);
+
+/**
+ * Whether a device's cables fit its ports=, breakout included: each cable
+ * takes a port at least as fast, and a port can be broken out into as many
+ * cables of one speed as its lanes and its speed allow -- a 400G port is
+ * four 100G cables, or two 200G, or eight 50G. Cables are placed fastest
+ * first, each on a port already broken out to its speed where one has room,
+ * else on the slowest free port that is fast enough. A cable with no gbps=
+ * takes a whole port of any speed. Where the device has a breakout= --
+ * its datasheet's most ports of each speed, a limit of the chip's as much
+ * as of the cages -- no more cables of a speed than that, and no more in
+ * all than the largest of them.
+ *
+ * @returns { needed, have, faster, over } -- the ports the cables need, the
+ *          ports there are, the speed of a cable no port is fast enough for
+ *          (or null), and a speed with more cables than breakout= allows,
+ *          { gbps, count, max } (or null); or null where the device has no
+ *          readable ports=
+ */
+export function portsUsed(el) {
+  const spec = readPorts(el.attrs && el.attrs.ports);
+  if (!spec) return null;
+  const free = [];
+  for (const { count, gbps } of spec) for (let i = 0; i < count; i++) free.push(gbps);
+  free.sort((a, b) => a - b);
+  const have = free.length;
+  const open = [];   // ports broken out: { gbps, lane, left }
+  const cables = el.links.map((link) => link.gbps || 0).sort((a, b) => b - a);
+  let needed = 0;
+  let faster = null;
+  for (const g of cables) {
+    const shared = g ? open.find((p) => p.lane === g && p.left > 0) : null;
+    if (shared) { shared.left--; continue; }
+    needed++;
+    const at = free.findIndex((speed) => speed >= g);
+    if (at < 0) {
+      if (g && !spec.some((p) => p.gbps >= g) && faster === null) faster = g;
+      continue;
+    }
+    const speed = free.splice(at, 1)[0];
+    const fits = g ? Math.min(lanesOf(speed), Math.floor(speed / g)) : 1;
+    if (fits > 1) open.push({ gbps: speed, lane: g, left: fits - 1 });
+  }
+  let over = null;
+  const table = readBreakout(el.attrs.breakout);
+  if (table) {
+    const bySpeed = new Map();
+    for (const g of cables) if (g) bySpeed.set(g, (bySpeed.get(g) || 0) + 1);
+    for (const [gbps, count] of bySpeed) {
+      const max = table.get(gbps);
+      if (max !== undefined && count > max && !over) over = { gbps, count, max };
+    }
+    let most = 0;
+    for (const n of table.values()) most = Math.max(most, n);
+    if (!over && cables.length > most) over = { gbps: null, count: cables.length, max: most };
+  }
+  return { needed, have, faster, over };
+}
+
+// Every device with a ports= its cables do not fit, said once per line.
+function checkPorts(model) {
+  const byLine = new Map();
+  for (const el of model.all) {
+    if (!el.attrs || el.attrs.ports === undefined || !el.links.length) continue;
+    const use = portsUsed(el);
+    if (!use || (use.needed <= use.have && use.faster === null && !use.over)) continue;
+    const list = byLine.get(el.line) || [];
+    list.push([el, use]);
+    byLine.set(el.line, list);
+  }
+  for (const [line, list] of byLine) {
+    const [el, use] = list[0];
+    const many = list.length > 1 ? `${list.length} devices, ${el.id} among them: ` : '';
+    // The plainest reason first: a cable too fast, a speed past its
+    // datasheet figure, then too few ports in all.
+    let why;
+    if (use.faster !== null) why = `${many}${el.id} has a ${use.faster}G cable and no port that fast (ports=${el.attrs.ports})`;
+    else if (use.over && use.over.gbps !== null) {
+      why = `${many}${el.id} has ${use.over.count} cables of ${use.over.gbps}G, and breaks out to ${use.over.max} of them at most (breakout=${el.attrs.breakout})`;
+    } else if (use.needed > use.have) {
+      why = `${many}${el.id}'s ${el.links.length} cables need ${use.needed} ports, breakout included, and it has ${use.have} (ports=${el.attrs.ports})`;
+    } else if (use.over.gbps === null) {
+      why = `${many}${el.id} has ${use.over.count} cables, and breaks out to ${use.over.max} at most (breakout=${el.attrs.breakout})`;
+    } else {
+      why = `${many}${el.id} has ${use.over.count} cables of ${use.over.gbps}G, and breaks out to ${use.over.max} of them at most (breakout=${el.attrs.breakout})`;
+    }
+    model.warnings.push(`${line ? `line ${line}: ` : ''}${why}`);
+  }
 }
 
 // Result files should not have to spell out full paths, so targets resolve by

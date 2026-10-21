@@ -19,7 +19,9 @@ import { fileURLToPath } from 'node:url';
 
 import { expand, subst } from '../js/expand.js';
 import { compileSelector } from '../js/select.js';
-import { parseLayout, isColor, looksLikeLayout, LINK_OPTS, NUMBERS } from '../js/parse.js';
+import {
+  parseLayout, isColor, looksLikeLayout, LINK_OPTS, NUMBERS, portsUsed, readBreakout, readBytes, readDuration, readPorts,
+} from '../js/parse.js';
 import {
   parseResults, bindOverlay, overlayValue, AGGREGATIONS, extent,
   recomputeStats, zScore, formatValue, unitFor, zRangeOf, paletteOf, invertedOf, overlayKey,
@@ -33,7 +35,7 @@ import {
 } from '../js/render.js';
 import {
   betweenPicks, biggestChanges, bitRate, burstRisk, busiest, cableKeys, cablesOf, compareLoads, countersOf, devicesOf,
-  contend, CONTEND_LIMITS, estimateFlows, findingKind, findingsOf, flowsOf, flowsOver, formatGbps, GEN_LIMITS,
+  adaptiveWeights, BUFFER_ALPHA, CONNECTION_LIMITS, FRAMING_BYTES, IMIX_BYTES, PACKET_PICKS, contend, pathLatency, switchBuffer, switchLatency, switchPps, CONTEND_LIMITS, estimateFlows, findingKind, findingsOf, flowsOf, flowsOver, formatGbps, GEN_LIMITS,
   generateFlows, hostCapacity,
   hostsFor, hostsOf, loadable, loadUnit, mergeResults, packetGb, reachKinds, readsAsLoad, routeEstimate, routeTraffic,
   switchCapacity, switchLoads, testFlows, trafficKind, utilOf, viewOf as cableView,
@@ -2087,6 +2089,195 @@ const segsOf = (cache, net) => {
   eq([bits.contention.held, bits.contention.packets.hostsFull.size], [0, 0], 'a load in bits alone leaves a server’s pps= alone');
 }
 
+// ------------------------------------------------------------ device models
+// A switch's datasheet, written once with a model line and used by name:
+// every element with model= takes its settings and tags where it does not
+// set its own -- the ones that do not inherit (u=, gbps=, pps=) included.
+{
+  const text = `model 7050DX4-32S u=1 +switch gbps=12800 pps=5300000000 buffer=132MB latency=900ns ports=32x400,2x10,1x1 breakout=400:32,200:64,100:128,50:144,40:64,25:128,10:130
+dc D
+  rack R u=42
+    node leaf[1..2] model=7050DX4-32S
+    node leaf3 model=7050dx4-32s buffer=64MB
+    node other model=some-note
+  rack S u=42
+    node s[1..8] role=server
+net up gbps=100
+link up role=server leaf*
+`;
+  const m = parseLayout(text);
+  eq(m.warnings, [], 'a model line and its uses parse clean');
+  ok(looksLikeLayout(text), 'and a file that starts with one is a layout');
+  const leaf = m.resolve('R/leaf1');
+  eq([leaf.attrs.gbps, leaf.attrs.pps, leaf.attrs.buffer, leaf.uSize, leaf.tagsAll.has('switch')],
+     ['12800', '5300000000', '132MB', 1, true], 'the model’s settings and tags are the element’s');
+  eq([switchBuffer(leaf), switchLatency(leaf), switchPps(leaf)], [132e6, 900e-9, 5.3e9], 'and read as the datasheet says');
+  eq(switchBuffer(m.resolve('R/leaf3')), 64e6, 'an element’s own setting wins, and the name is matched in any case');
+  eq(m.resolve('R/other').attrs.model, 'some-note', 'a model= no model line defines is kept as a note');
+  ok(/model=7050DX4-32 is not a model defined here -- did you mean 7050DX4-32S\?/.test(parseLayout(text.replace('model=7050DX4-32S', 'model=7050DX4-32')).warnings.join('\n')),
+     'and one a letter off a defined name is named as a typo');
+  ok(/model needs a name/.test(parseLayout('model u=1\ndc D').warnings.join('\n')), 'a model line needs a name');
+  ok(/model "x" is defined twice/.test(parseLayout('model x u=1\nmodel x u=2\ndc D').warnings.join('\n')), 'and is defined once');
+  const bad = parseLayout('model x buffer=lots latency=soon ports=many breakout=all\ndc D\n  node n model=x').warnings.join('\n');
+  ok(['buffer=lots is not a size', 'latency=soon is not a time', 'ports=many is not a list of ports', 'breakout=all is not a breakout table']
+    .every((w) => bad.includes(w)) && (bad.match(/line 1:/g) || []).length === 4,
+     'a setting that cannot be read is named once, on the model’s line');
+  eq([readBytes('132MB'), readBytes('64MiB'), readBytes('1.5GB'), readBytes('4096'), readBytes('x')],
+     [132e6, 64 * 1024 ** 2, 1.5e9, 4096, null], 'sizes read as a datasheet writes them');
+  const times = [readDuration('900ns'), readDuration('0.9us'), readDuration('0.9µs'), readDuration('1ms'), readDuration('825')];
+  ok([900e-9, 900e-9, 900e-9, 1e-3, 825e-9].every((t, i) => Math.abs(times[i] - t) < 1e-15) && readDuration('soon') === null,
+     'times too, a bare number in nanoseconds');
+  eq(readPorts('32x400,2x10G'), [{ count: 32, gbps: 400 }, { count: 2, gbps: 10 }], 'ports as so many of a speed');
+  eq([...readBreakout('200:64,100:128')], [[200, 64], [100, 128]], 'and a breakout table as the most of each speed');
+}
+
+// ------------------------------------------------------------------- ports
+// ports= checks a device's cables against what it has: each cable takes a
+// port at least as fast, a fast port breaks out into several slower cables,
+// and breakout= caps each speed at the datasheet's figure.
+{
+  const layout = (n, gbps, more = '') => parseLayout(`model sw +switch ports=32x400,2x10,1x1 breakout=400:32,200:64,100:128,50:144,40:64,25:128,10:130 ${more}
+dc D
+  rack R u=42
+    node leaf model=sw
+  rack S u=300
+    node s[1..${n}] role=server
+net up gbps=${gbps}
+link up role=server leaf
+`);
+  const use = (m) => portsUsed(m.resolve('R/leaf'));
+  eq(use(layout(32, 400)), { needed: 32, have: 35, faster: null, over: null }, 'thirty-two 400G cables fill the 400G ports');
+  eq(use(layout(128, 100)).needed, 32, 'four 100G cables to a 400G port');
+  eq(layout(128, 100).warnings, [], 'and 128 of them fit');
+  ok(/leaf has 129 cables of 100G, and breaks out to 128 of them at most/.test(layout(129, 100).warnings.join('\n')), 'a 129th does not');
+  const fast = layout(33, 400).warnings.join('\n');
+  ok(/leaf has 33 cables of 400G, and breaks out to 32 of them at most/.test(fast) && !/need \d+ ports/.test(fast),
+     'too many of one speed is said as that, not as ports in all -- the SFP+ and management ports cannot take a 400G cable');
+  ok(/leaf's 33 cables need 33 ports, breakout included, and it has 32/.test(
+    parseLayout(`dc D\n  node leaf +switch ports=32x400\n  rack S u=300\n    node s[1..33] role=server\nnet up gbps=400\nlink up role=server leaf`).warnings.join('\n')),
+  'more cables than ports is named');
+  ok(/leaf has a 800G cable and no port that fast/.test(layout(1, 800).warnings.join('\n')), 'a cable faster than any port is named');
+  eq(use(layout(2, 10)).needed, 2, '10G cables take the SFP+ ports first');
+  const many = parseLayout(`dc D\n  rack R u=42\n    node leaf[1..4] +switch ports=1x100\n  node s[1..2] role=server\nnet up gbps=100\nlink up role=server leaf*`);
+  eq(many.warnings.length, 1, 'said once for the line, however many devices it made');
+  ok(/4 devices, leaf1 among them/.test(many.warnings[0]), 'and how many');
+}
+
+// ------------------------------------------------------------- buffers
+// A burst's excess queues at the switch sending onto the cable; buffer= is
+// what it has to hold it, shared by every port overflowing there at once.
+{
+  const text = readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8')
+    .replace(/(node tor[ab] at=\d+ role=tor nic=[ab] \+switch)/g, '$1 buffer=2MB');
+  const m = parseLayout(text);
+  eq(m.warnings, [], 'buffer= on the ToRs');
+  const r = routeTraffic(m, generateFlows(m, { pattern: 'all', value: 50, unit: '%' }).flows, { split: 'even' });
+  const fates = (us) => {
+    const c = {};
+    for (const x of burstRisk(r.loads, 1, 2.5, us * 1e-6)) c[x.fate] = (c[x.fate] || 0) + 1;
+    return c;
+  };
+  // A 25G NIC at half full, in a 2.5x burst: 6.25 Gb/s over, 78 KB in 100 us,
+  // against 2 MB shared by the eight ports overflowing at its ToR.
+  const [first] = burstRisk(r.loads, 1, 2.5, 100e-6);
+  ok(Math.abs(first.need - 78125) < 1 && Math.abs(first.have - 2e6 * BUFFER_ALPHA / (1 + 8 * BUFFER_ALPHA)) < 1,
+     `the excess and the port's share of the buffer  (${Math.round(first.need)} B of ${Math.round(first.have)} B)`);
+  eq(fates(100), { absorbed: 64 }, 'a 100 µs burst fits every ToR’s buffer');
+  eq(fates(1000), { drops: 64 }, 'a millisecond one does not');
+  const bare = parseLayout(readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8'));
+  const plain = routeTraffic(bare, generateFlows(bare, { pattern: 'all', value: 50, unit: '%' }).flows, { split: 'even' });
+  ok(burstRisk(plain.loads, 1, 2.5).every((x) => x.fate === 'unknown' || x.fate === 'host'), 'with no buffer=, nothing is said to fit or drop');
+}
+
+// ------------------------------------------------------------------ latency
+// The floor of a packet's trip: each switch's latency=, and each cable's
+// time to send it -- once per run of cut-through hops, again wherever a
+// switch must hold the whole packet because the cable out is faster.
+{
+  const m = parseLayout(readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8').replace(/\+switch/g, '+switch latency=900ns'));
+  const [s1, s2, far] = ['R01/s1', 'R01/s2', 'R02/s1'].map((p) => m.resolve(p));
+  const near = pathLatency(m, s1, s2, 64);
+  ok(Math.abs(near.min - (900e-9 + (130 * 8) / 25e9)) < 1e-12 && near.switches === 1 && near.unknown === 0,
+     `in one rack: the ToR's 900 ns and 64 B (130 on the wire) onto 25G  (${near.min * 1e9} ns)`);
+  const across = pathLatency(m, s1, far, 1500);
+  const sendOn25 = (1566 * 8) / 25e9;
+  ok(Math.abs(across.min - (3 * 900e-9 + 2 * sendOn25)) < 1e-12 && across.min === across.max && across.routes === 8,
+     `across racks, the ToR stores the packet where 25G steps up to 100G: two 25G sends and three switches  (${(across.min * 1e6).toFixed(3)} µs)`);
+  const own = parseLayout(readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8'));
+  const none = pathLatency(own, own.resolve('R01/s1'), own.resolve('R02/s1'), 64);
+  eq([none.switches, none.unknown], [3, 3], 'switches with no latency= are counted, and said so');
+  eq(pathLatency(m, s1, s1, 64), null, 'no trip to itself');
+}
+
+// --------------------------------------------------------------- IMIX
+// The default packet size: simple IMIX's average frame, in payload terms.
+{
+  const frame = (7 * 64 + 4 * 594 + 1518) / 12;
+  eq(IMIX_BYTES, Math.round(frame + 20 - FRAMING_BYTES), `IMIX is the 7:4:1 mix's ${frame.toFixed(1)}-byte average frame, as payload`);
+  eq(PACKET_PICKS.map(([b]) => b), [64, IMIX_BYTES, 1500], 'offered beside the smallest and the largest');
+}
+
+// ------------------------------------------------------- what bursts lose
+// A burst past what the buffer holds loses the excess: the panel counts it.
+{
+  const m = parseLayout(readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8')
+    .replace(/(node tor[ab] at=\d+ role=tor nic=[ab] \+switch)/g, '$1 buffer=2MB'));
+  const r = routeTraffic(m, generateFlows(m, { pattern: 'all', value: 50, unit: '%' }).flows, { split: 'even' });
+  const [x] = burstRisk(r.loads, 1, 2.5, 1e-3);
+  // 781 KB queues on a 25G downlink in a millisecond, 222 KB fits: the rest
+  // is lost, of 3.9 MB sent onto it that way and as much the other.
+  const lost = 781250 - 2e6 / 9;
+  ok(x.fate === 'drops' && Math.abs(x.lost - lost) < 1 && Math.abs(x.sent - 2 * 3906250) < 1,
+     `a millisecond burst loses what its share of the buffer cannot hold  (${Math.round(x.lost)} of ${Math.round(x.sent)} B)`);
+  ok(burstRisk(r.loads, 1, 2.5, 100e-6).every((y) => y.lost === 0), 'one that fits loses nothing');
+}
+
+// --------------------------------------------------- latency under a load
+// The queues a load builds: rho/(1-rho) packet times on a cable rho full,
+// and a full one as long as its port's share of the buffer takes to drain.
+{
+  const m = parseLayout(readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8').replace(/\+switch/g, '+switch latency=900ns buffer=2MB'));
+  const [a, b] = ['R01/s1', 'R02/s1'].map((p) => m.resolve(p));
+  const at = (value) => {
+    const r = routeTraffic(m, generateFlows(m, { pattern: 'all', value, unit: '%' }).flows, { split: 'even' });
+    return pathLatency(m, a, b, 1500, { load: { loads: r.loads, toGbps: 1 } });
+  };
+  const idle = pathLatency(m, a, b, 1500);
+  eq(idle.loaded, null, 'with no load, only the floor');
+  const [low, high] = [at(10), at(90)];
+  ok(low.min === idle.min && low.loaded.min > idle.min && high.loaded.min > low.loaded.min,
+     `the fuller the cables, the longer the wait  (${(idle.min * 1e6).toFixed(2)} → ${(low.loaded.min * 1e6).toFixed(2)} → ${(high.loaded.min * 1e6).toFixed(2)} µs)`);
+  const c = contend(m, generateFlows(m, { pattern: 'all', value: 150, unit: '%' }).flows, { split: 'even', toGbps: 1 });
+  const full = pathLatency(m, a, b, 1500, { load: { loads: c.loads, toGbps: 1 } });
+  const drain = (2e6 / 9) * 8 / 25e9;
+  ok(full.loaded.full === 1 && full.loaded.hosts === 1 && full.loaded.unbounded === 0 && full.loaded.max <= idle.min + drain * 1.0001 + 1e-6,
+     `full, a ToR's downlink holds a packet as long as its share of 2 MB takes to drain  (${(full.loaded.min * 1e6).toFixed(1)} µs)`);
+  const bare = parseLayout(readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8'));
+  const cb = contend(bare, generateFlows(bare, { pattern: 'all', value: 150, unit: '%' }).flows, { split: 'even', toGbps: 1 });
+  eq(pathLatency(bare, bare.resolve('R01/s1'), bare.resolve('R02/s1'), 1500, { load: { loads: cb.loads, toGbps: 1 } }).loaded.unbounded, 1,
+     'with no buffer=, a full cable is said to have no ceiling known');
+}
+
+// ------------------------------------------------------- a server's NICs
+// gbps= on a server: what its NICs move each way, whatever its cables add up
+// to; latency= on one: its NIC and stack, at either end of a trip.
+{
+  const text = readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8')
+    .replace('node s[1..8] u=2 role=server +x86', 'node s[1..8] u=2 role=server +x86 gbps=20 latency=2us');
+  const m = parseLayout(text);
+  eq(m.warnings, [], 'gbps= and latency= on servers');
+  const c = contend(m, generateFlows(m, { pattern: 'all', value: 50, unit: '%' }).flows, { split: 'even', toGbps: 1 });
+  const hosts = c.contention.hosts;
+  ok(hosts.full.size === 32 && [...hosts.through.values()].every((h) => h.out[0] <= 20 + 1e-6 && h.in[0] <= 20 + 1e-6),
+     'servers asked for 25 hold to their 20 each way, and say so');
+  const s1 = m.resolve('R01/s1');
+  ok(Math.abs(hosts.through.get(s1).out[1] - 25) < 1e-9, 'having offered 25');
+  const lat = pathLatency(m, s1, m.resolve('R01/s2'), 64);
+  const plain = parseLayout(readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8'));
+  const base = pathLatency(plain, plain.resolve('R01/s1'), plain.resolve('R01/s2'), 64);
+  ok(Math.abs(lat.min - base.min - 4e-6) < 1e-12, 'a latency= at each end adds both to the trip');
+}
+
 // ------------------------------------------------------------------ bursts
 // A steady average that fits can still overflow in a clump: burstRisk lists
 // the cables a burst of N times the average would overflow, fullest first.
@@ -2121,9 +2312,9 @@ const segsOf = (cache, net) => {
 }
 
 // ------------------------------------------------------- one path per flow
-// Hashed, polarized and adaptive each put a flow on one path. Adaptive
-// places each where there is most room, so it never leaves the busiest
-// uplink fuller than hashing does; polarized hashes alike at every tier.
+// Hashed and polarized each put a connection on one path; polarized hashes
+// alike at every tier. Adaptive spreads every flow by where there is room,
+// so it never leaves the busiest uplink fuller than hashing does.
 {
   const m = parseLayout(readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8'));
   const gen = generateFlows(m, { pattern: 'random', value: 20, unit: 'Gb/s', peers: 2, seed: 7, reach: 'rack' });
@@ -2142,10 +2333,92 @@ const segsOf = (cache, net) => {
   eq(once.delivered, gen.offered, 'and every flow still arrives');
 }
 
+// Adaptive routing, as switches do it: each leans on its emptier cables
+// until its choices are about as full as each other. Where the fabric is
+// even, that is the even split. With one uplink degraded to 40G, the ToR
+// moves its traffic onto the full-speed one, which an even split cannot;
+// but a switch sees only its own cables, so where the trouble is further
+// on -- an uplink out, its spine's other ToRs unaware -- it is no better.
+{
+  const m = parseLayout(readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8'));
+  const flows = generateFlows(m, { pattern: 'all', value: 40, unit: '%' }).flows;
+  const worst = (r) => {
+    let w = 0;
+    for (const [l, x] of r.loads) if (l.net === 'fabric') w = Math.max(w, x[0] / l.gbps, x[1] / l.gbps);
+    return w;
+  };
+  const even = worst(routeTraffic(m, flows, { split: 'even' }));
+  const adaptive = worst(routeTraffic(m, flows, { split: 'adaptive' }));
+  ok(Math.abs(even - adaptive) < 0.02, `all to all on an even fabric, adaptive is the even split  (${adaptive.toFixed(3)} vs ${even.toFixed(3)})`);
+  const tora = m.resolve('R01/tora');
+  const uplink = m.links.find((l) => l.net === 'fabric' && [l.a, l.b].includes(tora) && [l.a, l.b].includes(m.resolve('SP1/spine1')));
+  const was = uplink.gbps;
+  uplink.gbps = 40;
+  try {
+    const evenSlow = worst(routeTraffic(m, flows, { split: 'even' }));
+    const adaptiveSlow = worst(routeTraffic(m, flows, { split: 'adaptive' }));
+    ok(adaptiveSlow < evenSlow - 0.1, `one uplink at 40G, adaptive moves off it  (${adaptiveSlow.toFixed(3)} vs ${evenSlow.toFixed(3)})`);
+    const w = adaptiveWeights(m, flows, { split: 'adaptive' });
+    const c = contend(m, flows, { split: 'adaptive', toGbps: 1, weights: w });
+    const r = routeTraffic(m, flows, { split: 'adaptive', weights: w });
+    ok([...r.loads].every(([l, x]) => {
+      const y = c.contention.offered.get(l);
+      return y && Math.abs(y[0] - x[0]) < 1e-9 && Math.abs(y[1] - x[1]) < 1e-9;
+    }), 'contend routes adaptively as routeTraffic does, given the same weights');
+  } finally {
+    uplink.gbps = was;
+  }
+  const down = { els: [], links: [uplink] };
+  const evenCut = worst(routeTraffic(m, flows, { split: 'even', down }));
+  const adaptiveCut = worst(routeTraffic(m, flows, { split: 'adaptive', down }));
+  ok(Math.abs(evenCut - adaptiveCut) < 0.02, `with the uplink out, no switch that has a choice sees it: adaptive is no better  (${adaptiveCut.toFixed(3)})`);
+}
+
+// -------------------------------------------------------------- connections
+// Real traffic between two hosts is one or more connections, and ECMP
+// hashes each one on its own: one connection per flow is hashing's worst
+// case, many come out near the even split. Contention shares out by
+// connection, and sums them back into the flow.
+{
+  const m = parseLayout(readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8'));
+  const gen = generateFlows(m, { pattern: 'shift', value: 50, unit: '%' });
+  const worst = (r) => {
+    let w = 0;
+    for (const [l, x] of r.loads) if (l.net === 'fabric') w = Math.max(w, x[0] / l.gbps, x[1] / l.gbps);
+    return w;
+  };
+  const one = worst(routeTraffic(m, gen.flows, { split: 'hashed', seed: 3 }));
+  const many = worst(routeTraffic(m, gen.flows, { split: 'hashed', seed: 3, connections: 32 }));
+  const even = worst(routeTraffic(m, gen.flows, { split: 'even' }));
+  ok(many < one && many - even < (one - even) / 2,
+     `32 connections a flow hash far nearer the even split than one  (${many.toFixed(2)} vs ${one.toFixed(2)}, even ${even.toFixed(2)})`);
+  eq(worst(routeTraffic(m, gen.flows, { split: 'even', connections: 32 })), even, 'an even split is the same however many');
+  const r = routeTraffic(m, gen.flows, { split: 'hashed', seed: 3, connections: 8 });
+  eq([r.routed, r.delivered], [gen.flows.length, gen.offered], 'every flow is still routed once, and all of it');
+  const c = contend(m, gen.flows, { split: 'hashed', seed: 3, connections: 8, toGbps: 1 });
+  eq(c.contention.flows.length, gen.flows.length, 'contention hands back flows, not connections');
+  ok([...r.loads].every(([l, x]) => {
+    const y = c.contention.offered.get(l);
+    return y && Math.abs(y[0] - x[0]) < 1e-9 && Math.abs(y[1] - x[1]) < 1e-9;
+  }), 'and routes the connections as routeTraffic does');
+  const link = [...r.loads.keys()].find((l) => l.net === 'fabric');
+  const over = flowsOver(m, gen.flows, [link], { split: 'hashed', seed: 3, connections: 8 });
+  const load = r.loads.get(link);
+  ok(Math.abs(over.amount - (load[0] + load[1])) < 1e-9, 'the flows over a cable add up to it, connection by connection');
+  // A full cable shares out by connection: a flow of eight beside one of
+  // one gets eight shares of it.
+  const [a, b, z] = [m.resolve('R01/s1'), m.resolve('R01/s2'), m.resolve('R01/s3')];
+  const both = [{ id: 1, src: a, dst: z, value: 100 }, { id: 2, src: b, dst: z, value: 100 }];
+  const solo = contend(m, both, { split: 'even', toGbps: 1 }).contention.flows.map((f) => Math.round(f.value));
+  eq(solo[0], solo[1], 'one connection each, they share the cable into the third server evenly');
+  ok(CONNECTION_LIMITS.max >= 32, 'up to a few dozen connections');
+}
+
 // ------------------------------------------------------------------- bonds
-// bond= on nets: a host's cables on nets of one bond carry every flow from
-// or to it in shares by capacity -- sending and receiving, under every split,
-// hashed included, where one flow would otherwise ride one NIC all the way.
+// bond= on nets: a host's cables on nets of one bond carry the flows from or
+// to it. As LACP (layer3+4) does, a hashed connection keeps to one NIC, so
+// only many connections even the NICs out; split evenly, every flow is
+// shared over them by capacity.
 {
   const text = readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8')
     .replace(/^(net nica .*)$/m, '$1 bond=nic').replace(/^(net nicb .*)$/m, '$1 bond=nic');
@@ -2171,7 +2444,10 @@ const segsOf = (cache, net) => {
   const gen = generateFlows(m, { pattern: 'random', value: 10, unit: 'Gb/s', peers: 3, seed: 2 });
   for (const split of ['even', 'capacity', 'hashed', 'polarized', 'adaptive']) {
     const r = routeTraffic(m, gen.flows, { split, seed: 4 });
-    ok(gap(r) < 1e-9 && r.routed === gen.flows.length, `${split}: every server's two NICs send and receive exactly the same`);
+    const hashed = split !== 'even' && split !== 'capacity';
+    ok(hashed ? gap(r) >= 10 - 1e-9 : gap(r) < 1e-9 && r.routed === gen.flows.length,
+       hashed ? `${split}: one connection a flow, LACP leaves a NIC a whole flow busier than its pair`
+         : `${split}: every server's two NICs send and receive exactly the same`);
     const c = contend(m, gen.flows, { split, seed: 4, toGbps: 1 });
     ok([...r.loads].every(([l, x]) => {
       const y = c.contention.offered.get(l);
@@ -2179,10 +2455,35 @@ const segsOf = (cache, net) => {
     }), `${split}: and contend routes the legs as routeTraffic does`);
     const cable = servers[5].links.find((l) => l.net === 'nicb');
     const over = flowsOver(m, gen.flows, [cable], { split, seed: 4 });
-    const load = r.loads.get(cable);
-    ok(Math.abs(over.amount - (load[0] + load[1])) < 1e-9 && over.count === 6,
-       `${split}: the flows over one NIC are the server's six, half of each`);
+    const load = r.loads.get(cable) || [0, 0];
+    ok(Math.abs(over.amount - (load[0] + load[1])) < 1e-9
+       && (hashed ? over.flows.every((x) => Math.abs(x.amount - x.flow.value) < 1e-9) : over.count === 6),
+       hashed ? `${split}: the flows over one NIC are whole ones` : `${split}: the flows over one NIC are the server's six, half of each`);
   }
+  // balance=even: the bond shares every flow over its NICs, hashed or not.
+  const evenText = text.replace(/bond=nic/g, 'bond=nic balance=even');
+  const even = parseLayout(evenText);
+  eq(even.warnings, [], 'balance=even on a bond');
+  for (const split of ['hashed', 'polarized', 'adaptive']) {
+    const r = routeTraffic(even, gen.flows.map((f) => ({ ...f, src: even.resolve(f.src.key), dst: even.resolve(f.dst.key) })), { split, seed: 4 });
+    const sv = hostsFor(even).hosts;
+    const worst = Math.max(...sv.map((s) => {
+      const [a, b] = ['nica', 'nicb'].map((net) => {
+        const link = s.links.find((l) => l.net === net);
+        const x = r.loads.get(link) || [0, 0];
+        return link.a === s ? x : [x[1], x[0]];
+      });
+      return Math.max(Math.abs(a[0] - b[0]), Math.abs(a[1] - b[1]));
+    }));
+    ok(worst < 1e-9, `${split}, balance=even: every server's two NICs carry exactly the same, one connection a flow or not`);
+  }
+  ok(/balance=fair is neither hash nor even/.test(parseLayout(text.replace('bond=nic', 'bond=nic balance=fair')).warnings.join('\n')),
+     'a balance= it does not know is named');
+  ok(/balance= says how a bond shares, and this net has no bond=/.test(
+    parseLayout(text.replace(/^(net fabric .*)$/m, '$1 balance=even')).warnings.join('\n')), 'and one on a net with no bond');
+  // Many connections a flow, LACP evens the NICs out.
+  const lacp = (conns) => gap(routeTraffic(m, gen.flows, { split: 'hashed', seed: 4, connections: conns }));
+  ok(lacp(64) < lacp(1) / 3, `64 connections a flow bring the NICs near even  (${lacp(64).toFixed(2)} apart, against ${lacp(1).toFixed(2)})`);
   // Unbonded and hashed, one flow rides one NIC: the two are apart by a flow.
   const plain = parseLayout(readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8'));
   const loose = routeTraffic(plain, generateFlows(plain, { pattern: 'random', value: 10, unit: 'Gb/s', peers: 3, seed: 2 }).flows,
@@ -2196,8 +2497,10 @@ const segsOf = (cache, net) => {
   // NIC a to NIC a: the legs keep to their side, so between two servers on
   // one pair of ToRs nothing goes up to a spine.
   const [s1, s2] = [m.resolve('R01/s1'), m.resolve('R01/s2')];
-  const pair = routeTraffic(m, [{ id: 1, src: s1, dst: s2, value: 10 }], { split: 'hashed' });
+  const pair = routeTraffic(m, [{ id: 1, src: s1, dst: s2, value: 10 }], { split: 'even' });
   eq([...pair.loads.keys()].map((l) => l.net).sort(), ['nica', 'nica', 'nicb', 'nicb'], 'in one rack, each NIC’s half stays on its own ToR');
+  const nets = [...routeTraffic(m, [{ id: 1, src: s1, dst: s2, value: 10 }], { split: 'hashed' }).loads.keys()].map((l) => l.net);
+  ok(nets.length === 2 && nets[0] === nets[1], `hashed, the one connection keeps to one side  (${nets.join(', ')})`);
 
   // Take a ToR out and the bond's other cable carries all of it.
   const tora = m.resolve('R01/tora');

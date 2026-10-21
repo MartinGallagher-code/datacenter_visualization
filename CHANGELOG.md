@@ -11,6 +11,106 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.21.1 — 2026-10-21
+
+- The even split is named for what it is on a fabric that sprays: **packet
+  spraying (even split)** -- every flow's packets over every route, as a
+  leaf that sprays sends them -- rather than "ideal", which said no switch
+  does it. The routing works as before.
+
+## 1.21.0 — 2026-10-20
+
+- **Show all** beside Show more, on the busiest cables and the biggest
+  changes: every row at once, up to 10,000 -- past that it lists that many
+  and says so, since a page of half a million cables is too long to read and
+  slow to draw. Show fewer goes back to eight.
+
+## 1.20.0 — 2026-10-20
+
+- **`balance=` on a bond's nets** says how it shares what it carries:
+  `hash`, the default, keeps each connection on one NIC as LACP's layer3+4
+  policy does; `even` shares every flow over the bond by capacity, under
+  every routing -- a bond whose NICs carry the same whatever the
+  connections. A value it does not know, or one on a net with no `bond=`, is
+  named. In the completions and the Syntax panel.
+
+## 1.19.1 — 2026-10-19
+
+- A device with more cables of one speed than its `breakout=` allows is
+  told so first -- `has 68 cables of 400G, and breaks out to 64 of them at
+  most` -- rather than as too few ports in all, a count that took in its
+  SFP+ and management ports, which no 400G cable can use.
+
+## 1.19.0 — 2026-10-19
+
+What a load costs: packets of a realistic size, what bursts lose, how long
+packets wait, and a server's own NICs. 1.17.0 and 1.18.0 ride the same pull
+request and are not published on their own.
+
+- **IMIX is the default packet size.** Choosing pps starts at 316 B
+  requests, the average of the standard 64/594/1518-byte mix, rather than
+  1500 B, which made a packet-rate limit look harmless. **64 B · IMIX ·
+  1500 B** are a click away, on the generator and on a measured packet
+  rate's row.
+- **Bursts count what they lose**: the excess past a port's share of its
+  switch's buffer, out of what the burst sends while it lasts. The panel,
+  the headline and the cable's tooltip give it.
+- **Latency under the load.** Between two picked devices, a second line
+  adds each cable's queue: about rho/(1-rho) packet times on a cable rho
+  full, and on a full one as long as its share of the buffer takes to
+  drain -- the buffer is the ceiling on every queue.
+- **A server's NICs.** `gbps=` on a server is what its NICs move each way,
+  held to in contention (`N hosts full`); `latency=` on a host is added at
+  either end of a trip. The README specifies a Broadcom BCM57508 card.
+
+## 1.18.0 — 2026-10-19
+
+A switch's datasheet, in the layout. 1.17.0 rides the same pull request and
+is not published on its own.
+
+- **Device models.** A `model` line defines a device once -- `model
+  7050DX4-32S u=1 +switch gbps=12800 pps=5300000000 buffer=132MB
+  latency=900ns ...` -- and every element with `model=` its name takes its
+  settings and tags where it does not set its own. A layout may now start
+  with a `model` line.
+- **`buffer=`**: a switch's shared packet buffer. Bursts now last a set time
+  (`for … µs`, 100 by default), and each cable a burst overflows is judged
+  against the buffer of the switch sending onto it, shared by every port
+  overflowing there: absorbed, or dropped. The panel counts each, and a
+  cable's tooltip says how much queues where, of how much.
+- **`ports=` and `breakout=`**: what a device has, so many ports of so many
+  Gb/s, and the datasheet's most ports of each speed. Its cables are checked
+  against them, breakout included, and a device with too many is a warning.
+- **`latency=`**: a switch's own time per packet. Between two picked
+  devices, the panel gives the floor of a packet's trip at 64 and 1500
+  bytes: switch latencies, and cable sending times with cut-through and
+  store-and-forward where speed steps up.
+
+## 1.17.0 — 2026-10-19
+
+Routing as a real fabric does it.
+
+- **Hashed per connection is the default**, as nearly every Ethernet fabric
+  routes out of the box. The routing choices are renamed for what real
+  switches do: ECMP hashed per connection, ECMP polarized, adaptive routing,
+  weighted by capacity (WCMP), and the ideal even split, now labelled as
+  the ideal rather than as ECMP.
+- **Connections a flow.** Each flow between two hosts can be several
+  connections (`iperf -P`, parallel streams, queue pairs), each hashed on its
+  own and each its own fair share of a full cable under contention. One, the
+  default, is hashing's worst case; dozens come out near the even split.
+- **Adaptive routing is per packet**, as InfiniBand AR, Spectrum-X and
+  dynamic load balancing do it: every switch leans on its emptier cables
+  until its choices are about as full as each other, seeing only its own
+  cables. It used to place whole flows one at a time, and so could come out
+  worse than the even split; now it is at least as good as the even split
+  on an even fabric, and better where a switch's own cables differ.
+- **Bonds hash as LACP layer3+4 does**: under hashed and adaptive routing
+  each connection keeps to one NIC, so two NICs can be a flow apart with one
+  connection a flow and even out with many. Under the ideal even split
+  every flow is shared over the bond exactly, as before.
+- **A greyed "load the cables" says why** under it, not only on hover.
+
 ## 1.16.0 — 2026-10-17
 
 Packet rates on servers. 1.12.0–1.15.0 ride the same pull request and are

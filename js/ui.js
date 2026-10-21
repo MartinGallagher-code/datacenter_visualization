@@ -16,7 +16,7 @@ import {
 } from './render.js';
 import {
   biggestChanges, burstRisk, busiest, cablesOf, formatGbps, GEN_UNITS, hostsFor, loadable, loadUnit, PATTERNS, reachKinds, TARGETED,
-  readsAsLoad, SINGLE_PATH, SPLITS, SPREADS, TEST_UNITS, trafficKind, utilOf,
+  CONNECTION_LIMITS, IMIX_BYTES, PACKET_PICKS, PER_CONNECTION, readsAsLoad, SPLITS, SPREADS, TEST_UNITS, trafficKind, utilOf,
 } from './traffic.js';
 
 const el = (tag, cls, text) => {
@@ -510,6 +510,8 @@ function overlayCard(state, overlay, actions) {
           + 'than routed -- and beside a routed metric, compared with it.',
       }[kind];
     body.append(lrow);
+    // Greyed, it says why where it can be read, not only on hover.
+    if (!unit.ok) body.append(el('div', 'muted why', `can’t load the cables: ${unit.why}`));
   }
 
   const stats = el('div', 'overlay-stats');
@@ -665,21 +667,26 @@ export function formatLoad(src, value) {
 }
 
 const SPLIT_LABELS = {
-  even: 'even split (ECMP)',
-  capacity: 'split by capacity',
-  hashed: 'hashed: one path per flow',
-  polarized: 'hashed alike at every tier (polarized)',
-  adaptive: 'adaptive: each flow where there is room',
+  hashed: 'ECMP: hashed per connection',
+  polarized: 'ECMP, hashed alike at every tier (polarized)',
+  adaptive: 'adaptive routing (per packet)',
+  capacity: 'weighted by capacity (WCMP)',
+  even: 'packet spraying (even split)',
 };
 // What each split stands for, on its option.
 const SPLIT_TITLES = {
-  even: 'Every flow shared equally over every shortest route, as a fluid: the ideal average of ECMP',
-  capacity: 'Shared in proportion to each cable’s gbps=, as weighted ECMP',
-  hashed: 'Each flow on one path, picked by a hash at every switch, as ECMP hashes a 5-tuple: big flows can land together',
-  polarized: 'Each flow on one path, hashed the same way at every tier, as switches sharing one hash seed do: flows that '
-    + 'collide at one tier collide again at the next',
-  adaptive: 'Each flow on one path, placed in turn on the cable with the most room as the load stands: congestion-aware '
-    + 'routing, the opposite extreme to hashing',
+  hashed: 'What standard Ethernet switches do: each connection on one path, picked by a hash of its 5-tuple at every '
+    + 'switch, each with its own seed. Big flows can land together; more connections a flow even it out. A bonded '
+    + 'host hashes each connection onto one NIC, as LACP layer3+4 does',
+  polarized: 'Each connection on one path, hashed the same way at every tier, as switches sharing one hash seed do: '
+    + 'flows that collide at one tier collide again at the next. A misconfiguration to test for',
+  adaptive: 'Per-packet adaptive routing (InfiniBand AR, Spectrum-X, dynamic load balancing): each switch leans on its '
+    + 'emptier cables until its choices are about as full as each other. It sees only its own cables, not '
+    + 'congestion further on. Hosts still hash, as LACP does',
+  capacity: 'Weighted ECMP: every flow shared over its paths in proportion to each cable’s gbps=, as a fluid',
+  even: 'Every flow’s packets sprayed evenly over every shortest route, round-robin or at random, whatever the load: '
+    + 'what a leaf that sprays does (the NICs put the packets back in order). Also the long-run average of hashing with '
+    + 'endless connections, and on an even fabric the best any balancing could do'
 };
 
 const SPREAD_LABELS = {
@@ -689,6 +696,9 @@ const SPREAD_LABELS = {
 
 const BUSIEST_SHOWN = 8;
 const MORE_STEP = 25;
+// The most rows Show all lists: past it a page of cables is too long to read
+// and slow to draw, so it lists that many and says so.
+const SHOW_ALL_MAX = 10000;
 
 // "40G/25G · 160%": a load against a capacity, short enough for a list row.
 function loadAgainst(src, value, gbps, util) {
@@ -742,6 +752,7 @@ function contendedText(c) {
   if (c.full.size) parts.push(`${n(c.full.size, 'cable')} full`);
   if (c.switches && c.switches.size) parts.push(`${n(c.switches.size, 'switch')} full`);
   if (c.packets && c.packets.full.size) parts.push(`${n(c.packets.full.size, 'switch')} out of packets`);
+  if (c.hosts && c.hosts.full && c.hosts.full.size) parts.push(`${n(c.hosts.full.size, 'host')} full`);
   if (c.packets && c.packets.hostsFull && c.packets.hostsFull.size) parts.push(`${n(c.packets.hostsFull.size, 'host')} out of packets`);
   return parts.join(' and ') || 'nothing full';
 }
@@ -751,6 +762,31 @@ export function formatPps(v) {
   if (v >= 1e9) return `${trimNum(Math.round(v / 1e8) / 10)} Gpps`;
   if (v >= 1e6) return `${trimNum(Math.round(v / 1e5) / 10)} Mpps`;
   return `${Math.round(v).toLocaleString('en-US')} pps`;
+}
+
+// Whether an element passes traffic on: tagged +switch, or -- where nothing
+// is tagged -- anything.
+function forwardsHere(state, el) {
+  if (el.tagsAll && el.tagsAll.has('switch')) return true;
+  return !state.model.all.some((x) => x.tags && x.tags.has('switch'));
+}
+
+/** What a burst's excess comes to at the switch sending it, and its fate. */
+function burstNeed(r) {
+  if (r.fate === 'host') return ' — it queues in the host sending it';
+  const queue = `${formatBytes(r.need)} queued at ${shortPath(r.from)}`;
+  if (r.fate === 'unknown') return ` — ${queue}, which has no buffer= to say whether it holds`;
+  if (r.fate === 'absorbed') return ` — ${queue}, of the ${formatBytes(r.have)} its buffer gives this port: absorbed`;
+  return ` — ${queue}, of the ${formatBytes(r.have)} its buffer gives this port: drops ${formatBytes(r.lost)} a burst, `
+    + `${pct(r.lost / r.sent)} of what it carries while it lasts`;
+}
+
+/** A size in bytes, as a datasheet gives it: 1.2 MB, 640 KB. */
+export function formatBytes(n) {
+  if (n >= 1e9) return `${trimNum(Math.round(n / 1e8) / 10)} GB`;
+  if (n >= 1e6) return `${trimNum(Math.round(n / 1e5) / 10)} MB`;
+  if (n >= 1e3) return `${trimNum(Math.round(n / 1e2) / 10)} KB`;
+  return `${Math.round(n)} B`;
 }
 
 /** A utilization's colour: shared out, a full cable is the contended one. */
@@ -844,6 +880,14 @@ export function hostTip(state, node, view) {
     line += ` — ${pct((Math.max(sent[0], got[0]) * view.toGbps) / capacity)} of its ${formatGbps(capacity)}`;
   }
   lines.push(line);
+  // Its own gbps=, where it has one: what its NICs can move each way,
+  // whatever its cables add up to -- a PCIe slot's ceiling, say.
+  const own = Number(node.attrs && node.attrs.gbps);
+  if (own > 0 && view.toGbps !== null && !forwardsHere(state, node)) {
+    const full = c && c.hosts && c.hosts.full ? c.hosts.full.get(node) : null;
+    lines.push(`its NICs: ${pct((Math.max(sent[0], got[0]) * view.toGbps) / own)} of the ${formatGbps(own)} they can move each way`
+      + (full ? ` — full, holding back ${full.out + full.in} flow${full.out + full.in === 1 ? '' : 's'} itself` : ''));
+  }
   if (each.length > 1) {
     for (const e of each) {
       const u = utilOf(e.link, e.link.a === node ? [e.out, e.in] : [e.in, e.out], view.toGbps);
@@ -920,6 +964,24 @@ function renderHeadline(state, view, box) {
       if (model.packets.why) wrap.append(el('div', 'bad', model.packets.why));
     }
   }
+  // What a burst loses, beside what is delivered on average.
+  const burst = state.traffic.burst || 1;
+  if (burst > 1 && !view.compare && view.toGbps !== null) {
+    const us = state.traffic.burstUs || 100;
+    let lost = 0;
+    let sentOn = 0;
+    let cables = 0;
+    for (const r of burstRisk(view.loads, view.toGbps, burst, us * 1e-6)) {
+      if (r.fate !== 'drops') continue;
+      lost += r.lost;
+      sentOn += r.sent;
+      cables++;
+    }
+    if (cables) {
+      wrap.append(el('div', 'bad', `a ${trimNum(burst)}× burst for ${trimNum(us)} µs drops ${formatBytes(lost)} on ${cables} cable${cables === 1 ? '' : 's'}`
+        + ` — ${pct(lost / sentOn)} of what they carry while it lasts`));
+    }
+  }
   // Each net's cables, both ways, against what they carry both ways.
   const nets = new Map();
   for (const [link, l] of view.loads) {
@@ -959,6 +1021,20 @@ function renderHeadline(state, view, box) {
  * line) or here -- a rate in pps becomes a bit rate, framing added, set
  * against the cables' gbps=, and every request comes back as its reply.
  */
+// A request size at a click: 64 B, the IMIX mix, or full-size packets.
+function sizePicks(current, pick) {
+  const wrap = el('span', 'size-picks');
+  for (const [bytes, label] of PACKET_PICKS) {
+    const b = el('button', current === bytes ? 'active' : null, label);
+    b.title = bytes === IMIX_BYTES
+      ? `The standard IMIX mix -- seven 64-byte frames to four of 594 and one of 1518 -- as its average: ${bytes} B of payload`
+      : `${bytes}-byte requests`;
+    b.addEventListener('click', () => pick(bytes));
+    wrap.append(b);
+  }
+  return wrap;
+}
+
 function packetsRow(state, overlay, actions) {
   const p = state.packetsOf ? state.packetsOf(overlay) : null;
   if (!p) return null;
@@ -983,7 +1059,8 @@ function packetsRow(state, overlay, actions) {
     el('span', null, 'B, replies of'),
     field(p.reply, 'The reply each request gets, in bytes, routed back the other way. Empty or 0: no replies.',
       (v) => actions.setPackets(overlay, { bytes: p.bytes, reply: v })),
-    el('span', null, 'B'));
+    el('span', null, 'B'),
+    sizePicks(p.bytes, (v) => actions.setPackets(overlay, { bytes: v, reply: p.reply })));
   row.title = `Payloads, in bytes: each packet carries ${66} more on the wire (Ethernet, IP, UDP, preamble and gap). `
     + 'With a size, a packet rate is a bit rate: set against gbps=, shared out where full, and every request '
     + 'is answered by a reply the other way. mx export says the sizes in its header (run shape), and bytes= '
@@ -1081,12 +1158,27 @@ export function renderCableLoad(state, host, actions) {
       opt.selected = state.traffic.split === split;
       select.append(opt);
     }
-    select.title = 'Where several cables continue a shortest route, how a flow is shared between them';
+    select.title = 'How the switches share traffic out where several cables continue a shortest route';
     select.addEventListener('change', () => actions.setTrafficSplit(select.value));
     row.append(select);
-    if ((state.traffic.split === 'hashed' || state.traffic.split === 'polarized') && model.kind !== 'hosts') {
+    if (PER_CONNECTION.has(state.traffic.split) && model.kind !== 'hosts') {
+      // How many connections each flow is: hashing's whole outcome turns on it.
+      const conns = el('label', 'conns');
+      const input = el('input', 'connections');
+      input.type = 'number';
+      input.min = '1';
+      input.max = String(CONNECTION_LIMITS.max);
+      input.value = String(state.traffic.connections);
+      input.addEventListener('change', () => actions.setConnections(input.value));
+      conns.append(input, el('span', null, state.traffic.connections === 1 ? 'connection a flow' : 'connections a flow'));
+      conns.title = 'How many connections each flow between two hosts is made of -- iperf -P, a test’s parallel '
+        + 'streams, an RDMA job’s queue pairs. Each is hashed on its own, and shares a full cable as one: one is '
+        + 'hashing’s worst case (and what a hash on the IP addresses alone does), dozens come out near the even split';
+      row.append(conns);
+    }
+    if (PER_CONNECTION.has(state.traffic.split) && model.kind !== 'hosts') {
       const roll = el('button', null, 'Re-roll');
-      roll.title = 'Hash every flow onto its paths again, with a different seed';
+      roll.title = 'Hash every connection onto its paths again, with a different seed';
       roll.addEventListener('click', () => actions.rerollTraffic());
       row.append(roll);
     }
@@ -1119,10 +1211,18 @@ export function renderCableLoad(state, host, actions) {
       burst.step = '0.5';
       burst.value = String(state.traffic.burst || 1);
       burst.addEventListener('change', () => actions.setBurst(burst.value));
-      burstRow.append(el('span', null, 'bursts of ×'), burst, el('span', 'muted', 'the average'));
+      const length = el('input', 'burst-length');
+      length.type = 'number';
+      length.min = '1';
+      length.step = '10';
+      length.value = String(state.traffic.burstUs || 100);
+      length.addEventListener('change', () => actions.setBurstLength(length.value));
+      burstRow.append(el('span', null, 'bursts of ×'), burst, el('span', 'muted', 'the average, for'), length, el('span', 'muted', 'µs'));
       burstRow.title = 'The load is a steady average; real traffic comes in clumps -- a synchronised start, an '
         + 'incast all answering at once. Above 1, the cables a burst this many times the average would overflow '
-        + 'are counted, and their tooltips say what it would need. 1: steady, nothing flagged.';
+        + 'are counted, and their tooltips say what it would need. What does not fit a cable queues in the '
+        + 'buffer= of the switch sending onto it for as long as the burst lasts: absorbed if it fits that port’s '
+        + 'share, dropped if not. 1: steady, nothing flagged.';
       share.title = 'A cable cannot carry more than its gbps=. Ticked, every full cable is shared out between '
         + 'the flows crossing it, as TCP shares it, and a flow held back there carries less on the rest of its '
         + 'path too. Unticked, the cables show what the flows offer, which can be more than 100%.';
@@ -1160,7 +1260,7 @@ export function renderCableLoad(state, host, actions) {
     } else if (model.kind === 'hosts') {
       lines.append(el('div', null, `estimated from ${model.count} hosts’ totals, sent `
         + `${SPREAD_LABELS[state.traffic.spread] || SPREAD_LABELS.gravity} · ${formatLoad(model, (model.own || r).delivered)}`));
-      if (SINGLE_PATH.has(state.traffic.split)) {
+      if (PER_CONNECTION.has(state.traffic.split)) {
         lines.append(el('div', 'muted', 'an estimate is routed as an even split: one path per guessed flow would read as a measurement'));
       }
       if (model.skipped) lines.append(el('div', 'muted', `${model.skipped} readings on racks or rooms left out`));
@@ -1223,14 +1323,33 @@ export function renderCableLoad(state, host, actions) {
   // overflow, where the average fits.
   const burst = state.traffic.burst || 1;
   if (burst > 1 && !view.compare && view.toGbps !== null) {
-    const risks = burstRisk(view.loads, view.toGbps, burst);
+    const us = state.traffic.burstUs || 100;
+    const risks = burstRisk(view.loads, view.toGbps, burst, us * 1e-6);
+    const bursts = `with bursts of ${trimNum(burst)}× the average for ${trimNum(us)} µs`;
     if (risks.length) {
       const [worst] = risks;
-      lines.append(el('div', 'bad', `with bursts of ${trimNum(burst)}× the average, ${risks.length} cable${risks.length === 1 ? '' : 's'} `
-        + `would overflow — the fullest, ${shortPath(worst.link.a)} ↔ ${shortPath(worst.link.b)}, is ${pct(worst.util)} on average, `
-        + `${pct(worst.util * burst)} in a burst`));
+      const fates = { drops: 0, absorbed: 0, unknown: 0, host: 0 };
+      for (const r of risks) fates[r.fate]++;
+      const parts = [];
+      let lost = 0;
+      let sentOn = 0;
+      for (const r of risks) if (r.fate === 'drops') { lost += r.lost; sentOn += r.sent; }
+      if (fates.drops) {
+        parts.push(`${fates.drops} drop — more than their switch’s buffer holds: ${formatBytes(lost)} lost a burst, `
+          + `${pct(lost / sentOn)} of what they carry while it lasts`);
+      }
+      if (fates.absorbed) parts.push(`${fates.absorbed} absorbed by their switch’s buffer`);
+      if (fates.unknown) parts.push(`${fates.unknown} at switches with no buffer= to say`);
+      if (fates.host) parts.push(`${fates.host} queued in the host sending`);
+      lines.append(el('div', fates.drops || fates.unknown ? 'bad' : 'muted',
+        `${bursts}, ${risks.length} cable${risks.length === 1 ? '' : 's'} would overflow: ${parts.join(', ')}`));
+      const dropping = risks.find((r) => r.fate === 'drops');
+      const named = dropping || worst;
+      lines.append(el('div', 'muted', `${dropping ? 'the fullest that drops' : 'the fullest'}, `
+        + `${shortPath(named.from)} → ${shortPath(named.link.a === named.from ? named.link.b : named.link.a)}: `
+        + `${pct(named.util)} on average, ${pct(named.util * burst)} in a burst${burstNeed(named)}`));
     } else {
-      lines.append(el('div', 'muted', `with bursts of ${trimNum(burst)}× the average, no cable would overflow`));
+      lines.append(el('div', 'muted', `${bursts}, no cable would overflow`));
     }
   }
   box.append(lines);
@@ -1247,6 +1366,12 @@ export function renderCableLoad(state, host, actions) {
       b.title = `Show ${Math.min(MORE_STEP, total - shown)} more ${title}`;
       b.addEventListener('click', () => actions.setListed(shown + MORE_STEP));
       bar.append(b);
+      const every = Math.min(total, SHOW_ALL_MAX);
+      const all = el('button', null, total <= SHOW_ALL_MAX ? 'Show all' : `Show ${every.toLocaleString()}`);
+      all.title = total <= SHOW_ALL_MAX ? `Show all ${total.toLocaleString()} ${title}`
+        : `Show the first ${every.toLocaleString()} of ${total.toLocaleString()} ${title}: more is too long to read and slow to draw`;
+      all.addEventListener('click', () => actions.setListed(every));
+      bar.append(all);
     }
     if (shown > BUSIEST_SHOWN) {
       const b = el('button', null, 'Show fewer');
@@ -1523,10 +1648,10 @@ export function renderLoadGen(state, host, actions, { unit } = {}) {
   if (base) units = base.toGbps === null ? [base.unit] : ['%', 'Gb/s', 'Mb/s', 'pps'];
   if (unit && !units.includes(unit)) units = [...units, unit];
   if (!g.from) {
-    // Packets with no size are only a count: choosing pps starts from a
-    // full-size packet, so the load reads against the cables at once.
+    // Packets with no size are only a count: choosing pps starts from the
+    // IMIX mix, so the load reads against the cables at once.
     const unitPick = choose(units, GEN_UNIT_LABELS, unit,
-      (v) => actions.setGen(v === 'pps' && !(g.bytes > 0) ? { unit: v, bytes: 1500 } : { unit: v }));
+      (v) => actions.setGen(v === 'pps' && !(g.bytes > 0) ? { unit: v, bytes: IMIX_BYTES } : { unit: v }));
     unitPick.className = 'gen-unit';
     unitPick.title = base
       ? `Added to ${metric.label}, so in a unit that adds up with ${base.unit || 'it'}`
@@ -1554,7 +1679,8 @@ export function renderLoadGen(state, host, actions, { unit } = {}) {
         el('span', null, 'B, replies of'),
         field(g.reply, 'gen-reply', 'The reply each request gets, in bytes, sent back the other way. Empty or 0: no replies.',
           (v) => actions.setGen({ reply: v })),
-        el('span', null, 'B'));
+        el('span', null, 'B'),
+        sizePicks(g.bytes, (v) => actions.setGen({ bytes: v })));
       packets.title = 'Requests and replies, as matrix_orchestrator sends them: with a request size, each host’s packet '
         + 'rate is a bit rate on the cables -- set against gbps=, shared out where full -- and every request is '
         + 'answered by a reply of its own size, the other way.';
@@ -1867,7 +1993,12 @@ export function cableTip(state, hit, view, flows) {
         : `${pct(worst)} full, the busier way${over}`);
       const burst = (state.traffic && state.traffic.burst) || 1;
       if (burst > 1 && worst * burst > 1 && worst <= 1.0005) {
-        lines.push(`a ${trimNum(burst)}× burst would need ${pct(worst * burst)} of it`);
+        const us = (state.traffic && state.traffic.burstUs) || 100;
+        // Judged against every port overflowing at the same switch, since
+        // they share its buffer.
+        const mine = new Set(links);
+        const risk = burstRisk(view.loads, view.toGbps, burst, us * 1e-6).find((r) => mine.has(r.link));
+        lines.push(`a ${trimNum(burst)}× burst would need ${pct(worst * burst)} of it${risk ? burstNeed(risk) : ''}`);
       }
     } else if (load[0] > 0 || load[1] > 0) {
       lines.push(view.toGbps === null
@@ -2167,6 +2298,8 @@ function renderPicks(state, host, actions) {
         }
         dd.append(line);
       }
+      const lat = state.latencyBetween ? state.latencyBetween(pair.a, pair.b) : null;
+      if (lat) dd.append(latencyLine(lat));
       dl.append(dd);
     }
     box.append(dl);
@@ -2175,6 +2308,44 @@ function renderPicks(state, host, actions) {
     renderPickTraffic(state, box, actions);
   }
   host.append(box);
+}
+
+/** A time, at the scale a packet's trip is: 940 ns, 3.7 µs, 1.2 ms. */
+export function formatTime(t) {
+  if (t >= 1e-3) return `${trimNum(Math.round(t * 1e5) / 100)} ms`;
+  if (t >= 1e-6) return `${trimNum(Math.round(t * 1e8) / 100)} µs`;
+  return `${Math.round(t * 1e9)} ns`;
+}
+
+// The floor of the trip between two picks, at 64 B and 1500 B.
+function latencyLine({ small, full }) {
+  const span = (r) => (r.max - r.min > 1e-12 ? `${formatTime(r.min)}–${formatTime(r.max)}` : formatTime(r.min));
+  const line = el('div', null, `latency: ${span(small)} at 64 B, ${span(full)} at 1500 B`
+    + ` · ${small.switches} switch${small.switches === 1 ? '' : 'es'}`
+    + (small.unknown ? `, ${small.unknown} with no latency= (counted as none)` : ''));
+  line.title = 'One packet with nothing queued: each switch’s latency=, and each cable’s time to send it -- once '
+    + 'per run of cut-through hops, again wherever a switch must store the whole packet because the cable out '
+    + 'is faster than the cable in, and a latency= on either host. Not the cables’ length, nor any queueing: the '
+    + 'floor a latency test can reach.'
+    + (small.capped ? ` The first ${small.routes.toLocaleString()} shortest routes.` : ` Over ${small.routes.toLocaleString()} shortest route${small.routes === 1 ? '' : 's'}.`)
+    + (small.noSpeed ? ' A cable on the way has no gbps=, and is counted as taking no time.' : '');
+  if (small.unknown === small.switches && small.switches) line.className = 'muted';
+  if (!full.loaded) return line;
+  // Under the load the cables show: the queues on the way added.
+  const box = el('div');
+  const l = full.loaded;
+  const notes = [];
+  if (l.full) notes.push(`${l.full} full cable${l.full === 1 ? '' : 's'} on the way`);
+  if (l.unbounded) notes.push(`${l.unbounded} of them with no buffer= to bound the wait`);
+  if (l.hosts) notes.push('a host’s own NIC full, its queue not counted');
+  const under = el('div', l.full ? 'bad' : null, `under this load: ${span(small.loaded)} at 64 B, ${span(l)} at 1500 B`
+    + (notes.length ? ` · ${notes.join(', ')}` : ''));
+  under.title = 'With each cable’s queue added: a cable a fraction ρ full holds a packet about ρ/(1−ρ) of the '
+    + 'load’s packet times (9 at 90%, 99 at 99%), and a full one as long as its share of the sending switch’s '
+    + 'buffer= takes to drain -- which is also the most any queue can hold it. The load’s packets are its own '
+    + 'size where it says one, else the IMIX mix.';
+  box.append(line, under);
+  return box;
 }
 
 /**

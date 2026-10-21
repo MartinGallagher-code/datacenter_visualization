@@ -22,7 +22,7 @@ import { attachHints, renderReference } from './hints.js';
 import { layoutFromHosts, matchesPattern, recordsSince, tailRecords } from './tsv.js';
 import { routesBetween } from './paths.js';
 import {
-  betweenPicks, bitRate, cableKeys, contend, countersOf, estimateFlows, flowsOf, flowsOver, GEN_LIMITS,
+  adaptiveWeights, betweenPicks, pathLatency, bitRate, cableKeys, CONNECTION_LIMITS, contend, countersOf, estimateFlows, flowsOf, flowsOver, GEN_LIMITS,
   findingsOf, generateFlows, hostCapacity, hostsOf, TARGETED, loadable, loadUnit, mergeResults, packetGb, readsAsLoad, REPLY_IDS, routeEstimate,
   routeTraffic, switchLoads, testFlows, trafficKind, viewOf,
 } from './traffic.js';
@@ -75,7 +75,10 @@ const state = {
   // `view` is which of model, change, measured and measured-less-model the
   // cables show, of those the sources allow.
   traffic: {
-    key: null, counters: null, split: 'even', seed: 1, spread: 'gravity', view: 'model',
+    // `split` is how the switches share a flow out: hashed per connection,
+    // as real ECMP does, unless the fabric is known to do otherwise; and
+    // `connections` how many each flow between two hosts is made of.
+    key: null, counters: null, split: 'hashed', connections: 1, seed: 1, spread: 'gravity', view: 'model',
     // With two or more picks: count only the metric's flows between them,
     // and a test flow from the first pick to the second.
     betweenOnly: false,
@@ -96,8 +99,10 @@ const state = {
     // the flows crossing it; off, the cables show what the flows offer.
     contention: true,
     // How bursty the load is: a burst of this many times the average, to
-    // flag the cables it would overflow. 1: steady, nothing flagged.
+    // flag the cables it would overflow. 1: steady, nothing flagged. And
+    // how long one lasts, in microseconds: what a switch's buffer must hold.
     burst: 1,
+    burstUs: 100,
     listed: 8,                // rows in the busiest-cables list
   },
   trafficCache: { model: null, base: null, counters: null, view: null, switches: null, findings: null },
@@ -177,6 +182,32 @@ const state = {
       state.betweenCache = { key, value };
     }
     return state.betweenCache.value;
+  },
+
+  // How long a packet takes from one pick to the other: small and
+  // full-size, over the fabric as it stands (what is taken out left out),
+  // with nothing queued and -- where the cables show a load in bits --
+  // under that load. Null where either is not a device with cables.
+  latencyBetween(a, b) {
+    if (!a.links.length || !b.links.length) return null;
+    const view = state.cableView();
+    const shown = view && !view.compare && view.toGbps !== null && view.toGbps !== undefined ? view : null;
+    const key = `${state.version}\u0000${a.key}\u0000${b.key}`;
+    // Kept per load shown: a new load is a new map.
+    const caches = state.latencyCache || (state.latencyCache = new WeakMap());
+    const owner = shown || state.model;
+    let cache = caches.get(owner);
+    if (!cache) caches.set(owner, (cache = new Map()));
+    if (!cache.has(key)) {
+      const packets = shown && shown.model && shown.model.packets;
+      const opts = {
+        down: state.takenOut(),
+        load: shown ? { loads: shown.loads, toGbps: shown.toGbps, packetBytes: packets ? packets.bytes : 0 } : null,
+      };
+      const small = pathLatency(state.model, a, b, 64, opts);
+      cache.set(key, small ? { small, full: pathLatency(state.model, a, b, 1500, opts) } : null);
+    }
+    return cache.get(key);
   },
 
   // What the cables are showing, worked out once per layout, metric,
@@ -384,7 +415,7 @@ function modelSource(withDown) {
   const slot = withDown ? 'model' : 'base';
   const c = state.trafficCache[slot];
   if (c && c.overlay === metric && c.layout === state.model && c.agg === (metric && metric.agg)
-      && c.split === t.split && c.seed === t.seed && c.spread === t.spread && c.down === downKey
+      && c.split === t.split && c.connections === t.connections && c.seed === t.seed && c.spread === t.spread && c.down === downKey
       && c.picks === pickKey && c.test === testKey && c.between === between && c.gen === genKey
       && sameSource(c.from, from) && c.contention === t.contention && c.duplex === duplexKey
       && c.packets === packetKey) {
@@ -400,7 +431,7 @@ function modelSource(withDown) {
   // top of one; with no metric, the generator's unit is the one, and a test
   // flow's own when it is all there is.
   const unit = metric ? metricUnit(metric, kind) : gen ? testUnit(genBase(genUnit())) : testUnit(test.unit);
-  const opts = { split: t.split, seed: t.seed, spread: t.spread, down: out };
+  const opts = { split: t.split, connections: t.connections, seed: t.seed, spread: t.spread, down: out };
   const only = between ? betweenPicks(picks) : null;
   let count = 0;
   let total = 0;
@@ -504,6 +535,11 @@ function modelSource(withDown) {
     testRun = { value: test.value, unit: unit.unit, flows: testFlowsNow.length, from: picks[0], to: picks[1] };
   }
 
+  // Adaptive routing settles on everything at once, since its switches see
+  // all of it in their queues: worked out once, and used by every pass --
+  // the hover's flows over a cable included.
+  if (t.split === 'adaptive') opts.weights = adaptiveWeights(state.model, [...metricFlows, ...genFlows, ...testFlowsNow], opts);
+
   // Contention: everything routed together, since it all shares the cables,
   // and every full cable shared out. Only a bit rate fills a gbps=.
   let contended = null;
@@ -561,7 +597,7 @@ function modelSource(withDown) {
     packets: packetRun || (genRun && genRun.packets) || null,
   };
   state.trafficCache[slot] = {
-    overlay: metric, layout: state.model, agg: metric && metric.agg, split: t.split, seed: t.seed, spread: t.spread,
+    overlay: metric, layout: state.model, agg: metric && metric.agg, split: t.split, connections: t.connections, seed: t.seed, spread: t.spread,
     down: downKey, picks: pickKey, test: testKey, between, gen: genKey, from, contention: t.contention, duplex: duplexKey,
     packets: packetKey, value,
   };
@@ -1021,6 +1057,14 @@ const actions = {
     invalidate();
   },
 
+  // How many connections each flow between two hosts is made of, each
+  // hashed on its own.
+  setConnections(n) {
+    state.traffic.connections = Math.max(1, Math.min(CONNECTION_LIMITS.max, Math.round(Number(n) || 1)));
+    refreshPanels();
+    invalidate();
+  },
+
   // Whether servers with findings are marked on the floor plan.
   setShowFindings(on) {
     state.showFindings = on;
@@ -1034,14 +1078,22 @@ const actions = {
     refreshPanels();
   },
 
-  // Whether full cables share out what they carry, or the cables show what
-  // the flows offer.
+  // How bursty the load is, and how long a burst lasts.
   setBurst(burst) {
     state.traffic.burst = Math.max(1, Number(burst) || 1);
     refreshPanels();
     invalidate();
   },
 
+  setBurstLength(us) {
+    const n = Number(us);
+    state.traffic.burstUs = Number.isFinite(n) && n > 0 ? Math.min(n, 1e6) : 100;
+    refreshPanels();
+    invalidate();
+  },
+
+  // Whether full cables share out what they carry, or the cables show what
+  // the flows offer.
   setContention(on) {
     state.traffic.contention = on;
     refreshPanels();
