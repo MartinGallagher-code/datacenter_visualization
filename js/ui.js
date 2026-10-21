@@ -15,7 +15,7 @@ import {
   capacityWidth, changeColor, countDescendants, FINDING_COLORS, LOAD_COLORS, loadColor, linkSummary, spliceSummary,
 } from './render.js';
 import {
-  biggestChanges, burstRisk, busiest, busyable, cablesOf, formatGbps, hostLimits, GEN_UNITS, hostsFor, loadable, loadUnit, PATTERNS, reachKinds, TARGETED,
+  biggestChanges, burstRisk, busiest, busyable, cablesOf, EXPLAIN_PATTERNS, formatGbps, hostLimits, GEN_UNITS, hostsFor, loadable, loadUnit, PATTERNS, reachKinds, TARGETED,
   CONNECTION_LIMITS, IMIX_BYTES, PACKET_PICKS, PER_CONNECTION, readsAsLoad, SPLITS, SPREADS, TEST_UNITS, trafficKind, utilOf,
 } from './traffic.js';
 
@@ -804,6 +804,7 @@ function renderExplain(state, box, actions) {
   if (!x) return;
   const wrap = el('div', 'explain-box');
   wrap.append(el('div', 'load-title', 'What would explain these results'));
+  wrap.append(explainSetup(state, actions));
   if (x.working) {
     wrap.append(el('div', 'muted', 'working it out — a moment here, up to twenty seconds on thousands of servers'));
     box.append(wrap);
@@ -814,12 +815,11 @@ function renderExplain(state, box, actions) {
     box.append(wrap);
     return;
   }
-  const how = x.pattern === 'random' ? `${x.peers} random peer${x.peers === 1 ? '' : 's'}` : (PATTERN_LABELS[x.pattern] || x.pattern);
   const above = x.target > x.best * 1.001;
   wrap.append(el('div', null, `if every server tried ${formatGbps(x.target)}b/s `
-    + `(${above ? `above the best result of ${formatGbps(x.best)}: even the best was held back` : 'the best result'}) to ${how}: `
+    + `(${above ? `above the best result of ${formatGbps(x.best)}: even the best was held back` : 'the best result'}) `
+    + `${layersText(x.layers || [{ pattern: x.pattern, peers: x.peers, reach: 'any', share: 1 }])}: `
     + `${x.short} of ${x.servers} fell short`));
-  wrap.append(el('div', 'muted', 'the pattern is the Load generator’s: change it there'));
   if (!x.short) {
     if (x.own) for (const line of ownLines(x.own, false)) wrap.append(line);
     else wrap.append(el('div', 'muted', 'every server reached it: nothing to explain'));
@@ -874,6 +874,94 @@ function renderExplain(state, box, actions) {
     wrap.append(el('div', 'muted', 'stopped after twenty seconds: what it found so far, the cables it was surest of first'));
   }
   box.append(wrap);
+}
+
+/** Where a flow may go, as the generator's and explain's choices name it. */
+function reachLabel(reach) {
+  if (!reach || reach === 'any') return 'anywhere';
+  return reach.startsWith('in:') ? `within its own ${reach.slice(3)}` : `outside its own ${reach}`;
+}
+
+/** What every server was assumed to send, readably: each layer and its share. */
+function layersText(layers) {
+  let total = 0;
+  for (const l of layers) total += l.share;
+  return layers.map((l) => {
+    const what = l.pattern === 'random' ? `to ${l.peers} random peer${l.peers === 1 ? '' : 's'}`
+      : l.pattern === 'all' ? 'to every other host' : PATTERN_LABELS[l.pattern] || l.pattern;
+    const where = !l.reach || l.reach === 'any' ? '' : ` ${reachLabel(l.reach)}`;
+    return `${what}${where}${layers.length > 1 ? ` (${Math.round((100 * l.share) / total)}%)` : ''}`;
+  }).join(' + ');
+}
+
+/**
+ * What every server is assumed to have sent, set here to match how the test
+ * was run: one row per layer -- its pattern, peers, where it may go and its
+ * share -- and buttons to add a layer, draw new peers, or start from the
+ * Load generator's settings.
+ */
+function explainSetup(state, actions) {
+  const t = state.traffic;
+  const box = el('div', 'explain-setup');
+  const kinds = reachOf(state.model);
+  const reaches = ['any', ...kinds.map((k) => `in:${k}`), ...kinds];
+  const many = t.explainLayers.length > 1;
+  const select = (options, label, value, onChange, cls) => {
+    const pick = el('select', cls);
+    for (const option of options) {
+      const opt = el('option', null, label(option));
+      opt.value = option;
+      opt.selected = option === value;
+      pick.append(opt);
+    }
+    pick.addEventListener('change', () => onChange(pick.value));
+    return pick;
+  };
+  const number = (value, min, cls, onChange) => {
+    const input = el('input', cls);
+    input.type = 'number';
+    input.min = String(min);
+    input.value = String(value);
+    input.addEventListener('change', () => onChange(Number(input.value)));
+    return input;
+  };
+  t.explainLayers.forEach((layer, i) => {
+    const row = el('div', 'gen-row explain-layer');
+    row.append(el('span', null, many ? `layer ${i + 1}: every server sent` : 'every server sent'));
+    row.append(select(EXPLAIN_PATTERNS, (p) => PATTERN_LABELS[p] || p, layer.pattern,
+      (v) => actions.setExplainLayer(i, { pattern: v }), 'explain-pattern'));
+    if (layer.pattern === 'random') {
+      row.append(el('span', null, '×'), number(layer.peers, 1, 'explain-peers',
+        (v) => actions.setExplainLayer(i, { peers: Math.max(1, Math.floor(v) || 1) })), el('span', null, 'peers'));
+    }
+    if (reaches.length > 1) {
+      row.append(select(reaches, reachLabel, reaches.includes(layer.reach) ? layer.reach : 'any',
+        (v) => actions.setExplainLayer(i, { reach: v }), 'explain-reach'));
+    }
+    if (many) {
+      row.append(number(layer.share, 1, 'explain-share', (v) => actions.setExplainLayer(i, { share: Math.max(1, v || 1) })),
+        el('span', null, '% of it'));
+      const drop = el('button', null, '✕');
+      drop.title = 'Take this layer out';
+      drop.addEventListener('click', () => actions.removeExplainLayer(i));
+      row.append(drop);
+    }
+    box.append(row);
+  });
+  const buttons = el('div', 'btnrow');
+  const add = el('button', 'explain-add', '+ layer');
+  add.title = 'Another set of peers on top of these, with a share of each server’s traffic: two tests run at once -- '
+    + 'iperf to four peers in the rack, mx to eight anywhere -- are two layers';
+  add.addEventListener('click', () => actions.addExplainLayer());
+  const again = el('button', null, 'New peers');
+  again.title = 'Draw every layer’s random peers again';
+  again.addEventListener('click', () => actions.newExplainPeers());
+  const copy = el('button', null, 'From the Load generator');
+  copy.title = 'One layer, set as the Load generator is: its pattern, peers, where it may go and its seed';
+  copy.addEventListener('click', () => actions.explainFromGenerator());
+  buttons.append(add, again, copy);
+  box.append(buttons);
+  return box;
 }
 
 /**
@@ -1476,6 +1564,11 @@ export function renderCableLoad(state, host, actions) {
         : 'contention: nothing is full · every flow carries all it offers'));
     } else if (model.contentionWhy && state.traffic.contention) {
       lines.append(el('div', 'muted', model.contentionWhy));
+      // Not shared out, what is drawn is what the flows offer: a cable or a
+      // switch can read past 100%, which is no measurement of it.
+      lines.append(el('div', 'bad', 'so cables and switches show what is offered, not what they could carry: past 100% '
+        + 'means more is sent their way than fits'
+        + (model.estimated ? ' — and an estimate sends every server’s total to every other server, wherever the test sent it' : '')));
     }
     lines.append(el('div', 'muted', r.switches
       ? `forwarded only by the ${r.switches} elements tagged +switch`
@@ -1884,12 +1977,18 @@ export function renderLoadGen(state, host, actions, { unit } = {}) {
   if (kinds.length) {
     const where = el('div', 'gen-row');
     const labels = { any: 'anywhere' };
-    for (const kind of kinds) labels[kind] = `outside its own ${kind}`;
-    const reach = choose(['any', ...kinds], labels, kinds.includes(g.reach) ? g.reach : 'any',
+    const inside = kinds.map((kind) => `in:${kind}`);
+    for (const kind of kinds) {
+      labels[`in:${kind}`] = `within its own ${kind}`;
+      labels[kind] = `outside its own ${kind}`;
+    }
+    const all = ['any', ...inside, ...kinds];
+    const reach = choose(all, labels, all.includes(g.reach) ? g.reach : 'any',
       (v) => actions.setGen({ reach: v }));
     reach.className = 'gen-reach';
-    reach.title = 'Keep every flow out of the sender’s own rack (row, room, …): '
-      + 'outside its own rack loads the uplinks and nothing inside a rack';
+    reach.title = 'Where each flow may go. Within its own rack (row, room, …) keeps every flow inside the sender’s '
+      + 'own: each rack a load of its own, as a test run rack by rack is, and nothing above its ToRs. Outside its '
+      + 'own rack is the other way round: it loads the uplinks and nothing inside a rack';
     where.append(el('span', null, 'to hosts'), reach);
     box.append(where);
   }

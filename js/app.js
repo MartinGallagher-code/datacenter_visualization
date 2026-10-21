@@ -106,6 +106,13 @@ const state = {
     // Read a per-server metric backwards: what the network would have to be
     // for every server's result to follow from the same load (explainResults).
     explain: false,
+    // What every server is assumed to have sent, for explaining: layers,
+    // each a pattern with its peers, where it may go and its share of the
+    // traffic -- iperf to 4 peers in the rack beside mx to 8 anywhere is
+    // two -- and the seed their peers are drawn with. Its own, not the
+    // Load generator's, so it can be set to how the test was run.
+    explainLayers: [{ pattern: 'random', peers: 1, reach: 'any', share: 100 }],
+    explainSeed: 1,
     // A per-host metric saying how busy each server's CPU was, by key: its
     // share comes off the server's cpugbps= in place of any busy= (busyOf).
     busyFrom: '',
@@ -262,9 +269,8 @@ const state = {
     const unit = metricUnit(overlay, 'hosts');
     if (unit.toGbps === null) return { why: `${unit.unit || 'this unit'} is not a bit rate, so no cable can be set against it` };
     const duplex = duplexOf(overlay);
-    const g = t.gen;
     const busy = busySource();
-    const key = JSON.stringify([overlay.key, duplex, t.split, t.seed, t.connections, g.pattern, g.peers, g.reach, g.seed,
+    const key = JSON.stringify([overlay.key, duplex, t.split, t.seed, t.connections, t.explainLayers, t.explainSeed,
       [...state.down.els].sort(), [...state.down.links].sort(), t.busyFrom]);
     const c = state.trafficCache.explain;
     if (c && c.key === key && c.layout === state.model && c.overlay === overlay && c.busy === busy) return c.value;
@@ -277,7 +283,8 @@ const state = {
         const h = hostsOf(overlay, state.model, duplex);
         const hosts = h.hosts.map((x) => ({ el: x.el, value: x.value * unit.toGbps }));
         const value = explainResults(state.model, hosts, {
-          gen: g, split: t.split, seed: t.seed, connections: t.connections, down: state.takenOut(), busy,
+          layers: t.explainLayers, layerSeed: t.explainSeed, split: t.split, seed: t.seed, connections: t.connections,
+          down: state.takenOut(), busy,
         });
         state.trafficCache.explain = { key, layout: state.model, overlay, busy, value };
         state.explainWorking = null;
@@ -1121,6 +1128,41 @@ const actions = {
 
   setTrafficSplit(split) {
     state.traffic.split = split;
+    refreshPanels();
+    invalidate();
+  },
+
+  // What every server is assumed to have sent, for explaining: one layer
+  // changed, one added (a copy of the last, at the same share), one taken
+  // out, new peers for all, or the Load generator's settings as one layer.
+  setExplainLayer(i, patch) {
+    const t = state.traffic;
+    t.explainLayers = t.explainLayers.map((l, k) => (k === i ? { ...l, ...patch } : l));
+    refreshPanels();
+    invalidate();
+  },
+  addExplainLayer() {
+    const t = state.traffic;
+    t.explainLayers = [...t.explainLayers, { ...t.explainLayers[t.explainLayers.length - 1] }];
+    refreshPanels();
+    invalidate();
+  },
+  removeExplainLayer(i) {
+    const t = state.traffic;
+    if (t.explainLayers.length > 1) t.explainLayers = t.explainLayers.filter((_, k) => k !== i);
+    refreshPanels();
+    invalidate();
+  },
+  newExplainPeers() {
+    state.traffic.explainSeed = (state.traffic.explainSeed + 1) >>> 0;
+    refreshPanels();
+    invalidate();
+  },
+  explainFromGenerator() {
+    const t = state.traffic;
+    const g = t.gen;
+    t.explainLayers = [{ pattern: g.pattern, peers: g.peers, reach: g.reach, shift: g.shift, share: 100 }];
+    t.explainSeed = g.seed;
     refreshPanels();
     invalidate();
   },

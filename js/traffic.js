@@ -1979,11 +1979,14 @@ export function reachKinds(hosts) {
  *           to one, the pattern that fills a ToR's downlink
  *
  * `reach` names a kind of container (rack, row, ...) a flow must leave:
- * 'other racks only' loads the uplinks and nothing inside a rack. 'any', or
- * none, lets a flow go anywhere.
+ * 'other racks only' loads the uplinks and nothing inside a rack. `in:` and
+ * a kind is the other way round, a container a flow must stay inside: each
+ * rack (row, ...) a load of its own, as a test run rack by rack is. 'any',
+ * or none, lets a flow go anywhere.
  *
  * @param gen   { pattern, value, unit, peers, reach, seed }
- * @param opts  { match: the hosts' filter, target: an element, base: the
+ * @param opts  { match: the hosts' filter, hosts: the hosts themselves, in
+ *              place of match, target: an element, base: the
  *              unit the cables are loaded in, { toGbps, unit }, amounts:
  *              el -> Gb/s or null } -- with `amounts`, each host sends what
  *              that says (a metric read off the servers), at `value` % of it
@@ -1993,7 +1996,7 @@ export function reachKinds(hosts) {
  */
 export function generateFlows(model, gen, opts = {}) {
   const base = opts.base || { toGbps: 1, unit: 'Gb/s' };
-  const { hosts, untagged } = hostsFor(model, opts.match || null);
+  const { hosts, untagged } = opts.hosts ? { hosts: opts.hosts, untagged: false } : hostsFor(model, opts.match || null);
   let noReading = 0;   // hosts a metric has no reading for
   const result = (flows, extra = {}) => {
     let offered = 0;
@@ -2038,12 +2041,48 @@ export function generateFlows(model, gen, opts = {}) {
   const perPeer = gen.per === 'peer' && !opts.amounts;
   const share = (amount, k) => (perPeer ? amount : amount / k);
 
-  const reach = gen.reach && gen.reach !== 'any' ? gen.reach : null;
+  // Out of the sender's own rack (row, ...), or -- `in:` -- kept inside it.
+  const within = typeof gen.reach === 'string' && gen.reach.startsWith('in:') ? gen.reach.slice(3) : null;
+  const reach = within || (gen.reach && gen.reach !== 'any' ? gen.reach : null);
   const groupOf = (el) => {
     for (let p = el.parent; p; p = p.parent) if (p.kind === reach) return p;
     return null;
   };
-  const apart = reach ? (a, b) => { const g = groupOf(a); return !g || g !== groupOf(b); } : () => true;
+  const apart = within ? (a, b) => { const g = groupOf(a); return !!g && g === groupOf(b); }
+    : reach ? (a, b) => { const g = groupOf(a); return !g || g !== groupOf(b); } : () => true;
+
+  // Kept inside: every rack (row, ...) is a load of its own, its hosts
+  // sending to each other in the pattern -- all-to-all, random peers, a
+  // ring -- as if it were the whole floor. A host in no such container, or
+  // alone in one, sends nothing.
+  if (within && ['all', 'random', 'shift', 'ring'].includes(pattern)) {
+    const groups = new Map();
+    for (const el of hosts) {
+      const g = groupOf(el);
+      if (!g) continue;
+      const list = groups.get(g);
+      if (list) list.push(el);
+      else groups.set(g, [el]);
+    }
+    const flows = [];
+    let noCapacity = 0;
+    let gi = 0;
+    for (const members of groups.values()) {
+      gi++;
+      if (members.length < 2) continue;
+      const one = generateFlows(model, { ...gen, reach: 'any', seed: ((gen.seed || 0) + Math.imul(gi, 0x9e3779b1)) >>> 0 },
+        { ...opts, hosts: members });
+      if (one.why) return result([], { why: one.why.replace(/(\d+) hosts/, `$1 hosts in one ${within}`) });
+      noCapacity += one.noCapacity;
+      noReading += one.noReading;
+      for (const flow of one.flows) flows.push({ ...flow, id: GEN_IDS + flows.length });
+      if (flows.length > GEN_LIMITS.flows) {
+        return result([], { why: `${flows.length.toLocaleString()}+ flows within each ${within}: too many to route here — fewer peers, or narrow the hosts (a filter such as path=*/H1/*)` });
+      }
+    }
+    if (!flows.length) return result([], { why: `no ${within} holds two of these hosts: nothing to send within one` });
+    return result(flows, { noCapacity });
+  }
 
   const n = hosts.length;
   const links = model.links.length;
@@ -2489,9 +2528,11 @@ export const EXPLAIN = {
  * the stream= and cpugbps= that would reproduce it.
  *
  * @param hosts  [{ el, value }] -- what each server achieved, in Gb/s, one way
- * @param opts   { gen, split, seed, connections, down, capacity, busy } --
- *               capacity the most a server can send, the ceiling on a
- *               target; busy as contend takes it
+ * @param opts   { layers, layerSeed, gen, split, seed, connections, down,
+ *               capacity, busy } -- layers what every server sent (see
+ *               layersOf; gen as one layer where there are none), capacity
+ *               the most a server can send, the ceiling on a target; busy
+ *               as contend takes it
  * @returns { target, best, flows, servers, short, pattern, peers, suspects:
  *          [{ link, from, to, carried, capacity, gbps, verdict:
  *          'degraded'|'full'|'unknown', hosts }], alone: [el], ownLoad: [{ el,
@@ -2538,11 +2579,7 @@ function ownLimit(model, readings, best, opts) {
   const sizes = readings.map((h) => hostCapacity(model, h.el)).filter((v) => v > 0).sort((x, y) => x - y);
   const most = sizes.length ? sizes[sizes.length >> 1] : best * EXPLAIN.reach;
   if (!(most > best * (1 + EXPLAIN.within))) return null;
-  const achieved = new Set(readings.map((h) => h.el));
-  const gen = opts.gen || {};
-  const pattern = PATTERNS.includes(gen.pattern) && !TARGETED.has(gen.pattern) ? gen.pattern : 'random';
-  const made = generateFlows(model, { ...gen, pattern, value: most, unit: 'Gb/s', per: 'host' },
-    { match: (el) => achieved.has(el), base: { toGbps: 1, unit: 'Gb/s' } });
+  const made = layeredFlows(model, layersOf(opts), most, readings.map((h) => h.el));
   if (!made.flows.length) return null;
   const route = { split: opts.split, seed: opts.seed, connections: opts.connections, down: opts.down, busy: opts.busy, toGbps: 1 };
   const c = contend(model, made.flows, route);
@@ -2560,13 +2597,55 @@ function ownLimit(model, readings, best, opts) {
   };
 }
 
+// The patterns a server can be assumed to have sent in: those with no
+// target, since every server is assumed to have done the same.
+export const EXPLAIN_PATTERNS = PATTERNS.filter((p) => !TARGETED.has(p));
+
+/**
+ * What explainResults assumes every server sent, as layers: each a pattern
+ * of its own -- random peers, all-to-all, a ring -- with its peers, where
+ * it may go (`reach`, as the generator takes it: 'any', a kind to leave, or
+ * `in:` a kind to stay inside), and its share of each server's traffic.
+ * Two tests run at once, iperf to four peers in the rack and mx to eight
+ * anywhere, are two layers. From opts.layers, or else opts.gen as one.
+ */
+export function layersOf(opts) {
+  const gen = opts.gen || {};
+  const raw = Array.isArray(opts.layers) && opts.layers.length ? opts.layers : [gen];
+  const seed = (Number(opts.layerSeed ?? gen.seed) || 0) >>> 0;
+  return raw.map((l, i) => ({
+    pattern: EXPLAIN_PATTERNS.includes(l.pattern) ? l.pattern : 'random',
+    peers: Math.max(1, Math.floor(Number(l.peers) || 1)),
+    reach: typeof l.reach === 'string' && l.reach ? l.reach : 'any',
+    shift: l.shift,
+    share: Number(l.share) > 0 ? Number(l.share) : 1,
+    // Each layer its own peers: the same seed would pair the servers alike.
+    seed: (seed + Math.imul(i, 0x2545f491)) >>> 0,
+  }));
+}
+
+/**
+ * Every layer's flows at `value` per server in all, each layer its share of
+ * it, between `hosts`; or why there are none.
+ */
+function layeredFlows(model, layers, value, hosts) {
+  let total = 0;
+  for (const l of layers) total += l.share;
+  const flows = [];
+  for (const [i, l] of layers.entries()) {
+    const made = generateFlows(model, { ...l, value: (value * l.share) / total, unit: 'Gb/s', per: 'host' },
+      { hosts, base: { toGbps: 1, unit: 'Gb/s' } });
+    if (!made.flows.length && made.why) return { flows: [], why: layers.length > 1 ? `layer ${i + 1}: ${made.why}` : made.why };
+    for (const f of made.flows) flows.push({ ...f, id: GEN_IDS + flows.length, layer: i });
+  }
+  return { flows, why: '' };
+}
+
 // explainResults at one target.
 function explainAt(model, readings, target, opts) {
   const achieved = new Map(readings.map((h) => [h.el, h.value]));
-  const gen = opts.gen || {};
-  const pattern = PATTERNS.includes(gen.pattern) && !TARGETED.has(gen.pattern) ? gen.pattern : 'random';
-  const made = generateFlows(model, { ...gen, pattern, value: target, unit: 'Gb/s', per: 'host' },
-    { match: (el) => achieved.has(el), base: { toGbps: 1, unit: 'Gb/s' } });
+  const layers = layersOf(opts);
+  const made = layeredFlows(model, layers, target, readings.map((h) => h.el));
   if (!made.flows.length) return { why: made.why || 'the assumed pattern sends nothing between these servers' };
   const route = { split: opts.split, seed: opts.seed, connections: opts.connections, down: opts.down, busy: opts.busy };
   const deficit = (el) => Math.max(0, target - achieved.get(el));
@@ -2575,7 +2654,8 @@ function explainAt(model, readings, target, opts) {
   const short = new Set(readings.filter((h) => h.value < target * (1 - EXPLAIN.short)).map((h) => h.el));
   const loads = routeTraffic(model, scaled, route).loads;
   const result = {
-    target, flows: made.flows.length, servers: readings.length, short: short.size, loads, pattern, peers: Number(gen.peers) || 1,
+    target, flows: made.flows.length, servers: readings.length, short: short.size, loads, layers,
+    pattern: layers[0].pattern, peers: layers[0].peers,
   };
   if (!short.size) return { ...result, suspects: [], alone: [], ownLoad: [], fit: null };
   const slow = routeTraffic(model, scaled.filter((f) => short.has(f.src)), route).loads;

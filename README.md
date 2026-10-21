@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.24.0** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.26.0** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -996,9 +996,14 @@ off.
   IMIX · 1500 B** beside the box set each at a click, here and on a measured
   packet rate's own row. With the request size emptied, pps is plain
   packets, drawn by load alone.
-- **to hosts** — **anywhere**, or **outside its own rack** (row, pod, room —
-  the kinds in your layout): every flow leaves the sender's rack, which loads
-  the uplinks and nothing inside a rack.
+- **to hosts** — **anywhere**; **within its own rack** (row, pod, room —
+  the kinds in your layout), where every rack is a load of its own, its
+  servers sending to each other in the pattern as if it were the whole
+  floor — a test run rack by rack, or row by row — and nothing goes above
+  that level; or **outside its own rack**, the other way round: every flow
+  leaves the sender's rack, which loads the uplinks and nothing inside a
+  rack. Explaining results uses the same choice, so set it to how the test
+  ran.
 - **hosts** — which devices send and receive, as a [filter](#the-viewer):
   `role=server`, `+gpu`, `role=server in:A[01..04]`, or several sections at
   once, `role=server (in:A01 or in:B[03..05])`; the box counts the hosts it
@@ -1120,9 +1125,26 @@ question the other way round: if every server tried to do exactly the same
 thing and the network is what stopped them, *what would the network have to
 look like to produce these results?*
 
-- **What every server tried** is the Load generator's pattern — random
-  peers (the default), all-to-all, a ring and so on, with its peers, reach
-  and seed — at **the best server's result**. Change the pattern there, and
+- **What every server tried** is set in the panel itself, to match how
+  the test was run, at **the best server's result**:
+  - **the pattern** — random peers (the default, one each), all-to-all, a
+    ring, a shift;
+  - **× peers** for random peers: how many each server sent to;
+  - **where** — anywhere, *within its own* rack (row, room, …) or
+    *outside its own* — the same choices as the Load generator's **to
+    hosts**. A test run rack by rack is *within its own rack*: left at
+    *anywhere*, every server is assumed to have sent across the whole
+    floor, over the superspines.
+  - **+ layer** adds another set on top, with **% of it** — the share of
+    each server's traffic that layer carried. Two tests run at once, iperf
+    to 4 peers inside the rack and mx to 8 anywhere, are two layers; each
+    draws its own peers. "to 4 random peers within its own rack (25%) + to
+    8 random peers (75%)" says what was assumed.
+  - **New peers** draws every layer's peers again; **From the Load
+    generator** starts from its settings as one layer.
+
+  The setup matters: explaining two-layer results as one layer anywhere
+  finds the right cable at the wrong speed and reproduces fewer servers. Change the pattern there, and
   the routing (packet spraying, hashed, …) in the routing box, to match the
   test that was run.
 - Each server that fell short of that is a server the network has to
