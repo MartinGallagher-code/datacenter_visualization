@@ -44,7 +44,7 @@ const DEFAULT_CAP = 2000000;
 // would say nothing about its servers.
 const NON_INHERITED = new Set([
   'id', 'name', 'at', 'u', 'cols', 'dir', 'gap', 'label', 'size', 'seq', 'align', 'if', 'gbps', 'pps',
-  'buffer', 'ports', 'breakout', 'latency',
+  'buffer', 'ports', 'breakout', 'latency', 'stream', 'cpugbps', 'rxcost', 'busy',
 ]);
 
 const DEFAULT_NET_COLORS = ['#4fa3ff', '#ff9f43', '#4dd4ac', '#c986ff', '#ff6b8b', '#f5d442'];
@@ -198,8 +198,11 @@ export const NUMBERS = {
 const NET_NUMBERS = { width: [0.1, 100], gbps: GBPS_RANGE };
 // An element's gbps= -- a switch's forwarding capacity -- may be too.
 // pps=: what a switch can forward in packets a second -- a packet-rate
-// ceiling of its own, beside its gbps=.
-const ELEMENT_REALS = { gbps: GBPS_RANGE, pps: [1, 1e13] };
+// ceiling of its own, beside its gbps=. On a server, stream= is the most one
+// connection carries (one core's worth), cpugbps= what its CPU can send and
+// receive together, and rxcost= how much more receiving costs it than
+// sending. Not cpu=: layouts already use that to name the part.
+const ELEMENT_REALS = { gbps: GBPS_RANGE, pps: [1, 1e13], stream: GBPS_RANGE, cpugbps: GBPS_RANGE, rxcost: [0.1, 10] };
 // A device's datasheet figures that carry a unit, each read by one function
 // here so the check and every use agree.
 const BYTE_UNITS = {
@@ -264,12 +267,24 @@ export function readBreakout(raw) {
   return out.size ? out : null;
 }
 
+/**
+ * A share of a server's CPU taken by other work -- `20%`, or a bare `20`
+ * read as per cent -- as a fraction from 0 up to, not including, 1; or null.
+ */
+export function readShare(raw) {
+  const m = /^\s*([0-9]*\.?[0-9]+)\s*%?\s*$/.exec(String(raw ?? ''));
+  if (!m) return null;
+  const n = Number(m[1]) / 100;
+  return Number.isFinite(n) && n >= 0 && n < 1 ? n : null;
+}
+
 // Each of them, with what it says when it cannot be read.
 const ELEMENT_UNITS = {
   buffer: [readBytes, 'not a size -- write it as 132MB, 64MiB or a number of bytes'],
   latency: [readDuration, 'not a time -- write it as 900ns, 0.9us or a number of nanoseconds'],
   ports: [readPorts, 'not a list of ports -- write it as 32x400,2x10: so many ports of so many Gb/s'],
   breakout: [readBreakout, 'not a breakout table -- write it as 200:64,100:128: the most ports of each speed'],
+  busy: [readShare, 'not a share of the CPU -- write it as 20%: from 0 up to, not including, 100'],
 };
 
 function checkUnits(attrs, what, model, line) {

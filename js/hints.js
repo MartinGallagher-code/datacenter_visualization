@@ -40,6 +40,10 @@ const ELEMENT_KEYS = [
   ['ports=', 'a device’s ports, so many of so many Gb/s: ports=32x400,2x10 -- its cables are checked against them'],
   ['breakout=', 'the most ports of each speed it breaks out to, from its datasheet: breakout=200:64,100:128,50:144'],
   ['latency=', 'a switch’s own latency per packet, or a host’s NIC and stack: latency=900ns'],
+  ['stream=', 'the most one connection carries on a server, in Gb/s -- one core’s worth: stream=40'],
+  ['cpugbps=', 'what a server’s CPU can send and receive together, in Gb/s -- one budget for both: cpugbps=310'],
+  ['rxcost=', 'how many times more receiving costs a server’s CPU than sending (1 unless set): rxcost=1.3'],
+  ['busy=', 'the share of a server’s CPU other work takes, off its cpugbps=: busy=20%'],
   ['model=', 'a device defined by a model line: its settings and tags are this one’s too'],
 ];
 
@@ -428,6 +432,10 @@ const REFERENCE = [
     ['node leaf +switch buffer=132MB', 'a shared packet buffer: what bursts queue in before they drop'],
     ['node leaf +switch latency=900ns', 'its latency per packet, added up along a route between picks'],
     ['node s[1..16] role=server gbps=200', 'a server whose NICs move 200 Gb/s each way, whatever its cables add up to (a PCIe slot)'],
+    ['node s[1..16] role=server stream=40', 'one connection carries at most 40 Gb/s, at either end: a flow of 4 connections, 160'],
+    ['node s[1..16] role=server cpugbps=310', 'its CPU sends and receives 310 Gb/s together: 200 out and 110 in, or 155 each way'],
+    ['node s[1..16] role=server cpugbps=310 rxcost=1.3', 'receiving costs it 1.3 times what sending does'],
+    ['node s7 role=server busy=20%', 'a fifth of its CPU taken by other work: 248 of its 310 left for the network'],
     ['node leaf +switch ports=32x400,2x10', 'its ports: its cables are checked against them, breakout included (one 400G port is four 100G cables)'],
     ['node leaf +switch breakout=200:64,100:128,50:144', 'the datasheet’s most ports of each speed: no more cables of a speed than that'],
     ['gbps=1 gbps=10 gbps=25 gbps=40 gbps=100 gbps=200 gbps=400 gbps=800', 'common port speeds', true],

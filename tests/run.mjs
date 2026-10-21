@@ -35,8 +35,8 @@ import {
 } from '../js/render.js';
 import {
   betweenPicks, biggestChanges, bitRate, burstRisk, busiest, cableKeys, cablesOf, compareLoads, countersOf, devicesOf,
-  adaptiveWeights, BUFFER_ALPHA, CONNECTION_LIMITS, FRAMING_BYTES, IMIX_BYTES, PACKET_PICKS, contend, pathLatency, switchBuffer, switchLatency, switchPps, CONTEND_LIMITS, estimateFlows, findingKind, findingsOf, flowsOf, flowsOver, formatGbps, GEN_LIMITS,
-  generateFlows, hostCapacity,
+  adaptiveWeights, BUFFER_ALPHA, CONNECTION_LIMITS, EXPLAIN, explainResults, sendersOver, FRAMING_BYTES, IMIX_BYTES, PACKET_PICKS, contend, pathLatency, switchBuffer, switchLatency, switchPps, CONTEND_LIMITS, estimateFlows, findingKind, findingsOf, flowsOf, flowsOver, formatGbps, GEN_LIMITS,
+  generateFlows, hostCapacity, hostLimits, busyable, busyOf,
   hostsFor, hostsOf, loadable, loadUnit, mergeResults, packetGb, reachKinds, readsAsLoad, routeEstimate, routeTraffic,
   switchCapacity, switchLoads, testFlows, trafficKind, utilOf, viewOf as cableView,
 } from '../js/traffic.js';
@@ -2276,6 +2276,165 @@ link up role=server leaf
   const plain = parseLayout(readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8'));
   const base = pathLatency(plain, plain.resolve('R01/s1'), plain.resolve('R01/s2'), 64);
   ok(Math.abs(lat.min - base.min - 4e-6) < 1e-12, 'a latency= at each end adds both to the trip');
+}
+
+// ------------------------------------------------------- explaining results
+// Per-server results read backwards: if every server tried the same load,
+// which cables would hold them back to exactly what they measured? Checked
+// against results made by the forward model from a cable known to be bad.
+{
+  const fresh = () => parseLayout(readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8'));
+  const bad = (m) => m.links.find((l) => l.net === 'fabric' && [l.a, l.b].includes(m.resolve('R02/tora'))
+    && [l.a, l.b].includes(m.resolve('SP1/spine1')));
+  // Results the way a test run would give them: the load offered, one cable
+  // at 30G of its 100G, shared out.
+  const measure = (m, gen, value) => {
+    const link = bad(m);
+    const was = link.gbps;
+    link.gbps = 30;
+    try {
+      const c = contend(m, generateFlows(m, { ...gen, value, unit: 'Gb/s', per: 'host' }).flows, { split: 'even', toGbps: 1 });
+      const got = new Map();
+      for (const f of c.contention.flows) got.set(f.src, (got.get(f.src) || 0) + f.value);
+      return [...got].map(([el, v]) => ({ el, value: v }));
+    } finally {
+      link.gbps = was;
+    }
+  };
+
+  // The senders over each cable each way, in one pass, as flowsOver finds them one at a time.
+  const m0 = fresh();
+  const flows = generateFlows(m0, { pattern: 'random', peers: 3, seed: 5, value: 40, unit: 'Gb/s', per: 'host' }).flows;
+  const ways = m0.links.filter((l) => l.net === 'fabric').flatMap((link) => [{ link, from: link.a }, { link, from: link.b }]);
+  const one = sendersOver(m0, flows, ways, { split: 'even' });
+  ok(ways.every((w, k) => {
+    const each = new Set(flowsOver(m0, flows, [w.link], { split: 'even', from: new Map([[w.link, w.from]]) }).flows.map((o) => o.flow.src));
+    return each.size === one[k].size && [...each].every((x) => one[k].has(x));
+  }), 'sendersOver finds, in one pass, the senders flowsOver finds over each cable each way');
+
+  const m = fresh();
+  const gen = { pattern: 'random', peers: 3, seed: 5 };
+  const x = explainResults(m, measure(m, gen, 40), { gen, split: 'even' });
+  const [s] = x.suspects;
+  ok(x.suspects.length === 1 && s.link === bad(m) && s.verdict === 'degraded' && Math.abs(s.capacity - 30) < 3,
+     `random peers: the one bad cable, running at the 30G of its 100G it was set to  (${x.suspects.length} named, ${s && s.capacity.toFixed(1)}G)`);
+  ok(x.target === 40 && x.short === s.hosts.length && x.alone.length === 0 && x.fit.within === x.fit.n,
+     `every short server explained by it, and the whole set reproduced  (${x.fit.within} of ${x.fit.n})`);
+  ok(m.links.every((l) => l.gbps === (l.net === 'fabric' ? 100 : l.gbps)) && bad(m).gbps === 100, 'and the layout is left as it was');
+
+  // All-to-all: one bad cable slows everyone, the best included, so the
+  // target is searched above the best result.
+  const all = explainResults(m, measure(m, { pattern: 'all' }, 40), { gen: { pattern: 'all' }, split: 'even' });
+  ok(all.target > all.best && all.suspects.some((v) => v.link === bad(m) && Math.abs(v.capacity - 30) < 3),
+     `all-to-all: the best was held back too, and the bad cable is found  (target ${all.target.toFixed(1)} above ${all.best.toFixed(1)})`);
+
+  // A server slow on its own is no cable's doing.
+  const alone = explainResults(m, hostsFor(m).hosts.map((el, i) => ({ el, value: i === 5 ? 12 : 40 })), { gen, split: 'even' });
+  eq([alone.suspects.length, alone.alone.length, alone.alone[0] === hostsFor(m).hosts[5]], [0, 1, true],
+     'a server short on its own is held back by itself');
+  eq(explainResults(m, hostsFor(m).hosts.map((el) => ({ el, value: 40 })), { gen, split: 'even' }).suspects, [],
+     'every server at the target: nothing to explain');
+  ok(/fewer than two/.test(explainResults(m, [{ el: hostsFor(m).hosts[0], value: 1 }], { gen }).why), 'one reading is not enough');
+  ok(EXPLAIN.budget > 0, 'and there is a time budget');
+}
+
+// ---------------------------------------------------- a server's own limits
+// stream= caps each connection at either end, one core's worth; cpugbps= is
+// one budget for sending and receiving together, receiving at rxcost= times
+// the cost. Both hold flows back in contention as a cable does, and explain
+// reads them back out of results that stop at one figure.
+{
+  const m = parseLayout(`
+net fabric gbps=100
+node tor +switch
+node a role=server stream=30
+node b role=server cpugbps=120 rxcost=2
+node c role=server cpu=epyc-9654
+link fabric role=server tor
+`);
+  eq(m.warnings, [], 'stream=, cpugbps= and rxcost= are element keys, and cpu= still names the part');
+  const [a, b, c] = ['a', 'b', 'c'].map((n) => m.resolve(n));
+  const lim = (el) => { const x = hostLimits(el); return [x.stream, x.cpu, x.rxcost]; };
+  eq([lim(a), lim(b), lim(c)], [[30, null, 1], [null, 120, 2], [null, null, 1]],
+     'hostLimits reads them, receiving costing what sending does unless it says');
+  ok(/rxcost=50 is outside/.test(parseLayout('node x rxcost=50').warnings.join('\n')), 'rxcost= is checked against its range');
+  const one = (flows, o = {}) => contend(m, flows, { toGbps: 1, ...o });
+  const f = (src, dst, value, id = 1) => ({ id, src, dst, value });
+  let r = one([f(a, c, 80)]);
+  eq([r.contention.flows[0].value, r.contention.flows[0].wanted, r.contention.flows[0].heldAt === a, r.contention.hosts.streams.get(a)],
+     [30, 80, true, 1], 'one connection of a stream=30 server carries 30 of the 80 it wanted, held back by the server itself');
+  eq(one([f(a, c, 80)], { connections: 2 }).contention.flows[0].value, 60, 'two connections carry twice that, kept whole by an even split');
+  eq(one([f(a, c, 80)], { connections: 2, split: 'hashed' }).contention.flows[0].value, 60, 'and as two hashed connections, each capped');
+  eq(one([f(c, a, 80)]).contention.flows[0].value, 30, 'stream= holds at the receiving end too');
+  eq(contend(m, [f(a, c, 80)], {}).contention.flows[0].value, 80, 'a load that is not a bit rate has no stream= to set against');
+  r = one([f(b, c, 80), f(c, b, 80, 2)]);
+  eq([...r.contention.flows.map((x) => x.value), r.contention.hosts.cpuFull.get(b), r.contention.hosts.cpu.get(b)],
+     [40, 40, 2, [120, 240]], 'cpugbps=120 at rxcost=2: sending 40 and receiving 40 fill it, holding both flows back');
+  r = one([f(b, c, 100)]);
+  eq([r.contention.flows[0].value, r.contention.hosts.cpuFull.size], [100, 0], 'sending alone, it reaches its NIC');
+
+  // busy=: a share of the CPU other work takes, off its cpugbps=.
+  const busyM = parseLayout(`
+net fabric gbps=100
+node tor +switch
+node b role=server cpugbps=120 rxcost=2 busy=25%
+node c role=server busy=40
+link fabric role=server tor
+`);
+  eq(busyM.warnings, [], 'busy= takes a share, with or without its %');
+  ok(/busy=150 is not a share of the CPU/.test(parseLayout('node x busy=150').warnings.join('\n')), 'and 100% or more is refused, with why');
+  const [bb, bc] = ['b', 'c'].map((n) => busyM.resolve(n));
+  eq([hostLimits(bb).cpu, hostLimits(bb).idle, hostLimits(bb).busy, hostLimits(bc).busy, hostLimits(bc).cpu],
+     [90, 120, 0.25, 0.4, null], 'a quarter busy leaves 90 of 120; busy with no cpugbps= has nothing to take from');
+  r = contend(busyM, [f(bb, bc, 80), f(bc, bb, 80, 2)], { toGbps: 1 });
+  eq(r.contention.flows.map((x) => x.value), [30, 30], 'so sending and receiving at rxcost=2 come to 30 each, not 40');
+  r = contend(busyM, [f(bb, bc, 80), f(bc, bb, 80, 2)], { toGbps: 1, busy: new Map([[bb, 0.5]]) });
+  eq(r.contention.flows.map((x) => x.value), [20, 20], 'a measured share, given, wins over busy=: half of 120 is 20 each');
+  ok(hostLimits(bb, new Map([[bb, 0.5]])).busyFrom, 'and says it was measured');
+
+  // A per-server CPU metric, read as each server's busy share.
+  const cpuRaw = parseResults('!test cpu_util unit=%\ncpu_util\tb\t35\ncpu_util\tc\t100\n!test cpu_frac\ncpu_frac\tb\t0.35\n'
+    + '!test egress_gbps unit=Gb/s\negress_gbps\tb\t10\n');
+  const bindTo = (name) => bindOverlay(cpuRaw.get(name), busyM);
+  eq([busyable(bindTo('cpu_util')), busyable(bindTo('cpu_frac')), busyable(bindTo('egress_gbps'))], [true, true, false],
+     'a per-host metric in per cent, or unitless and named for the CPU, can say how busy; a rate cannot');
+  eq([...busyOf(bindTo('cpu_util'), busyM)].map(([el, v]) => [el.id, v]), [['b', 0.35], ['c', 0.99]],
+     'per cent read as a share, and a whole 100% kept just short of it');
+  eq([...busyOf(bindTo('cpu_frac'), busyM)].map(([el, v]) => [el.id, v]), [['b', 0.35]], 'a unitless share of at most 1 read as it is');
+
+  // Results that stop at one figure, from servers limited by stream=, read
+  // back on a layout that does not say so: the servers' own limit.
+  const text = readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8');
+  const plain = parseLayout(text);
+  const limited = parseLayout(text.replace(/role=server/, 'role=server stream=10'));
+  const gen = { pattern: 'random', peers: 3, seed: 5 };
+  const c2 = contend(limited, generateFlows(limited, { ...gen, value: 80, unit: 'Gb/s', per: 'host' }).flows, { split: 'even', toGbps: 1 });
+  const got = new Map();
+  for (const x of c2.contention.flows) got.set(x.src.path, (got.get(x.src.path) || 0) + x.value);
+  eq([...new Set(got.values())], [30], 'three peers of one 10G connection each: every server at 30');
+  const x = explainResults(plain, hostsFor(plain).hosts.map((el) => ({ el, value: got.get(el.path) })), { gen, split: 'even' });
+  ok(x.short === 0 && x.own && x.own.at === 30 && x.own.carries > 30 && x.own.same === 32,
+     `explained: all 32 stop at 30, where the network carries ${x.own && x.own.carries}`);
+  eq(x.own && [x.own.flows, x.own.connections, x.own.stream, x.own.cpu], [3, 1, 10, 60],
+     'and stream=10 (three flows of one connection) or cpugbps=60 would reproduce it');
+  const y = explainResults(limited, hostsFor(limited).hosts.map((el) => ({ el, value: got.get(el.path) })), { gen, split: 'even' });
+  eq([y.short, y.own], [0, null], 'with stream=10 written, the layout already explains it: nothing to say');
+  const spread = explainResults(plain, hostsFor(plain).hosts.map((el, i) => ({ el, value: 10 + i })), { gen, split: 'even' });
+  eq(spread.own, null, 'results spread out are not one shared limit');
+
+  // Two servers busy elsewhere: short, and the layout's own limits already
+  // hold them there -- their load, not a cable.
+  const cpuText = text.replace(/role=server/, 'role=server cpugbps=60');
+  const cpuM = parseLayout(cpuText);
+  const servers = hostsFor(cpuM).hosts;
+  const busyMap = new Map([[servers[3], 0.5], [servers[20], 0.5]]);
+  const c3 = contend(cpuM, generateFlows(cpuM, { ...gen, value: 30, unit: 'Gb/s', per: 'host' }).flows, { split: 'even', toGbps: 1, busy: busyMap });
+  const got3 = new Map();
+  for (const v of c3.contention.flows) got3.set(v.src, (got3.get(v.src) || 0) + v.value);
+  const z = explainResults(cpuM, servers.map((el) => ({ el, value: got3.get(el) })), { gen, split: 'even', busy: busyMap });
+  ok(z.short >= 2 && z.suspects.length === 0 && z.alone.length === 0
+     && z.ownLoad.some((o) => o.el === servers[3] && o.busy === 0.5) && z.ownLoad.some((o) => o.el === servers[20]),
+     `servers busy elsewhere are short by their own load, with no cable to blame  (${z.short} short, ${z.ownLoad.length} by their own load)`);
 }
 
 // ------------------------------------------------------------------ bursts

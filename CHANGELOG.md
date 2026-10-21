@@ -11,6 +11,51 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.24.0 — 2026-10-21
+
+- **`busy=`** on a server: the share of its CPU other work takes, off its
+  `cpugbps=` -- `busy=20%` leaves 248 of 310. Or measured: with servers that
+  have a `cpugbps=`, the routing box offers **CPU busy elsewhere**, and a
+  per-server CPU metric chosen there sets each server's share in place of
+  its `busy=`. The tooltip says what was left and why.
+- **Explain these results** names servers **short by their own load**: the
+  ones the layout's own limits, busy included, already hold to what they
+  measured, with no cable blamed.
+- *Connections a flow* shows whenever a server has a `stream=`, packet
+  spraying included, since it decides what a flow may carry there too.
+- 1.22.0, 1.23.0 and 1.24.0 share one pull request.
+
+## 1.23.0 — 2026-10-21
+
+- **A server's own limits**, beyond its NICs. `stream=` is the most one
+  connection carries -- one core's worth on a kernel stack -- at either end,
+  so a flow carries at most its connections times it. `cpugbps=` is what
+  its CPU can send and receive together, one budget for both directions,
+  with `rxcost=` for receiving costing more than sending. Both hold flows
+  back in contention as a full cable does; the headline counts hosts out of
+  CPU and at their stream=, and hovering a server says where it stands.
+  (`cpu=` is left to name the part, as layouts already use it.)
+- **Explain these results** gains the other answer: when most servers stop
+  at one result the network would carry more than, the limit is in the
+  servers, and it gives the `stream=` or `cpugbps=` that would reproduce
+  it. 1.22.0 and 1.23.0 share one pull request, so 1.22.0 is not published
+  on its own.
+
+## 1.22.0 — 2026-10-21
+
+- **Explain these results by the network**, under a per-host load: assume
+  every server tried the same thing -- the Load generator's pattern, at the
+  best server's result -- and find the cables that would hold the others
+  back to exactly what they measured. Each comes with the capacity the
+  results give it: **degraded** when that is under its `gbps=` ("runs at
+  30G of its 100G"), **full** when simply more was offered than it carries.
+  Servers no shared cable explains are named as held back by themselves.
+  When even the best server was held back, it searches above the best
+  result and says so; the panel ends with how closely the model, so
+  changed, reproduces every server's result. A new cable view, **explained
+  by the network**, shows the load as it would be. On thousands of servers
+  it stops after twenty seconds with what it is surest of, and says so.
+
 ## 1.21.1 — 2026-10-21
 
 - The even split is named for what it is on a fabric that sprays: **packet

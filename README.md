@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.21.1** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.24.0** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -800,6 +800,46 @@ node s[1..16] role=server model=P2100G
 A server with two such cards has twice each figure: `ports=4x100
 gbps=400 pps=212000000`, or a card a net if they are cabled apart.
 
+A server is more than its NICs, and two of its own limits usually set what
+a test reaches well before they do:
+
+- **`stream=`** — the most one connection carries, in Gb/s. On a kernel
+  stack a TCP stream is mostly one core's work, and tops out around 30–50
+  Gb/s however empty the cables. It holds at either end, and a flow carries
+  at most its connections (the routing box's *connections per flow*) times
+  it: `stream=40` and four connections is 160.
+- **`cpugbps=`** — what its CPU can send and receive together, in Gb/s:
+  one budget for both directions, since the same cores do both. A server
+  with `cpugbps=310` sends its 200 alone, but sending and receiving at once
+  it manages 155 each way. **`rxcost=`** says how many times more receiving
+  costs than sending (1 unless set): at `rxcost=1.3` it is about 135 each
+  way.
+  (`cpu=` stays free to name the part, `cpu=epyc-9654`, as layouts already
+  use it.)
+- **`busy=`** — the share of its CPU other work takes, `busy=20%` (or a
+  bare `busy=20`), off its `cpugbps=`: `cpugbps=310 busy=20%` leaves 248 for
+  the network. Write the idle figure once on the model and `busy=` on the
+  servers or lines that are loaded. With no `cpugbps=` it has nothing to
+  take from, and the tooltip says so. Measured is better than written:
+  with servers that have a `cpugbps=`, the routing box offers **CPU busy
+  elsewhere**, and choosing a loaded per-server CPU metric there — in per
+  cent (`unit=%`), or unitless and named for the CPU (`cpu_util`,
+  `busy`) with readings as shares — reads each server's share from it in
+  place of its `busy=`. The metric must be ticked to count.
+
+The routing box shows *connections a flow* whenever a server has a
+`stream=`, packet spraying included: it sets what a flow may carry.
+
+Both hold flows back in [contention](#contention-a-full-cable-shares-itself-out)
+just as a full cable does; hovering a server says which it is at, and the
+headline counts *hosts out of CPU* and *hosts at their stream=*. Telling the
+two apart is one test: an iperf run with `-P 1`, `-P 4` and `-P 8` gains with
+each extra connection only where the limit is per connection.
+
+```text
+model P2100Gx2 ports=4x100 gbps=400 pps=212000000 stream=40 cpugbps=310
+```
+
 What the datasheets also give and the viewer does not model: power draw,
 fans and power supplies, memory, table sizes (128-way ECMP, routes, MACs),
 queues per port and QoS (PFC, ECN), MACsec, and the load-balancing features
@@ -1071,6 +1111,62 @@ other hosts measured, then routed like flows.
 
 `examples/dual-plane-hosts.tsv` gives each server of `examples/dual-plane.dc`
 a total: a busy rack, and one hot server in a quiet one.
+
+#### Explaining the results by the network
+
+The estimate above asks *where would these totals go?* Ticking **explain
+these results by the network**, under the same per-host load, asks the
+question the other way round: if every server tried to do exactly the same
+thing and the network is what stopped them, *what would the network have to
+look like to produce these results?*
+
+- **What every server tried** is the Load generator's pattern — random
+  peers (the default), all-to-all, a ring and so on, with its peers, reach
+  and seed — at **the best server's result**. Change the pattern there, and
+  the routing (packet spraying, hashed, …) in the routing box, to match the
+  test that was run.
+- Each server that fell short of that is a server the network has to
+  explain. The search looks for the cables those servers share, and for
+  each one the capacity that holds every server crossing it back to what it
+  measured — running the same max-min contention as the load itself, so a
+  cable shared with a fast server is not blamed for a slow one.
+- A cable that comes out under its `gbps=` is **degraded** — a lane down, a
+  bad optic, a speed mis-negotiated — and says what it runs at: "runs at
+  30G of its 100G · 8 servers". One that only needs to be full at its rating
+  is **full**: simply more offered than it carries. Click either to select
+  its sending end; hover for the servers it explains.
+- A server no shared cable explains is **held back by itself** — its NIC,
+  CPU or stack — and is named as such rather than blamed on a cable.
+- **Their own load**: a short server that the layout's own limits already
+  hold to its result — `cpugbps=` less what it was busy with, as written or
+  measured — is named as such, with how busy it was, and no cable is blamed
+  for it.
+- **The servers themselves**: when most of them stop at the same result,
+  and the network as the layout has it would carry more of the same load,
+  the limit is theirs — "32 of 32 servers stop at about 155Gb/s, where the
+  network would carry 200Gb/s". It gives the `stream=` (the result over
+  each server's flows and connections) or `cpugbps=` (sending and receiving
+  the result at once) that would reproduce it; write either on the servers
+  and the panel has nothing left to explain. Where cables explain the
+  results too, it is offered as the other answer, after them.
+- When even the best server sits on a degraded path (all-to-all, where every
+  server crosses the bad cable), the best result is not what was tried: the
+  search tries higher targets and says so — "above the best result of 31G:
+  even the best was held back".
+- The panel ends with how well it fits: how closely the model, with those
+  cables changed, reproduces every server's result, and how many come out
+  within 5%. A poor fit is in red — the pattern, peers or routing likely do
+  not match the test.
+- The cable view gains **explained by the network**: the load as it would
+  be, with each suspect cable's share read against the capacity the results
+  give it.
+- It is worked out in the background, and on thousands of servers stops
+  after twenty seconds with the cables it was surest of — the panel says
+  when it did.
+
+It is an inference, not a measurement: it finds the *fewest* cables that
+explain the results, and a different set may explain them as well. Switch
+counters, below, are what settle it.
 
 #### Switch counters: measured, on the cable
 
