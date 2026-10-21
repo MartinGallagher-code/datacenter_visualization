@@ -671,7 +671,7 @@ const SPLIT_LABELS = {
   polarized: 'ECMP, hashed alike at every tier (polarized)',
   adaptive: 'adaptive routing (per packet)',
   capacity: 'weighted by capacity (WCMP)',
-  even: 'ideal: even split',
+  even: 'packet spraying (even split)',
 };
 // What each split stands for, on its option.
 const SPLIT_TITLES = {
@@ -684,8 +684,9 @@ const SPLIT_TITLES = {
     + 'emptier cables until its choices are about as full as each other. It sees only its own cables, not '
     + 'congestion further on. Hosts still hash, as LACP does',
   capacity: 'Weighted ECMP: every flow shared over its paths in proportion to each cable’s gbps=, as a fluid',
-  even: 'Not something switches do: every flow shared equally over every shortest route, as a fluid -- the long-run '
-    + 'average of hashing with endless connections, and the best any balancing could do here',
+  even: 'Every flow’s packets sprayed evenly over every shortest route, round-robin or at random, whatever the load: '
+    + 'what a leaf that sprays does (the NICs put the packets back in order). Also the long-run average of hashing with '
+    + 'endless connections, and on an even fabric the best any balancing could do'
 };
 
 const SPREAD_LABELS = {

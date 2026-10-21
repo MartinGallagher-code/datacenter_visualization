@@ -11,6 +11,13 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.21.1 — 2026-10-21
+
+- The even split is named for what it is on a fabric that sprays: **packet
+  spraying (even split)** -- every flow's packets over every route, as a
+  leaf that sprays sends them -- rather than "ideal", which said no switch
+  does it. The routing works as before.
+
 ## 1.21.0 — 2026-10-20
 
 - **Show all** beside Show more, on the busiest cables and the biggest

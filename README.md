@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.21.0** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.21.1** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -538,10 +538,15 @@ is end to end, and only switch counters see the cables themselves:
   - **weighted by capacity (WCMP)** — shares in proportion to `gbps=`, as
     weighted ECMP (UCMP, the BGP link-bandwidth community) spreads over
     unequal links;
-  - **ideal: even split** — not something switches do: every flow shared
-    equally over every route, as a fluid. It is the long-run average of
-    hashing with endless connections, and the best any balancing could do
-    on a symmetric fabric: if a cable is full here, nothing will save it.
+  - **packet spraying (even split)** — every flow's packets sprayed evenly
+    over every shortest route, round-robin or at random, whatever the load:
+    what a leaf that sprays does, its spines and superspines keeping to the
+    route each packet was given. It needs NICs that put packets back in order,
+    as RDMA NICs do. It is also the long-run average of hashing with endless
+    connections, and the best any balancing could do on an even fabric: if a
+    cable is full here, nothing will save it. Where spines also move traffic
+    off a busy route, adaptive routing is the closer model; where they move
+    it off a dead one, take that out with the what-if.
 - **connections a flow**, beside the routing, is how many connections each
   flow between two hosts is made of — `iperf -P`, a test's parallel streams,
   an RDMA job's queue pairs — **1 by default**. Each is hashed on its own,
@@ -590,7 +595,7 @@ is end to end, and only switch counters see the cables themselves:
 servers sending 40 Gb/s each across the planes — 80% of their NICs and their
 rack's uplinks — and an incast of eight servers into one, 160% of the two
 NICs it lands on. Hashed, each 40 Gb/s flow takes one NIC, not two; under
-the ideal even split it is shared over both.
+the even split it is shared over both.
 
 #### Contention: a full cable shares itself out
 
@@ -856,7 +861,7 @@ picks the picks box offers two things more:
 
 A single test flow, hashed as the page routes it by default, takes one
 uplink, so every cable from server to server is drawn the same width; the
-ideal even split shares it over every uplink — four spines, a quarter each.
+even split (packet spraying) shares it over every uplink — four spines, a quarter each.
 
 Between two devices the picks box also gives the **latency** floor of one
 packet's trip, at 64 and 1500 bytes, over every shortest route: each
@@ -1976,7 +1981,7 @@ quietly left stale.
   Networks panel holds what the cables show (model, counters, the two
   compared, or the change since taking something out), the colour key, the
   routing (hashed per connection with **Re-roll** and the connections a
-  flow, polarized, adaptive, by capacity, or the ideal even split), the spread for an
+  flow, polarized, adaptive, by capacity, or packet spraying), the spread for an
   estimate, the what-if, and the busiest cables or biggest changes; **width
   by capacity** draws each cable by its `gbps=` instead. See
   [Capacity](#capacity-what-a-cable-carries) and

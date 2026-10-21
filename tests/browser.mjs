@@ -1320,7 +1320,7 @@ await test('routing as a real fabric does it', async () => {
   const split = page.locator('#cable-load .btnrow select').first();
   eq(await split.inputValue(), 'hashed', 'the switches hash per connection unless told otherwise');
   const labels = await split.locator('option').allTextContents();
-  ok(labels[0] === 'ECMP: hashed per connection' && labels.includes('ideal: even split') && labels.includes('adaptive routing (per packet)'),
+  ok(labels[0] === 'ECMP: hashed per connection' && labels.includes('packet spraying (even split)') && labels.includes('adaptive routing (per packet)'),
      `what each is, by what real fabrics do  (${labels.join(' | ')})`);
   ok(/connection a flow/.test(await panel()) && await page.inputValue('#cable-load input.connections') === '1',
      'one connection a flow, said so');
