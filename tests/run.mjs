@@ -35,7 +35,7 @@ import {
 } from '../js/render.js';
 import {
   betweenPicks, biggestChanges, bitRate, burstRisk, busiest, cableKeys, cablesOf, compareLoads, countersOf, devicesOf,
-  adaptiveWeights, BUFFER_ALPHA, CONNECTION_LIMITS, FRAMING_BYTES, IMIX_BYTES, PACKET_PICKS, contend, pathLatency, switchBuffer, switchLatency, switchPps, CONTEND_LIMITS, estimateFlows, findingKind, findingsOf, flowsOf, flowsOver, formatGbps, GEN_LIMITS,
+  adaptiveWeights, BUFFER_ALPHA, CONNECTION_LIMITS, EXPLAIN, explainResults, sendersOver, FRAMING_BYTES, IMIX_BYTES, PACKET_PICKS, contend, pathLatency, switchBuffer, switchLatency, switchPps, CONTEND_LIMITS, estimateFlows, findingKind, findingsOf, flowsOf, flowsOver, formatGbps, GEN_LIMITS,
   generateFlows, hostCapacity,
   hostsFor, hostsOf, loadable, loadUnit, mergeResults, packetGb, reachKinds, readsAsLoad, routeEstimate, routeTraffic,
   switchCapacity, switchLoads, testFlows, trafficKind, utilOf, viewOf as cableView,
@@ -2276,6 +2276,66 @@ link up role=server leaf
   const plain = parseLayout(readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8'));
   const base = pathLatency(plain, plain.resolve('R01/s1'), plain.resolve('R01/s2'), 64);
   ok(Math.abs(lat.min - base.min - 4e-6) < 1e-12, 'a latency= at each end adds both to the trip');
+}
+
+// ------------------------------------------------------- explaining results
+// Per-server results read backwards: if every server tried the same load,
+// which cables would hold them back to exactly what they measured? Checked
+// against results made by the forward model from a cable known to be bad.
+{
+  const fresh = () => parseLayout(readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8'));
+  const bad = (m) => m.links.find((l) => l.net === 'fabric' && [l.a, l.b].includes(m.resolve('R02/tora'))
+    && [l.a, l.b].includes(m.resolve('SP1/spine1')));
+  // Results the way a test run would give them: the load offered, one cable
+  // at 30G of its 100G, shared out.
+  const measure = (m, gen, value) => {
+    const link = bad(m);
+    const was = link.gbps;
+    link.gbps = 30;
+    try {
+      const c = contend(m, generateFlows(m, { ...gen, value, unit: 'Gb/s', per: 'host' }).flows, { split: 'even', toGbps: 1 });
+      const got = new Map();
+      for (const f of c.contention.flows) got.set(f.src, (got.get(f.src) || 0) + f.value);
+      return [...got].map(([el, v]) => ({ el, value: v }));
+    } finally {
+      link.gbps = was;
+    }
+  };
+
+  // The senders over each cable each way, in one pass, as flowsOver finds them one at a time.
+  const m0 = fresh();
+  const flows = generateFlows(m0, { pattern: 'random', peers: 3, seed: 5, value: 40, unit: 'Gb/s', per: 'host' }).flows;
+  const ways = m0.links.filter((l) => l.net === 'fabric').flatMap((link) => [{ link, from: link.a }, { link, from: link.b }]);
+  const one = sendersOver(m0, flows, ways, { split: 'even' });
+  ok(ways.every((w, k) => {
+    const each = new Set(flowsOver(m0, flows, [w.link], { split: 'even', from: new Map([[w.link, w.from]]) }).flows.map((o) => o.flow.src));
+    return each.size === one[k].size && [...each].every((x) => one[k].has(x));
+  }), 'sendersOver finds, in one pass, the senders flowsOver finds over each cable each way');
+
+  const m = fresh();
+  const gen = { pattern: 'random', peers: 3, seed: 5 };
+  const x = explainResults(m, measure(m, gen, 40), { gen, split: 'even' });
+  const [s] = x.suspects;
+  ok(x.suspects.length === 1 && s.link === bad(m) && s.verdict === 'degraded' && Math.abs(s.capacity - 30) < 3,
+     `random peers: the one bad cable, running at the 30G of its 100G it was set to  (${x.suspects.length} named, ${s && s.capacity.toFixed(1)}G)`);
+  ok(x.target === 40 && x.short === s.hosts.length && x.alone.length === 0 && x.fit.within === x.fit.n,
+     `every short server explained by it, and the whole set reproduced  (${x.fit.within} of ${x.fit.n})`);
+  ok(m.links.every((l) => l.gbps === (l.net === 'fabric' ? 100 : l.gbps)) && bad(m).gbps === 100, 'and the layout is left as it was');
+
+  // All-to-all: one bad cable slows everyone, the best included, so the
+  // target is searched above the best result.
+  const all = explainResults(m, measure(m, { pattern: 'all' }, 40), { gen: { pattern: 'all' }, split: 'even' });
+  ok(all.target > all.best && all.suspects.some((v) => v.link === bad(m) && Math.abs(v.capacity - 30) < 3),
+     `all-to-all: the best was held back too, and the bad cable is found  (target ${all.target.toFixed(1)} above ${all.best.toFixed(1)})`);
+
+  // A server slow on its own is no cable's doing.
+  const alone = explainResults(m, hostsFor(m).hosts.map((el, i) => ({ el, value: i === 5 ? 12 : 40 })), { gen, split: 'even' });
+  eq([alone.suspects.length, alone.alone.length, alone.alone[0] === hostsFor(m).hosts[5]], [0, 1, true],
+     'a server short on its own is held back by itself');
+  eq(explainResults(m, hostsFor(m).hosts.map((el) => ({ el, value: 40 })), { gen, split: 'even' }).suspects, [],
+     'every server at the target: nothing to explain');
+  ok(/fewer than two/.test(explainResults(m, [{ el: hostsFor(m).hosts[0], value: 1 }], { gen }).why), 'one reading is not enough');
+  ok(EXPLAIN.budget > 0, 'and there is a time budget');
 }
 
 // ------------------------------------------------------------------ bursts

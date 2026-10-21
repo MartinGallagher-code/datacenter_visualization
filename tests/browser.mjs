@@ -133,6 +133,11 @@ const fixtures = new Map([
   // The same, with the bond sharing every flow evenly.
   ['/fx/bonded-even.dc', readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8')
     .replace(/^(net nica .*)$/m, '$1 bond=nic balance=even').replace(/^(net nicb .*)$/m, '$1 bond=nic balance=even')],
+  // What each dual-plane server achieved, all-to-all at 40 Gb/s, with the
+  // cable between R02/tora and SP1/spine1 at 30G of its 100G -- results for
+  // explaining by the network.
+  ['/fx/explain.tsv', `!test achieved_gbps unit=Gb/s label="Achieved"\n${[1, 2, 3, 4].flatMap((r) => [1, 2, 3, 4, 5, 6, 7, 8]
+    .map((n) => `achieved_gbps\tR0${r}/s${n}\t${r === 2 ? '24.032' : '34.677'}\n`)).join('')}`],
   // The dual-plane fabric with each server's two NICs bonded.
   ['/fx/bonded.dc', readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8')
     .replace(/^(net nica .*)$/m, '$1 bond=nic').replace(/^(net nicb .*)$/m, '$1 bond=nic')],
@@ -1396,6 +1401,33 @@ await test('buffers, latency and device models', async () => {
   ok(/under this load: [\d.]+ µs at 64 B, [\d.]+ µs at 1500 B/.test(picks) && !/full cable/.test(picks),
      `and under the load the cables show, the queues on the way added  (${(/under this load.*/.exec(picks) || [''])[0]})`);
 }, { url: '?layout=fx/modelled.dc' });
+
+// Results read backwards: every server tried the same load, and the cable
+// that held them back to exactly what they measured is named.
+await test('explaining results by the network', async () => {
+  const panel = () => page.evaluate(() => document.querySelector('#cable-load').innerText);
+  await page.locator('#overlays .overlay-head input[type=checkbox]').first().check();
+  await page.waitForTimeout(200);
+  await page.locator('#overlays label', { hasText: 'load the cables (estimated)' }).locator('input').check();
+  await page.waitForTimeout(400);
+  await ideal();
+  await page.locator('#cable-load label.explain input').check();
+  let text = '';
+  for (let i = 0; i < 40; i++) {
+    await page.waitForTimeout(250);
+    text = await panel();
+    if (/What would explain these results/.test(text) && !/working it out/.test(text)) break;
+  }
+  ok(/if every server tried [\d.]+Gb\/s \(above the best result of 34\.7G: even the best was held back\) to every other host: 32 of 32 fell short/.test(text)
+     || /if every server tried [\d.]+Gb\/s \(above the best result/.test(text),
+     `every server assumed to try the same, above the best result  (${(/if every server.*/.exec(text) || [''])[0]})`);
+  ok(/R02\/tora → SP1\/spine1\s+runs at (2[6-9]|3[0-3])(\.\d)?G of its 100G/.test(text),
+     `and the bad cable named, at about the 30G it was set to  (${(/R02\/tora → SP1\/spine1.*/.exec(text) || [''])[0]})`);
+  ok(/with these, the model reproduces the results to within \d+% of the target on average · 32 of 32 servers within 5%/.test(text),
+     'the explanation reproduces every server');
+  const views = await page.locator('#cable-load select.cable-view option').allTextContents();
+  ok(views.some((v) => /explained by the network/.test(v)), `and the cables can show it  (${views.join(' | ')})`);
+}, { url: '?layout=examples/dual-plane.dc&results=fx/explain.tsv' });
 
 // Bonded NICs, as LACP (layer3+4) runs them: hashed, each connection keeps
 // to one NIC, so with one connection a flow the two drift apart and with

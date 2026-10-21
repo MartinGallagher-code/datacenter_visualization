@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.21.1** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.22.0** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -1071,6 +1071,50 @@ other hosts measured, then routed like flows.
 
 `examples/dual-plane-hosts.tsv` gives each server of `examples/dual-plane.dc`
 a total: a busy rack, and one hot server in a quiet one.
+
+#### Explaining the results by the network
+
+The estimate above asks *where would these totals go?* Ticking **explain
+these results by the network**, under the same per-host load, asks the
+question the other way round: if every server tried to do exactly the same
+thing and the network is what stopped them, *what would the network have to
+look like to produce these results?*
+
+- **What every server tried** is the Load generator's pattern — random
+  peers (the default), all-to-all, a ring and so on, with its peers, reach
+  and seed — at **the best server's result**. Change the pattern there, and
+  the routing (packet spraying, hashed, …) in the routing box, to match the
+  test that was run.
+- Each server that fell short of that is a server the network has to
+  explain. The search looks for the cables those servers share, and for
+  each one the capacity that holds every server crossing it back to what it
+  measured — running the same max-min contention as the load itself, so a
+  cable shared with a fast server is not blamed for a slow one.
+- A cable that comes out under its `gbps=` is **degraded** — a lane down, a
+  bad optic, a speed mis-negotiated — and says what it runs at: "runs at
+  30G of its 100G · 8 servers". One that only needs to be full at its rating
+  is **full**: simply more offered than it carries. Click either to select
+  its sending end; hover for the servers it explains.
+- A server no shared cable explains is **held back by itself** — its NIC,
+  CPU or stack — and is named as such rather than blamed on a cable.
+- When even the best server sits on a degraded path (all-to-all, where every
+  server crosses the bad cable), the best result is not what was tried: the
+  search tries higher targets and says so — "above the best result of 31G:
+  even the best was held back".
+- The panel ends with how well it fits: how closely the model, with those
+  cables changed, reproduces every server's result, and how many come out
+  within 5%. A poor fit is in red — the pattern, peers or routing likely do
+  not match the test.
+- The cable view gains **explained by the network**: the load as it would
+  be, with each suspect cable's share read against the capacity the results
+  give it.
+- It is worked out in the background, and on thousands of servers stops
+  after twenty seconds with the cables it was surest of — the panel says
+  when it did.
+
+It is an inference, not a measurement: it finds the *fewest* cables that
+explain the results, and a different set may explain them as well. Switch
+counters, below, are what settle it.
 
 #### Switch counters: measured, on the cable
 

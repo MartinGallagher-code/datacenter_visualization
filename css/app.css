@@ -773,3 +773,4 @@ body.resizing-rows { cursor: row-resize; user-select: none; }
 .size-picks { display: inline-flex; gap: 3px; margin-left: 4px; }
 .size-picks button { font-size: 10.5px; padding: 1px 5px; }
 .size-picks button.active { border-color: #4fa3ff; color: #8cc4ff; }
+.explain-box { margin-top: 8px; }

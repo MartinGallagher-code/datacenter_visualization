@@ -741,6 +741,7 @@ function viewLabel(view, name) {
     return m.overlay ? text : `${text[0].toUpperCase()}${text.slice(1)}`;
   }
   if (name === 'change') return 'change since taking out';
+  if (name === 'explain') return `${view.model.overlay.label}, explained by the network`;
   if (name === 'measured') return `${view.counters.overlay.label} (measured)`;
   return 'measured − model';
 }
@@ -769,6 +770,77 @@ export function formatPps(v) {
 function forwardsHere(state, el) {
   if (el.tagsAll && el.tagsAll.has('switch')) return true;
   return !state.model.all.some((x) => x.tags && x.tags.has('switch'));
+}
+
+/**
+ * The results read backwards: what every server was assumed to try, how many
+ * fell short, the cables that would explain it -- each with the capacity the
+ * results give it -- the servers held back by themselves, and how closely the
+ * explanation reproduces the results.
+ */
+function renderExplain(state, box, actions) {
+  const x = state.explainSource ? state.explainSource() : null;
+  if (!x) return;
+  const wrap = el('div', 'explain-box');
+  wrap.append(el('div', 'load-title', 'What would explain these results'));
+  if (x.working) {
+    wrap.append(el('div', 'muted', 'working it out — a moment here, up to twenty seconds on thousands of servers'));
+    box.append(wrap);
+    return;
+  }
+  if (x.why) {
+    wrap.append(el('div', 'muted', x.why));
+    box.append(wrap);
+    return;
+  }
+  const how = x.pattern === 'random' ? `${x.peers} random peer${x.peers === 1 ? '' : 's'}` : (PATTERN_LABELS[x.pattern] || x.pattern);
+  const above = x.target > x.best * 1.001;
+  wrap.append(el('div', null, `if every server tried ${formatGbps(x.target)}b/s `
+    + `(${above ? `above the best result of ${formatGbps(x.best)}: even the best was held back` : 'the best result'}) to ${how}: `
+    + `${x.short} of ${x.servers} fell short`));
+  wrap.append(el('div', 'muted', 'the pattern is the Load generator’s: change it there'));
+  if (!x.short) {
+    wrap.append(el('div', 'muted', 'every server reached it: nothing to explain'));
+    box.append(wrap);
+    return;
+  }
+  if (x.suspects.length) {
+    const list = el('div', 'load-list');
+    for (const s of x.suspects) {
+      const item = el('div', 'load-row');
+      const dot = el('span', 'dot');
+      dot.style.background = s.verdict === 'degraded' ? LOAD_COLORS.over : loadColor(1);
+      item.append(dot, el('span', 'load-ends', `${shortPath(s.from)} → ${shortPath(s.to)}`));
+      const what = s.verdict === 'degraded'
+        ? `runs at ${formatGbps(s.capacity)} of its ${formatGbps(s.gbps)}`
+        : s.verdict === 'full' ? `full at its ${formatGbps(s.gbps)}` : `full at ${formatGbps(s.capacity)}`;
+      item.append(el('span', 'val', `${what} · ${s.hosts.length} servers`));
+      item.title = `${s.from.path} → ${s.to.path}\n`
+        + (s.verdict === 'degraded'
+          ? `The results say it carries only ${formatGbps(s.capacity)}b/s of its ${formatGbps(s.gbps)}: a lane down, a bad optic, a speed mis-negotiated.`
+          : 'Full at its rating: simply more offered than it carries.')
+        + `\nExplains ${s.hosts.length} short server${s.hosts.length === 1 ? '' : 's'}: ${s.hosts.slice(0, 6).map(shortPath).join(', ')}`
+        + `${s.hosts.length > 6 ? ', …' : ''}\nClick to select its sending end`;
+      item.addEventListener('click', () => { actions.select(s.from); actions.focus(s.from); });
+      list.append(item);
+    }
+    wrap.append(list);
+  } else {
+    wrap.append(el('div', 'muted', 'no cable is shared by two or more of the short servers'));
+  }
+  if (x.alone.length) {
+    wrap.append(el('div', null, `${x.alone.length} server${x.alone.length === 1 ? '' : 's'} short on ${x.alone.length === 1 ? 'its' : 'their'} own — `
+      + `held back by ${x.alone.length === 1 ? 'itself' : 'themselves'} (NIC, CPU, stack): `
+      + `${x.alone.slice(0, 4).map(shortPath).join(', ')}${x.alone.length > 4 ? ', …' : ''}`));
+  }
+  if (x.fit) {
+    wrap.append(el('div', x.fit.mean < 0.05 ? 'muted' : 'bad', `with these, the model reproduces the results to within `
+      + `${pct(x.fit.mean)} of the target on average · ${x.fit.within} of ${x.fit.n} servers within 5%`));
+  }
+  if (x.partial) {
+    wrap.append(el('div', 'muted', 'stopped after twenty seconds: what it found so far, the cables it was surest of first'));
+  }
+  box.append(wrap);
 }
 
 /** What a burst's excess comes to at the switch sending it, and its fate. */
@@ -1266,6 +1338,20 @@ export function renderCableLoad(state, host, actions) {
       if (model.skipped) lines.append(el('div', 'muted', `${model.skipped} readings on racks or rooms left out`));
       const box = duplexBox(state, model.overlay, actions);
       if (box) lines.append(box);
+      if (model.toGbps !== null) {
+        // Read backwards: what the network would have to be.
+        const row = el('label', 'chk explain');
+        const check = el('input');
+        check.type = 'checkbox';
+        check.checked = !!state.traffic.explain;
+        check.addEventListener('change', () => actions.setExplain(check.checked));
+        row.append(check, el('span', null, 'explain these results by the network'));
+        row.title = 'Assume every server tried the same load -- the Load generator’s pattern, peers and reach, at '
+          + 'the best server’s result -- and find the cables that would hold the others back to exactly what they '
+          + 'measured: running below their gbps=, or simply full. A server no shared cable explains was held back '
+          + 'by itself.';
+        lines.append(row);
+      }
       // Measured, a host cannot send more than its cables carry one way.
       if (model.over && model.over.length) {
         const [worst] = model.over;
@@ -1353,6 +1439,7 @@ export function renderCableLoad(state, host, actions) {
     }
   }
   box.append(lines);
+  if (state.traffic.explain) renderExplain(state, box, actions);
 
   if (down.size) renderWhatIf(state, box, actions, down, view);
 

@@ -742,7 +742,9 @@ function weightsFor(model, flows, opts, split) {
  *
  * @param flows  [{ id, src, dst, value }], as routed
  * @param links  the cables, an array or a Set
- * @param opts   { split, seed, down }, as routeTraffic took them
+ * @param opts   { split, seed, down }, as routeTraffic took them; and
+ *               `from`, a Map(link -> element), to count a cable only the
+ *               way out of that element
  * @returns      { flows: [{ flow, amount }] biggest first, count, amount }
  */
 export function flowsOver(model, flows, links, opts = {}) {
@@ -751,6 +753,9 @@ export function flowsOver(model, flows, links, opts = {}) {
   const conns = connectionCount(opts);
   const weights = opts.weights || weightsFor(model, flows, opts, split);
   const targets = links instanceof Set ? links : new Set(links);
+  // Whether crossing `link` out of `u` counts: either way, or only one.
+  const dir = opts.from || null;
+  const hit = (link, u) => targets.has(link) && (!dir || !dir.has(link) || dir.get(link) === u);
   const f = fabric(model, opts);
   // How many of the cables each flow crosses, its legs' shares added up: a
   // bonded host's own cables first, then each leg's route.
@@ -765,7 +770,7 @@ export function flowsOver(model, flows, links, opts = {}) {
       // A connection's crossings count for the flow, each at its part.
       for (const leg of legsOf(conn, f, PER_CONNECTION.has(how))) {
         const part = { ...leg, share: leg.share / parts.length };
-        cross(flow, part.share * ((leg.pre && targets.has(leg.pre) ? 1 : 0) + (leg.post && targets.has(leg.post) ? 1 : 0)));
+        cross(flow, part.share * ((leg.pre && hit(leg.pre, flow.src) ? 1 : 0) + (leg.post && hit(leg.post, leg.dst) ? 1 : 0)));
         if (leg.src === leg.dst) continue;
         const list = byDst.get(leg.dst);
         if (list) list.push([flow, part]);
@@ -793,7 +798,7 @@ export function flowsOver(model, flows, links, opts = {}) {
       const shares = sharesOf(hops, how, u, weights);
       let p = 0;
       for (let k = 0; k < hops.length; k++) {
-        p += shares[k] * ((targets.has(hops[k]) ? 1 : 0) + throughOf(how, other(hops[k], u)));
+        p += shares[k] * ((hit(hops[k], u) ? 1 : 0) + throughOf(how, other(hops[k], u)));
       }
       through.set(u, p);
       return p;
@@ -805,7 +810,7 @@ export function flowsOver(model, flows, links, opts = {}) {
       const pick = pickFor(how);
       for (let u = leg.src; u !== dst;) {
         const link = pick(route.next(u), u, leg.id);
-        if (targets.has(link)) crossings++;
+        if (hit(link, u)) crossings++;
         u = other(link, u);
       }
       cross(flow, leg.share * crossings);
@@ -821,6 +826,94 @@ export function flowsOver(model, flows, links, opts = {}) {
   }
   out.sort((x, y) => y.amount - x.amount || x.flow.id - y.flow.id);
   return { flows: out, count: out.length, amount };
+}
+
+/**
+ * Which flows' senders cross each of a set of cables, each one way: what
+ * flowsOver answers for one cable, for many in one routing pass. A flow
+ * counts where any share of it crosses -- every path of an even split, the
+ * one a hash picks.
+ *
+ * @param ways  [{ link, from }] -- each cable, out of that element
+ * @param opts  as routeTraffic took them
+ * @returns     [Set(sender)] -- one per way, in order
+ */
+export function sendersOver(model, flows, ways, opts = {}) {
+  const split = SPLITS.includes(opts.split) ? opts.split : 'even';
+  const seed = (opts.seed || 0) >>> 0;
+  const conns = connectionCount(opts);
+  const f = fabric(model, opts);
+  const out = ways.map(() => new Set());
+  const words = Math.max(1, Math.ceil(ways.length / 32));
+  // Each cable's ways, by the element they leave.
+  const byLink = new Map();
+  ways.forEach((w, k) => {
+    const list = byLink.get(w.link) || [];
+    list.push([w.from, k]);
+    byLink.set(w.link, list);
+  });
+  const mark = (mask, link, u) => {
+    const list = byLink.get(link);
+    if (list) for (const [from, k] of list) if (from === u) mask[k >> 5] |= 1 << (k & 31);
+  };
+  const credit = (mask, src) => {
+    for (let w = 0; w < words; w++) {
+      let bits = mask[w];
+      while (bits) {
+        const b = 31 - Math.clz32(bits);
+        bits &= ~(1 << b);
+        out[w * 32 + b].add(src);
+      }
+    }
+  };
+  const byDst = new Map();
+  for (const flow of flows) {
+    if (!(flow.value > 0) || cannotStart(flow.src, flow.dst, f) || !legsOf(flow, f)) continue;
+    const how = flow.split || split;
+    for (const conn of connectionsOf(flow, how, conns)) {
+      for (const leg of legsOf(conn, f, PER_CONNECTION.has(how))) {
+        const ends = new Uint32Array(words);
+        if (leg.pre) mark(ends, leg.pre, flow.src);
+        if (leg.post) mark(ends, leg.post, leg.dst);
+        credit(ends, flow.src);
+        if (leg.src === leg.dst) continue;
+        const list = byDst.get(leg.dst);
+        if (list) list.push([flow, leg, how]);
+        else byDst.set(leg.dst, [[flow, leg, how]]);
+      }
+    }
+  }
+  const pickers = new Map();
+  const pickFor = (how) => pickers.get(how) || pickers.set(how, picker(how, seed)).get(how);
+  for (const [dst, list] of byDst) {
+    const route = f.route(dst);
+    // The ways reachable from each element on its way to dst, once each.
+    const reach = new Map([[dst, new Uint32Array(words)]]);
+    const reachOf = (u) => {
+      const known = reach.get(u);
+      if (known) return known;
+      const mask = new Uint32Array(words);
+      for (const link of route.next(u)) {
+        mark(mask, link, u);
+        const on = reachOf(other(link, u));
+        for (let w = 0; w < words; w++) mask[w] |= on[w];
+      }
+      reach.set(u, mask);
+      return mask;
+    };
+    for (const [flow, leg, how] of list) {
+      if (!SINGLE_PATH.has(how)) { credit(reachOf(leg.src), flow.src); continue; }
+      const mask = new Uint32Array(words);
+      const pick = pickFor(how);
+      for (let u = leg.src; u !== dst;) {
+        const link = pick(route.next(u), u, leg.id);
+        mark(mask, link, u);
+        u = other(link, u);
+      }
+      credit(mask, flow.src);
+    }
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------- contention
@@ -2235,7 +2328,215 @@ export function burstRisk(loads, toGbps, burst, seconds = 100e-6) {
   return [...byLink.values()].sort((a, b) => b.util - a.util);
 }
 
-export const VIEWS = ['model', 'change', 'measured', 'diff'];
+// How explainResults reads the results: a server short of the target by
+// more than `short` fell short; it names up to `suspects` cables from the
+// `candidates` most likely; a guess at a cable's capacity is refined up to
+// `rounds` times -- `trial` while it is only being tried; where the best
+// server's result fits poorly, targets up to `reach` times it are tried,
+// `steps` of them; and all of it stops after `budget` ms, partial, since
+// one round on four thousand servers is a few seconds.
+export const EXPLAIN = {
+  short: 0.03, suspects: 24, candidates: 60, degraded: 0.97, rounds: 8, trial: 3, within: 0.05, reach: 2,
+  steps: [1.05, 1.1, 1.2, 1.35, 1.5, 2], budget: 20000,
+};
+
+/**
+ * What the network would have to look like to produce a set of per-server
+ * results, if every server had tried to do the same thing: the inverse of
+ * routing a load.
+ *
+ * Every server is assumed to have sent the generator's pattern (`gen`: its
+ * pattern, peers, reach and seed) at one rate, the target -- the best
+ * server's result to begin with. Each server's flows are scaled to what it
+ * achieved and routed: what each cable must have carried. Each cable, each
+ * way, is then read for **contrast**: how much shorter the servers sending
+ * through it fell than the servers that do not. A cable the short servers
+ * cross and the others do not is where they were held; picked greedily, most
+ * contrast times most servers first. Its capacity is first guessed at what it
+ * carried, then refined: the load offered at the target, shared out with each
+ * suspect at its guess, and each guess moved by how far the servers crossing
+ * it came out from their results. Below its gbps=, the cable runs at less
+ * than its rating -- a lane down, a bad optic, a speed mis-negotiated; at
+ * it, it is simply full. A short server the explanation does not reproduce
+ * was held back by itself: its NIC, its CPU, its stack.
+ *
+ * Where even the best server was held back -- all-to-all through one bad
+ * cable slows everyone -- the best result is too low a target to explain
+ * anything, so higher ones are tried (EXPLAIN.steps, up to the servers' own
+ * capacity) and the one the results fit best is kept.
+ *
+ * @param hosts  [{ el, value }] -- what each server achieved, in Gb/s, one way
+ * @param opts   { gen, split, seed, connections, down, capacity } -- capacity
+ *               the most a server can send, the ceiling on a target
+ * @returns { target, best, flows, servers, short, pattern, peers, suspects:
+ *          [{ link, from, to, carried, capacity, gbps, verdict:
+ *          'degraded'|'full'|'unknown', hosts }], alone: [el], loads, fit:
+ *          { mean, within, n } } -- loads what the cables must have carried;
+ *          or { why } when there is nothing to explain
+ */
+export function explainResults(model, hosts, opts = {}) {
+  const readings = hosts.filter((h) => h.value > 0);
+  if (readings.length < 2) return { why: 'fewer than two servers with a reading' };
+  let best = 0;
+  for (const h of readings) best = Math.max(best, h.value);
+  const deadline = Date.now() + (opts.budget ?? EXPLAIN.budget);
+  const timed = { ...opts, deadline };
+  let first = explainAt(model, readings, best, timed);
+  if (first.why || !first.fit || first.fit.mean <= EXPLAIN.within / 2) return { ...first, best };
+  const ceiling = opts.capacity || best * EXPLAIN.reach;
+  for (const step of EXPLAIN.steps) {
+    const target = best * step;
+    if (target > ceiling * 1.0001 || Date.now() > deadline) break;
+    const next = explainAt(model, readings, target, timed);
+    if (next.fit && next.fit.mean < first.fit.mean) first = next;
+  }
+  return { ...first, best, partial: first.partial || Date.now() > deadline };
+}
+
+// explainResults at one target.
+function explainAt(model, readings, target, opts) {
+  const achieved = new Map(readings.map((h) => [h.el, h.value]));
+  const gen = opts.gen || {};
+  const pattern = PATTERNS.includes(gen.pattern) && !TARGETED.has(gen.pattern) ? gen.pattern : 'random';
+  const made = generateFlows(model, { ...gen, pattern, value: target, unit: 'Gb/s', per: 'host' },
+    { match: (el) => achieved.has(el), base: { toGbps: 1, unit: 'Gb/s' } });
+  if (!made.flows.length) return { why: made.why || 'the assumed pattern sends nothing between these servers' };
+  const route = { split: opts.split, seed: opts.seed, connections: opts.connections, down: opts.down };
+  const deficit = (el) => Math.max(0, target - achieved.get(el));
+  // What each server sent, scaled to what it achieved.
+  const scaled = made.flows.map((f) => ({ ...f, value: f.value * (achieved.get(f.src) / target) }));
+  const short = new Set(readings.filter((h) => h.value < target * (1 - EXPLAIN.short)).map((h) => h.el));
+  const loads = routeTraffic(model, scaled, route).loads;
+  const result = {
+    target, flows: made.flows.length, servers: readings.length, short: short.size, loads, pattern, peers: Number(gen.peers) || 1,
+  };
+  if (!short.size) return { ...result, suspects: [], alone: [], fit: null };
+  const slow = routeTraffic(model, scaled.filter((f) => short.has(f.src)), route).loads;
+
+  // Each way of each cable carrying short servers' traffic, the most first,
+  // read for contrast: the servers sending through it against the rest.
+  const ways = [];
+  for (const [link, l] of slow) for (let d = 0; d < 2; d++) if (l[d] > 0) ways.push({ link, d, slow: l[d] });
+  ways.sort((x, y) => y.slow - x.slow);
+  let total = 0;
+  for (const h of readings) total += deficit(h.el);
+  // Who sends through each candidate, each way -- and both ways, for
+  // refining its capacity -- in one routing pass.
+  const pool = ways.slice(0, EXPLAIN.candidates).map((w) => ({ ...w, from: w.d ? w.link.b : w.link.a }));
+  const asked = [];
+  for (const w of pool) asked.push({ link: w.link, from: w.from }, { link: w.link, from: w.d ? w.link.a : w.link.b });
+  const senders = sendersOver(model, scaled, asked, route);
+  const covers = [];
+  for (const [i, w] of pool.entries()) {
+    const { from } = w;
+    const who = senders[2 * i];
+    const through = new Set([...who, ...senders[2 * i + 1]]);
+    if (!who.size || who.size === readings.length) continue;
+    let inside = 0;
+    for (const el of who) inside += deficit(el);
+    const contrast = inside / who.size - (total - inside) / (readings.length - who.size);
+    if (contrast > 0) covers.push({ ...w, from, who, through, contrast });
+  }
+
+  // Share out the load offered at the target with these cables at these
+  // capacities, refining each against the results: how close it comes.
+  const late = () => opts.deadline && Date.now() > opts.deadline;
+  const refine = (picks, start, rounds = EXPLAIN.rounds) => {
+    const guess = [...start];
+    const was = picks.map((x) => [x.link, x.link.gbps]);
+    let fit = null;
+    let got = new Map();
+    try {
+      for (let round = 0; round < rounds && !(round && late()); round++) {
+        picks.forEach((x, i) => { x.link.gbps = guess[i]; });
+        const c = contend(model, made.flows, { ...route, toGbps: 1 });
+        if (!c) break;
+        got = new Map();
+        for (const f of c.contention.flows) got.set(f.src, (got.get(f.src) || 0) + f.value);
+        let sum = 0;
+        let within = 0;
+        for (const h of readings) {
+          const err = Math.abs((got.get(h.el) || 0) - h.value) / target;
+          sum += err;
+          if (err <= EXPLAIN.within) within++;
+        }
+        fit = { mean: sum / readings.length, within, n: readings.length };
+        if (fit.mean < 0.005 || !picks.length) break;
+        // Each cable by the servers sending through it the way it was
+        // suspected, against what they achieved: those it holds back.
+        picks.forEach((x, i) => {
+          let want = 0;
+          let have = 0;
+          for (const el of x.who) { want += achieved.get(el) || 0; have += got.get(el) || 0; }
+          if (have > 0) guess[i] *= want / have;
+        });
+      }
+    } finally {
+      for (const [link, gbps] of was) link.gbps = gbps;
+    }
+    return { fit, got, guess };
+  };
+  const reproducedBy = (got) => (el) => Math.abs((got.get(el) || 0) - achieved.get(el)) <= EXPLAIN.within * target;
+  // Whether one fit is enough better than another to be worth a cable: a
+  // quarter closer, and half a per cent of the target at least.
+  const better = (a, b) => a.mean < b.mean * 0.75 && a.mean < b.mean - 0.005;
+
+  // Greedily: most contrast, times the short servers it would newly explain
+  // -- kept only where, refined, it brings the network closer to the results.
+  const suspects = [];
+  let now = refine([], []);
+  let open = new Set([...short].filter((el) => !reproducedBy(now.got)(el)));
+  const tried = new Set();
+  let tries = 0;
+  while (suspects.length < EXPLAIN.suspects && open.size && tries < EXPLAIN.candidates / 2 && !late()) {
+    let pick = null;
+    let score = 0;
+    for (const c of covers) {
+      if (tried.has(c)) continue;
+      let n = 0;
+      for (const el of c.who) if (open.has(el)) n++;
+      if (n >= 2 && c.contrast * n > score) { score = c.contrast * n; pick = c; }
+    }
+    if (!pick) break;
+    tried.add(pick);
+    tries++;
+    if (suspects.some((x) => x.link === pick.link)) continue;
+    const candidate = {
+      link: pick.link, from: pick.from, to: pick.d ? pick.link.a : pick.link.b, carried: loads.get(pick.link)[pick.d],
+      gbps: pick.link.gbps || null, who: pick.who, through: pick.through,
+    };
+    const next = refine([...suspects, candidate], [...now.guess, Math.max(candidate.carried, 1e-9)], EXPLAIN.trial);
+    if (!next.fit || !now.fit || !better(next.fit, now.fit)) continue;
+    suspects.push(candidate);
+    now = next;
+    open = new Set([...short].filter((el) => !reproducedBy(now.got)(el)));
+  }
+  // Then each cable that the rest explain as well without, dropped: the
+  // simplest network that produces the results.
+  for (let i = suspects.length - 1; i >= 0 && suspects.length > 1 && !late(); i--) {
+    const rest = suspects.filter((_, j) => j !== i);
+    const without = refine(rest, now.guess.filter((_, j) => j !== i), EXPLAIN.trial);
+    if (without.fit && !better(now.fit, without.fit)) {
+      suspects.splice(i, 1);
+      now = without;
+    }
+  }
+  // And the cables kept, refined in full.
+  if (suspects.length && !late()) now = refine(suspects, now.guess);
+  const fit = now.fit;
+  const reproduced = reproducedBy(now.got);
+  suspects.forEach((x, i) => {
+    x.capacity = now.guess[i];
+    x.verdict = !x.gbps ? 'unknown' : x.capacity < x.gbps * EXPLAIN.degraded ? 'degraded' : 'full';
+    x.hosts = [...x.through].filter((el) => short.has(el) && reproduced(el));
+    delete x.who;
+    delete x.through;
+  });
+  const alone = [...short].filter((el) => !reproduced(el));
+  return { ...result, suspects, alone, fit, partial: !!late() };
+}
+
+export const VIEWS = ['model', 'change', 'measured', 'diff', 'explain'];
 const ZERO = [0, 0, null];
 
 /**
@@ -2262,6 +2563,23 @@ const ZERO = [0, 0, null];
 export function viewOf(s) {
   const { view, anyCapacity } = s;
   const base = { ...s };
+  if (view === 'explain') {
+    // What the cables must have carried for the results to be true, each
+    // suspect against the capacity the results give it -- so it reads full.
+    const x = s.explain;
+    const { loads } = x;
+    const capacity = new Map(x.suspects.map((v) => [v.link, v.capacity]));
+    return {
+      ...base,
+      colour: 'util', loads, toGbps: 1, unit: 'Gb/s', compare: null, span: 1, after: null, before: null, contention: null,
+      share(link) {
+        const l = loads.get(link);
+        if (!l) return ZERO;
+        const c = capacity.get(link);
+        return [l[0], l[1], c ? Math.max(l[0], l[1]) / c : utilOf(link, l, 1)];
+      },
+    };
+  }
   if (view === 'model' || view === 'measured') {
     const src = view === 'measured' ? s.counters : s.model;
     const { loads, toGbps } = src;

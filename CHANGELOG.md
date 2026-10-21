@@ -11,6 +11,21 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.22.0 — 2026-10-21
+
+- **Explain these results by the network**, under a per-host load: assume
+  every server tried the same thing -- the Load generator's pattern, at the
+  best server's result -- and find the cables that would hold the others
+  back to exactly what they measured. Each comes with the capacity the
+  results give it: **degraded** when that is under its `gbps=` ("runs at
+  30G of its 100G"), **full** when simply more was offered than it carries.
+  Servers no shared cable explains are named as held back by themselves.
+  When even the best server was held back, it searches above the best
+  result and says so; the panel ends with how closely the model, so
+  changed, reproduces every server's result. A new cable view, **explained
+  by the network**, shows the load as it would be. On thousands of servers
+  it stops after twenty seconds with what it is surest of, and says so.
+
 ## 1.21.1 — 2026-10-21
 
 - The even split is named for what it is on a fabric that sprays: **packet
