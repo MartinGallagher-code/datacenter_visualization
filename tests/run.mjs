@@ -1891,6 +1891,21 @@ const segsOf = (cache, net) => {
   const out = generateFlows(m, { pattern: 'random', value: 10, unit: 'Gb/s', peers: 2, seed: 5, reach: 'rack' });
   ok(out.flows.every((f) => f.src.parent !== f.dst.parent) && out.flows.length === 16, 'and outside its own rack when asked');
 
+  // Within: each rack a load of its own, and nothing above its ToRs.
+  const inside = generateFlows(m, { pattern: 'all', value: 50, unit: '%', reach: 'in:rack' });
+  eq([inside.flows.length, inside.senders], [24, 8], 'within its own rack: each server to the other three of its rack');
+  ok(inside.flows.every((f) => f.src.parent === f.dst.parent), 'and no flow leaves its rack');
+  const kept = generateFlows(m, { pattern: 'random', value: 10, unit: 'Gb/s', peers: 2, seed: 5, reach: 'in:rack' });
+  ok(kept.flows.length === 16 && kept.flows.every((f) => f.src.parent === f.dst.parent), 'random peers within the rack, two each');
+  eq(generateFlows(m, { pattern: 'random', value: 10, unit: 'Gb/s', peers: 9, seed: 5, reach: 'in:rack' }).flows.length, 24,
+     'as many peers as a rack has, and no more');
+  eq(generateFlows(m, { pattern: 'ring', value: 10, unit: 'Gb/s', reach: 'in:rack' }).flows.map((f) => [f.src.parent === f.dst.parent]).length, 8,
+     'a ring in every rack');
+  const rows = generateFlows(m, { pattern: 'random', value: 10, unit: 'Gb/s', peers: 2, seed: 5, reach: 'in:row' });
+  ok(rows.flows.length === 16 && rows.flows.every((f) => f.src.parent.parent === f.dst.parent.parent), 'within its own row likewise');
+  ok(/no rack holds two/.test(generateFlows(m, { pattern: 'all', value: 10, unit: 'Gb/s', reach: 'in:rack' },
+    { match: (el) => el.name === 's1' }).why), 'with one host a rack, nothing to send within one, and it says so');
+
   // Incast: everyone into one server, which is where it overflows.
   const into = m.resolve('R1/s1');
   const incast = generateFlows(m, { pattern: 'incast', value: 10, unit: 'Gb/s' }, { target: into });

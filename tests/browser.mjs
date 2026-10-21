@@ -1268,6 +1268,15 @@ await test('the load generator', async () => {
   await page.locator('#load-gen select.gen-reach').selectOption('rack');
   await page.waitForTimeout(400);
   ok(/768 flows/.test(await gen()), 'outside its own rack: no flow stays inside one');
+  const reaches = await page.locator('#load-gen select.gen-reach option').allTextContents();
+  ok(reaches.includes('within its own rack') && reaches.includes('within its own row') && reaches.includes('outside its own row'),
+     `within and outside, for each kind of container  (${reaches.join(' | ')})`);
+  await page.locator('#load-gen select.gen-reach').selectOption('in:rack');
+  await page.waitForTimeout(400);
+  ok(/224 flows/.test(await gen()), 'within its own rack: each server to the other seven of its rack');
+  ok(!/→ \S*spine/.test(await panel()), 'and nothing goes up to a spine');
+  await page.locator('#load-gen select.gen-reach').selectOption('rack');
+  await page.waitForTimeout(400);
   await page.locator('#load-gen select.gen-pattern').selectOption('incast');
   await page.waitForTimeout(400);
   ok(/pick or select where it all goes/.test(await gen()), 'incast asks for its target');

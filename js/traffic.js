@@ -1979,11 +1979,14 @@ export function reachKinds(hosts) {
  *           to one, the pattern that fills a ToR's downlink
  *
  * `reach` names a kind of container (rack, row, ...) a flow must leave:
- * 'other racks only' loads the uplinks and nothing inside a rack. 'any', or
- * none, lets a flow go anywhere.
+ * 'other racks only' loads the uplinks and nothing inside a rack. `in:` and
+ * a kind is the other way round, a container a flow must stay inside: each
+ * rack (row, ...) a load of its own, as a test run rack by rack is. 'any',
+ * or none, lets a flow go anywhere.
  *
  * @param gen   { pattern, value, unit, peers, reach, seed }
- * @param opts  { match: the hosts' filter, target: an element, base: the
+ * @param opts  { match: the hosts' filter, hosts: the hosts themselves, in
+ *              place of match, target: an element, base: the
  *              unit the cables are loaded in, { toGbps, unit }, amounts:
  *              el -> Gb/s or null } -- with `amounts`, each host sends what
  *              that says (a metric read off the servers), at `value` % of it
@@ -1993,7 +1996,7 @@ export function reachKinds(hosts) {
  */
 export function generateFlows(model, gen, opts = {}) {
   const base = opts.base || { toGbps: 1, unit: 'Gb/s' };
-  const { hosts, untagged } = hostsFor(model, opts.match || null);
+  const { hosts, untagged } = opts.hosts ? { hosts: opts.hosts, untagged: false } : hostsFor(model, opts.match || null);
   let noReading = 0;   // hosts a metric has no reading for
   const result = (flows, extra = {}) => {
     let offered = 0;
@@ -2038,12 +2041,48 @@ export function generateFlows(model, gen, opts = {}) {
   const perPeer = gen.per === 'peer' && !opts.amounts;
   const share = (amount, k) => (perPeer ? amount : amount / k);
 
-  const reach = gen.reach && gen.reach !== 'any' ? gen.reach : null;
+  // Out of the sender's own rack (row, ...), or -- `in:` -- kept inside it.
+  const within = typeof gen.reach === 'string' && gen.reach.startsWith('in:') ? gen.reach.slice(3) : null;
+  const reach = within || (gen.reach && gen.reach !== 'any' ? gen.reach : null);
   const groupOf = (el) => {
     for (let p = el.parent; p; p = p.parent) if (p.kind === reach) return p;
     return null;
   };
-  const apart = reach ? (a, b) => { const g = groupOf(a); return !g || g !== groupOf(b); } : () => true;
+  const apart = within ? (a, b) => { const g = groupOf(a); return !!g && g === groupOf(b); }
+    : reach ? (a, b) => { const g = groupOf(a); return !g || g !== groupOf(b); } : () => true;
+
+  // Kept inside: every rack (row, ...) is a load of its own, its hosts
+  // sending to each other in the pattern -- all-to-all, random peers, a
+  // ring -- as if it were the whole floor. A host in no such container, or
+  // alone in one, sends nothing.
+  if (within && ['all', 'random', 'shift', 'ring'].includes(pattern)) {
+    const groups = new Map();
+    for (const el of hosts) {
+      const g = groupOf(el);
+      if (!g) continue;
+      const list = groups.get(g);
+      if (list) list.push(el);
+      else groups.set(g, [el]);
+    }
+    const flows = [];
+    let noCapacity = 0;
+    let gi = 0;
+    for (const members of groups.values()) {
+      gi++;
+      if (members.length < 2) continue;
+      const one = generateFlows(model, { ...gen, reach: 'any', seed: ((gen.seed || 0) + Math.imul(gi, 0x9e3779b1)) >>> 0 },
+        { ...opts, hosts: members });
+      if (one.why) return result([], { why: one.why.replace(/(\d+) hosts/, `$1 hosts in one ${within}`) });
+      noCapacity += one.noCapacity;
+      noReading += one.noReading;
+      for (const flow of one.flows) flows.push({ ...flow, id: GEN_IDS + flows.length });
+      if (flows.length > GEN_LIMITS.flows) {
+        return result([], { why: `${flows.length.toLocaleString()}+ flows within each ${within}: too many to route here — fewer peers, or narrow the hosts (a filter such as path=*/H1/*)` });
+      }
+    }
+    if (!flows.length) return result([], { why: `no ${within} holds two of these hosts: nothing to send within one` });
+    return result(flows, { noCapacity });
+  }
 
   const n = hosts.length;
   const links = model.links.length;

@@ -1476,6 +1476,11 @@ export function renderCableLoad(state, host, actions) {
         : 'contention: nothing is full · every flow carries all it offers'));
     } else if (model.contentionWhy && state.traffic.contention) {
       lines.append(el('div', 'muted', model.contentionWhy));
+      // Not shared out, what is drawn is what the flows offer: a cable or a
+      // switch can read past 100%, which is no measurement of it.
+      lines.append(el('div', 'bad', 'so cables and switches show what is offered, not what they could carry: past 100% '
+        + 'means more is sent their way than fits'
+        + (model.estimated ? ' — and an estimate sends every server’s total to every other server, wherever the test sent it' : '')));
     }
     lines.append(el('div', 'muted', r.switches
       ? `forwarded only by the ${r.switches} elements tagged +switch`
@@ -1884,12 +1889,18 @@ export function renderLoadGen(state, host, actions, { unit } = {}) {
   if (kinds.length) {
     const where = el('div', 'gen-row');
     const labels = { any: 'anywhere' };
-    for (const kind of kinds) labels[kind] = `outside its own ${kind}`;
-    const reach = choose(['any', ...kinds], labels, kinds.includes(g.reach) ? g.reach : 'any',
+    const inside = kinds.map((kind) => `in:${kind}`);
+    for (const kind of kinds) {
+      labels[`in:${kind}`] = `within its own ${kind}`;
+      labels[kind] = `outside its own ${kind}`;
+    }
+    const all = ['any', ...inside, ...kinds];
+    const reach = choose(all, labels, all.includes(g.reach) ? g.reach : 'any',
       (v) => actions.setGen({ reach: v }));
     reach.className = 'gen-reach';
-    reach.title = 'Keep every flow out of the sender’s own rack (row, room, …): '
-      + 'outside its own rack loads the uplinks and nothing inside a rack';
+    reach.title = 'Where each flow may go. Within its own rack (row, room, …) keeps every flow inside the sender’s '
+      + 'own: each rack a load of its own, as a test run rack by rack is, and nothing above its ToRs. Outside its '
+      + 'own rack is the other way round: it loads the uplinks and nothing inside a rack';
     where.append(el('span', null, 'to hosts'), reach);
     box.append(where);
   }

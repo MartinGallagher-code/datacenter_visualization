@@ -11,6 +11,17 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.25.0 — 2026-10-21
+
+- **Within its own rack** (row, room, … — every kind in the layout) in the
+  Load generator's **to hosts**, beside *outside its own*: every rack a
+  load of its own, its servers sending to each other in the pattern, and
+  nothing above that level. Explaining results takes the same choice, so a
+  test run rack by rack can be explained as one.
+- A load too large to share out now says, in red, that cables and switches
+  show what is offered, and can read past 100% -- and, for an estimate,
+  that it sends every server's total to every other server.
+
 ## 1.24.0 — 2026-10-21
 
 - **`busy=`** on a server: the share of its CPU other work takes, off its
