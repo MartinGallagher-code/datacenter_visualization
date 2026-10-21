@@ -36,7 +36,7 @@ import {
 import {
   betweenPicks, biggestChanges, bitRate, burstRisk, busiest, cableKeys, cablesOf, compareLoads, countersOf, devicesOf,
   adaptiveWeights, BUFFER_ALPHA, CONNECTION_LIMITS, EXPLAIN, explainResults, sendersOver, FRAMING_BYTES, IMIX_BYTES, PACKET_PICKS, contend, pathLatency, switchBuffer, switchLatency, switchPps, CONTEND_LIMITS, estimateFlows, findingKind, findingsOf, flowsOf, flowsOver, formatGbps, GEN_LIMITS,
-  generateFlows, hostCapacity, hostLimits,
+  generateFlows, hostCapacity, hostLimits, busyable, busyOf,
   hostsFor, hostsOf, loadable, loadUnit, mergeResults, packetGb, reachKinds, readsAsLoad, routeEstimate, routeTraffic,
   switchCapacity, switchLoads, testFlows, trafficKind, utilOf, viewOf as cableView,
 } from '../js/traffic.js';
@@ -2354,9 +2354,9 @@ link fabric role=server tor
 `);
   eq(m.warnings, [], 'stream=, cpugbps= and rxcost= are element keys, and cpu= still names the part');
   const [a, b, c] = ['a', 'b', 'c'].map((n) => m.resolve(n));
-  eq([hostLimits(a), hostLimits(b), hostLimits(c)], [
-    { stream: 30, cpu: null, rxcost: 1 }, { stream: null, cpu: 120, rxcost: 2 }, { stream: null, cpu: null, rxcost: 1 },
-  ], 'hostLimits reads them, receiving costing what sending does unless it says');
+  const lim = (el) => { const x = hostLimits(el); return [x.stream, x.cpu, x.rxcost]; };
+  eq([lim(a), lim(b), lim(c)], [[30, null, 1], [null, 120, 2], [null, null, 1]],
+     'hostLimits reads them, receiving costing what sending does unless it says');
   ok(/rxcost=50 is outside/.test(parseLayout('node x rxcost=50').warnings.join('\n')), 'rxcost= is checked against its range');
   const one = (flows, o = {}) => contend(m, flows, { toGbps: 1, ...o });
   const f = (src, dst, value, id = 1) => ({ id, src, dst, value });
@@ -2372,6 +2372,35 @@ link fabric role=server tor
      [40, 40, 2, [120, 240]], 'cpugbps=120 at rxcost=2: sending 40 and receiving 40 fill it, holding both flows back');
   r = one([f(b, c, 100)]);
   eq([r.contention.flows[0].value, r.contention.hosts.cpuFull.size], [100, 0], 'sending alone, it reaches its NIC');
+
+  // busy=: a share of the CPU other work takes, off its cpugbps=.
+  const busyM = parseLayout(`
+net fabric gbps=100
+node tor +switch
+node b role=server cpugbps=120 rxcost=2 busy=25%
+node c role=server busy=40
+link fabric role=server tor
+`);
+  eq(busyM.warnings, [], 'busy= takes a share, with or without its %');
+  ok(/busy=150 is not a share of the CPU/.test(parseLayout('node x busy=150').warnings.join('\n')), 'and 100% or more is refused, with why');
+  const [bb, bc] = ['b', 'c'].map((n) => busyM.resolve(n));
+  eq([hostLimits(bb).cpu, hostLimits(bb).idle, hostLimits(bb).busy, hostLimits(bc).busy, hostLimits(bc).cpu],
+     [90, 120, 0.25, 0.4, null], 'a quarter busy leaves 90 of 120; busy with no cpugbps= has nothing to take from');
+  r = contend(busyM, [f(bb, bc, 80), f(bc, bb, 80, 2)], { toGbps: 1 });
+  eq(r.contention.flows.map((x) => x.value), [30, 30], 'so sending and receiving at rxcost=2 come to 30 each, not 40');
+  r = contend(busyM, [f(bb, bc, 80), f(bc, bb, 80, 2)], { toGbps: 1, busy: new Map([[bb, 0.5]]) });
+  eq(r.contention.flows.map((x) => x.value), [20, 20], 'a measured share, given, wins over busy=: half of 120 is 20 each');
+  ok(hostLimits(bb, new Map([[bb, 0.5]])).busyFrom, 'and says it was measured');
+
+  // A per-server CPU metric, read as each server's busy share.
+  const cpuRaw = parseResults('!test cpu_util unit=%\ncpu_util\tb\t35\ncpu_util\tc\t100\n!test cpu_frac\ncpu_frac\tb\t0.35\n'
+    + '!test egress_gbps unit=Gb/s\negress_gbps\tb\t10\n');
+  const bindTo = (name) => bindOverlay(cpuRaw.get(name), busyM);
+  eq([busyable(bindTo('cpu_util')), busyable(bindTo('cpu_frac')), busyable(bindTo('egress_gbps'))], [true, true, false],
+     'a per-host metric in per cent, or unitless and named for the CPU, can say how busy; a rate cannot');
+  eq([...busyOf(bindTo('cpu_util'), busyM)].map(([el, v]) => [el.id, v]), [['b', 0.35], ['c', 0.99]],
+     'per cent read as a share, and a whole 100% kept just short of it');
+  eq([...busyOf(bindTo('cpu_frac'), busyM)].map(([el, v]) => [el.id, v]), [['b', 0.35]], 'a unitless share of at most 1 read as it is');
 
   // Results that stop at one figure, from servers limited by stream=, read
   // back on a layout that does not say so: the servers' own limit.
@@ -2392,6 +2421,20 @@ link fabric role=server tor
   eq([y.short, y.own], [0, null], 'with stream=10 written, the layout already explains it: nothing to say');
   const spread = explainResults(plain, hostsFor(plain).hosts.map((el, i) => ({ el, value: 10 + i })), { gen, split: 'even' });
   eq(spread.own, null, 'results spread out are not one shared limit');
+
+  // Two servers busy elsewhere: short, and the layout's own limits already
+  // hold them there -- their load, not a cable.
+  const cpuText = text.replace(/role=server/, 'role=server cpugbps=60');
+  const cpuM = parseLayout(cpuText);
+  const servers = hostsFor(cpuM).hosts;
+  const busyMap = new Map([[servers[3], 0.5], [servers[20], 0.5]]);
+  const c3 = contend(cpuM, generateFlows(cpuM, { ...gen, value: 30, unit: 'Gb/s', per: 'host' }).flows, { split: 'even', toGbps: 1, busy: busyMap });
+  const got3 = new Map();
+  for (const v of c3.contention.flows) got3.set(v.src, (got3.get(v.src) || 0) + v.value);
+  const z = explainResults(cpuM, servers.map((el) => ({ el, value: got3.get(el) })), { gen, split: 'even', busy: busyMap });
+  ok(z.short >= 2 && z.suspects.length === 0 && z.alone.length === 0
+     && z.ownLoad.some((o) => o.el === servers[3] && o.busy === 0.5) && z.ownLoad.some((o) => o.el === servers[20]),
+     `servers busy elsewhere are short by their own load, with no cable to blame  (${z.short} short, ${z.ownLoad.length} by their own load)`);
 }
 
 // ------------------------------------------------------------------ bursts

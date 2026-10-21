@@ -144,6 +144,9 @@ const fixtures = new Map([
   // Its servers with limits of their own: 10G a connection, 60G of CPU.
   ['/fx/cpu-servers.dc', readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8')
     .replace('node s[1..8] u=2 role=server +x86', 'node s[1..8] u=2 role=server +x86 stream=10 cpugbps=60')],
+  // Every dual-plane server's CPU half busy with other work, as measured.
+  ['/fx/cpu-busy.tsv', `!test cpu_util unit=% label="CPU busy"\n${[1, 2, 3, 4].flatMap((r) => [1, 2, 3, 4, 5, 6, 7, 8]
+    .map((n) => `cpu_util\tR0${r}/s${n}\t50\n`)).join('')}`],
   // The dual-plane fabric with each server's two NICs bonded.
   ['/fx/bonded.dc', readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8')
     .replace(/^(net nica .*)$/m, '$1 bond=nic').replace(/^(net nicb .*)$/m, '$1 bond=nic')],
@@ -1486,6 +1489,44 @@ await test('a server’s CPU and connections', async () => {
   ok(/its CPU: 100% of the 60G it can send and receive together — full, holding back \d+ flows itself/.test(tip),
      'and its CPU, full');
 }, { url: '?layout=fx/cpu-servers.dc' });
+
+await test('a server’s CPU busy elsewhere, as measured', async () => {
+  await page.locator('#overlays .overlay-head input[type=checkbox]').first().check();
+  await page.waitForTimeout(200);
+  await page.locator('#load-gen select.gen-unit').selectOption('Gb/s');
+  await page.waitForTimeout(200);
+  await page.fill('#load-gen input.gen-value', '20');
+  await page.locator('#load-gen input.gen-value').dispatchEvent('change');
+  await page.waitForTimeout(200);
+  await page.locator('#load-gen select.gen-reach').selectOption('rack');
+  await page.locator('#load-gen button', { hasText: 'Run' }).click();
+  await page.waitForTimeout(500);
+  await ideal();
+  ok(await page.locator('#cable-load input.connections').count() === 1,
+     'with stream= on the servers, the connections box shows even where the split keeps flows whole');
+  const opts = await page.locator('#cable-load select.busy-from option').allTextContents();
+  ok(opts.includes('each server’s busy=') && opts.includes('CPU busy'), `the CPU metric is offered for how busy each was  (${opts.join(' | ')})`);
+  const before = await page.evaluate(() => document.querySelector('#cable-load').innerText);
+  ok(!/out of CPU/.test(before), 'sending and receiving 20 each fits in 60 of CPU');
+  await page.locator('#cable-load select.busy-from').selectOption({ label: 'CPU busy' });
+  await page.waitForTimeout(500);
+  const after = await page.evaluate(() => document.querySelector('#cable-load').innerText);
+  ok(/32 hosts out of CPU/.test(after), `half busy, 30 of CPU is too little for 20 each way  (${(/contention: .*/.exec(after) || [''])[0]})`);
+  const tip = await page.evaluate(() => {
+    const c = document.querySelector('#view');
+    const r = c.getBoundingClientRect();
+    for (let y = 10; y < r.height; y += 7) {
+      for (let x = 4; x < r.width; x += 2) {
+        c.dispatchEvent(new PointerEvent('pointermove', { clientX: r.left + x, clientY: r.top + y, bubbles: true }));
+        const t = document.querySelector('#tooltip');
+        if (!t.hidden && /^s\d   \(node\)/.test(t.textContent)) return t.textContent;
+      }
+    }
+    return '';
+  });
+  ok(/its CPU: 100% of the 30G it can send and receive together \(of its 60G: 50% busy elsewhere, as measured\)/.test(tip),
+     `the tooltip says how much of its CPU was left, and why  (${(/its CPU.*/.exec(tip) || [''])[0]})`);
+}, { url: '?layout=fx/cpu-servers.dc&results=fx/cpu-busy.tsv' });
 
 // Bonded NICs, as LACP (layer3+4) runs them: hashed, each connection keeps
 // to one NIC, so with one connection a flow the two drift apart and with

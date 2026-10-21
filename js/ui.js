@@ -15,7 +15,7 @@ import {
   capacityWidth, changeColor, countDescendants, FINDING_COLORS, LOAD_COLORS, loadColor, linkSummary, spliceSummary,
 } from './render.js';
 import {
-  biggestChanges, burstRisk, busiest, cablesOf, formatGbps, hostLimits, GEN_UNITS, hostsFor, loadable, loadUnit, PATTERNS, reachKinds, TARGETED,
+  biggestChanges, burstRisk, busiest, busyable, cablesOf, formatGbps, hostLimits, GEN_UNITS, hostsFor, loadable, loadUnit, PATTERNS, reachKinds, TARGETED,
   CONNECTION_LIMITS, IMIX_BYTES, PACKET_PICKS, PER_CONNECTION, readsAsLoad, SPLITS, SPREADS, TEST_UNITS, trafficKind, utilOf,
 } from './traffic.js';
 
@@ -746,6 +746,25 @@ function viewLabel(view, name) {
   return 'measured − model';
 }
 
+/**
+ * Whether any element has a stream= or a cpugbps=: what decides whether the
+ * connections box and the busy choice are worth showing. Once per layout.
+ */
+const limitsSeen = new WeakMap();
+function serverLimits(model) {
+  let seen = limitsSeen.get(model);
+  if (!seen) {
+    seen = { stream: false, cpu: false };
+    for (const x of model.all) {
+      if (!x.attrs) continue;
+      if (x.attrs.stream !== undefined) seen.stream = true;
+      if (x.attrs.cpugbps !== undefined) seen.cpu = true;
+    }
+    limitsSeen.set(model, seen);
+  }
+  return seen;
+}
+
 /** "2 cables and 1 switch": what is full, holding flows back. */
 function contendedText(c) {
   const n = (k, what) => `${k} ${what}${k === 1 ? '' : what.endsWith('h') ? 'es' : 's'}`;
@@ -830,6 +849,16 @@ function renderExplain(state, box, actions) {
     wrap.append(list);
   } else {
     wrap.append(el('div', 'muted', 'no cable is shared by two or more of the short servers'));
+  }
+  if (x.ownLoad && x.ownLoad.length) {
+    const busy = x.ownLoad.filter((o) => o.busy > 0);
+    const name = (o) => `${shortPath(o.el)}${o.busy > 0 ? ` (${pct(o.busy)} busy)` : ''}`;
+    const line = el('div', null, `${x.ownLoad.length} server${x.ownLoad.length === 1 ? '' : 's'} short by ${x.ownLoad.length === 1 ? 'its' : 'their'} own load, `
+      + `as the layout gives it${busy.length ? ` — ${busy.length} busy elsewhere` : ''}: `
+      + `${x.ownLoad.slice(0, 4).map(name).join(', ')}${x.ownLoad.length > 4 ? ', …' : ''}`);
+    line.title = 'Their own limits -- stream=, cpugbps= less what other work takes -- already hold them to what they '
+      + 'measured, with no cable to blame.';
+    wrap.append(line);
   }
   if (x.alone.length) {
     wrap.append(el('div', null, `${x.alone.length} server${x.alone.length === 1 ? '' : 's'} short on ${x.alone.length === 1 ? 'its' : 'their'} own — `
@@ -985,7 +1014,7 @@ export function hostTip(state, node, view) {
       + (full ? ` — full, holding back ${full.out + full.in} flow${full.out + full.in === 1 ? '' : 's'} itself` : ''));
   }
   // Its own limits beyond its NICs: one connection's ceiling, and its CPU.
-  const lim = hostLimits(node);
+  const lim = hostLimits(node, view.model && view.model.opts ? view.model.opts.busy : null);
   if (lim.stream && !forwardsHere(state, node)) {
     const k = c && c.hosts && c.hosts.streams ? c.hosts.streams.get(node) : 0;
     lines.push(`one connection carries at most ${formatGbps(lim.stream)}b/s (stream=)`
@@ -995,10 +1024,13 @@ export function hostTip(state, node, view) {
     const cpu = c && c.hosts && c.hosts.cpu ? c.hosts.cpu.get(node) : null;
     const k = c && c.hosts && c.hosts.cpuFull ? c.hosts.cpuFull.get(node) : 0;
     const rx = lim.rxcost !== 1 ? `, receiving costing ${trimNum(lim.rxcost)}×` : '';
+    const busy = lim.busy ? ` (of its ${formatGbps(lim.idle)}: ${pct(lim.busy)} busy elsewhere, ${lim.busyFrom ? 'as measured' : 'busy='})` : '';
     lines.push(cpu && view.toGbps !== null
-      ? `its CPU: ${pct((cpu[0] * view.toGbps) / lim.cpu)} of the ${formatGbps(lim.cpu)} it can send and receive together${rx}`
+      ? `its CPU: ${pct((cpu[0] * view.toGbps) / lim.cpu)} of the ${formatGbps(lim.cpu)} it can send and receive together${busy}${rx}`
         + (k ? ` — full, holding back ${k} flow${k === 1 ? '' : 's'} itself` : '')
-      : `its CPU can send and receive ${formatGbps(lim.cpu)} together${rx} (cpugbps=)`);
+      : `its CPU can send and receive ${formatGbps(lim.cpu)} together${busy}${rx} (cpugbps=)`);
+  } else if (lim.busy && !forwardsHere(state, node)) {
+    lines.push(`${pct(lim.busy)} busy elsewhere — no cpugbps= to take it from, so it holds nothing back`);
   }
   if (each.length > 1) {
     for (const e of each) {
@@ -1273,8 +1305,10 @@ export function renderCableLoad(state, host, actions) {
     select.title = 'How the switches share traffic out where several cables continue a shortest route';
     select.addEventListener('change', () => actions.setTrafficSplit(select.value));
     row.append(select);
-    if (PER_CONNECTION.has(state.traffic.split) && model.kind !== 'hosts') {
-      // How many connections each flow is: hashing's whole outcome turns on it.
+    const limits = serverLimits(state.model);
+    if ((PER_CONNECTION.has(state.traffic.split) && model.kind !== 'hosts') || limits.stream) {
+      // How many connections each flow is: hashing's whole outcome turns on
+      // it, and so does what a server's stream= lets a flow carry.
       const conns = el('label', 'conns');
       const input = el('input', 'connections');
       input.type = 'number';
@@ -1285,7 +1319,8 @@ export function renderCableLoad(state, host, actions) {
       conns.append(input, el('span', null, state.traffic.connections === 1 ? 'connection a flow' : 'connections a flow'));
       conns.title = 'How many connections each flow between two hosts is made of -- iperf -P, a test’s parallel '
         + 'streams, an RDMA job’s queue pairs. Each is hashed on its own, and shares a full cable as one: one is '
-        + 'hashing’s worst case (and what a hash on the IP addresses alone does), dozens come out near the even split';
+        + 'hashing’s worst case (and what a hash on the IP addresses alone does), dozens come out near the even split'
+        + (limits.stream ? '. With stream= on the servers, a flow carries at most this many times it, however it is split' : '');
       row.append(conns);
     }
     if (PER_CONNECTION.has(state.traffic.split) && model.kind !== 'hosts') {
@@ -1307,6 +1342,27 @@ export function renderCableLoad(state, host, actions) {
       row.append(spread);
     }
     box.append(row);
+    // Where servers' CPUs are limited, how busy each was with other work:
+    // their busy=, or a metric that measured it.
+    if (limits.cpu) {
+      const choices = [...state.overlays.values()].filter((o) => busyable(o));
+      const busyRow = el('label', 'busy-from');
+      const pick = el('select', 'busy-from');
+      const mine = el('option', null, 'each server’s busy=');
+      mine.value = '';
+      pick.append(mine);
+      for (const o of choices) {
+        const opt = el('option', null, o.enabled ? o.label : `${o.label} (unticked)`);
+        opt.value = o.key;
+        opt.selected = state.traffic.busyFrom === o.key;
+        pick.append(opt);
+      }
+      pick.addEventListener('change', () => actions.setBusyFrom(pick.value));
+      busyRow.append(el('span', null, 'CPU busy elsewhere: '), pick);
+      busyRow.title = 'How much of each server’s cpugbps= other work takes: its own busy=, or a per-server CPU '
+        + 'metric -- in per cent, or a share -- read server by server. A metric must be ticked to count.';
+      box.append(busyRow);
+    }
     // Whether a full cable shares out what it carries, as TCP does, or the
     // cables show what the flows offer -- which can be more than they carry.
     if (model.toGbps !== null) {

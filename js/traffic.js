@@ -49,7 +49,7 @@
 // it crosses (max-min fairness), and a flow held back at one full cable
 // carries less on every other cable along its path too.
 
-import { readBytes, readDuration } from './parse.js';
+import { readBytes, readDuration, readShare } from './parse.js';
 import { AGGREGATIONS, DEFAULT_AGG, overlayValue } from './results.js';
 
 // The ways a fabric shares a flow out where several cables continue its
@@ -953,11 +953,13 @@ export const CONTEND_LIMITS = { crossings: 2e7 };
  * -- so a flow carries at most its connections times it. Its cpugbps= is one
  * budget for sending and receiving together, receiving costing rxcost=
  * times as much: a server can send its full rate or receive it, and both at
- * once only as far as its CPU goes.
+ * once only as far as its CPU goes -- less what busy= (or opts.busy, read
+ * from a metric) says other work on it takes.
  *
  * @param flows  [{ id, src, dst, value, split? }] -- `split` routes one flow
  *               its own way (an estimate's pairs are never hashed)
- * @param opts   { split, seed, down, connections, weights, toGbps }
+ * @param opts   { split, seed, down, connections, weights, toGbps, busy:
+ *               Map(el -> share of its CPU busy elsewhere) }
  * @returns as routeTraffic, with `loads` what is carried, and contention:
  *          { offered: Map(link -> [ab, ba]) before sharing, full: Map(link
  *          -> [ab, ba]) the flows held back there each way -- a cable that
@@ -1212,7 +1214,7 @@ export function contend(model, flows, opts = {}) {
     const ends = [[flow.src, 'out'], [flow.dst, 'in']].filter(([el]) => !f.forwards(el));
     for (const [el, side] of ends) if (switchCapacity(el)) part(i, [hostBitSlot(el, side), 1], 1);
     for (const [el, side] of ends) {
-      const lim = hostLimits(el);
+      const lim = hostLimits(el, opts.busy);
       if (lim.cpu) part(i, [cpuSlot(el), 1], side === 'in' ? lim.rxcost : 1);
     }
     if (!(flow.pps > 0)) return;
@@ -1226,7 +1228,7 @@ export function contend(model, flows, opts = {}) {
     // A packet slot is in packets a second, whatever the load's unit.
     if (o.pps) { cap[k] = switchPps(o.el) || Infinity; return; }
     if (toGbps === null || toGbps === undefined) return;
-    const gbps = o.link ? o.link.gbps : o.cpu ? hostLimits(o.el).cpu : switchCapacity(o.el);
+    const gbps = o.link ? o.link.gbps : o.cpu ? hostLimits(o.el, opts.busy).cpu : switchCapacity(o.el);
     if (gbps) cap[k] = gbps / toGbps;
   });
   const n = routed.length;
@@ -1476,16 +1478,58 @@ export function switchCapacity(el) {
 
 /**
  * A server's own limits, beyond its NICs: `stream` the most one connection
- * carries, in Gb/s -- one core's worth on a kernel stack -- `cpu` (its
- * cpugbps=) what it can send and receive together, and `rxcost` how many times more receiving
- * costs it than sending (1 unless it says).
+ * carries, in Gb/s -- one core's worth on a kernel stack -- `cpu` what it
+ * can send and receive together, its cpugbps= less the share `busy` with
+ * other work (`idle` the whole of it), and `rxcost` how many times more
+ * receiving costs it than sending (1 unless it says).
+ *
+ * @param busy  Map(el -> share) read from a metric, over each busy=
  */
-export function hostLimits(el) {
+export function hostLimits(el, busy = null) {
   const num = (key, least) => {
     const n = Number(el.attrs && el.attrs[key]);
     return el.attrs && el.attrs[key] !== undefined && Number.isFinite(n) && n >= least ? n : null;
   };
-  return { stream: num('stream', 1e-9), cpu: num('cpugbps', 1e-9), rxcost: num('rxcost', 0.1) || 1 };
+  const idle = num('cpugbps', 1e-9);
+  const share = busy && busy.has(el) ? busy.get(el) : el.attrs && el.attrs.busy !== undefined ? readShare(el.attrs.busy) : null;
+  return {
+    stream: num('stream', 1e-9), cpu: idle && share ? idle * (1 - share) : idle, idle, busy: share || 0,
+    busyFrom: !!(busy && busy.has(el)), rxcost: num('rxcost', 0.1) || 1,
+  };
+}
+
+/**
+ * Whether a metric can say how busy each server's CPU was: one per host
+ * (no peer=), in per cent -- `unit=%`, or no unit and a name that says CPU,
+ * busy, util or load.
+ */
+export function busyable(overlay) {
+  if (!overlay || trafficKind(overlay) !== 'hosts') return false;
+  const unit = String(overlay.unit || '').trim();
+  if (/^(%|percent|pct)$/i.test(unit)) return true;
+  return !unit && /cpu|busy|util|load/i.test(`${overlay.name || ''} ${overlay.label || ''}`);
+}
+
+/**
+ * Each server's busy share from a metric busyable says can: a reading in
+ * per cent, or -- with no unit and every reading at most 1 -- a fraction;
+ * kept below 1, since a CPU wholly busy elsewhere would carry nothing, and
+ * a reading of 100% is more likely rounding than that.
+ *
+ * @returns Map(el -> share from 0 to 0.99)
+ */
+export function busyOf(overlay, model) {
+  const out = new Map();
+  if (!busyable(overlay)) return out;
+  const readings = [];
+  for (const el of model.all) {
+    if (!overlay.direct.has(el.key) || el.children.length) continue;
+    const r = overlayValue(overlay, el);
+    if (r && r.numeric && Number.isFinite(r.value)) readings.push([el, Math.max(0, r.value)]);
+  }
+  const fraction = !String(overlay.unit || '').trim() && readings.every(([, v]) => v <= 1);
+  for (const [el, v] of readings) out.set(el, Math.min(0.99, fraction ? v : v / 100));
+  return out;
 }
 
 /**
@@ -2445,11 +2489,14 @@ export const EXPLAIN = {
  * the stream= and cpugbps= that would reproduce it.
  *
  * @param hosts  [{ el, value }] -- what each server achieved, in Gb/s, one way
- * @param opts   { gen, split, seed, connections, down, capacity } -- capacity
- *               the most a server can send, the ceiling on a target
+ * @param opts   { gen, split, seed, connections, down, capacity, busy } --
+ *               capacity the most a server can send, the ceiling on a
+ *               target; busy as contend takes it
  * @returns { target, best, flows, servers, short, pattern, peers, suspects:
  *          [{ link, from, to, carried, capacity, gbps, verdict:
- *          'degraded'|'full'|'unknown', hosts }], alone: [el], loads, fit:
+ *          'degraded'|'full'|'unknown', hosts }], alone: [el], ownLoad: [{ el,
+ *          busy }] short servers the layout's own limits already reproduce,
+ *          loads, fit:
  *          { mean, within, n }, own: null | { at, carries, same, servers,
  *          flows, connections, stream, cpu } } -- loads what the cables must
  *          have carried; or { why } when there is nothing to explain
@@ -2497,7 +2544,7 @@ function ownLimit(model, readings, best, opts) {
   const made = generateFlows(model, { ...gen, pattern, value: most, unit: 'Gb/s', per: 'host' },
     { match: (el) => achieved.has(el), base: { toGbps: 1, unit: 'Gb/s' } });
   if (!made.flows.length) return null;
-  const route = { split: opts.split, seed: opts.seed, connections: opts.connections, down: opts.down, toGbps: 1 };
+  const route = { split: opts.split, seed: opts.seed, connections: opts.connections, down: opts.down, busy: opts.busy, toGbps: 1 };
   const c = contend(model, made.flows, route);
   if (!c) return null;
   const got = new Map();
@@ -2521,7 +2568,7 @@ function explainAt(model, readings, target, opts) {
   const made = generateFlows(model, { ...gen, pattern, value: target, unit: 'Gb/s', per: 'host' },
     { match: (el) => achieved.has(el), base: { toGbps: 1, unit: 'Gb/s' } });
   if (!made.flows.length) return { why: made.why || 'the assumed pattern sends nothing between these servers' };
-  const route = { split: opts.split, seed: opts.seed, connections: opts.connections, down: opts.down };
+  const route = { split: opts.split, seed: opts.seed, connections: opts.connections, down: opts.down, busy: opts.busy };
   const deficit = (el) => Math.max(0, target - achieved.get(el));
   // What each server sent, scaled to what it achieved.
   const scaled = made.flows.map((f) => ({ ...f, value: f.value * (achieved.get(f.src) / target) }));
@@ -2530,7 +2577,7 @@ function explainAt(model, readings, target, opts) {
   const result = {
     target, flows: made.flows.length, servers: readings.length, short: short.size, loads, pattern, peers: Number(gen.peers) || 1,
   };
-  if (!short.size) return { ...result, suspects: [], alone: [], fit: null };
+  if (!short.size) return { ...result, suspects: [], alone: [], ownLoad: [], fit: null };
   const slow = routeTraffic(model, scaled.filter((f) => short.has(f.src)), route).loads;
 
   // Each way of each cable carrying short servers' traffic, the most first,
@@ -2653,7 +2700,12 @@ function explainAt(model, readings, target, opts) {
     delete x.through;
   });
   const alone = [...short].filter((el) => !reproduced(el));
-  return { ...result, suspects, alone, fit, partial: !!late() };
+  // Short, and reproduced with no cable of the explanation on their way:
+  // the layout's own limits for them -- a busy CPU, say -- already do it.
+  const onCable = new Set(suspects.flatMap((x) => x.hosts));
+  const ownLoad = [...short].filter((el) => reproduced(el) && !onCable.has(el))
+    .map((el) => ({ el, busy: hostLimits(el, opts.busy).busy }));
+  return { ...result, suspects, alone, ownLoad, fit, partial: !!late() };
 }
 
 export const VIEWS = ['model', 'change', 'measured', 'diff', 'explain'];

@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.23.0** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.24.0** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -816,6 +816,19 @@ a test reaches well before they do:
   way.
   (`cpu=` stays free to name the part, `cpu=epyc-9654`, as layouts already
   use it.)
+- **`busy=`** — the share of its CPU other work takes, `busy=20%` (or a
+  bare `busy=20`), off its `cpugbps=`: `cpugbps=310 busy=20%` leaves 248 for
+  the network. Write the idle figure once on the model and `busy=` on the
+  servers or lines that are loaded. With no `cpugbps=` it has nothing to
+  take from, and the tooltip says so. Measured is better than written:
+  with servers that have a `cpugbps=`, the routing box offers **CPU busy
+  elsewhere**, and choosing a loaded per-server CPU metric there — in per
+  cent (`unit=%`), or unitless and named for the CPU (`cpu_util`,
+  `busy`) with readings as shares — reads each server's share from it in
+  place of its `busy=`. The metric must be ticked to count.
+
+The routing box shows *connections a flow* whenever a server has a
+`stream=`, packet spraying included: it sets what a flow may carry.
 
 Both hold flows back in [contention](#contention-a-full-cable-shares-itself-out)
 just as a full cable does; hovering a server says which it is at, and the
@@ -1124,6 +1137,10 @@ look like to produce these results?*
   its sending end; hover for the servers it explains.
 - A server no shared cable explains is **held back by itself** — its NIC,
   CPU or stack — and is named as such rather than blamed on a cable.
+- **Their own load**: a short server that the layout's own limits already
+  hold to its result — `cpugbps=` less what it was busy with, as written or
+  measured — is named as such, with how busy it was, and no cable is blamed
+  for it.
 - **The servers themselves**: when most of them stop at the same result,
   and the network as the layout has it would carry more of the same load,
   the limit is theirs — "32 of 32 servers stop at about 155Gb/s, where the

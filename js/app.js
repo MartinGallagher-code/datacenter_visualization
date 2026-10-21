@@ -22,7 +22,7 @@ import { attachHints, renderReference } from './hints.js';
 import { layoutFromHosts, matchesPattern, recordsSince, tailRecords } from './tsv.js';
 import { routesBetween } from './paths.js';
 import {
-  adaptiveWeights, betweenPicks, explainResults, pathLatency, bitRate, cableKeys, CONNECTION_LIMITS, contend, countersOf, estimateFlows, flowsOf, flowsOver, GEN_LIMITS,
+  adaptiveWeights, betweenPicks, busyable, busyOf, explainResults, pathLatency, bitRate, cableKeys, CONNECTION_LIMITS, contend, countersOf, estimateFlows, flowsOf, flowsOver, GEN_LIMITS,
   findingsOf, generateFlows, hostCapacity, hostsOf, TARGETED, loadable, loadUnit, mergeResults, packetGb, readsAsLoad, REPLY_IDS, routeEstimate,
   routeTraffic, switchLoads, testFlows, trafficKind, viewOf,
 } from './traffic.js';
@@ -106,6 +106,9 @@ const state = {
     // Read a per-server metric backwards: what the network would have to be
     // for every server's result to follow from the same load (explainResults).
     explain: false,
+    // A per-host metric saying how busy each server's CPU was, by key: its
+    // share comes off the server's cpugbps= in place of any busy= (busyOf).
+    busyFrom: '',
     listed: 8,                // rows in the busiest-cables list
   },
   trafficCache: { model: null, base: null, counters: null, view: null, switches: null, findings: null, explain: null },
@@ -260,10 +263,11 @@ const state = {
     if (unit.toGbps === null) return { why: `${unit.unit || 'this unit'} is not a bit rate, so no cable can be set against it` };
     const duplex = duplexOf(overlay);
     const g = t.gen;
+    const busy = busySource();
     const key = JSON.stringify([overlay.key, duplex, t.split, t.seed, t.connections, g.pattern, g.peers, g.reach, g.seed,
-      [...state.down.els].sort(), [...state.down.links].sort()]);
+      [...state.down.els].sort(), [...state.down.links].sort(), t.busyFrom]);
     const c = state.trafficCache.explain;
-    if (c && c.key === key && c.layout === state.model && c.overlay === overlay) return c.value;
+    if (c && c.key === key && c.layout === state.model && c.overlay === overlay && c.busy === busy) return c.value;
     // Worked out after the panel has said so: on four thousand servers it
     // takes seconds, and the page should not freeze without a word.
     if (state.explainWorking !== key) {
@@ -273,9 +277,9 @@ const state = {
         const h = hostsOf(overlay, state.model, duplex);
         const hosts = h.hosts.map((x) => ({ el: x.el, value: x.value * unit.toGbps }));
         const value = explainResults(state.model, hosts, {
-          gen: g, split: t.split, seed: t.seed, connections: t.connections, down: state.takenOut(),
+          gen: g, split: t.split, seed: t.seed, connections: t.connections, down: state.takenOut(), busy,
         });
-        state.trafficCache.explain = { key, layout: state.model, overlay, value };
+        state.trafficCache.explain = { key, layout: state.model, overlay, busy, value };
         state.explainWorking = null;
         refreshPanels();
         invalidate();
@@ -460,13 +464,14 @@ function modelSource(withDown) {
   const duplexKey = metric && kind === 'hosts' ? duplexOf(metric) : null;
   const packets = metric ? packetsOf(metric) : null;
   const packetKey = packets ? `${packets.bytes}\u0001${packets.reply}` : '';
+  const busy = busySource();
   const slot = withDown ? 'model' : 'base';
   const c = state.trafficCache[slot];
   if (c && c.overlay === metric && c.layout === state.model && c.agg === (metric && metric.agg)
       && c.split === t.split && c.connections === t.connections && c.seed === t.seed && c.spread === t.spread && c.down === downKey
       && c.picks === pickKey && c.test === testKey && c.between === between && c.gen === genKey
       && sameSource(c.from, from) && c.contention === t.contention && c.duplex === duplexKey
-      && c.packets === packetKey) {
+      && c.packets === packetKey && c.busy === busy) {
     return c.value;
   }
   // Nothing taken out: the model and its baseline are one routing.
@@ -479,7 +484,7 @@ function modelSource(withDown) {
   // top of one; with no metric, the generator's unit is the one, and a test
   // flow's own when it is all there is.
   const unit = metric ? metricUnit(metric, kind) : gen ? testUnit(genBase(genUnit())) : testUnit(test.unit);
-  const opts = { split: t.split, connections: t.connections, seed: t.seed, spread: t.spread, down: out };
+  const opts = { split: t.split, connections: t.connections, seed: t.seed, spread: t.spread, down: out, busy };
   const only = between ? betweenPicks(picks) : null;
   let count = 0;
   let total = 0;
@@ -647,7 +652,7 @@ function modelSource(withDown) {
   state.trafficCache[slot] = {
     overlay: metric, layout: state.model, agg: metric && metric.agg, split: t.split, connections: t.connections, seed: t.seed, spread: t.spread,
     down: downKey, picks: pickKey, test: testKey, between, gen: genKey, from, contention: t.contention, duplex: duplexKey,
-    packets: packetKey, value,
+    packets: packetKey, busy, value,
   };
   return value;
 }
@@ -690,6 +695,21 @@ function genSized() {
  * rate, read in Gb/s, or a percentage, read as that share of each host's
  * NICs. Null for anything else.
  */
+/**
+ * Each server's CPU busy share, from the metric chosen for it: null with
+ * none chosen, or it is not loaded and ticked. Read once per metric object,
+ * so the caches above can tell it has not changed by identity.
+ */
+function busySource() {
+  const overlay = state.traffic.busyFrom ? state.overlays.get(state.traffic.busyFrom) : null;
+  if (!overlay || !overlay.enabled || !busyable(overlay)) return null;
+  const c = state.busyCache;
+  if (c && c.overlay === overlay && c.layout === state.model) return c.value;
+  const value = busyOf(overlay, state.model);
+  state.busyCache = { overlay, layout: state.model, value };
+  return value;
+}
+
 function genSource() {
   const overlay = state.overlays.get(state.traffic.gen.from);
   return overlay && overlay.enabled ? readsAsLoad(overlay, duplexOf(overlay)) : null;
@@ -1101,6 +1121,13 @@ const actions = {
 
   setTrafficSplit(split) {
     state.traffic.split = split;
+    refreshPanels();
+    invalidate();
+  },
+
+  // Which metric says how busy each server's CPU was ('' for their busy=).
+  setBusyFrom(key) {
+    state.traffic.busyFrom = key || '';
     refreshPanels();
     invalidate();
   },

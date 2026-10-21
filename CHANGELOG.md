@@ -11,6 +11,20 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.24.0 — 2026-10-21
+
+- **`busy=`** on a server: the share of its CPU other work takes, off its
+  `cpugbps=` -- `busy=20%` leaves 248 of 310. Or measured: with servers that
+  have a `cpugbps=`, the routing box offers **CPU busy elsewhere**, and a
+  per-server CPU metric chosen there sets each server's share in place of
+  its `busy=`. The tooltip says what was left and why.
+- **Explain these results** names servers **short by their own load**: the
+  ones the layout's own limits, busy included, already hold to what they
+  measured, with no cable blamed.
+- *Connections a flow* shows whenever a server has a `stream=`, packet
+  spraying included, since it decides what a flow may carry there too.
+- 1.22.0, 1.23.0 and 1.24.0 share one pull request.
+
 ## 1.23.0 — 2026-10-21
 
 - **A server's own limits**, beyond its NICs. `stream=` is the most one
