@@ -11,6 +11,17 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.30.0 — 2026-10-22
+
+- **Average over every draw**, beside random peers' **New peers**: what
+  random peers come to on average rather than one draw of them -- every
+  host's total spread evenly over every host it may reach, which is
+  all-to-all at the same totals and exactly the average; where that is too
+  many flows, the mean of eight draws, each pair once. A ToR's figures stop
+  moving from draw to draw: a rack's three servers at 200 Gb/s to one peer
+  among 48 read 400 to 600 on its torb by the draw, and 587 on average.
+- 1.29.0 and 1.30.0 share one pull request.
+
 ## 1.29.0 — 2026-10-22
 
 - **Take out at random**, in the Load generator: servers, racks and

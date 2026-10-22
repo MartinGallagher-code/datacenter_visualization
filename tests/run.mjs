@@ -1900,6 +1900,27 @@ const segsOf = (cache, net) => {
   ok(balanced.flows.every((f) => f.src !== f.dst)
      && new Set(balanced.flows.map((f) => `${f.src.key}>${f.dst.key}`)).size === balanced.flows.length,
      'never itself, and never the same peer twice');
+  // Averaged over every draw: every other host alike, which is all-to-all
+  // at the same totals -- or, where that is too many flows, eight draws.
+  const avg = generateFlows(m, { pattern: 'random', value: 10, unit: 'Gb/s', peers: 2, seed: 5, average: true });
+  const a2a = generateFlows(m, { pattern: 'all', value: 10, unit: 'Gb/s' });
+  ok(avg.averaged === 'every' && avg.flows.length === a2a.flows.length && Math.abs(avg.offered - a2a.offered) < 1e-9,
+     'random peers averaged over every draw is all-to-all at the same totals');
+  ok(Math.abs(generateFlows(m, { pattern: 'random', value: 10, unit: 'Gb/s', peers: 2, per: 'peer', average: true }).offered - 160) < 1e-9,
+     'and to each peer, the total is the amount times the peers');
+  // 32 servers: all-to-all is 992 flows, eight draws of two peers at most 512.
+  const floor = parseLayout(readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8'));
+  const flowLimit = GEN_LIMITS.flows;
+  GEN_LIMITS.flows = 600;
+  let eight;
+  try {
+    eight = generateFlows(floor, { pattern: 'random', value: 10, unit: 'Gb/s', peers: 2, seed: 5, average: true });
+  } finally {
+    GEN_LIMITS.flows = flowLimit;
+  }
+  ok(eight.averaged === 8 && Math.abs(eight.offered - 320) < 1e-9 && eight.flows.length <= 512
+     && new Set(eight.flows.map((f) => `${f.src.n}>${f.dst.n}`)).size === eight.flows.length,
+     `where all-to-all is too many, the mean of eight draws at the same totals, each pair once  (${eight.flows.length} flows)`);
   const out = generateFlows(m, { pattern: 'random', value: 10, unit: 'Gb/s', peers: 2, seed: 5, reach: 'rack' });
   ok(out.flows.every((f) => f.src.parent !== f.dst.parent) && out.flows.length === 16, 'and outside its own rack when asked');
 

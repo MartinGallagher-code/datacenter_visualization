@@ -1860,10 +1860,23 @@ export function renderLoadGen(state, host, actions, { unit } = {}) {
     peers.step = '1';
     peers.title = 'How many hosts each host sends to -- and is sent to by: every host gets exactly this many each way';
     shape.append(el('span', null, '×'), peers);
-    const roll = el('button', null, 'New peers');
-    roll.title = 'Pick every host’s peers again at random';
-    roll.addEventListener('click', () => actions.rerollGen());
-    shape.append(roll);
+    if (!g.average) {
+      const roll = el('button', null, 'New peers');
+      roll.title = 'Pick every host’s peers again at random';
+      roll.addEventListener('click', () => actions.rerollGen());
+      shape.append(roll);
+    }
+    // Not one draw but what they come to on average: every other host alike.
+    const avg = el('label', 'chk gen-average');
+    const tick = el('input');
+    tick.type = 'checkbox';
+    tick.checked = !!g.average;
+    tick.addEventListener('change', () => actions.setGen({ average: tick.checked }));
+    avg.append(tick, el('span', null, 'average over every draw'));
+    avg.title = 'What random peers come to on average, rather than one draw of them: every host sends its total '
+      + 'evenly to every host it may reach -- all-to-all at the same totals, which is exactly the average. Where '
+      + 'that is too many flows, the mean of eight draws';
+    shape.append(avg);
   }
   if (g.pattern === 'shift') {
     const k = number(g.shift || '', 1, (v) => actions.setGen({ shift: Math.max(1, Math.floor(v)) }));
@@ -2055,6 +2068,11 @@ export function renderLoadGen(state, host, actions, { unit } = {}) {
     else {
       lines.append(el('div', null, `${run.senders} of ${run.hosts} hosts send · ${run.flows} flows · `
         + `${formatLoad(shown.model, run.offered)}`));
+      if (run.averaged === 'every') {
+        lines.append(el('div', 'muted', 'averaged over every draw: each host’s total spread evenly over every host it may reach'));
+      } else if (run.averaged) {
+        lines.append(el('div', 'muted', `averaged over ${run.averaged} draws: every draw at once would be too many flows here`));
+      }
       // A share of the NICs is of what they carry one way -- what a host can
       // send -- and says what that comes to.
       if (run.unit === '%' && run.per === 'host' && !run.from && run.senders && shown.model.toGbps !== null) {

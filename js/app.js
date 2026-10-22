@@ -486,7 +486,7 @@ function modelSource(withDown) {
   const testKey = test ? `${test.value}\u0001${test.unit}` : '';
   // Incast sends to the first pick, or failing that the selection.
   const target = gen && TARGETED.has(gen.pattern) ? state.picked[0] || state.selected || null : null;
-  const genKey = gen ? JSON.stringify([gen.pattern, gen.value, genUnit(), gen.per, gen.peers, gen.reach, gen.hosts, gen.seed,
+  const genKey = gen ? JSON.stringify([gen.pattern, gen.value, genUnit(), gen.per, gen.peers, gen.reach, gen.hosts, gen.seed, gen.average,
     target && target.key, gen.from, gen.bytes, gen.reply, gen.hot, gen.shift]) : '';
   // A metric the generator reads: re-read when its file is, so by object.
   const from = gen && gen.from ? genSource() : null;

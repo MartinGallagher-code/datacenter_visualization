@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.29.0** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.30.0** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -945,7 +945,13 @@ off.
     server's own cables carry the same. It is the way to load a fabric too
     big for all-to-all — a few thousand servers at 16 or 64 peers each — and
     the panel says how many peers fit when all-to-all is too many. The same
-    seed picks the same peers; **New peers** draws them again;
+    seed picks the same peers; **New peers** draws them again. One draw
+    can land a server's peers inside its own rack or not, so a switch's
+    figures move from draw to draw; **average over every draw** shows what
+    they come to on average instead: every host sends its total evenly to
+    every host it may reach — all-to-all at the same totals, which is
+    exactly the average of every draw — or, where that is too many flows,
+    the mean of eight draws, and the box says which;
   - **incast: all to one** — every host sends to one target, the first pick
     or else the selection: many to one, the pattern that fills a single
     server's cable. A rack as the target shares it over the rack's devices;

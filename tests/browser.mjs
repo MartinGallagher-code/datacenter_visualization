@@ -1295,6 +1295,17 @@ await test('the load generator', async () => {
   await page.locator('#load-gen input.gen-hosts').dispatchEvent('input');
   await page.locator('#load-gen input.gen-hosts').dispatchEvent('change');
   await page.waitForTimeout(300);
+  // Random peers averaged over every draw.
+  await page.locator('#load-gen select.gen-pattern').selectOption('random');
+  await page.waitForTimeout(300);
+  await page.locator('#load-gen label.gen-average input').check();
+  await page.waitForTimeout(400);
+  ok(/averaged over every draw/.test(await gen()) && /768 flows/.test(await gen()),
+     `averaged over every draw, as many flows as all-to-all outside the rack  (${(await gen()).split('\n').slice(-2).join(' | ')})`);
+  ok(!(await page.locator('#load-gen button', { hasText: 'New peers' }).count()), 'with no draw to redo');
+  await page.locator('#load-gen label.gen-average input').uncheck();
+  await page.locator('#load-gen select.gen-pattern').selectOption('all');
+  await page.waitForTimeout(300);
   // Taken out at random: a number or a share of each kind, into the what-if.
   await page.fill('#load-gen input.takeout-servers', '25');
   await page.locator('#load-gen input.takeout-servers').dispatchEvent('change');
