@@ -29,7 +29,8 @@
 // A value can be a range the way a layout writes one: in:A[01..04],
 // rack=R[01..08,12], name=u[1..4]x… -- each a list of alternatives -- and so
 // can a bare term: ht11r01u[7..11], ht11r[01,05,07]u[7,9]. Numbers in a range
-// match however they are padded, so u[7..11] finds u07 and u11 alike.
+// match however they are padded, so u[7..11] finds u07 and u11 alike, and
+// spaces inside the brackets are only spacing: u[07, 09] is u[07,09].
 //
 // Matching an element implicitly reveals its ancestors, so a hit deep in a rack
 // does not leave the rack itself filtered out from around it.
@@ -117,7 +118,8 @@ function tokenizeQuery(query) {
     if (c === '[') depth++;
     else if (c === ']') depth = Math.max(0, depth - 1);
     if ((c === '(' || c === ')') && !depth) { flush(); out.push({ text: c, paren: true }); continue; }
-    if (/\s/.test(c)) { flush(); continue; }
+    // Inside a range's brackets a space is only spacing: [07, 09] is [07,09].
+    if (/\s/.test(c)) { if (!depth) flush(); continue; }
     cur += c;
   }
   flush();

@@ -37,6 +37,7 @@ import {
   betweenPicks, biggestChanges, bitRate, burstRisk, busiest, cableKeys, cablesOf, compareLoads, countersOf, devicesOf,
   adaptiveWeights, BUFFER_ALPHA, CONNECTION_LIMITS, EXPLAIN, explainResults, sendersOver, FRAMING_BYTES, IMIX_BYTES, PACKET_PICKS, contend, pathLatency, switchBuffer, switchLatency, switchPps, CONTEND_LIMITS, estimateFlows, findingKind, findingsOf, flowsOf, flowsOver, formatGbps, GEN_LIMITS,
   generateFlows, hostCapacity, hostLimits, busyable, busyOf, layersOf, EXPLAIN_PATTERNS, pairedFlows, randomTakeouts, takeoutCandidates,
+  counterparts, counterpartLevels,
   hostsFor, hostsOf, loadable, loadUnit, mergeResults, packetGb, reachKinds, readsAsLoad, routeEstimate, routeTraffic,
   switchCapacity, switchLoads, testFlows, trafficKind, utilOf, viewOf as cableView,
 } from '../js/traffic.js';
@@ -1096,6 +1097,9 @@ ok(hits('u05 | u06') === hits('u05') + hits('u06'), 'filter OR');
   eq(n('u[01..03] in:DH1/A/R01'), 3, 'and in a bare term: three servers by name');
   eq(n('u[1..3] in:DH1/A/R01'), 3, 'a number in a range matches however it is padded: [1..3] finds u01');
   eq(n('name=u[1,5,9] in:DH1/A/R01'), 3, 'lists too, after name= as bare');
+  eq(n('u[1, 5, 9] in:DH1/A/R01'), 3, 'spaces inside the brackets are only spacing');
+  eq(n('u[ 1 .. 3 ] in:DH1/A/R01'), 3, 'around a range too');
+  eq(servers('role=server in:DH1/A/R[01, 02, 03]'), 60, 'and in in:');
   eq(servers('*/R[01,04]/u[7,9] in:DH1/A'), 4, 'two ranges in one term, against the path: two racks, two servers each');
   eq(n('u[5..6]'), hits('u05') + hits('u06') - small.all.filter((el) => /u0[56]./.test(el.id)).length,
      'a range is whole names, never a part of one');
@@ -1900,27 +1904,6 @@ const segsOf = (cache, net) => {
   ok(balanced.flows.every((f) => f.src !== f.dst)
      && new Set(balanced.flows.map((f) => `${f.src.key}>${f.dst.key}`)).size === balanced.flows.length,
      'never itself, and never the same peer twice');
-  // Averaged over every draw: every other host alike, which is all-to-all
-  // at the same totals -- or, where that is too many flows, eight draws.
-  const avg = generateFlows(m, { pattern: 'random', value: 10, unit: 'Gb/s', peers: 2, seed: 5, average: true });
-  const a2a = generateFlows(m, { pattern: 'all', value: 10, unit: 'Gb/s' });
-  ok(avg.averaged === 'every' && avg.flows.length === a2a.flows.length && Math.abs(avg.offered - a2a.offered) < 1e-9,
-     'random peers averaged over every draw is all-to-all at the same totals');
-  ok(Math.abs(generateFlows(m, { pattern: 'random', value: 10, unit: 'Gb/s', peers: 2, per: 'peer', average: true }).offered - 160) < 1e-9,
-     'and to each peer, the total is the amount times the peers');
-  // 32 servers: all-to-all is 992 flows, eight draws of two peers at most 512.
-  const floor = parseLayout(readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8'));
-  const flowLimit = GEN_LIMITS.flows;
-  GEN_LIMITS.flows = 600;
-  let eight;
-  try {
-    eight = generateFlows(floor, { pattern: 'random', value: 10, unit: 'Gb/s', peers: 2, seed: 5, average: true });
-  } finally {
-    GEN_LIMITS.flows = flowLimit;
-  }
-  ok(eight.averaged === 8 && Math.abs(eight.offered - 320) < 1e-9 && eight.flows.length <= 512
-     && new Set(eight.flows.map((f) => `${f.src.n}>${f.dst.n}`)).size === eight.flows.length,
-     `where all-to-all is too many, the mean of eight draws at the same totals, each pair once  (${eight.flows.length} flows)`);
   const out = generateFlows(m, { pattern: 'random', value: 10, unit: 'Gb/s', peers: 2, seed: 5, reach: 'rack' });
   ok(out.flows.every((f) => f.src.parent !== f.dst.parent) && out.flows.length === 16, 'and outside its own rack when asked');
 
@@ -2531,6 +2514,21 @@ link fabric role=server tor
   ok(z.short >= 2 && z.suspects.length === 0 && z.alone.length === 0
      && z.ownLoad.some((o) => o.el === servers[3] && o.busy === 0.5) && z.ownLoad.some((o) => o.el === servers[20]),
      `servers busy elsewhere are short by their own load, with no cable to blame  (${z.short} short, ${z.ownLoad.length} by their own load)`);
+}
+
+// ------------------------------------------------------------ counterparts
+// What sits where an element does in every row (rack, room, ...), of its
+// class: what the inspector's expected figures average over.
+{
+  const m = parseLayout(readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8'));
+  const tor = m.resolve('R01/tora');
+  eq(counterpartLevels(tor), ['rack', 'row', 'pod', 'room'], 'the kinds of container it sits in, innermost first');
+  eq(counterparts(m, tor, 'rack').map((e) => e.path.split('/').slice(-2).join('/')), ['R01/tora', 'R02/tora', 'R03/tora', 'R04/tora'],
+     'in every rack: every ToR a, and never a spine or superspine in the same place');
+  eq(counterparts(m, tor, 'row').map((e) => e.path.split('/').slice(-2).join('/')), ['R01/tora', 'R03/tora'],
+     'in every row: the first rack’s ToR a of each');
+  eq(counterparts(m, m.resolve('R02/s3'), 'rack').length, 4, 'the third server of every rack');
+  eq(counterparts(m, tor, 'room').map((e) => e.path), [tor.path], 'one room: only itself');
 }
 
 // ------------------------------------------------------- random take-outs

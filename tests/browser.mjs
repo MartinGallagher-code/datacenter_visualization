@@ -1286,7 +1286,7 @@ await test('the load generator', async () => {
   await page.waitForTimeout(400);
   ok(/768 flows/.test(await gen()), 'outside its own rack: no flow stays inside one');
   // Hosts by name, with ranges and lists, however the numbers are padded.
-  await page.fill('#load-gen input.gen-hosts', 's[1..3] in:R0[1,3]');
+  await page.fill('#load-gen input.gen-hosts', 's[1 .. 3] in:R0[1, 3]');
   await page.locator('#load-gen input.gen-hosts').dispatchEvent('input');
   await page.waitForTimeout(300);
   ok(/6 hosts/.test(await page.evaluate(() => document.querySelector('#load-gen .gen-count').textContent)),
@@ -1294,17 +1294,6 @@ await test('the load generator', async () => {
   await page.fill('#load-gen input.gen-hosts', '');
   await page.locator('#load-gen input.gen-hosts').dispatchEvent('input');
   await page.locator('#load-gen input.gen-hosts').dispatchEvent('change');
-  await page.waitForTimeout(300);
-  // Random peers averaged over every draw.
-  await page.locator('#load-gen select.gen-pattern').selectOption('random');
-  await page.waitForTimeout(300);
-  await page.locator('#load-gen label.gen-average input').check();
-  await page.waitForTimeout(400);
-  ok(/averaged over every draw/.test(await gen()) && /768 flows/.test(await gen()),
-     `averaged over every draw, as many flows as all-to-all outside the rack  (${(await gen()).split('\n').slice(-2).join(' | ')})`);
-  ok(!(await page.locator('#load-gen button', { hasText: 'New peers' }).count()), 'with no draw to redo');
-  await page.locator('#load-gen label.gen-average input').uncheck();
-  await page.locator('#load-gen select.gen-pattern').selectOption('all');
   await page.waitForTimeout(300);
   // Taken out at random: a number or a share of each kind, into the what-if.
   await page.fill('#load-gen input.takeout-servers', '25');
@@ -1554,6 +1543,32 @@ await test('explaining results by the servers themselves', async () => {
      `with the stream= or cpugbps= that would  (${(/stream=.*/.exec(text) || [''])[0]})`);
   ok(!/nothing to explain/.test(text), 'and it is not "nothing to explain"');
 }, { url: '?layout=examples/dual-plane.dc&results=fx/own.tsv' });
+
+// Expected: the inspector's cable load as the average of every element in
+// the selected one's place, in place of its own figures. Nothing reroutes.
+await test('expected load in the inspector', async () => {
+  await page.locator('#load-gen select.gen-pattern').selectOption('random');
+  await page.locator('#load-gen button', { hasText: 'Run' }).click();
+  await page.waitForTimeout(500);
+  await page.fill('#filter', 'tora');
+  await page.waitForTimeout(400);
+  await page.locator('#tree .tree-row:not(.nomatch) .tree-name', { hasText: /^tora$/ }).first().click();
+  await page.fill('#filter', '');
+  await page.waitForTimeout(400);
+  const insp = () => page.evaluate(() => document.querySelector('#inspector').innerText);
+  const own = await insp();
+  const before = await page.evaluate(() => document.querySelector('#cable-load').innerText);
+  ok(/switching \d/.test(own) && !/the average of \d/.test(own), `its own figures to begin with  (${own.slice(own.indexOf('CABLE') >= 0 ? own.indexOf('CABLE') : 0, 400).replace(/\n/g, ' | ')})`);
+  const levels = await page.locator('#inspector select.expected-level option').allTextContents();
+  ok(levels.includes('rack (4)') && levels.includes('row (2)'), `every one in its place, in every rack or row  (${levels.join(' | ')})`);
+  await page.locator('#inspector label.expected input').check();
+  await page.waitForTimeout(400);
+  ok(/the average of 2/.test(await insp()) && /switching, expected/.test(await insp()), 'ticked: the average of its place in every row');
+  await page.locator('#inspector select.expected-level').selectOption('rack');
+  await page.waitForTimeout(400);
+  ok(/the average of 4/.test(await insp()), 'or in every rack');
+  eq(await page.evaluate(() => document.querySelector('#cable-load').innerText), before, 'and the load itself is as it was: only the report changes');
+}, { url: '?layout=examples/dual-plane.dc' });
 
 await test('a server’s CPU and connections', async () => {
   const panel = () => page.evaluate(() => document.querySelector('#cable-load').innerText);

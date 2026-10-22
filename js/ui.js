@@ -15,7 +15,7 @@ import {
   capacityWidth, changeColor, countDescendants, FINDING_COLORS, LOAD_COLORS, loadColor, linkSummary, spliceSummary,
 } from './render.js';
 import {
-  biggestChanges, burstRisk, busiest, busyable, cablesOf, EXPLAIN_PATTERNS, takeoutCandidates, TAKEOUT_KINDS, formatGbps, hostLimits, GEN_UNITS, hostsFor, loadable, loadUnit, PATTERNS, reachKinds, TARGETED,
+  biggestChanges, burstRisk, busiest, busyable, cablesOf, counterparts, counterpartLevels, EXPLAIN_PATTERNS, takeoutCandidates, TAKEOUT_KINDS, formatGbps, hostLimits, GEN_UNITS, hostsFor, loadable, loadUnit, PATTERNS, reachKinds, TARGETED,
   CONNECTION_LIMITS, IMIX_BYTES, PACKET_PICKS, PER_CONNECTION, readsAsLoad, SPLITS, SPREADS, TEST_UNITS, trafficKind, utilOf,
 } from './traffic.js';
 
@@ -1860,23 +1860,10 @@ export function renderLoadGen(state, host, actions, { unit } = {}) {
     peers.step = '1';
     peers.title = 'How many hosts each host sends to -- and is sent to by: every host gets exactly this many each way';
     shape.append(el('span', null, '×'), peers);
-    if (!g.average) {
-      const roll = el('button', null, 'New peers');
-      roll.title = 'Pick every host’s peers again at random';
-      roll.addEventListener('click', () => actions.rerollGen());
-      shape.append(roll);
-    }
-    // Not one draw but what they come to on average: every other host alike.
-    const avg = el('label', 'chk gen-average');
-    const tick = el('input');
-    tick.type = 'checkbox';
-    tick.checked = !!g.average;
-    tick.addEventListener('change', () => actions.setGen({ average: tick.checked }));
-    avg.append(tick, el('span', null, 'average over every draw'));
-    avg.title = 'What random peers come to on average, rather than one draw of them: every host sends its total '
-      + 'evenly to every host it may reach -- all-to-all at the same totals, which is exactly the average. Where '
-      + 'that is too many flows, the mean of eight draws';
-    shape.append(avg);
+    const roll = el('button', null, 'New peers');
+    roll.title = 'Pick every host’s peers again at random';
+    roll.addEventListener('click', () => actions.rerollGen());
+    shape.append(roll);
   }
   if (g.pattern === 'shift') {
     const k = number(g.shift || '', 1, (v) => actions.setGen({ shift: Math.max(1, Math.floor(v)) }));
@@ -2068,11 +2055,6 @@ export function renderLoadGen(state, host, actions, { unit } = {}) {
     else {
       lines.append(el('div', null, `${run.senders} of ${run.hosts} hosts send · ${run.flows} flows · `
         + `${formatLoad(shown.model, run.offered)}`));
-      if (run.averaged === 'every') {
-        lines.append(el('div', 'muted', 'averaged over every draw: each host’s total spread evenly over every host it may reach'));
-      } else if (run.averaged) {
-        lines.append(el('div', 'muted', `averaged over ${run.averaged} draws: every draw at once would be too many flows here`));
-      }
       // A share of the NICs is of what they carry one way -- what a host can
       // send -- and says what that comes to.
       if (run.unit === '%' && run.per === 'host' && !run.from && run.senders && shown.model.toGbps !== null) {
@@ -2568,6 +2550,36 @@ function renderCapacityKey(state, host) {
 }
 
 /**
+ * The average of records alike -- switch figures, a net's cables -- field by
+ * field: every number its mean, an object of numbers likewise, anything
+ * else the first one's. Null for none.
+ */
+function meanRecord(recs) {
+  if (!recs.length) return null;
+  if (recs.length === 1) return recs[0];
+  const out = {};
+  for (const key of Object.keys(recs[0])) {
+    const v = recs[0][key];
+    if (typeof v === 'number' || v === null) {
+      const nums = recs.map((r) => r[key]).filter((x) => typeof x === 'number');
+      out[key] = nums.length ? nums.reduce((a, b) => a + b, 0) / recs.length : v;
+    } else if (v && typeof v === 'object' && !(v instanceof Map) && !(v instanceof Set) && !Array.isArray(v)) {
+      out[key] = meanRecord(recs.map((r) => r[key]).filter(Boolean));
+    } else out[key] = v;
+  }
+  return out;
+}
+
+/** cablesOf for several elements, averaged net by net. */
+function meanNets(maps) {
+  const out = new Map();
+  for (const net of new Set(maps.flatMap((m) => [...m.keys()]))) {
+    out.set(net, meanRecord(maps.map((m) => m.get(net) || { cables: 0, gbps: 0, unknown: 0, out: 0, in: 0, worst: null })));
+  }
+  return out;
+}
+
+/**
  * The selected element's share of the cable load: per net, what its cables
  * (a container's: the ones leaving it) send and receive against what they
  * can carry -- and, comparing, what they did before -- then its busiest
@@ -2581,21 +2593,58 @@ function renderElementLoad(state, host, node, actions) {
   const before = view.before ? cablesOf(node, view.before.loads, view.before.toGbps) : null;
   const leaf = !node.children.length;
   host.append(el('h2', null, view.view === 'measured' ? 'Cable load, measured' : 'Cable load'));
-  const dl = el('dl', 'kv');
-  // A switch: how much of what it can pass it is passing.
   const sw = state.switchLoads ? state.switchLoads() : null;
-  const swRec = sw && sw.get(node);
+
+  // Expected: in place of this one's own figures, the average of those that
+  // sit where it does in every row (rack, room, ...) -- what one like it
+  // carries, whatever this draw of the load happened to give it. Only what
+  // is reported changes; nothing is routed differently.
+  const levels = counterpartLevels(node).filter((l) => counterparts(state.model, node, l).length > 1);
+  const exp = state.expectedLoad || { on: false, level: '' };
+  const level = levels.includes(exp.level) ? exp.level : levels[1] || levels[0];
+  const peers = exp.on && level ? counterparts(state.model, node, level) : null;
+  if (levels.length) {
+    const row = el('div', 'gen-row expected-row');
+    const tick = el('input');
+    tick.type = 'checkbox';
+    tick.checked = !!exp.on;
+    tick.addEventListener('change', () => actions.setExpectedLoad({ on: tick.checked, level }));
+    const label = el('label', 'chk expected');
+    label.append(tick, el('span', null, 'expected: the average of every one in its place, in every'));
+    const pick = el('select', 'expected-level');
+    for (const l of levels) {
+      const opt = el('option', null, `${l} (${counterparts(state.model, node, l).length})`);
+      opt.value = l;
+      opt.selected = l === level;
+      pick.append(opt);
+    }
+    pick.addEventListener('change', () => actions.setExpectedLoad({ on: true, level: pick.value }));
+    label.title = 'Its own figures, or the average of every element that sits where it does -- the same tor of the '
+      + 'same rack -- in every row (or rack, room, …): what one like it carries, rather than what this draw gave this '
+      + 'one. Nothing is routed differently; only what is reported here.';
+    row.append(label, pick);
+    host.append(row);
+  }
+  const shown = peers ? peers : [node];
+  const dl = el('dl', 'kv');
+  if (peers) {
+    dl.append(el('dt', null, 'expected'));
+    dl.append(el('dd', 'muted', `the average of ${peers.length} — this one’s own figures are with the box unticked`));
+  }
+  // A switch: how much of what it can pass it is passing.
+  const swRec = sw ? meanRecord(shown.map((x) => sw.get(x)).filter(Boolean)) : null;
   if (swRec) {
-    dl.append(el('dt', null, 'switching'));
+    dl.append(el('dt', null, peers ? 'switching, expected' : 'switching'));
     const dd = el('dd', 'switching');
     const dot = el('span', 'dot');
     dot.style.background = swRec.util !== null ? switchColor(swRec) : LOAD_COLORS.unknown;
     dd.append(dot, el('span', null, switchTip(swRec, view).join(' · ')));
     dl.append(dd);
   }
-  for (const [net, rec] of byNet) {
+  const nets = peers ? meanNets(peers.map((x) => cablesOf(x, view.loads, view.toGbps))) : byNet;
+  for (const [net, rec] of nets) {
     if (!rec.out && !rec.in && !rec.gbps) continue;
-    dl.append(el('dt', null, leaf ? net : `${net} leaving`));
+    dl.append(el('dt', null, `${leaf ? net : `${net} leaving`}${peers ? ', expected' : ''}`));
     const dd = el('dd');
     const dot = el('span', 'dot');
     dot.style.background = rec.worst !== null ? utilColor(view, rec.worst) : LOAD_COLORS.unknown;
@@ -2603,7 +2652,7 @@ function renderElementLoad(state, host, node, actions) {
     const of = rec.gbps ? ` of ${formatGbps(rec.gbps)}` : '';
     const worst = rec.worst !== null ? ` · fullest ${pct(rec.worst)}` : '';
     let text = `out ${formatLoad(view, rec.out)} · in ${formatLoad(view, rec.in)}${of}${worst}`;
-    const was = before && before.get(net);
+    const was = before && !peers && before.get(net);
     if (was) {
       const label = view.view === 'change' ? 'was' : 'model';
       text += ` (${label} ${formatLoad(view.before, was.out)} / ${formatLoad(view.before, was.in)})`;

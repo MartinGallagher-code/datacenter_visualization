@@ -1918,8 +1918,6 @@ const AUGMENT_DEPTH = 200;
 // cables -- each destination is a walk over the fabric. A lab floor is far
 // inside both; a hyperscale campus is far outside, and is told to narrow it.
 export const GEN_LIMITS = { flows: 300000, work: 4e7 };
-// Random peers averaged where all-to-all is too many flows: this many draws.
-export const AVERAGE_DRAWS = 8;
 
 /**
  * The hosts a generated load runs between: devices whose cables carry
@@ -2228,36 +2226,6 @@ export function generateFlows(model, gen, opts = {}) {
   // with the seed; never itself, never a host it already sends to, and
   // never one the reach rules out, where a swap can avoid it.
   const peers = Math.max(1, Math.min(n - 1, Math.floor(Number(gen.peers) || 1)));
-  // Averaged over every draw: random peers pick every other host alike, so
-  // over all their draws each host sends its total evenly to every host it
-  // may reach -- all-to-all at the same totals, exactly. Where that is too
-  // many flows, the mean of AVERAGE_DRAWS draws stands in for it.
-  if (gen.average) {
-    const plain = { ...gen, average: false };
-    const totals = perPeer ? { ...plain, value: value * peers, per: 'host' } : { ...plain, per: 'host' };
-    const exact = generateFlows(model, { ...totals, pattern: 'all' }, { ...opts, hosts });
-    if (exact.flows.length || !/too many|too much/.test(exact.why)) return { ...exact, averaged: 'every' };
-    // Each pair once, carrying its share of every draw it is in.
-    const byPair = new Map();
-    let noCapacity = 0;
-    for (let k = 0; k < AVERAGE_DRAWS; k++) {
-      const one = generateFlows(model, { ...plain, seed: ((gen.seed || 0) + Math.imul(k + 1, 0x9e3779b1)) >>> 0 }, { ...opts, hosts });
-      if (!one.flows.length && one.why) return result([], { why: one.why });
-      noCapacity = one.noCapacity;
-      noReading = one.noReading;
-      for (const f of one.flows) {
-        const key = `${f.src.n}>${f.dst.n}`;
-        const had = byPair.get(key);
-        if (had) had.value += f.value / AVERAGE_DRAWS;
-        else byPair.set(key, { ...f, value: f.value / AVERAGE_DRAWS });
-      }
-    }
-    const flows = [...byPair.values()].map((f, i) => ({ ...f, id: GEN_IDS + i }));
-    if (tooBig(hosts, flows.length)) {
-      return result([], { why: `${AVERAGE_DRAWS} draws of ${n} hosts × ${peers} peers is too much to route here: fewer peers, or ${narrow}` });
-    }
-    return result(flows, { noCapacity, averaged: AVERAGE_DRAWS });
-  }
   if (tooBig(hosts, n * peers)) {
     return result([], {
       why: `${n} hosts × ${peers} peers is too much to route here: fewer peers, or ${narrow}`,
@@ -3101,6 +3069,61 @@ export function cablesOf(el, loads = null, toGbps = null) {
   };
   walk(el);
   return byNet;
+}
+
+/**
+ * Where an element sits, under its nearest container of kind `level`: the
+ * kind and the place among its kind of each step down from that container
+ * -- the first rack, then its tor b -- or null with no such container.
+ */
+function placeUnder(node, level) {
+  const steps = [];
+  for (let e = node; e.parent; e = e.parent) {
+    if (e.parent.kind === level) {
+      steps.push([e.kind, e.parent.children.filter((c) => c.kind === e.kind).indexOf(e)]);
+      return { top: e.parent, steps: steps.reverse() };
+    }
+    steps.push([e.kind, e.parent.children.filter((c) => c.kind === e.kind).indexOf(e)]);
+  }
+  return null;
+}
+
+/** The kinds of container an element sits in, innermost first: what its counterparts can be counted across. */
+export function counterpartLevels(node) {
+  const out = [];
+  for (let p = node.parent; p && p.parent; p = p.parent) if (!out.includes(p.kind)) out.push(p.kind);
+  return out;
+}
+
+// Of one class: the same kind, and the same role= -- or, where roles are
+// named per room (superspine11, superspine12), the same model=.
+const sameClass = (a, b) => {
+  if (a.kind !== b.kind) return false;
+  const role = (e) => e.attrsEff && e.attrsEff.role;
+  const model = (e) => e.attrsEff && e.attrsEff.model;
+  return role(a) === role(b) || (!!model(a) && model(a) === model(b));
+};
+
+/**
+ * The elements of the same class as `node` that sit where it does in every
+ * container of kind `level`: the tor b of the first rack of every row, the
+ * third server of every rack -- found by walking the same steps down from
+ * each such container. `node` itself among them.
+ */
+export function counterparts(model, node, level) {
+  const here = placeUnder(node, level);
+  if (!here) return [node];
+  const out = [];
+  for (const top of model.all) {
+    if (top.kind !== level) continue;
+    let at = top;
+    for (const [kind, i] of here.steps) {
+      at = at.children.filter((c) => c.kind === kind)[i];
+      if (!at) break;
+    }
+    if (at && sameClass(at, node)) out.push(at);
+  }
+  return out;
 }
 
 /**

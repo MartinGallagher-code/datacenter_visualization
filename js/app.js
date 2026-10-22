@@ -486,7 +486,7 @@ function modelSource(withDown) {
   const testKey = test ? `${test.value}\u0001${test.unit}` : '';
   // Incast sends to the first pick, or failing that the selection.
   const target = gen && TARGETED.has(gen.pattern) ? state.picked[0] || state.selected || null : null;
-  const genKey = gen ? JSON.stringify([gen.pattern, gen.value, genUnit(), gen.per, gen.peers, gen.reach, gen.hosts, gen.seed, gen.average,
+  const genKey = gen ? JSON.stringify([gen.pattern, gen.value, genUnit(), gen.per, gen.peers, gen.reach, gen.hosts, gen.seed,
     target && target.key, gen.from, gen.bytes, gen.reply, gen.hot, gen.shift]) : '';
   // A metric the generator reads: re-read when its file is, so by object.
   const from = gen && gen.from ? genSource() : null;
@@ -1240,6 +1240,13 @@ const actions = {
     t.explainSeed = g.seed;
     refreshPanels();
     invalidate();
+  },
+
+  // Whether the selected element's cable load shows its own figures or the
+  // average of every one in its place, and across which kind of container.
+  setExpectedLoad(patch) {
+    state.expectedLoad = { ...(state.expectedLoad || { on: false, level: '' }), ...patch };
+    refreshPanels();
   },
 
   // Which metric says how busy each server's CPU was ('' for their busy=).
