@@ -1286,7 +1286,7 @@ await test('the load generator', async () => {
   await page.waitForTimeout(400);
   ok(/768 flows/.test(await gen()), 'outside its own rack: no flow stays inside one');
   // Hosts by name, with ranges and lists, however the numbers are padded.
-  await page.fill('#load-gen input.gen-hosts', 's[1..3] in:R0[1,3]');
+  await page.fill('#load-gen input.gen-hosts', 's[1 .. 3] in:R0[1, 3]');
   await page.locator('#load-gen input.gen-hosts').dispatchEvent('input');
   await page.waitForTimeout(300);
   ok(/6 hosts/.test(await page.evaluate(() => document.querySelector('#load-gen .gen-count').textContent)),

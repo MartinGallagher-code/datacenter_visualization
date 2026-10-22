@@ -1096,6 +1096,9 @@ ok(hits('u05 | u06') === hits('u05') + hits('u06'), 'filter OR');
   eq(n('u[01..03] in:DH1/A/R01'), 3, 'and in a bare term: three servers by name');
   eq(n('u[1..3] in:DH1/A/R01'), 3, 'a number in a range matches however it is padded: [1..3] finds u01');
   eq(n('name=u[1,5,9] in:DH1/A/R01'), 3, 'lists too, after name= as bare');
+  eq(n('u[1, 5, 9] in:DH1/A/R01'), 3, 'spaces inside the brackets are only spacing');
+  eq(n('u[ 1 .. 3 ] in:DH1/A/R01'), 3, 'around a range too');
+  eq(servers('role=server in:DH1/A/R[01, 02, 03]'), 60, 'and in in:');
   eq(servers('*/R[01,04]/u[7,9] in:DH1/A'), 4, 'two ranges in one term, against the path: two racks, two servers each');
   eq(n('u[5..6]'), hits('u05') + hits('u06') - small.all.filter((el) => /u0[56]./.test(el.id)).length,
      'a range is whole names, never a part of one');

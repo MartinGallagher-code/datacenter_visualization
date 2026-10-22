@@ -11,6 +11,13 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.30.1 — 2026-10-22
+
+- Spaces inside a filter's brackets are only spacing: `ht11r01u[07, 09]`
+  and `u[ 7 .. 11 ]` read as `u[07,09]` and `u[7..11]`, in the filter bar,
+  the Load generator's hosts box and the take-out filters. A space there
+  used to split the term in two, and match nothing.
+
 ## 1.30.0 — 2026-10-22
 
 - **Average over every draw**, beside random peers' **New peers**: what
