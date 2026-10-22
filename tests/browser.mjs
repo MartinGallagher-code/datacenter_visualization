@@ -1160,6 +1160,21 @@ await test('per-host totals load the cables as an estimate', async () => {
   const text = await page.evaluate(() => document.querySelector('#cable-load').innerText);
   ok(/estimated from 32 hosts’ totals/.test(text), 'the panel says it is an estimate, and from how many hosts');
   ok(/R02\/s5 → R02\/tor[ab]\s+22\.5G\/25G · 90%/.test(text), 'the hot server’s NICs are the busiest cables');
+
+  // Paired as the test paired them: each server's total to its peers.
+  const spread = page.locator('#cable-load select').filter({ has: page.locator('option', { hasText: 'to its peers, as the test paired them' }) });
+  await spread.selectOption('peers');
+  await page.waitForTimeout(400);
+  await page.fill('#cable-load input.explain-peers', '3');
+  await page.locator('#cable-load input.explain-peers').dispatchEvent('change');
+  await page.waitForTimeout(400);
+  const paired = await page.evaluate(() => document.querySelector('#cable-load').innerText);
+  ok(/estimated from 32 hosts’ totals, sent to 3 random peers/.test(paired), `paired to three peers each  (${(/estimated from.*/.exec(paired) || [''])[0]})`);
+  ok(/96 flows/.test(paired) || /contention/.test(paired), 'routed as that many flows');
+  await page.locator('#cable-load label.explain input').check();
+  await page.waitForTimeout(300);
+  ok(/paired as set above, with the estimate/.test(await page.evaluate(() => document.querySelector('#cable-load').innerText)),
+     'and explaining uses the same pairing, set once');
 }, { url: '?layout=examples/dual-plane.dc&results=examples/dual-plane-hosts.tsv' });
 
 // Picks narrow the traffic too: only the flows between them, and a test flow
@@ -1264,10 +1279,22 @@ await test('the load generator', async () => {
   await page.locator('#load-gen input.gen-value').dispatchEvent('change');
   await page.waitForTimeout(400);
   ok(/992 flows · 800Gb\/s/.test(await gen()), 'and in all again, 50% is the host’s total');
+  ok(/50% of its NICs: 25Gb\/s from each host on average, of the 50G its cables carry one way/.test(await gen()),
+     `and says what that comes to: half of what a host can send  (${(await gen()).split('\n').pop()})`);
 
   await page.locator('#load-gen select.gen-reach').selectOption('rack');
   await page.waitForTimeout(400);
   ok(/768 flows/.test(await gen()), 'outside its own rack: no flow stays inside one');
+  // Hosts by name, with ranges and lists, however the numbers are padded.
+  await page.fill('#load-gen input.gen-hosts', 's[1..3] in:R0[1,3]');
+  await page.locator('#load-gen input.gen-hosts').dispatchEvent('input');
+  await page.waitForTimeout(300);
+  ok(/6 hosts/.test(await page.evaluate(() => document.querySelector('#load-gen .gen-count').textContent)),
+     `the hosts box takes ranges and lists in a name  (${await page.evaluate(() => document.querySelector('#load-gen .gen-count').textContent)})`);
+  await page.fill('#load-gen input.gen-hosts', '');
+  await page.locator('#load-gen input.gen-hosts').dispatchEvent('input');
+  await page.locator('#load-gen input.gen-hosts').dispatchEvent('change');
+  await page.waitForTimeout(300);
   const reaches = await page.locator('#load-gen select.gen-reach option').allTextContents();
   ok(reaches.includes('within its own rack') && reaches.includes('within its own row') && reaches.includes('outside its own row'),
      `within and outside, for each kind of container  (${reaches.join(' | ')})`);

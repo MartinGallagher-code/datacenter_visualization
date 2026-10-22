@@ -67,7 +67,7 @@ export const PER_CONNECTION = new Set(['hashed', 'polarized', 'adaptive']);
 export const CONNECTION_LIMITS = { max: 64 };
 // The units a test flow can be given when no metric sets one.
 export const TEST_UNITS = ['Gb/s', 'Mb/s', 'pps'];
-export const SPREADS = ['gravity', 'even'];
+export const SPREADS = ['gravity', 'even', 'peers'];
 
 const PREFIX = { '': 1e-9, k: 1e-6, m: 1e-3, g: 1, t: 1e3, p: 1e6 };
 
@@ -235,6 +235,12 @@ function outOfService(down) {
   return { els, links: new Set((down && down.links) || []) };
 }
 
+// The routes over a layout with nothing taken out, kept between passes: a
+// walk of the whole fabric per ToR pair is most of what a pass costs, and
+// nothing a pass changes -- a cable's gbps=, the load -- moves a route.
+// Taking something out makes a pass of its own.
+const ROUTES = new WeakMap();
+
 /**
  * What a routing pass needs to know about the fabric: which cables carry
  * traffic, which elements pass it on, and where the loads go.
@@ -258,8 +264,15 @@ function fabric(model, opts) {
   const noRoute = switches ? 'no route through +switch elements' : 'no route';
   // Routes to every host behind the same switches are the same but for the
   // last hop, so they are worked out once per set of switches: see towards.
-  // Each element's cables that carry traffic, worked out once per pass.
-  const carrying = new Map();
+  // Each element's cables that carry traffic, and the routes: once per
+  // layout while nothing is taken out, else once per pass.
+  const whole = !out.els.size && !out.links.size;
+  let kept = whole ? ROUTES.get(model) : null;
+  if (!kept) {
+    kept = { carrying: new Map(), routes: new Map(), shared: new Map() };
+    if (whole) ROUTES.set(model, kept);
+  }
+  const { carrying } = kept;
   const cables = (u) => {
     let list = carrying.get(u);
     if (!list) carrying.set(u, (list = u.links.filter(carries)));
@@ -299,9 +312,9 @@ function fabric(model, opts) {
     bonded.set(el, bond);
     return bond;
   };
-  const routes = new Map();
+  const { routes } = kept;
   const f = {
-    carries, cables, forwards, switches, loads, add, out, noRoute, shared: new Map(), bondOf,
+    carries, cables, forwards, switches, loads, add, out, noRoute, shared: kept.shared, bondOf,
     seed: (opts.seed || 0) >>> 0,
     // The way to each destination, worked out once per pass.
     route: (dst) => {
@@ -1351,47 +1364,22 @@ export function contend(model, flows, opts = {}) {
   // Each flow's connections summed: what it carries, what it offered, and
   // where the first of them held back was held.
   const sums = taken.map(() => ({ carried: 0, wanted: 0, at: null }));
+  // Summed by slot first, then once per slot into its place: every path
+  // crosses hundreds of slots where routes fan out, and a map update per
+  // crossing was most of what contention cost.
+  const slotCarried = new Float64Array(slots);
+  const slotOffered = new Float64Array(slots);
   routed.forEach((conn, i) => {
     const parts = paths[i];
+    const x = rate[i];
+    const d = demand[i];
     for (let p = 0; p < parts.length; p += 2) {
       const path = parts[p];
       const scale = parts[p + 1];
       for (let k = 0; k < path.length; k += 2) {
-        const o = owner[path[k]];
-        if (o.cpu) {
-          const h = hostCpu.get(o.el) || [0, 0];
-          h[0] += path[k + 1] * scale * rate[i];
-          h[1] += path[k + 1] * scale * demand[i];
-          hostCpu.set(o.el, h);
-          continue;
-        }
-        if (o.host) {
-          // Out of, or into, a host with a gbps=: carried, and offered.
-          let h = hostBits.get(o.el);
-          if (!h) hostBits.set(o.el, (h = { out: [0, 0], in: [0, 0] }));
-          h[o.side][0] += path[k + 1] * scale * rate[i];
-          h[o.side][1] += path[k + 1] * scale * demand[i];
-          continue;
-        }
-        if (o.pps && o.side) {
-          // Packets out of, or into, a host with a pps=: carried, and offered.
-          let h = hostPkts.get(o.el);
-          if (!h) hostPkts.set(o.el, (h = { out: [0, 0], in: [0, 0] }));
-          h[o.side][0] += path[k + 1] * scale * rate[i];
-          h[o.side][1] += path[k + 1] * scale * demand[i];
-          continue;
-        }
-        if (o.pps) {
-          // Packets through a switch with a pps=: carried, and offered.
-          const p2 = ppsThrough.get(o.el) || [0, 0];
-          p2[0] += path[k + 1] * scale * rate[i];
-          p2[1] += path[k + 1] * scale * demand[i];
-          ppsThrough.set(o.el, p2);
-          continue;
-        }
-        if (!o.link) continue;
-        into(loads, o.link, o.dir, path[k + 1] * scale * rate[i]);
-        into(offeredLoads, o.link, o.dir, path[k + 1] * scale * demand[i]);
+        const r = path[k + 1] * scale;
+        slotCarried[path[k]] += r * x;
+        slotOffered[path[k]] += r * d;
       }
     }
     const sum = sums[flowOf[i]];
@@ -1400,6 +1388,34 @@ export function contend(model, flows, opts = {}) {
     if (!sum.at && rate[i] < demand[i] * (1 - 1e-9) && heldAt[i] >= 0) sum.at = owner[heldAt[i]];
     else if (!sum.at && capped[i] && rate[i] >= demand[i] * (1 - 1e-9)) sum.at = { el: capOf[i].el, stream: true };
   });
+  for (let sl = 0; sl < slots; sl++) {
+    const c = slotCarried[sl];
+    const w = slotOffered[sl];
+    if (!(c > 0 || w > 0)) continue;
+    const o = owner[sl];
+    if (o.cpu) {
+      // What a host with a cpugbps= does of it, receiving at its rxcost=.
+      hostCpu.set(o.el, [c, w]);
+    } else if (o.host) {
+      // Out of, or into, a host with a gbps=: carried, and offered.
+      let h = hostBits.get(o.el);
+      if (!h) hostBits.set(o.el, (h = { out: [0, 0], in: [0, 0] }));
+      h[o.side][0] += c;
+      h[o.side][1] += w;
+    } else if (o.pps && o.side) {
+      // Packets out of, or into, a host with a pps=: carried, and offered.
+      let h = hostPkts.get(o.el);
+      if (!h) hostPkts.set(o.el, (h = { out: [0, 0], in: [0, 0] }));
+      h[o.side][0] += c;
+      h[o.side][1] += w;
+    } else if (o.pps) {
+      // Packets through a switch with a pps=: carried, and offered.
+      ppsThrough.set(o.el, [c, w]);
+    } else if (o.link) {
+      into(loads, o.link, o.dir, c);
+      into(offeredLoads, o.link, o.dir, w);
+    }
+  }
   const out = taken.map((flow, t) => {
     const sum = sums[t];
     carried += sum.carried;
@@ -1917,7 +1933,11 @@ export function hostsFor(model, match = null) {
   const hosts = [];
   for (const el of model.all) {
     if (el.children.length || !el.links.some((link) => !blocked.has(link.net))) continue;
-    if (match ? !match(el) : switches && el.tagsAll.has('switch')) continue;
+    // A switch is never a host while the layout tags any: a filter narrows
+    // the hosts, and one naming a rack would otherwise make its ToRs send
+    // at a share of their own cables, filling the servers' from above.
+    if (switches && el.tagsAll.has('switch')) continue;
+    if (match && !match(el)) continue;
     hosts.push(el);
   }
   return { hosts, untagged: !switches && !match };
@@ -2542,22 +2562,23 @@ export const EXPLAIN = {
  *          flows, connections, stream, cpu } } -- loads what the cables must
  *          have carried; or { why } when there is nothing to explain
  */
-export function explainResults(model, hosts, opts = {}) {
+export async function explainResults(model, hosts, opts = {}) {
   const readings = hosts.filter((h) => h.value > 0);
   if (readings.length < 2) return { why: 'fewer than two servers with a reading' };
   let best = 0;
   for (const h of readings) best = Math.max(best, h.value);
   const deadline = Date.now() + (opts.budget ?? EXPLAIN.budget);
   const timed = { ...opts, deadline };
-  let first = explainAt(model, readings, best, timed);
+  let first = await explainAt(model, readings, best, timed);
   if (first.why) return { ...first, best };
+  await breathe();
   const own = ownLimit(model, readings, best, timed);
   if (!first.fit || first.fit.mean <= EXPLAIN.within / 2) return { ...first, best, own };
   const ceiling = opts.capacity || best * EXPLAIN.reach;
   for (const step of EXPLAIN.steps) {
     const target = best * step;
     if (target > ceiling * 1.0001 || Date.now() > deadline) break;
-    const next = explainAt(model, readings, target, timed);
+    const next = await explainAt(model, readings, target, timed);
     if (next.fit && next.fit.mean < first.fit.mean) first = next;
   }
   return { ...first, best, own, partial: first.partial || Date.now() > deadline };
@@ -2641,8 +2662,37 @@ function layeredFlows(model, layers, value, hosts) {
   return { flows, why: '' };
 }
 
+// Gives the page its turn: explaining thousands of servers is many passes,
+// and the browser offers to kill a page that does not answer for seconds.
+const breathe = () => new Promise((resolve) => { setTimeout(resolve, 0); });
+
+/**
+ * Per-host totals paired as a test pairs its servers: each server's total
+ * sent to its peers in each layer (see layersOf), at that layer's share --
+ * a few flows a server, where every other server would be a million pairs
+ * on a thousand. The flows are an estimate, routed as a fluid.
+ *
+ * @param hosts  [{ el, value }], what each sent
+ * @param opts   { layers, layerSeed, gen, split, only }
+ * @returns { flows, why }
+ */
+export function pairedFlows(model, hosts, opts = {}) {
+  const made = layeredFlows(model, layersOf(opts), 1, hosts.map((h) => h.el));
+  if (!made.flows.length) return { flows: [], why: made.why };
+  const sent = new Map(hosts.map((h) => [h.el, h.value]));
+  const split = opts.split === 'capacity' ? 'capacity' : 'even';
+  const only = opts.only || null;
+  const flows = [];
+  for (const f of made.flows) {
+    if (only && !only(f.src, f.dst)) continue;
+    const value = f.value * (sent.get(f.src) || 0);
+    if (value > 0) flows.push({ id: ESTIMATE_IDS + flows.length, src: f.src, dst: f.dst, value, split, estimate: true });
+  }
+  return { flows, why: '' };
+}
+
 // explainResults at one target.
-function explainAt(model, readings, target, opts) {
+async function explainAt(model, readings, target, opts) {
   const achieved = new Map(readings.map((h) => [h.el, h.value]));
   const layers = layersOf(opts);
   const made = layeredFlows(model, layers, target, readings.map((h) => h.el));
@@ -2688,16 +2738,27 @@ function explainAt(model, readings, target, opts) {
   // Share out the load offered at the target with these cables at these
   // capacities, refining each against the results: how close it comes.
   const late = () => opts.deadline && Date.now() > opts.deadline;
-  const refine = (picks, start, rounds = EXPLAIN.rounds) => {
+  // Each round sets the guesses, shares the load out, and puts every cable
+  // back before it gives the page its turn: nothing drawn in between sees a
+  // guess.
+  const refine = async (picks, start, rounds = EXPLAIN.rounds) => {
     const guess = [...start];
-    const was = picks.map((x) => [x.link, x.link.gbps]);
     let fit = null;
     let got = new Map();
-    try {
-      for (let round = 0; round < rounds && !(round && late()); round++) {
+    let carried = null;
+    for (let round = 0; round < rounds && !(round && late()); round++) {
+      const was = picks.map((x) => [x.link, x.link.gbps]);
+      let c;
+      try {
         picks.forEach((x, i) => { x.link.gbps = guess[i]; });
-        const c = contend(model, made.flows, { ...route, toGbps: 1 });
+        c = contend(model, made.flows, { ...route, toGbps: 1 });
+      } finally {
+        for (const [link, gbps] of was) link.gbps = gbps;
+      }
+      await breathe();
+      {
         if (!c) break;
+        carried = c.loads;
         got = new Map();
         for (const f of c.contention.flows) got.set(f.src, (got.get(f.src) || 0) + f.value);
         let sum = 0;
@@ -2718,10 +2779,8 @@ function explainAt(model, readings, target, opts) {
           if (have > 0) guess[i] *= want / have;
         });
       }
-    } finally {
-      for (const [link, gbps] of was) link.gbps = gbps;
     }
-    return { fit, got, guess };
+    return { fit, got, guess, carried };
   };
   const reproducedBy = (got) => (el) => Math.abs((got.get(el) || 0) - achieved.get(el)) <= EXPLAIN.within * target;
   // Whether one fit is enough better than another to be worth a cable: a
@@ -2731,7 +2790,7 @@ function explainAt(model, readings, target, opts) {
   // Greedily: most contrast, times the short servers it would newly explain
   // -- kept only where, refined, it brings the network closer to the results.
   const suspects = [];
-  let now = refine([], []);
+  let now = await refine([], []);
   let open = new Set([...short].filter((el) => !reproducedBy(now.got)(el)));
   const tried = new Set();
   let tries = 0;
@@ -2752,7 +2811,7 @@ function explainAt(model, readings, target, opts) {
       link: pick.link, from: pick.from, to: pick.d ? pick.link.a : pick.link.b, carried: loads.get(pick.link)[pick.d],
       gbps: pick.link.gbps || null, who: pick.who, through: pick.through,
     };
-    const next = refine([...suspects, candidate], [...now.guess, Math.max(candidate.carried, 1e-9)], EXPLAIN.trial);
+    const next = await refine([...suspects, candidate], [...now.guess, Math.max(candidate.carried, 1e-9)], EXPLAIN.trial);
     if (!next.fit || !now.fit || !better(next.fit, now.fit)) continue;
     suspects.push(candidate);
     now = next;
@@ -2762,14 +2821,14 @@ function explainAt(model, readings, target, opts) {
   // simplest network that produces the results.
   for (let i = suspects.length - 1; i >= 0 && suspects.length > 1 && !late(); i--) {
     const rest = suspects.filter((_, j) => j !== i);
-    const without = refine(rest, now.guess.filter((_, j) => j !== i), EXPLAIN.trial);
+    const without = await refine(rest, now.guess.filter((_, j) => j !== i), EXPLAIN.trial);
     if (without.fit && !better(now.fit, without.fit)) {
       suspects.splice(i, 1);
       now = without;
     }
   }
   // And the cables kept, refined in full.
-  if (suspects.length && !late()) now = refine(suspects, now.guess);
+  if (suspects.length && !late()) now = await refine(suspects, now.guess);
   const fit = now.fit;
   const reproduced = reproducedBy(now.got);
   suspects.forEach((x, i) => {
@@ -2780,6 +2839,9 @@ function explainAt(model, readings, target, opts) {
     delete x.through;
   });
   const alone = [...short].filter((el) => !reproduced(el));
+  // What the cables carry in the explanation -- shared out, so none past
+  // its capacity but a suspect, read against what the results give it.
+  if (now.carried) result.loads = now.carried;
   // Short, and reproduced with no cable of the explanation on their way:
   // the layout's own limits for them -- a busy CPU, say -- already do it.
   const onCable = new Set(suspects.flatMap((x) => x.hosts));

@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.26.0** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.28.0** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -962,8 +962,10 @@ off.
     all-reduce passes its data round.
 - **each sends** how much every host sends in all: in Gb/s, Mb/s or pps, or
   **% of its NICs** — a share of what the host's own cables can carry, their
-  `gbps=` added up — which is the default once the cables have a `gbps=`.
-  50% of two 25G NICs is 25 Gb/s.
+  `gbps=` added up, which is what it can send one way — which is the
+  default once the cables have a `gbps=`. 50% of two 25G NICs is 25 Gb/s,
+  so 50% and 25 Gb/s are the same load; the box says what the share comes
+  to from each host.
 - **in all** or **to each peer** — who that amount is for:
   - **in all**, the default, makes it the host's total, whatever the
     pattern: **more random peers spread the same load thinner** — at ×8
@@ -1008,9 +1010,10 @@ off.
   `role=server`, `+gpu`, `role=server in:A[01..04]`, or several sections at
   once, `role=server (in:A01 or in:B[03..05])`; the box counts the hosts it
   takes as you type. Empty means every device with cables
-  that is not tagged `+switch`; a layout that tags nothing `+switch` cannot
-  tell a server from a switch, so the box says so and every device with
-  cables counts.
+  that is not tagged `+switch`, and a filter only narrows those: naming a
+  rack takes its servers, never its ToRs. A layout that tags nothing
+  `+switch` cannot tell a server from a switch, so the box says so and
+  every device with cables counts.
 
 - **from** — an amount of the generator's own, or **what a metric says**:
   pretend the servers make the load they measured. Any per-host metric that
@@ -1096,6 +1099,14 @@ other hosts measured, then routed like flows.
   a traffic matrix from per-host volumes. A host sending 10 among hosts
   totalling 10 and 20 sends them a third and two thirds.
 - **evenly to every other host** sends each the same share.
+- **to its peers, as the test paired them** sends each server's total to
+  its random peers instead, in the layers set under it — the same setup
+  explaining uses: × peers, within or outside its own rack (row, room, …),
+  and a share for each layer. A few flows a server rather than one to
+  every other, so it shares out and its replies come back however many
+  servers there are. It is taken by itself where every pair would be too
+  many flows to share out — a thousand servers are a million pairs — and
+  the panel says so.
 - Every host still sends exactly its total; what is a guess is only where it
   goes. The panel says the load is estimated and from how many hosts, and an
   estimate is always shared as a fluid — hashed or adaptive routes it as an
@@ -1159,10 +1170,15 @@ look like to produce these results?*
   its sending end; hover for the servers it explains.
 - A server no shared cable explains is **held back by itself** — its NIC,
   CPU or stack — and is named as such rather than blamed on a cable.
-- **Their own load**: a short server that the layout's own limits already
-  hold to its result — `cpugbps=` less what it was busy with, as written or
-  measured — is named as such, with how busy it was, and no cable is blamed
-  for it.
+- **As the layout already has it**: a short server that the layout as it
+  stands already holds to its result — cables full at their `gbps=`, or
+  its own `stream=`, `cpugbps=` less what it was busy with — is named as
+  such, with how busy it was, and no cable is changed for it.
+- A packet rate with its packets sized (mx's) is read in bits: each
+  server's requests and the replies it sends back.
+- The cables in **explained by the network** carry the load as the
+  explanation shares it out, so none reads past its capacity but a suspect,
+  against what the results give it.
 - **The servers themselves**: when most of them stop at the same result,
   and the network as the layout has it would carry more of the same load,
   the limit is theirs — "32 of 32 servers stop at about 155Gb/s, where the
@@ -1182,9 +1198,9 @@ look like to produce these results?*
 - The cable view gains **explained by the network**: the load as it would
   be, with each suspect cable's share read against the capacity the results
   give it.
-- It is worked out in the background, and on thousands of servers stops
-  after twenty seconds with the cables it was surest of — the panel says
-  when it did.
+- It is worked out in turns, the page answering between them, and on
+  thousands of servers stops after twenty seconds with the cables it was
+  surest of — the panel says when it did.
 
 It is an inference, not a measurement: it finds the *fewest* cables that
 explain the results, and a different set may explain them as well. Switch
@@ -2039,7 +2055,11 @@ quietly left stale.
   **Sections, and boolean logic.** `in:A01` is everything inside A01 (and A01
   itself) — by id or name, or by path, `in:H1/A01` for the A01 in hall H1.
   Values take ranges the way a layout writes them: `in:A[01..04]`,
-  `in:R[01..08,12]`, `name=u[01..10]`. Terms combine with `and`, `or` and
+  `in:R[01..08,12]`, `name=u[01..10]` — and so does a bare name:
+  `ht11r01u[7..11]`, `ht11r[01,05,07]u[7,9]`, each bracket a range (`7..11`),
+  a list (`1,5,9`) or both (`1..4,7`). A number in a range matches however
+  it is padded, so `u[7..11]` finds `u07` to `u11`; a range matches whole
+  names, so `u[5..6]` is not `u50`. Terms combine with `and`, `or` and
   `not` (any case) and parentheses: `not` binds tightest, then `and` (or a
   plain space), then `or`, so
 

@@ -11,6 +11,49 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.28.0 — 2026-10-22
+
+- **Ranges and lists in a name**, in the filter bar and the Load
+  generator's hosts box: `ht11r01u[7..11]`, `ht11r[01,05,07]u[7,9]` -- each
+  bracket a range, a list, or both. A bare term took none before; now it
+  matches the names (or a path) the brackets describe.
+- A number in a range matches however it is padded, wherever a filter takes
+  ranges: `u[7..11]` finds `u07` to `u11`, `in:R[1..3]` finds `R01` to `R03`.
+  A range matches whole names, so `u[5..6]` is never `u50`.
+- 1.27.0, 1.27.1 and 1.28.0 share one pull request.
+
+## 1.27.1 — 2026-10-22
+
+- Fixed: the Load generator's **hosts** filter let switches in. A filter
+  naming a rack took its ToRs as hosts too, and at a share of the NICs each
+  ToR sent that share of *its* cables down to the servers -- so 50% filled
+  the servers' NICs, and a share and the same rate in Gb/s gave different
+  loads. A switch is never a host now while the layout tags any.
+- The generator box says what a share of the NICs comes to: "50% of its
+  NICs: 100Gb/s from each host on average, of the 200G its cables carry one
+  way".
+- 1.27.0 and 1.27.1 share one pull request.
+
+## 1.27.0 — 2026-10-21
+
+- **Per-host totals paired as the test paired them**: a new choice beside
+  *to each host by its own total*, sending each server's total to its
+  random peers, in the same layers explaining uses. Taken by itself where
+  every pair would be too many to share out -- a thousand servers are a
+  million pairs -- so a room of mx results now shares out, and its
+  replies come back, where before they were left out.
+- **Much faster, and the page keeps answering.** Routes are kept between
+  passes while nothing is taken out, and contention sums its loads once
+  per cable rather than per crossing: about twice as fast on a room of a
+  thousand servers. Explaining works in turns, the page answering between
+  them, so the browser no longer offers to stop it.
+- Fixed: explaining a packet rate with its packets sized read packets a
+  second as Gb/s. It is now read in bits, requests and replies.
+- Fixed: the cables in *explained by the network* could read past 100%;
+  they now carry the load as the explanation shares it out.
+- The line for short servers the layout already holds back says so --
+  cables full as drawn, or their own limits -- rather than "their own load".
+
 ## 1.26.0 — 2026-10-21
 
 - **Explaining results is set up in its own panel**, to match how the test

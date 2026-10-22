@@ -23,7 +23,7 @@ import { layoutFromHosts, matchesPattern, recordsSince, tailRecords } from './ts
 import { routesBetween } from './paths.js';
 import {
   adaptiveWeights, betweenPicks, busyable, busyOf, explainResults, pathLatency, bitRate, cableKeys, CONNECTION_LIMITS, contend, countersOf, estimateFlows, flowsOf, flowsOver, GEN_LIMITS,
-  findingsOf, generateFlows, hostCapacity, hostsOf, TARGETED, loadable, loadUnit, mergeResults, packetGb, readsAsLoad, REPLY_IDS, routeEstimate,
+  findingsOf, generateFlows, hostCapacity, hostsOf, pairedFlows, TARGETED, loadable, loadUnit, mergeResults, packetGb, readsAsLoad, REPLY_IDS, routeEstimate,
   routeTraffic, switchLoads, testFlows, trafficKind, viewOf,
 } from './traffic.js';
 import { VERSION } from './version.js';
@@ -278,15 +278,27 @@ const state = {
     // takes seconds, and the page should not freeze without a word.
     if (state.explainWorking !== key) {
       state.explainWorking = key;
-      setTimeout(() => {
+      const layout = state.model;
+      setTimeout(async () => {
         if (state.explainWorking !== key) return;
-        const h = hostsOf(overlay, state.model, duplex);
-        const hosts = h.hosts.map((x) => ({ el: x.el, value: x.value * unit.toGbps }));
-        const value = explainResults(state.model, hosts, {
+        const h = hostsOf(overlay, layout, duplex);
+        // A packet rate with its packets sized is read in bits: each server's
+        // requests, and the replies it sends back -- as many as it asks for,
+        // when every server does the same.
+        const per = unit.packets ? packetGb(unit.packets.bytes) + (unit.packets.reply > 0 ? packetGb(unit.packets.reply) : 0) : unit.toGbps;
+        const hosts = h.hosts.map((x) => ({ el: x.el, value: x.value * per }));
+        const value = await explainResults(layout, hosts, {
           layers: t.explainLayers, layerSeed: t.explainSeed, split: t.split, seed: t.seed, connections: t.connections,
           down: state.takenOut(), busy,
         });
-        state.trafficCache.explain = { key, layout: state.model, overlay, busy, value };
+        // Changed while it worked: the newer question is the one to answer.
+        if (state.explainWorking !== key) return;
+        if (state.model !== layout) {
+          state.explainWorking = null;
+          refreshPanels();
+          return;
+        }
+        state.trafficCache.explain = { key, layout, overlay, busy, value };
         state.explainWorking = null;
         refreshPanels();
         invalidate();
@@ -472,13 +484,14 @@ function modelSource(withDown) {
   const packets = metric ? packetsOf(metric) : null;
   const packetKey = packets ? `${packets.bytes}\u0001${packets.reply}` : '';
   const busy = busySource();
+  const pairingKey = JSON.stringify([t.explainLayers, t.explainSeed]);
   const slot = withDown ? 'model' : 'base';
   const c = state.trafficCache[slot];
   if (c && c.overlay === metric && c.layout === state.model && c.agg === (metric && metric.agg)
       && c.split === t.split && c.connections === t.connections && c.seed === t.seed && c.spread === t.spread && c.down === downKey
       && c.picks === pickKey && c.test === testKey && c.between === between && c.gen === genKey
       && sameSource(c.from, from) && c.contention === t.contention && c.duplex === duplexKey
-      && c.packets === packetKey && c.busy === busy) {
+      && c.packets === packetKey && c.busy === busy && c.pairing === pairingKey) {
     return c.value;
   }
   // Nothing taken out: the model and its baseline are one routing.
@@ -519,6 +532,16 @@ function modelSource(withDown) {
     duplex = h.duplex;
     over = h.over;
   }
+  // Per-host totals are sent somewhere: to every other host (gravity, or
+  // evenly), or -- by choice, or where every pair would be too many flows to
+  // share out -- to each server's peers as the test paired them, the same
+  // layers explaining uses. A thousand servers are a million pairs, and a
+  // few peers each.
+  const allPairs = hosts ? hosts.length * (hosts.length - 1) : 0;
+  const byPeers = !!hosts && (t.spread === 'peers' || allPairs * 2 > GEN_LIMITS.flows);
+  const pairUp = (list) => (byPeers
+    ? pairedFlows(state.model, list, { layers: t.explainLayers, layerSeed: t.explainSeed, split: t.split, only }).flows
+    : estimateFlows(list, { spread: t.spread, split: t.split, only }));
   // A packet rate with its packets' size is a bit rate: every request
   // carries its payload and framing, and comes back as a reply of its own
   // size, the other way. Per-host totals are paired first, as the estimate
@@ -529,13 +552,8 @@ function modelSource(withDown) {
     const rep = packets.reply > 0 ? packetGb(packets.reply) : 0;
     packetRun = { ...packets, why: '' };
     if (hosts && rep) {
-      const pairs = estimateFlows(hosts, { spread: t.spread, split: t.split, only });
-      if (pairs.length * 2 <= GEN_LIMITS.flows) {
-        metricFlows = pairs;
-        hosts = null;
-      } else {
-        packetRun.why = `${hosts.length.toLocaleString()} hosts are too many to pair here, so their replies are left out`;
-      }
+      metricFlows = pairUp(hosts);
+      hosts = null;
     }
     if (hosts) hosts = hosts.map((h) => ({ el: h.el, value: h.value * req, pps: h.value }));
     const both = [];
@@ -608,7 +626,7 @@ function modelSource(withDown) {
     if (unit.toGbps === null) contentionWhy = `${unit.unit || 'this unit'} cannot fill a cable’s gbps=, so nothing is shared out`;
     else if (!state.model.links.some((link) => link.gbps)) contentionWhy = 'no cable has a gbps= to fill, so nothing is shared out';
     else {
-      const pairs = hosts ? estimateFlows(hosts, { spread: t.spread, split: t.split, only }) : [];
+      const pairs = hosts ? pairUp(hosts) : [];
       if (pairs.length > GEN_LIMITS.flows) {
         contentionWhy = `${pairs.length.toLocaleString()} estimated host pairs are too many to share out here`;
       } else {
@@ -636,7 +654,9 @@ function modelSource(withDown) {
     routed = [...metricFlows];
     result = null;
     if (metric) {
-      result = hosts ? routeEstimate(state.model, hosts, { ...opts, only }) : routeTraffic(state.model, metricFlows, opts);
+      result = !hosts ? routeTraffic(state.model, metricFlows, opts)
+        : byPeers ? { ...routeTraffic(state.model, pairUp(hosts), opts), estimated: true, hosts: hosts.length }
+          : routeEstimate(state.model, hosts, { ...opts, only });
       // The metric's own count, before anything is added on top of it.
       // Every request routed has its reply routed back the same way round.
       own = { routed: packetRun && packetRun.reply && !hosts ? Math.round(result.routed / 2) : result.routed, delivered: result.delivered };
@@ -654,12 +674,15 @@ function modelSource(withDown) {
     overlay: metric, kind: metric ? kind : gen ? 'gen' : 'test', result, loads: result.loads, toGbps: unit.toGbps,
     unit: unit.unit, count, total, unresolved, skipped, between, test: testRun, gen: genRun, own,
     flows: routed, opts, estimated: !!metric && kind === 'hosts', contentionWhy, duplex, over,
+    // How per-host totals were paired: to peers as the test paired them, and
+    // whether by choice or because every pair was too many.
+    pairedBy: byPeers ? (t.spread === 'peers' ? 'choice' : 'size') : null, allPairs,
     packets: packetRun || (genRun && genRun.packets) || null,
   };
   state.trafficCache[slot] = {
     overlay: metric, layout: state.model, agg: metric && metric.agg, split: t.split, connections: t.connections, seed: t.seed, spread: t.spread,
     down: downKey, picks: pickKey, test: testKey, between, gen: genKey, from, contention: t.contention, duplex: duplexKey,
-    packets: packetKey, busy, value,
+    packets: packetKey, busy, pairing: pairingKey, value,
   };
   return value;
 }
