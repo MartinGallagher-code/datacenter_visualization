@@ -774,3 +774,7 @@ body.resizing-rows { cursor: row-resize; user-select: none; }
 .size-picks button { font-size: 10.5px; padding: 1px 5px; }
 .size-picks button.active { border-color: #4fa3ff; color: #8cc4ff; }
 .explain-box { margin-top: 8px; }
+.takeouts { margin-top: 8px; }
+.takeouts .takeout-amount { width: 5em; }
+.takeouts .takeout-among { width: 10em; }
+.picks-list .random-out { font-style: italic; }

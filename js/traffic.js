@@ -1918,6 +1918,8 @@ const AUGMENT_DEPTH = 200;
 // cables -- each destination is a walk over the fabric. A lab floor is far
 // inside both; a hyperscale campus is far outside, and is told to narrow it.
 export const GEN_LIMITS = { flows: 300000, work: 4e7 };
+// Random peers averaged where all-to-all is too many flows: this many draws.
+export const AVERAGE_DRAWS = 8;
 
 /**
  * The hosts a generated load runs between: devices whose cables carry
@@ -2226,6 +2228,36 @@ export function generateFlows(model, gen, opts = {}) {
   // with the seed; never itself, never a host it already sends to, and
   // never one the reach rules out, where a swap can avoid it.
   const peers = Math.max(1, Math.min(n - 1, Math.floor(Number(gen.peers) || 1)));
+  // Averaged over every draw: random peers pick every other host alike, so
+  // over all their draws each host sends its total evenly to every host it
+  // may reach -- all-to-all at the same totals, exactly. Where that is too
+  // many flows, the mean of AVERAGE_DRAWS draws stands in for it.
+  if (gen.average) {
+    const plain = { ...gen, average: false };
+    const totals = perPeer ? { ...plain, value: value * peers, per: 'host' } : { ...plain, per: 'host' };
+    const exact = generateFlows(model, { ...totals, pattern: 'all' }, { ...opts, hosts });
+    if (exact.flows.length || !/too many|too much/.test(exact.why)) return { ...exact, averaged: 'every' };
+    // Each pair once, carrying its share of every draw it is in.
+    const byPair = new Map();
+    let noCapacity = 0;
+    for (let k = 0; k < AVERAGE_DRAWS; k++) {
+      const one = generateFlows(model, { ...plain, seed: ((gen.seed || 0) + Math.imul(k + 1, 0x9e3779b1)) >>> 0 }, { ...opts, hosts });
+      if (!one.flows.length && one.why) return result([], { why: one.why });
+      noCapacity = one.noCapacity;
+      noReading = one.noReading;
+      for (const f of one.flows) {
+        const key = `${f.src.n}>${f.dst.n}`;
+        const had = byPair.get(key);
+        if (had) had.value += f.value / AVERAGE_DRAWS;
+        else byPair.set(key, { ...f, value: f.value / AVERAGE_DRAWS });
+      }
+    }
+    const flows = [...byPair.values()].map((f, i) => ({ ...f, id: GEN_IDS + i }));
+    if (tooBig(hosts, flows.length)) {
+      return result([], { why: `${AVERAGE_DRAWS} draws of ${n} hosts × ${peers} peers is too much to route here: fewer peers, or ${narrow}` });
+    }
+    return result(flows, { noCapacity, averaged: AVERAGE_DRAWS });
+  }
   if (tooBig(hosts, n * peers)) {
     return result([], {
       why: `${n} hosts × ${peers} peers is too much to route here: fewer peers, or ${narrow}`,
@@ -2285,6 +2317,60 @@ export function generateFlows(model, gen, opts = {}) {
     for (const j of to[i]) flows.push({ id: GEN_IDS + flows.length, src, dst: hosts[j], value: share(amounts[i], to[i].size), gen: true });
   });
   return result(flows, { noCapacity });
+}
+
+// What can be taken out at random, and the order they are listed in.
+export const TAKEOUT_KINDS = ['servers', 'racks', 'switches'];
+
+/**
+ * What a random take-out may pick from, of each kind: the servers (the
+ * hosts, never a switch), the racks that hold a cabled device, and the
+ * switches -- each narrowed by its own filter where one is given.
+ */
+export function takeoutCandidates(model, match = {}) {
+  const cabled = (el) => !el.children.length && el.links.length;
+  const servers = hostsFor(model).hosts;
+  const racks = new Set();
+  const switches = [];
+  for (const el of model.all) {
+    if (!cabled(el)) continue;
+    if (el.tagsAll.has('switch')) switches.push(el);
+    for (let p = el.parent; p; p = p.parent) if (p.kind === 'rack') { racks.add(p); break; }
+  }
+  const pool = { servers, racks: [...racks], switches };
+  for (const kind of TAKEOUT_KINDS) if (match[kind]) pool[kind] = pool[kind].filter(match[kind]);
+  return pool;
+}
+
+/**
+ * Elements to take out at random: of each kind, `amount` of them, or that
+ * per cent of them (`unit: '%'`, rounded to the nearest whole one), drawn
+ * by `seed` -- the same seed, the same draw. A server inside a rack also
+ * drawn is drawn all the same: each kind counts on its own.
+ *
+ * @param spec   { servers|racks|switches: { amount, unit: '#'|'%' } }
+ * @param match  { servers|racks|switches: el -> bool } narrowing each kind
+ * @returns { servers, racks, switches: [el], of: { kind: how many there were } }
+ */
+export function randomTakeouts(model, spec, seed = 1, match = {}) {
+  const pool = takeoutCandidates(model, match);
+  const out = { of: {} };
+  TAKEOUT_KINDS.forEach((kind, k) => {
+    const list = pool[kind];
+    const want = spec && spec[kind] ? spec[kind] : {};
+    const amount = Math.max(0, Number(want.amount) || 0);
+    const count = Math.min(list.length, want.unit === '%' ? Math.round((list.length * Math.min(100, amount)) / 100) : Math.floor(amount));
+    out.of[kind] = list.length;
+    // A shuffle as far as it needs to go: the first `count` of a seeded
+    // Fisher-Yates are as random as the whole of it.
+    const order = list.slice();
+    for (let i = 0; i < count; i++) {
+      const j = i + Math.floor(mix((seed >>> 0) || 1, k * 104729 + 7, i) * (order.length - i));
+      [order[i], order[j]] = [order[j], order[i]];
+    }
+    out[kind] = order.slice(0, count);
+  });
+  return out;
 }
 
 /** A switch's shared packet buffer, in bytes: its buffer=, or null. */
