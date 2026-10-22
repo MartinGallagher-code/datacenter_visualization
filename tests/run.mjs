@@ -1844,6 +1844,11 @@ const segsOf = (cache, net) => {
      'with nothing tagged +switch, every device with cables is a host, and it says so');
   eq(hostCapacity(m, m.resolve('R1/s1')), 25, 'a host’s capacity is its traffic-carrying cables: mgmt is traffic=no');
   eq(reachKinds(hosts), ['rack', 'row'], 'a load can be kept out of a host’s rack or row, innermost first');
+  ok(hostsFor(m, (el) => el.parent === m.resolve('R1')).hosts.every((el) => !el.tagsAll.has('switch')),
+     'a filter naming a rack takes its servers, never its ToRs');
+  const rackOnly = generateFlows(m, { pattern: 'all', value: 50, unit: '%' }, { match: (el) => el.parent === m.resolve('R1') });
+  ok(rackOnly.flows.every((f) => !f.src.tagsAll.has('switch') && !f.dst.tagsAll.has('switch')) && Math.abs(rackOnly.offered / rackOnly.senders - 12.5) < 1e-9,
+     'so 50% of the NICs is half of what each server sends one way, and nothing comes down from a ToR');
 
   const peak = (r, net) => Math.max(0, ...[...r.loads].filter(([l]) => l.net === net).map(([, x]) => Math.max(...x)));
   // All-to-all at half of each NIC: every server's cable half full.

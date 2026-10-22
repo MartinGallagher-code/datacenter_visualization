@@ -1933,7 +1933,11 @@ export function hostsFor(model, match = null) {
   const hosts = [];
   for (const el of model.all) {
     if (el.children.length || !el.links.some((link) => !blocked.has(link.net))) continue;
-    if (match ? !match(el) : switches && el.tagsAll.has('switch')) continue;
+    // A switch is never a host while the layout tags any: a filter narrows
+    // the hosts, and one naming a rack would otherwise make its ToRs send
+    // at a share of their own cables, filling the servers' from above.
+    if (switches && el.tagsAll.has('switch')) continue;
+    if (match && !match(el)) continue;
     hosts.push(el);
   }
   return { hosts, untagged: !switches && !match };

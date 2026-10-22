@@ -1279,6 +1279,8 @@ await test('the load generator', async () => {
   await page.locator('#load-gen input.gen-value').dispatchEvent('change');
   await page.waitForTimeout(400);
   ok(/992 flows · 800Gb\/s/.test(await gen()), 'and in all again, 50% is the host’s total');
+  ok(/50% of its NICs: 25Gb\/s from each host on average, of the 50G its cables carry one way/.test(await gen()),
+     `and says what that comes to: half of what a host can send  (${(await gen()).split('\n').pop()})`);
 
   await page.locator('#load-gen select.gen-reach').selectOption('rack');
   await page.waitForTimeout(400);

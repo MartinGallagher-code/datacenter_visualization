@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.27.0** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.27.1** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -962,8 +962,10 @@ off.
     all-reduce passes its data round.
 - **each sends** how much every host sends in all: in Gb/s, Mb/s or pps, or
   **% of its NICs** — a share of what the host's own cables can carry, their
-  `gbps=` added up — which is the default once the cables have a `gbps=`.
-  50% of two 25G NICs is 25 Gb/s.
+  `gbps=` added up, which is what it can send one way — which is the
+  default once the cables have a `gbps=`. 50% of two 25G NICs is 25 Gb/s,
+  so 50% and 25 Gb/s are the same load; the box says what the share comes
+  to from each host.
 - **in all** or **to each peer** — who that amount is for:
   - **in all**, the default, makes it the host's total, whatever the
     pattern: **more random peers spread the same load thinner** — at ×8
@@ -1008,9 +1010,10 @@ off.
   `role=server`, `+gpu`, `role=server in:A[01..04]`, or several sections at
   once, `role=server (in:A01 or in:B[03..05])`; the box counts the hosts it
   takes as you type. Empty means every device with cables
-  that is not tagged `+switch`; a layout that tags nothing `+switch` cannot
-  tell a server from a switch, so the box says so and every device with
-  cables counts.
+  that is not tagged `+switch`, and a filter only narrows those: naming a
+  rack takes its servers, never its ToRs. A layout that tags nothing
+  `+switch` cannot tell a server from a switch, so the box says so and
+  every device with cables counts.
 
 - **from** — an amount of the generator's own, or **what a metric says**:
   pretend the servers make the load they measured. Any per-host metric that

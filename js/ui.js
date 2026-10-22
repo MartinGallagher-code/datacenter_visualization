@@ -2051,6 +2051,13 @@ export function renderLoadGen(state, host, actions, { unit } = {}) {
     else {
       lines.append(el('div', null, `${run.senders} of ${run.hosts} hosts send · ${run.flows} flows · `
         + `${formatLoad(shown.model, run.offered)}`));
+      // A share of the NICs is of what they carry one way -- what a host can
+      // send -- and says what that comes to.
+      if (run.unit === '%' && run.per === 'host' && !run.from && run.senders && shown.model.toGbps !== null) {
+        const each = (run.offered / run.senders) * shown.model.toGbps;
+        lines.append(el('div', 'muted', `${trimNum(run.value)}% of its NICs: ${formatGbps(each)}b/s from each host on average, `
+          + `of the ${formatGbps(each / (run.value / 100))} its cables carry one way`));
+      }
     }
     if (run.noReading) {
       lines.append(el('div', 'muted', `${run.noReading} host${run.noReading === 1 ? ' has' : 's have'} no reading, so send nothing`));

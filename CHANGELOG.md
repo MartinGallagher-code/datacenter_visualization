@@ -11,6 +11,18 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.27.1 — 2026-10-22
+
+- Fixed: the Load generator's **hosts** filter let switches in. A filter
+  naming a rack took its ToRs as hosts too, and at a share of the NICs each
+  ToR sent that share of *its* cables down to the servers -- so 50% filled
+  the servers' NICs, and a share and the same rate in Gb/s gave different
+  loads. A switch is never a host now while the layout tags any.
+- The generator box says what a share of the NICs comes to: "50% of its
+  NICs: 100Gb/s from each host on average, of the 200G its cables carry one
+  way".
+- 1.27.0 and 1.27.1 share one pull request.
+
 ## 1.27.0 — 2026-10-21
 
 - **Per-host totals paired as the test paired them**: a new choice beside
