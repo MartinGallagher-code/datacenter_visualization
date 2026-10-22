@@ -15,7 +15,7 @@ import {
   capacityWidth, changeColor, countDescendants, FINDING_COLORS, LOAD_COLORS, loadColor, linkSummary, spliceSummary,
 } from './render.js';
 import {
-  biggestChanges, burstRisk, busiest, busyable, cablesOf, EXPLAIN_PATTERNS, formatGbps, hostLimits, GEN_UNITS, hostsFor, loadable, loadUnit, PATTERNS, reachKinds, TARGETED,
+  biggestChanges, burstRisk, busiest, busyable, cablesOf, EXPLAIN_PATTERNS, takeoutCandidates, TAKEOUT_KINDS, formatGbps, hostLimits, GEN_UNITS, hostsFor, loadable, loadUnit, PATTERNS, reachKinds, TARGETED,
   CONNECTION_LIMITS, IMIX_BYTES, PACKET_PICKS, PER_CONNECTION, readsAsLoad, SPLITS, SPREADS, TEST_UNITS, trafficKind, utilOf,
 } from './traffic.js';
 
@@ -2045,6 +2045,8 @@ export function renderLoadGen(state, host, actions, { unit } = {}) {
       : el('div', 'bad', g.pattern === 'outcast' ? 'pick or select who sends' : 'pick or select where it goes'));
   }
 
+  box.append(renderTakeouts(state, actions));
+
   const shown = g.on && state.cableView ? state.cableView() : null;
   const run = shown && shown.model && shown.model.gen;
   if (run) {
@@ -2077,6 +2079,75 @@ export function renderLoadGen(state, host, actions, { unit } = {}) {
     box.append(el('p', 'muted cable-note', 'A made-up load, routed and drawn like a metric: no results file needed.'));
   }
   host.append(box);
+}
+
+/**
+ * Random take-outs: of servers, racks and switches, how many -- a number or a
+ * per cent -- and among which, as a filter; then a draw, which goes into the
+ * what-if beside anything taken out by hand, a new draw, and putting them
+ * back. Each row says what its amount comes to.
+ */
+const takeoutPools = new WeakMap();
+function renderTakeouts(state, actions) {
+  const t = state.takeouts;
+  const wrap = el('div', 'takeouts');
+  wrap.append(el('div', 'load-title', 'Take out at random'));
+  let pools = takeoutPools.get(state.model);
+  if (!pools) takeoutPools.set(state.model, (pools = new Map()));
+  const poolOf = (kind) => {
+    const among = t[kind].among || '';
+    const key = `${kind}\u0000${among}`;
+    if (!pools.has(key)) {
+      let match;
+      try { match = among ? compileQuery(among, state) : null; } catch { match = () => false; }
+      pools.set(key, takeoutCandidates(state.model, match ? { [kind]: match } : {})[kind].length);
+    }
+    return pools.get(key);
+  };
+  const labels = { servers: 'servers', racks: 'racks', switches: 'switches' };
+  for (const kind of TAKEOUT_KINDS) {
+    const row = el('div', 'gen-row takeout-row');
+    const amount = el('input', `takeout-amount takeout-${kind}`);
+    amount.type = 'number';
+    amount.min = '0';
+    amount.step = 'any';
+    amount.value = String(t[kind].amount);
+    amount.addEventListener('change', () => actions.setTakeouts(kind, { amount: Math.max(0, Number(amount.value) || 0) }));
+    const unit = el('select', `takeout-unit takeout-unit-${kind}`);
+    for (const [v, text] of [['#', 'of the'], ['%', '% of the']]) {
+      const opt = el('option', null, text);
+      opt.value = v;
+      opt.selected = t[kind].unit === v;
+      unit.append(opt);
+    }
+    unit.addEventListener('change', () => actions.setTakeouts(kind, { unit: unit.value }));
+    const among = el('input', `takeout-among takeout-among-${kind}`);
+    among.type = 'text';
+    among.value = t[kind].among;
+    among.placeholder = 'among all';
+    among.title = `Which ${labels[kind]} it may pick, as a filter: role=tor, in:<row>, ht11r[01..04]*`;
+    among.addEventListener('change', () => actions.setTakeouts(kind, { among: among.value.trim() }));
+    const n = poolOf(kind);
+    const count = Math.min(n, t[kind].unit === '%' ? Math.round((n * Math.min(100, t[kind].amount)) / 100) : Math.floor(t[kind].amount));
+    row.append(amount, unit, el('span', null, `${n.toLocaleString()} ${labels[kind]}`), among,
+      el('span', 'muted takeout-count', t[kind].amount > 0 ? `→ ${count.toLocaleString()}` : ''));
+    wrap.append(row);
+  }
+  const buttons = el('div', 'btnrow');
+  const any = TAKEOUT_KINDS.some((kind) => t[kind].amount > 0);
+  const out = state.down && state.down.random ? state.down.random.size : 0;
+  const take = el('button', 'takeout-draw', out ? 'Draw again' : 'Take out');
+  take.disabled = !any;
+  take.title = 'Take that many out at random, into the what-if: their cables carry nothing, and the load goes round them';
+  take.addEventListener('click', () => actions.drawTakeouts(!!out));
+  buttons.append(take);
+  if (out) {
+    const back = el('button', 'takeout-back', 'Put them back');
+    back.addEventListener('click', () => actions.putBackTakeouts());
+    buttons.append(back, el('span', 'muted', `${out.toLocaleString()} out at random`));
+  }
+  wrap.append(buttons);
+  return wrap;
 }
 
 // ---------------------------------------------------------------- findings
@@ -2400,7 +2471,18 @@ function renderWhatIf(state, host, actions, down, view) {
   head.append(back);
   box.append(head);
   const chips = el('div', 'picks-list');
+  // Those taken out at random are one chip, however many: a tenth of four
+  // thousand servers is four hundred names.
+  const random = state.down && state.down.random ? state.down.random : new Set();
+  const drawn = down.els.filter((node) => random.has(node.key));
+  if (drawn.length) {
+    const chip = el('span', 'pick out random-out', `${drawn.length} at random`);
+    chip.title = `${drawn.slice(0, 12).map((n) => n.path).join('\n')}${drawn.length > 12 ? '\n…' : ''}\n— click to put them back`;
+    chip.addEventListener('click', () => actions.putBackTakeouts());
+    chips.append(chip);
+  }
   for (const node of down.els) {
+    if (random.has(node.key)) continue;
     const chip = el('span', 'pick out', node.name);
     chip.title = `${node.path}, and everything in it — click to put it back`;
     chip.addEventListener('click', () => actions.takeOut(node, false));

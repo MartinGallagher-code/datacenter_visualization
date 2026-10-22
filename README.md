@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.28.0** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.29.0** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -1015,6 +1015,17 @@ off.
   `+switch` cannot tell a server from a switch, so the box says so and
   every device with cables counts.
 
+- **Take out at random** — servers, racks and switches, each by a
+  number or **% of the** ones there are, and each among all of its kind or
+  those a filter names (`role=tor`, `role=compute`, `ht11r[01..04]*`); the
+  row says what it comes to ("→ 41"). **Take out** draws them into the
+  what-if beside anything taken out by hand — their cables carry nothing,
+  the load goes round them, and the panel says what it cost — and the what-if
+  shows them as one chip, "41 at random". **Draw again** takes out a fresh
+  set in their place, and **Put them back** returns them, leaving what was
+  taken out by hand. A rack is any rack with a cabled device in it, the
+  switches' racks included; a server inside a drawn rack still counts as a
+  server drawn only if it was drawn itself.
 - **from** — an amount of the generator's own, or **what a metric says**:
   pretend the servers make the load they measured. Any per-host metric that
   is loaded and ticked can be picked: a rate (`egress_gbps`, `tx_mbps`) is

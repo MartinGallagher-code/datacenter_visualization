@@ -36,7 +36,7 @@ import {
 import {
   betweenPicks, biggestChanges, bitRate, burstRisk, busiest, cableKeys, cablesOf, compareLoads, countersOf, devicesOf,
   adaptiveWeights, BUFFER_ALPHA, CONNECTION_LIMITS, EXPLAIN, explainResults, sendersOver, FRAMING_BYTES, IMIX_BYTES, PACKET_PICKS, contend, pathLatency, switchBuffer, switchLatency, switchPps, CONTEND_LIMITS, estimateFlows, findingKind, findingsOf, flowsOf, flowsOver, formatGbps, GEN_LIMITS,
-  generateFlows, hostCapacity, hostLimits, busyable, busyOf, layersOf, EXPLAIN_PATTERNS, pairedFlows,
+  generateFlows, hostCapacity, hostLimits, busyable, busyOf, layersOf, EXPLAIN_PATTERNS, pairedFlows, randomTakeouts, takeoutCandidates,
   hostsFor, hostsOf, loadable, loadUnit, mergeResults, packetGb, reachKinds, readsAsLoad, routeEstimate, routeTraffic,
   switchCapacity, switchLoads, testFlows, trafficKind, utilOf, viewOf as cableView,
 } from '../js/traffic.js';
@@ -2510,6 +2510,33 @@ link fabric role=server tor
   ok(z.short >= 2 && z.suspects.length === 0 && z.alone.length === 0
      && z.ownLoad.some((o) => o.el === servers[3] && o.busy === 0.5) && z.ownLoad.some((o) => o.el === servers[20]),
      `servers busy elsewhere are short by their own load, with no cable to blame  (${z.short} short, ${z.ownLoad.length} by their own load)`);
+}
+
+// ------------------------------------------------------- random take-outs
+// Servers, racks and switches taken out at random: so many, or a per cent,
+// among all of a kind or those a filter names, the same seed the same draw.
+{
+  const m = parseLayout(readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8'));
+  const pool = takeoutCandidates(m);
+  eq([pool.servers.length, pool.racks.length, pool.switches.length > 0], [32, 8, true],
+     'the pools: every server, every rack with a cabled device in it (the switches’ racks too), every switch');
+  ok(pool.servers.every((el) => !el.tagsAll.has('switch')) && pool.switches.every((el) => el.tagsAll.has('switch')),
+     'a server is never a switch, nor a switch a server');
+  const spec = { servers: { amount: 25, unit: '%' }, racks: { amount: 1 }, switches: { amount: 2, unit: '#' } };
+  const a = randomTakeouts(m, spec, 7);
+  eq([a.servers.length, a.racks.length, a.switches.length], [8, 1, 2], '25% of 32 servers is 8; one rack; two switches');
+  eq(new Set(a.servers).size, 8, 'never the same one twice');
+  eq(randomTakeouts(m, spec, 7).servers.map((el) => el.path), a.servers.map((el) => el.path), 'the same seed, the same draw');
+  ok(randomTakeouts(m, spec, 8).servers.map((el) => el.path).join() !== a.servers.map((el) => el.path).join(), 'a new seed, a new draw');
+  eq(randomTakeouts(m, { servers: { amount: 500 } }, 1).servers.length, 32, 'no more than there are');
+  const tors = randomTakeouts(m, { switches: { amount: 100, unit: '%' } }, 1, { switches: (el) => /^tor/.test(el.id) });
+  ok(tors.switches.length === tors.of.switches && tors.switches.every((el) => /^tor/.test(el.id)), 'among those a filter names');
+  // Taken out, a server's flows lose their route and its cables carry nothing.
+  const gen = generateFlows(m, { pattern: 'random', peers: 2, value: 10, unit: 'Gb/s', seed: 3 });
+  const before = routeTraffic(m, gen.flows, { split: 'even' });
+  const after = routeTraffic(m, gen.flows, { split: 'even', down: { els: a.servers, links: [] } });
+  ok(after.missed.count > before.missed.count && a.servers.every((el) => el.links.every((l) => !after.loads.get(l))),
+     `taken out, a server’s flows have no route and its cables carry nothing  (${after.missed.count} lost)`);
 }
 
 // ------------------------------------------------------------------ bursts

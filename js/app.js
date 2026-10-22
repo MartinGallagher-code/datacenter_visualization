@@ -22,7 +22,7 @@ import { attachHints, renderReference } from './hints.js';
 import { layoutFromHosts, matchesPattern, recordsSince, tailRecords } from './tsv.js';
 import { routesBetween } from './paths.js';
 import {
-  adaptiveWeights, betweenPicks, busyable, busyOf, explainResults, pathLatency, bitRate, cableKeys, CONNECTION_LIMITS, contend, countersOf, estimateFlows, flowsOf, flowsOver, GEN_LIMITS,
+  adaptiveWeights, betweenPicks, busyable, busyOf, randomTakeouts, TAKEOUT_KINDS, explainResults, pathLatency, bitRate, cableKeys, CONNECTION_LIMITS, contend, countersOf, estimateFlows, flowsOf, flowsOver, GEN_LIMITS,
   findingsOf, generateFlows, hostCapacity, hostsOf, pairedFlows, TARGETED, loadable, loadUnit, mergeResults, packetGb, readsAsLoad, REPLY_IDS, routeEstimate,
   routeTraffic, switchLoads, testFlows, trafficKind, viewOf,
 } from './traffic.js';
@@ -121,7 +121,17 @@ const state = {
   trafficCache: { model: null, base: null, counters: null, view: null, switches: null, findings: null, explain: null },
   showFindings: true,       // mark servers with findings on the floor plan
   // What-if: elements and cables taken out, by key so they survive a re-parse.
-  down: { els: new Set(), links: new Set() },
+  // `random`: the keys the last random take-out added, so a new draw, or
+  // putting them back, leaves what was taken out by hand alone.
+  down: { els: new Set(), links: new Set(), random: new Set() },
+  // Random take-outs: of each kind, how many (or what per cent) and among
+  // which (a filter), and the seed they are drawn with.
+  takeouts: {
+    servers: { amount: 0, unit: '#', among: '' },
+    racks: { amount: 0, unit: '#', among: '' },
+    switches: { amount: 0, unit: '#', among: '' },
+    seed: 1,
+  },
   capacityView: false,      // with no traffic shown, cable widths by gbps=
   maxLinksDrawn: 60000,
   warnings: [],
@@ -1117,6 +1127,44 @@ const actions = {
     invalidate();
   },
 
+  // Random take-outs: their settings, a draw (again, with `fresh`, under a
+  // new seed), and putting the drawn back. A draw replaces the last one and
+  // goes into the what-if beside anything taken out by hand.
+  setTakeouts(kind, patch) {
+    Object.assign(state.takeouts[kind], patch);
+    refreshPanels();
+  },
+  drawTakeouts(fresh = false) {
+    const t = state.takeouts;
+    if (fresh) t.seed = (t.seed + 1) >>> 0 || 1;
+    const match = {};
+    for (const kind of TAKEOUT_KINDS) {
+      if (!t[kind].among) continue;
+      try { match[kind] = compileQuery(t[kind].among, state) || undefined; } catch { match[kind] = () => false; }
+    }
+    const drawn = randomTakeouts(state.model, t, t.seed, match);
+    for (const key of state.down.random) state.down.els.delete(key);
+    state.down.random = new Set();
+    for (const kind of TAKEOUT_KINDS) {
+      for (const el of drawn[kind]) {
+        if (state.down.els.has(el.key)) continue;
+        state.down.els.add(el.key);
+        state.down.random.add(el.key);
+      }
+    }
+    if (state.down.random.size && state.traffic.view === 'model' && modelSource(false)) state.traffic.view = 'change';
+    state.version++;
+    refreshPanels();
+    invalidate();
+  },
+  putBackTakeouts() {
+    for (const key of state.down.random) state.down.els.delete(key);
+    state.down.random = new Set();
+    state.version++;
+    refreshPanels();
+    invalidate();
+  },
+
   // Random peers drawn again.
   rerollGen() {
     state.traffic.gen.seed = (state.traffic.gen.seed + 1) >>> 0 || 1;
@@ -1133,7 +1181,10 @@ const actions = {
     const key = isLink ? cableKeys(state.model).byLink.get(thing) : thing.key;
     if (!key) return;
     if (out) set.add(key);
-    else set.delete(key);
+    else {
+      set.delete(key);
+      state.down.random.delete(key);
+    }
     // Taking something out is asking where its traffic goes.
     if (out && state.traffic.view === 'model' && modelSource(false)) state.traffic.view = 'change';
     state.version++;
@@ -1144,6 +1195,7 @@ const actions = {
   putAllBack() {
     state.down.els.clear();
     state.down.links.clear();
+    state.down.random = new Set();
     state.version++;
     refreshPanels();
     invalidate();
@@ -1406,6 +1458,7 @@ const actions = {
     state.traffic.gen.on = false;
     state.down.els.clear();
     state.down.links.clear();
+    state.down.random = new Set();
     // Nothing left to reload, so nothing is being followed or re-read. The
     // timer in particular has to stop: it would refill the viewer that was
     // just emptied, seconds later, with no visible reason.

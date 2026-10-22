@@ -1295,6 +1295,25 @@ await test('the load generator', async () => {
   await page.locator('#load-gen input.gen-hosts').dispatchEvent('input');
   await page.locator('#load-gen input.gen-hosts').dispatchEvent('change');
   await page.waitForTimeout(300);
+  // Taken out at random: a number or a share of each kind, into the what-if.
+  await page.fill('#load-gen input.takeout-servers', '25');
+  await page.locator('#load-gen input.takeout-servers').dispatchEvent('change');
+  await page.locator('#load-gen select.takeout-unit-servers').selectOption('%');
+  await page.waitForTimeout(200);
+  ok(/→ 8/.test(await page.evaluate(() => document.querySelector('#load-gen .takeout-row').textContent)), '25% of 32 servers comes to 8');
+  await page.locator('#load-gen button.takeout-draw').click();
+  await page.waitForTimeout(500);
+  ok(/What-if: 8 taken out/.test(await panel()) && /8 at random/.test(await panel()), 'drawn into the what-if, as one chip');
+  ok(/\d+ flows lost their route/.test(await panel()), 'and what it cost');
+  await page.locator('#load-gen button.takeout-draw', { hasText: 'Draw again' }).click();
+  await page.waitForTimeout(400);
+  ok(/What-if: 8 taken out/.test(await panel()), 'a new draw replaces the last');
+  await page.locator('#load-gen button.takeout-back').click();
+  await page.waitForTimeout(400);
+  ok(!/What-if/.test(await panel()), 'and Put them back does');
+  await page.fill('#load-gen input.takeout-servers', '0');
+  await page.locator('#load-gen input.takeout-servers').dispatchEvent('change');
+  await page.waitForTimeout(200);
   const reaches = await page.locator('#load-gen select.gen-reach option').allTextContents();
   ok(reaches.includes('within its own rack') && reaches.includes('within its own row') && reaches.includes('outside its own row'),
      `within and outside, for each kind of container  (${reaches.join(' | ')})`);

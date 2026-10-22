@@ -11,6 +11,15 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.29.0 — 2026-10-22
+
+- **Take out at random**, in the Load generator: servers, racks and
+  switches, each by a number or a per cent of them, among all of a kind or
+  those a filter names. A draw goes into the what-if beside anything taken
+  out by hand -- the load goes round it, the change view and the panel say
+  what it cost -- shown as one chip however many it is. **Draw again** takes
+  out a fresh set in their place; **Put them back** returns only them.
+
 ## 1.28.0 — 2026-10-22
 
 - **Ranges and lists in a name**, in the filter bar and the Load

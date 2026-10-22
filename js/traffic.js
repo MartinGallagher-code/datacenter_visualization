@@ -2287,6 +2287,60 @@ export function generateFlows(model, gen, opts = {}) {
   return result(flows, { noCapacity });
 }
 
+// What can be taken out at random, and the order they are listed in.
+export const TAKEOUT_KINDS = ['servers', 'racks', 'switches'];
+
+/**
+ * What a random take-out may pick from, of each kind: the servers (the
+ * hosts, never a switch), the racks that hold a cabled device, and the
+ * switches -- each narrowed by its own filter where one is given.
+ */
+export function takeoutCandidates(model, match = {}) {
+  const cabled = (el) => !el.children.length && el.links.length;
+  const servers = hostsFor(model).hosts;
+  const racks = new Set();
+  const switches = [];
+  for (const el of model.all) {
+    if (!cabled(el)) continue;
+    if (el.tagsAll.has('switch')) switches.push(el);
+    for (let p = el.parent; p; p = p.parent) if (p.kind === 'rack') { racks.add(p); break; }
+  }
+  const pool = { servers, racks: [...racks], switches };
+  for (const kind of TAKEOUT_KINDS) if (match[kind]) pool[kind] = pool[kind].filter(match[kind]);
+  return pool;
+}
+
+/**
+ * Elements to take out at random: of each kind, `amount` of them, or that
+ * per cent of them (`unit: '%'`, rounded to the nearest whole one), drawn
+ * by `seed` -- the same seed, the same draw. A server inside a rack also
+ * drawn is drawn all the same: each kind counts on its own.
+ *
+ * @param spec   { servers|racks|switches: { amount, unit: '#'|'%' } }
+ * @param match  { servers|racks|switches: el -> bool } narrowing each kind
+ * @returns { servers, racks, switches: [el], of: { kind: how many there were } }
+ */
+export function randomTakeouts(model, spec, seed = 1, match = {}) {
+  const pool = takeoutCandidates(model, match);
+  const out = { of: {} };
+  TAKEOUT_KINDS.forEach((kind, k) => {
+    const list = pool[kind];
+    const want = spec && spec[kind] ? spec[kind] : {};
+    const amount = Math.max(0, Number(want.amount) || 0);
+    const count = Math.min(list.length, want.unit === '%' ? Math.round((list.length * Math.min(100, amount)) / 100) : Math.floor(amount));
+    out.of[kind] = list.length;
+    // A shuffle as far as it needs to go: the first `count` of a seeded
+    // Fisher-Yates are as random as the whole of it.
+    const order = list.slice();
+    for (let i = 0; i < count; i++) {
+      const j = i + Math.floor(mix((seed >>> 0) || 1, k * 104729 + 7, i) * (order.length - i));
+      [order[i], order[j]] = [order[j], order[i]];
+    }
+    out[kind] = order.slice(0, count);
+  });
+  return out;
+}
+
 /** A switch's shared packet buffer, in bytes: its buffer=, or null. */
 export function switchBuffer(el) {
   return el && el.attrs ? readBytes(el.attrs.buffer) : null;
