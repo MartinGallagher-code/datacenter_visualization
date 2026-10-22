@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.30.1** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.31.0** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -494,6 +494,15 @@ says why under it: a percentage or a latency does not add up along a path.)
   that could not be and why. **The inspector** gives the selected element's
   traffic out and in against its capacity, per net — for a rack, over its
   uplinks — and its busiest cables.
+- **Expected**, ticked in the inspector's Cable load, shows in place of the
+  selected element's own figures the average of every element of its class
+  that sits where it does, in every rack, row, room … (the kinds of
+  container it is in; the box says how many each finds): the tor b of the
+  first rack of every row, the third server of every rack. One draw of
+  random peers can give a ToR 400 or 600 where one like it carries 587 on
+  average; this is that average. Only the report changes — the load and how
+  it is routed are as set. Of one class means the same kind and `role=`, or
+  the same `model=` where roles are named per room.
 
 How a flow is routed, which is a model, not a measurement — the measurement
 is end to end, and only switch counters see the cables themselves:
@@ -947,11 +956,8 @@ off.
     the panel says how many peers fit when all-to-all is too many. The same
     seed picks the same peers; **New peers** draws them again. One draw
     can land a server's peers inside its own rack or not, so a switch's
-    figures move from draw to draw; **average over every draw** shows what
-    they come to on average instead: every host sends its total evenly to
-    every host it may reach — all-to-all at the same totals, which is
-    exactly the average of every draw — or, where that is too many flows,
-    the mean of eight draws, and the box says which;
+    figures move from draw to draw: the inspector's **expected** shows what
+    one like it carries on average (see *Cable load*, above);
   - **incast: all to one** — every host sends to one target, the first pick
     or else the selection: many to one, the pattern that fills a single
     server's cable. A rack as the target shares it over the rack's devices;

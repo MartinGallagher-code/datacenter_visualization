@@ -11,6 +11,18 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.31.0 — 2026-10-22
+
+- **Expected**, in the inspector's Cable load: the selected element's
+  figures as the average of every element of its class in its place -- the
+  tor b of the first rack of every row, in every rack, row, room, as chosen --
+  in place of its own. What one like it carries, rather than what this draw
+  of random peers gave this one. Only the report changes.
+- The Load generator's *average over every draw* (1.30.0) is gone: it
+  changed the load itself, where what was wanted was this report. Random
+  peers are one draw again, as before 1.30.0.
+- 1.30.1 and 1.31.0 share one pull request.
+
 ## 1.30.1 — 2026-10-22
 
 - Spaces inside a filter's brackets are only spacing: `ht11r01u[07, 09]`
