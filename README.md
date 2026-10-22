@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.27.1** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.28.0** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -2055,7 +2055,11 @@ quietly left stale.
   **Sections, and boolean logic.** `in:A01` is everything inside A01 (and A01
   itself) — by id or name, or by path, `in:H1/A01` for the A01 in hall H1.
   Values take ranges the way a layout writes them: `in:A[01..04]`,
-  `in:R[01..08,12]`, `name=u[01..10]`. Terms combine with `and`, `or` and
+  `in:R[01..08,12]`, `name=u[01..10]` — and so does a bare name:
+  `ht11r01u[7..11]`, `ht11r[01,05,07]u[7,9]`, each bracket a range (`7..11`),
+  a list (`1,5,9`) or both (`1..4,7`). A number in a range matches however
+  it is padded, so `u[7..11]` finds `u07` to `u11`; a range matches whole
+  names, so `u[5..6]` is not `u50`. Terms combine with `and`, `or` and
   `not` (any case) and parentheses: `not` binds tightest, then `and` (or a
   plain space), then `or`, so
 

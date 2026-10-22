@@ -1285,6 +1285,16 @@ await test('the load generator', async () => {
   await page.locator('#load-gen select.gen-reach').selectOption('rack');
   await page.waitForTimeout(400);
   ok(/768 flows/.test(await gen()), 'outside its own rack: no flow stays inside one');
+  // Hosts by name, with ranges and lists, however the numbers are padded.
+  await page.fill('#load-gen input.gen-hosts', 's[1..3] in:R0[1,3]');
+  await page.locator('#load-gen input.gen-hosts').dispatchEvent('input');
+  await page.waitForTimeout(300);
+  ok(/6 hosts/.test(await page.evaluate(() => document.querySelector('#load-gen .gen-count').textContent)),
+     `the hosts box takes ranges and lists in a name  (${await page.evaluate(() => document.querySelector('#load-gen .gen-count').textContent)})`);
+  await page.fill('#load-gen input.gen-hosts', '');
+  await page.locator('#load-gen input.gen-hosts').dispatchEvent('input');
+  await page.locator('#load-gen input.gen-hosts').dispatchEvent('change');
+  await page.waitForTimeout(300);
   const reaches = await page.locator('#load-gen select.gen-reach option').allTextContents();
   ok(reaches.includes('within its own rack') && reaches.includes('within its own row') && reaches.includes('outside its own row'),
      `within and outside, for each kind of container  (${reaches.join(' | ')})`);

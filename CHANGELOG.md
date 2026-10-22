@@ -11,6 +11,17 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.28.0 — 2026-10-22
+
+- **Ranges and lists in a name**, in the filter bar and the Load
+  generator's hosts box: `ht11r01u[7..11]`, `ht11r[01,05,07]u[7,9]` -- each
+  bracket a range, a list, or both. A bare term took none before; now it
+  matches the names (or a path) the brackets describe.
+- A number in a range matches however it is padded, wherever a filter takes
+  ranges: `u[7..11]` finds `u07` to `u11`, `in:R[1..3]` finds `R01` to `R03`.
+  A range matches whole names, so `u[5..6]` is never `u50`.
+- 1.27.0, 1.27.1 and 1.28.0 share one pull request.
+
 ## 1.27.1 — 2026-10-22
 
 - Fixed: the Load generator's **hosts** filter let switches in. A filter

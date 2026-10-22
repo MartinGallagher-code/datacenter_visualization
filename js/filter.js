@@ -27,7 +27,9 @@
 //                       in:H1/A01 -- and that element itself
 //
 // A value can be a range the way a layout writes one: in:A[01..04],
-// rack=R[01..08,12], name=u[1..4]x… -- each a list of alternatives.
+// rack=R[01..08,12], name=u[1..4]x… -- each a list of alternatives -- and so
+// can a bare term: ht11r01u[7..11], ht11r[01,05,07]u[7,9]. Numbers in a range
+// match however they are padded, so u[7..11] finds u07 and u11 alike.
 //
 // Matching an element implicitly reveals its ancestors, so a hit deep in a rack
 // does not leave the rack itself filtered out from around it.
@@ -38,7 +40,31 @@ import { globToRegExp, hasGlob, tagMatcher } from './select.js';
 // A value written as a layout range -- R[01..04], [a|b] -- is the list of
 // what it expands to; anything else is itself.
 const RANGE = /\[[^\]]*\]|^[^\s[\]]+\.\.[^\s[\]]+$/;
+const BRACKETS = /\[([^\]]*)\]/;
+const globBody = (text) => text.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.');
+
+/**
+ * A value with ranges in brackets as one pattern: each bracket its list of
+ * alternatives, the text between them glob-aware. Built a bracket at a time
+ * rather than by expanding every combination -- r[01..64]u[01..42] is 2,688
+ * names and one pattern -- and a number matches however it is padded, so
+ * [7..11] finds 07 as well as 7.
+ */
+function rangeRegExp(value) {
+  let body = '';
+  let rest = value;
+  let m;
+  while ((m = BRACKETS.exec(rest))) {
+    body += globBody(rest.slice(0, m.index));
+    const alts = expand(`[${m[1]}]`).map((a) => (/^\d+$/.test(a) ? `0*${String(Number(a))}` : globBody(a)));
+    body += `(?:${alts.join('|')})`;
+    rest = rest.slice(m.index + m[0].length);
+  }
+  return new RegExp(`^${body}${globBody(rest)}$`, 'i');
+}
+
 function patternsOf(value) {
+  if (BRACKETS.test(value)) return [rangeRegExp(value)];
   const list = RANGE.test(value) ? expand(value) : [value];
   return list.map((v) => globToRegExp(v));
 }
@@ -206,8 +232,9 @@ function compileAtom(atom, ctx) {
   // The glob also matches the full path, which is what makes `DH1/A/*` a
   // query; a path is not worth a substring search, since a substring of one
   // is almost always just a name.
-  if (hasGlob(atom)) {
-    const re = globToRegExp(atom);
+  // A range in brackets is one too: ht11r01u[7..11] is five names.
+  if (hasGlob(atom) || BRACKETS.test(atom)) {
+    const re = BRACKETS.test(atom) ? rangeRegExp(atom) : globToRegExp(atom);
     return (el) => re.test(el.path) || searchFields(el).some((part) => re.test(part));
   }
   return (el) => haystack(el).includes(lower);

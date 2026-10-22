@@ -2011,8 +2011,10 @@ export function renderLoadGen(state, host, actions, { unit } = {}) {
   hosts.value = g.hosts;
   hosts.placeholder = 'not +switch';
   hosts.title = 'Which devices send and receive, as a filter. Empty: every device with cables not tagged +switch.\n'
-    + 'and, or, not and ( ) combine terms; in:A01 is everything inside A01; ranges as in a layout:\n'
+    + 'and, or, not and ( ) combine terms; in:A01 is everything inside A01; ranges as in a layout,\n'
+    + 'in a name too, however its numbers are padded:\n'
     + '  role=server in:A[01..04]\n'
+    + '  ht11r[01,05,07]u[7..11]\n'
     + '  role=server (in:A01 or in:B[03..05]) not +gpu\n'
     + '  role=server in:H1/A01 or role=server in:H2/A07';
   // How many hosts the filter takes, as it is typed.
