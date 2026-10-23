@@ -106,7 +106,25 @@ const MIME = {
 const FEED_HEAD = 'Timestamp\thost\trtt\n';
 const FEED_ROW = (at, host, value) => `2026-09-16T12:00:${at}\t${host}\t${value}\n`;
 
+// Two racks of three named servers under one spine: small enough to read a
+// comparison off by eye.
+const TINY = [
+  'dc D',
+  '  row A',
+  '    rack r[1..2] u=10',
+  '      node h[1..3] role=server name={rack}{id}',
+  '      node t role=tor +switch name={rack}tor',
+  '  row S',
+  '    rack SP u=4',
+  '      node spine role=spine +switch',
+  'net nic gbps=25',
+  'net up gbps=100',
+  'link nic scope=rack role=server role=tor',
+  'link up role=tor role=spine',
+].join('\n');
+
 const fixtures = new Map([
+  ['/fx/tiny.dc', TINY],
   ['/fx/runs/monday/results.tsv', '!test alpha unit=A\nalpha\tDH1/A/R01/u01\t21\n'],
   ['/fx/runs/tuesday/results.tsv', '!test beta unit=B\nbeta\tDH1/A/R01/u02\t42\n'],
   // A file that grows between reads, which is what a live dashboard watches.
@@ -1351,6 +1369,108 @@ await test('the load generator', async () => {
   await page.waitForTimeout(400);
   eq(await count(), '16 hosts', 'and not: every server outside pod 1');
 }, { url: '?layout=examples/dual-plane.dc' });
+
+// The load, to run for real: each tool's files to save, and the commands to
+// run them. Nothing is run from the page.
+await test('the load as run files', async () => {
+  const files = () => page.evaluate(() => (document.querySelector('#load-gen .run-files') || {}).innerText || '');
+  await page.locator('#load-gen button', { hasText: 'Run' }).click();
+  await page.waitForTimeout(400);
+  await page.locator('#load-gen button.run-tool-mx').click();
+  await page.waitForTimeout(300);
+  ok(/two hosts are both called s1/.test(await files()), 'hosts of one name cannot go into a tool’s files, and it says why');
+  await openLayout([
+    'dc D',
+    '  row A',
+    '    rack r[1..2] u=10',
+    '      node h[1..3] role=server name={rack}{id}',
+    '      node t role=tor +switch name={rack}tor',
+    '  row S',
+    '    rack SP u=4',
+    '      node spine role=spine +switch',
+    'net nic gbps=25',
+    'net up gbps=100',
+    'link nic scope=rack role=server role=tor',
+    'link up role=tor role=spine',
+  ].join('\n'));
+  await page.waitForTimeout(400);
+  ok(/mx check --matrix matrix\.csv/.test(await files()) && /mx run --matrix matrix\.csv --for 60 --streams 1/.test(await files()),
+     `named hosts: mx’s file and the commands that run it  (${(await files()).split('\n').slice(-6).join(' | ')})`);
+  const [saved] = await Promise.all([page.waitForEvent('download'), page.locator('#load-gen button.run-save').first().click()]);
+  eq(saved.suggestedFilename(), 'matrix.csv', 'its file to save');
+  const text = readFileSync(await saved.path(), 'utf8');
+  ok(/^src\\dst,r1h1,r1h2,r1h3,r2h1,r2h2,r2h3$/m.test(text) && /^# tx_size=1472 rx_size=32 port=5300$/m.test(text),
+     'a matrix mx reads, by the layout’s names');
+  await page.fill('#load-gen input.run-seconds', '300');
+  await page.locator('#load-gen input.run-seconds').dispatchEvent('change');
+  await page.locator('#load-gen button.run-tool-iperf').click();
+  await page.waitForTimeout(300);
+  ok(/iperf_plan\.conf/.test(await files()) && /--run-id dcviz --for 300/.test(await files()), 'iperf’s plan, for as long as asked');
+  await page.locator('#load-gen button.run-tool-netmesh').click();
+  await page.waitForTimeout(300);
+  ok(/mesh\.csv/.test(await files()) && /netmesh makes no load/.test(await files()), 'netmesh’s mesh, and what it measures');
+  await page.locator('#load-gen button.run-tool-netmesh').click();
+  await page.waitForTimeout(300);
+  ok(!/mesh\.csv/.test(await files()), 'and its button again closes it');
+}, { url: '?layout=examples/dual-plane.dc' });
+
+// The real money: a run's results against the model that planned it. The
+// model's figures go out with the run files as expected.tsv; a run comes back
+// with r1h1's NIC giving 30% and r2h2 saying nothing.
+await test('a run against the model', async () => {
+  const panel = () => page.evaluate(() => (document.querySelector('#compare') || {}).innerText || '');
+  await page.locator('#load-gen select.gen-unit').selectOption('Gb/s');
+  await page.fill('#load-gen input.gen-value', '10');
+  await page.locator('#load-gen input.gen-value').dispatchEvent('change');
+  await page.locator('#load-gen button', { hasText: 'Run' }).click();
+  await page.waitForTimeout(400);
+  await page.locator('#load-gen button.run-tool-iperf').click();
+  await page.waitForTimeout(300);
+  ok(/cat expected\.tsv iperf_results\.tsv > iperf-run\.tsv/.test(await page.evaluate(() => document.querySelector('#load-gen .run-files').innerText)),
+     'the run files carry the model, and the step that collects the run with it');
+  const [saved] = await Promise.all([page.waitForEvent('download'),
+    page.locator('#load-gen button.run-save', { hasText: 'expected.tsv' }).click()]);
+  const expected = readFileSync(await saved.path(), 'utf8');
+  ok(/^model_gbps\tD\/A\/r1\/h1\t2\tpeer=D\/A\/r1\/h2/m.test(expected), 'expected.tsv: what the model expects each flow to carry');
+  const run = ['!test\tiperf_mbps_out\tunit=Mb/s'];
+  for (const line of expected.split('\n')) {
+    const [name, src, value, peer] = line.split('\t');
+    if (name !== 'model_gbps' || src.endsWith('r2/h2')) continue;
+    run.push(`iperf_mbps_out\t${src.split('/').slice(-2).join('')}\t${Math.round(Number(value) * 1000 * (src.endsWith('r1/h1') ? 0.3 : 1))}\tpeer=${peer.slice(5)}`);
+  }
+  fixtures.set('/fx/run/expected.tsv', expected);
+  fixtures.set('/fx/run/iperf_results.tsv', `${run.join('\n')}\n`);
+  ok(/Measured against the model/.test(await panel()) || !(await panel()), 'nothing to compare until a run is loaded');
+
+  await page.goto(`${base}?layout=fx/tiny.dc&results=fx/run/expected.tsv,fx/run/iperf_results.tsv`, { waitUntil: 'networkidle' });
+  await page.waitForTimeout(500);
+  const text = await panel();
+  ok(/43Gb\/s measured, of the 50Gb\/s the model expects on the same flows: 86%/.test(text), `how much of it arrived  (${text.split('\n')[3]})`);
+  ok(/30 flows, within 15%: 20 as modeled, 5 short of it, 5 not measured/.test(text), 'flow by flow');
+  ok(/r1h1 sent 3Gb\/s of 10Gb\/s \(30%\) · 5 of its 5 flows, every one/.test(text), 'the host that fell short, once, by its name');
+  ok(/Where to look[\s\S]*r1h1 sending: 5 of its 5 flows short/.test(text), 'and where to look: everything it sends');
+  ok(/1 host with nothing measured\s*r2h2/.test(text), 'and the host that said nothing');
+  await page.fill('#compare input.compare-tolerance', '80');
+  await page.locator('#compare input.compare-tolerance').dispatchEvent('change');
+  await page.waitForTimeout(300);
+  ok(/25 as modeled/.test(await panel()), 'a wider tolerance: 30% of the model is within 80% of it');
+  await page.locator('#compare button.compare-show').click();
+  await page.waitForTimeout(500);
+  const names = await page.evaluate(() => document.querySelector('#overlays').innerText);
+  ok(/as a share of what the model expects/.test(names), 'shown on the floor plan as overlays of its own');
+
+  // Against the load generator itself, with no expected.tsv.
+  await page.goto(`${base}?layout=fx/tiny.dc&results=fx/run/iperf_results.tsv`, { waitUntil: 'networkidle' });
+  await page.waitForTimeout(400);
+  ok(/load the run’s expected\.tsv, or run the load generator/.test(await panel()), 'with no model, it says where to get one');
+  await page.locator('#load-gen select.gen-unit').selectOption('Gb/s');
+  await page.fill('#load-gen input.gen-value', '10');
+  await page.locator('#load-gen input.gen-value').dispatchEvent('change');
+  await page.locator('#load-gen button', { hasText: 'Run' }).click();
+  await page.waitForTimeout(500);
+  ok(/5 short of it/.test(await panel()) && /the load generator now/.test(await page.evaluate(() => document.querySelector('#compare select.compare-against').innerText)),
+     'the load generator as it is set now is a model too');
+}, { url: '?layout=fx/tiny.dc' });
 
 // A hundred thousand flows and more: a random load at a few hundred peers
 // over a few hundred servers. Spreading that many flows into one push()

@@ -18,6 +18,7 @@ import {
   biggestChanges, burstRisk, busiest, busyable, cablesOf, counterparts, counterpartLevels, EXPLAIN_PATTERNS, takeoutCandidates, TAKEOUT_KINDS, formatGbps, hostLimits, GEN_UNITS, hostsFor, loadable, loadUnit, PATTERNS, reachKinds, TARGETED,
   CONNECTION_LIMITS, IMIX_BYTES, PACKET_PICKS, PER_CONNECTION, readsAsLoad, SPLITS, SPREADS, TEST_UNITS, trafficKind, utilOf,
 } from './traffic.js';
+import { RUN_LABELS, RUN_TOOLS, runReadme } from './runfiles.js';
 
 const el = (tag, cls, text) => {
   const n = document.createElement(tag);
@@ -2075,10 +2076,82 @@ export function renderLoadGen(state, host, actions, { unit } = {}) {
         + 'tag the switches, or name the hosts (role=server)'));
     }
     box.append(lines);
+    if (!run.why && run.flows) box.append(renderRunFiles(state, actions));
   } else if (!g.on) {
     box.append(el('p', 'muted cable-note', 'A made-up load, routed and drawn like a metric: no results file needed.'));
   }
   host.append(box);
+}
+
+/**
+ * Run it for real: the load as each tool's own input files, to save, and the
+ * commands that run it and export what it measured for this viewer. Nothing
+ * is run from here -- the files and the commands are handed over.
+ */
+function renderRunFiles(state, actions) {
+  const r = state.runFiles;
+  const wrap = el('div', 'run-files');
+  wrap.append(el('div', 'load-title', 'Run it for real'));
+  const row = el('div', 'gen-row');
+  const seconds = el('input', 'run-seconds');
+  seconds.type = 'number';
+  seconds.min = '1';
+  seconds.step = '1';
+  seconds.value = String(r.seconds);
+  seconds.title = 'How long the commands run the load for';
+  seconds.addEventListener('change', () => {
+    const v = Math.floor(Number(seconds.value));
+    if (v >= 1) actions.setRunFiles({ seconds: v });
+    else seconds.value = String(r.seconds);
+  });
+  row.append(el('span', null, 'the files and commands to run it for'), seconds, el('span', null, 's with'));
+  const tools = el('div', 'btnrow');
+  for (const tool of RUN_TOOLS) {
+    const button = el('button', `run-tool run-tool-${tool}${r.tool === tool ? ' active' : ''}`, RUN_LABELS[tool]);
+    button.title = r.tool === tool ? 'Close' : `The files ${RUN_LABELS[tool]} needs for this load, and the commands to run it`;
+    button.addEventListener('click', () => actions.setRunFiles({ tool: r.tool === tool ? '' : tool }));
+    tools.append(button);
+  }
+  wrap.append(row, tools);
+  if (!r.tool) return wrap;
+
+  const { built, why, dropped } = actions.runFilesFor(r.tool);
+  if (dropped) {
+    wrap.append(el('div', 'muted', `${dropped.toLocaleString()} flow${dropped === 1 ? '' : 's'} to or from something taken out `
+      + 'left out: nothing runs there'));
+  }
+  if (why) {
+    wrap.append(el('div', 'bad run-why', why));
+    return wrap;
+  }
+  const notes = el('div', 'muted run-notes');
+  for (const line of built.notes) notes.append(el('div', null, line));
+  wrap.append(notes);
+  const files = el('div', 'run-file-list');
+  for (const file of built.files) {
+    const item = el('div', 'gen-row');
+    const save = el('button', 'run-save', file.name);
+    save.title = `Save ${file.name}`;
+    save.addEventListener('click', () => actions.saveText(file.name, file.text));
+    item.append(save, el('span', 'muted', file.note));
+    files.append(item);
+  }
+  wrap.append(files);
+  const commands = el('pre', 'run-commands', built.commands.join('\n'));
+  wrap.append(commands);
+  const buttons = el('div', 'btnrow');
+  const copy = el('button', 'run-copy', 'Copy commands');
+  copy.addEventListener('click', () => {
+    const text = built.commands.join('\n');
+    if (navigator.clipboard) navigator.clipboard.writeText(text).then(() => { copy.textContent = 'Copied'; }, () => {});
+  });
+  const readme = `README-${r.tool}.txt`;
+  const notesButton = el('button', 'run-readme', `Save ${readme}`);
+  notesButton.title = 'The notes and the commands above, as a file to keep with the others';
+  notesButton.addEventListener('click', () => actions.saveText(readme, runReadme(built)));
+  buttons.append(copy, notesButton);
+  wrap.append(buttons);
+  return wrap;
 }
 
 /**
@@ -2207,6 +2280,193 @@ export function renderFindings(state, host, actions) {
     }
     box.append(chips);
   }
+  host.append(box);
+}
+
+// ------------------------------------------------- measured against the model
+
+const COMPARE_SHOWN = 10;
+const nameCounts = (() => {
+  const cache = new WeakMap();
+  return (model) => {
+    let m = cache.get(model);
+    if (!m) {
+      m = new Map();
+      for (const x of model.all) m.set(x.name, (m.get(x.name) || 0) + 1);
+      cache.set(model, m);
+    }
+    return m;
+  };
+})();
+
+/**
+ * Measured against the model: a run's results set beside what the model said
+ * that load would do -- how much of it arrived, which flows fell short or beat
+ * it, which hosts said nothing, which of the model's own bottlenecks held as
+ * it said, and the cables the short flows have in common.
+ */
+export function renderCompare(state, host, actions) {
+  host.textContent = '';
+  const { measured, models, gen } = actions.compareChoices();
+  if (!measured.length && !models.length) return;
+  const c = state.compare;
+  const box = el('div', 'compare');
+  const head = el('div', 'picks-head');
+  head.append(el('strong', null, 'Measured against the model'));
+  box.append(head);
+
+  const cmp = actions.comparison();
+  const row = el('div', 'gen-row');
+  if (measured.length) {
+    const pick = el('select', 'compare-measured');
+    for (const o of measured) {
+      const opt = el('option', null, `${o.name}${o.source ? ` (${o.source})` : ''}`);
+      opt.value = o.key;
+      opt.selected = cmp.measured === o;
+      pick.append(opt);
+    }
+    pick.title = 'The run’s figure: what each flow (peer=) or host sent';
+    pick.addEventListener('change', () => actions.setCompare({ measured: pick.value }));
+    row.append(pick);
+  }
+  const against = el('select', 'compare-against');
+  const choices = [...(gen ? [['gen', 'the load generator now']] : []), ...models.map((o) => [o.key, o.source || o.name])];
+  for (const [value, text] of choices) {
+    const opt = el('option', null, text);
+    opt.value = value;
+    opt.selected = cmp.against === 'gen' ? value === 'gen' : cmp.against && cmp.against.key === value;
+    against.append(opt);
+  }
+  against.title = 'The model: an expected.tsv saved with the run files, or the load generator as it is set now';
+  against.addEventListener('change', () => actions.setCompare({ against: against.value }));
+  const tol = el('input', 'compare-tolerance');
+  tol.type = 'number';
+  tol.min = '0';
+  tol.step = '1';
+  tol.value = String(c.tolerance);
+  tol.title = 'How far either side of the model still counts as as modeled';
+  tol.addEventListener('change', () => {
+    const v = Number(tol.value);
+    if (Number.isFinite(v) && v >= 0) actions.setCompare({ tolerance: v });
+    else tol.value = String(c.tolerance);
+  });
+  row.append(el('span', null, 'against'), against, el('span', null, 'within'), tol, el('span', null, '%'));
+  box.append(row);
+  if (!choices.length && !cmp.why) box.append(el('div', 'muted', 'load the run’s expected.tsv, or run the load generator as the run was made'));
+  if (cmp.why) {
+    box.append(el('div', 'muted compare-why', cmp.why));
+    host.append(box);
+    return;
+  }
+
+  const { result, unit } = cmp;
+  const fmt = (v) => (v === null || v === undefined ? '—' : unit === 'Gb/s' ? `${formatGbps(v)}b/s` : formatPps(v));
+  // By the name the run knew it by, where it is one of its own and no other
+  // element has it; else by where it is.
+  const names = nameCounts(state.model);
+  const shortPath = (node) => (node.name && node.name !== node.id && names.get(node.name) === 1 ? node.name : node.path);
+  const pct = (got, want) => (want > 0 ? `${Math.round((got / want) * 100)}%` : '—');
+  const summary = el('div', 'cable-summary compare-summary');
+  for (const line of cmp.summary) summary.append(el('div', null, line));
+  for (const line of cmp.caveats) summary.append(el('div', 'muted', line));
+  box.append(summary);
+
+  const section = (title, cls) => {
+    box.append(el('div', `load-title ${cls || ''}`, title));
+  };
+  const flowLine = (f, cls) => {
+    const line = el('div', `compare-flow ${cls || ''}`);
+    const name = el('span', 'pick', `${shortPath(f.src)} → ${shortPath(f.dst)}`);
+    name.title = `${f.src.path} → ${f.dst.path}\nClick to go to the sender`;
+    name.addEventListener('click', () => actions.focus(f.src));
+    line.append(name, el('span', null, ` ${fmt(f.measured)} of ${fmt(f.model)} (${pct(f.measured, f.model)})`));
+    if (f.held.size) line.append(el('span', 'muted', ` · the model holds it at ${[...f.held][0]}`));
+    return line;
+  };
+
+  if (cmp.suspects.length) {
+    section('Where to look: what the short flows have in common');
+    const n = (v) => String(Math.round(v * 10) / 10);
+    for (const x of cmp.suspects) {
+      const line = el('div', 'compare-suspect');
+      const label = x.kind === 'cable' ? `${shortPath(x.from)} → ${shortPath(x.to)}` : shortPath(x.el);
+      const name = el('span', 'pick', label);
+      name.title = `${x.kind === 'cable' ? `${x.from.path} → ${x.to.path}` : x.el.path}\nClick to go to it`;
+      name.addEventListener('click', () => actions.focus(x.el));
+      let text;
+      if (x.kind === 'place') {
+        text = ` ${x.side === 'src' ? 'sending' : 'taking in'}: ${n(x.short)} of its ${n(x.short + x.fine)} flows short`
+          + `${x.el.children.length ? ` -- look at its switches and uplinks` : ''}`;
+      } else {
+        text = ` ${n(x.short)} of the ${x.of} short flows ${x.kind === 'switch' ? 'pass it' : 'cross it'}, ${n(x.fine)} that kept up`;
+      }
+      line.append(name, el('span', null, text));
+      box.append(line);
+    }
+  }
+  // A host off the model as a whole is one line, not one per flow; the flows
+  // listed are those off it on their own.
+  const offHosts = result.hosts.filter((h) => (h.verdict === 'short' || h.verdict === 'over') && h.model > 0)
+    .sort((a, b) => Math.abs(b.measured / b.model - 1) - Math.abs(a.measured / a.model - 1));
+  const whole = new Set(offHosts.filter((h) => !h.flows || h.short + h.over >= h.measuredFlows).map((h) => h.el));
+  if (offHosts.length) {
+    section(`${offHosts.length.toLocaleString()} host${offHosts.length === 1 ? '' : 's'} off the model by more than ${result.tolerance}%`);
+    for (const h of offHosts.slice(0, COMPARE_SHOWN)) {
+      const line = el('div', `compare-flow ${h.verdict === 'short' ? 'bad' : 'over'}`);
+      const name = el('span', 'pick', shortPath(h.el));
+      name.title = `${h.el.path}\nClick to go to it`;
+      name.addEventListener('click', () => actions.focus(h.el));
+      const flows = h.flows ? ` · ${h.short + h.over} of its ${h.measuredFlows} flows${whole.has(h.el) ? ', every one' : ''}` : '';
+      line.append(name, el('span', null, ` sent ${fmt(h.measured)} of ${fmt(h.model)} (${pct(h.measured, h.model)})${flows}`));
+      box.append(line);
+    }
+    if (offHosts.length > COMPARE_SHOWN) box.append(el('div', 'muted', `+${(offHosts.length - COMPARE_SHOWN).toLocaleString()} more`));
+  }
+  const loose = result.unexpected.filter((f) => !whole.has(f.src));
+  if (loose.length) {
+    section(`${loose.length.toLocaleString()} flow${loose.length === 1 ? '' : 's'} off the model by more than ${result.tolerance}%`);
+    for (const f of loose.slice(0, COMPARE_SHOWN)) box.append(flowLine(f, f.verdict === 'short' ? 'bad' : 'over'));
+    if (loose.length > COMPARE_SHOWN) box.append(el('div', 'muted', `+${(loose.length - COMPARE_SHOWN).toLocaleString()} more`));
+  }
+  if (!offHosts.length && !loose.length && result.flows.length && result.counts.ok) {
+    box.append(el('div', 'compare-good', `every measured flow within ${result.tolerance}% of the model`));
+  }
+
+  if (result.asModeled.length) {
+    section('As the model said');
+    for (const [at, n] of result.asModeled.slice(0, 3)) {
+      box.append(el('div', 'muted', `${n.toLocaleString()} flow${n === 1 ? '' : 's'} held back at ${at}, and measured so`));
+    }
+  }
+  if (result.silent.length) {
+    section(`${result.silent.length.toLocaleString()} host${result.silent.length === 1 ? '' : 's'} with nothing measured`, 'bad');
+    const chips = el('div', 'picks-list');
+    for (const node of result.silent.slice(0, COMPARE_SHOWN)) {
+      const chip = el('span', 'pick', shortPath(node));
+      chip.title = `${node.path}: the model has it sending, and the run has nothing from it\nClick to go to it`;
+      chip.addEventListener('click', () => actions.focus(node));
+      chips.append(chip);
+    }
+    if (result.silent.length > COMPARE_SHOWN) chips.append(el('span', 'muted', `+${result.silent.length - COMPARE_SHOWN} more`));
+    box.append(chips);
+  }
+  const surprises = result.losses.filter((l) => !l.expected);
+  if (result.losses.length) {
+    section(`${result.losses.length.toLocaleString()} flow${result.losses.length === 1 ? '' : 's'} losing more than 1%`, surprises.length ? 'bad' : '');
+    box.append(el('div', surprises.length ? 'bad' : 'muted', surprises.length
+      ? `${surprises.length.toLocaleString()} where the model has room: loss the load does not explain`
+      : 'every one where the model holds the flow back: full cables drop'));
+  }
+
+  const buttons = el('div', 'btnrow');
+  const show = el('button', 'compare-show', 'Show on the floor plan');
+  show.title = 'Each host, and each flow, as a share of what the model expects -- loaded as overlays of their own';
+  show.addEventListener('click', () => actions.showComparison());
+  const save = el('button', 'compare-save', 'Save vs-model.tsv');
+  save.title = 'The comparison as a results file: load it later, beside the layout, to see it again';
+  save.addEventListener('click', () => actions.saveComparison());
+  buttons.append(show, save);
+  box.append(buttons);
   host.append(box);
 }
 

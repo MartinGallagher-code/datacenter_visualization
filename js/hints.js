@@ -45,6 +45,7 @@ const ELEMENT_KEYS = [
   ['rxcost=', 'how many times more receiving costs a server’s CPU than sending (1 unless set): rxcost=1.3'],
   ['busy=', 'the share of a server’s CPU other work takes, off its cpugbps=: busy=20%'],
   ['model=', 'a device defined by a model line: its settings and tags are this one’s too'],
+  ['addr=', 'the address the load tools reach a server at, when its name does not resolve: addr=10.1.{rack}.{id}'],
 ];
 
 const NET_KEYS = [
@@ -436,6 +437,7 @@ const REFERENCE = [
     ['node s[1..16] role=server cpugbps=310', 'its CPU sends and receives 310 Gb/s together: 200 out and 110 in, or 155 each way'],
     ['node s[1..16] role=server cpugbps=310 rxcost=1.3', 'receiving costs it 1.3 times what sending does'],
     ['node s7 role=server busy=20%', 'a fifth of its CPU taken by other work: 248 of its 310 left for the network'],
+    ['node s7 role=server addr=10.1.7.15', 'the address iperf, mx and netmesh reach it at; its name is still what their results say'],
     ['node leaf +switch ports=32x400,2x10', 'its ports: its cables are checked against them, breakout included (one 400G port is four 100G cables)'],
     ['node leaf +switch breakout=200:64,100:128,50:144', 'the datasheet’s most ports of each speed: no more cables of a speed than that'],
     ['gbps=1 gbps=10 gbps=25 gbps=40 gbps=100 gbps=200 gbps=400 gbps=800', 'common port speeds', true],

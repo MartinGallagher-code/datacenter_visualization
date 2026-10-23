@@ -53,6 +53,12 @@ import {
   droppedLayoutsNotice, layoutNotice, prefixed, resultsFileNotice,
 } from '../js/report.js';
 import {
+  buildIperf, buildMx, buildNetmesh, hostToken, rateGroups, runPairs, runProblem, runReadme, runWhy,
+} from '../js/runfiles.js';
+import {
+  compareHosts, compareRuns, comparisonResults, modelPairs, modelResults, suspects,
+} from '../js/compare.js';
+import {
   columnLetter, commonDomain, layoutFromHosts, looksLikeTime, looksLikeWideTsv, markOf,
   matchesPattern, placeHost, readWideTsv, recordsSince, slugify, splitFlow, splitPreamble,
   tailRecords, timeValue,
@@ -4996,6 +5002,228 @@ if (python.error) {
     recomputeStats(o, plan);
     eq(tailIsOdd(o.stats), false, `examples: ${o.name} is a shape σ describes fairly`);
   }
+}
+
+// ------------------------------------------- the load, to run for real
+{
+  const m = parseLayout([
+    'dc D',
+    '  row A',
+    '    rack r[1..2] u=10 addr=10.9.9.9',
+    '      node h[1..3] role=server name={rack}{id}',
+    '      node t role=tor +switch name={rack}tor',
+    '  row S',
+    '    rack SP u=4',
+    '      node spine role=spine +switch',
+    'net nic gbps=25',
+    'net up gbps=100',
+    'link nic scope=rack role=server role=tor',
+    'link up role=tor role=spine',
+  ].join('\n'));
+  const h = (name) => m.all.find((el) => el.name === name);
+  eq(hostToken(h('r1h1')), { name: 'r1h1', addr: 'r1h1' }, 'a host the tools reach by its name, when it has no addr=');
+  ok(!('addr' in h('r1h1').attrsEff), 'and a rack’s addr= is not its servers’: an address is one device’s');
+
+  const all = generateFlows(m, { pattern: 'all', value: 10, unit: 'Gb/s' });
+  const made = runPairs(all.flows, { toGbps: 1, unit: 'Gb/s', sized: null });
+  eq([made.hosts.length, made.pairs.length], [6, 30], 'every directed pair of six hosts, once');
+  eq(made.hosts.map((el) => el.name), ['r1h1', 'r1h2', 'r1h3', 'r2h1', 'r2h2', 'r2h3'], 'in the layout’s order');
+  ok(made.pairs.every((p) => Math.abs(p.gbps - 2) < 1e-9 && p.pps === 0 && p.back === 0), 'each at its share of the host’s 10 Gb/s');
+  const twice = runPairs([...all.flows, ...all.flows], { toGbps: 1, unit: 'Gb/s', sized: null });
+  ok(twice.pairs.length === 30 && twice.pairs.every((p) => Math.abs(p.gbps - 4) < 1e-9), 'two flows of a pair are one pair, at both rates');
+  const out = runPairs(all.flows, { toGbps: 1, unit: 'Gb/s', sized: null }, (el) => el.parent === h('r1h1').parent);
+  eq([out.pairs.length, out.dropped, out.hosts.length], [6, 24, 3], 'flows to or from a host taken out are left out: nothing runs there');
+
+  // Sized: requests a second, each answered the other way.
+  const sizedFlows = all.flows.slice(0, 1).map((f) => ({ ...f, value: 1000 }));
+  const sized = runPairs(sizedFlows, { toGbps: null, unit: 'pps', sized: { bytes: 434, reply: 934 } });
+  const there = sized.pairs.find((p) => p.src === sizedFlows[0].src);
+  const back = sized.pairs.find((p) => p.dst === sizedFlows[0].src);
+  ok(there.pps === 1000 && Math.abs(there.gbps - 0.004) < 1e-12, 'a sized request: its rate, and its bits at its size on the wire');
+  ok(back && back.pps === 0 && Math.abs(back.back - 0.008) < 1e-12, 'and its reply, the other way, for a tool that has to send it itself');
+  const odd = runPairs(all.flows, { toGbps: null, unit: '%', sized: null });
+  eq(runWhy('mx', odd), 'this load is neither a bit rate nor a packet rate, so no tool can send it', 'a load in neither has nothing to give a tool');
+  const unsized = runPairs(all.flows, { toGbps: null, unit: 'pps', sized: null });
+  ok(runWhy('iperf', unsized).startsWith('iperf sends a bit rate'), 'iperf needs bits; packets with no size are mx’s');
+  eq(runWhy('mx', unsized), '', 'which mx takes as they are');
+
+  eq(runProblem([h('r1h1')]), 'the load needs two hosts or more to run', 'a load needs two ends');
+  const same = parseLayout('dc D\n  rack a\n    node u1 role=server\n  rack b\n    node u1 role=server');
+  ok(runProblem(same.all.filter((el) => el.kind === 'node')).startsWith('two hosts are both called u1'),
+     'two hosts of one name cannot both be in a tool’s files: their results would land on one');
+  const spaced = parseLayout('dc D\n  node a role=server name="web 1"\n  node b role=server');
+  ok(runProblem(spaced.all.filter((el) => el.kind === 'node')).includes('web 1'), 'nor a name with a space in it');
+
+  // mx: a bit rate in full frames, a cell a pair's requests a second.
+  const mx = buildMx(made, { seconds: 90, connections: 2, summary: 'all to all' });
+  const matrix = mx.files[0];
+  eq(matrix.name, 'matrix.csv', 'mx gets matrix.csv');
+  const lines = matrix.text.trim().split('\n');
+  eq(lines.slice(0, 3), [
+    '# mx matrix v1 -- rows send, columns receive, cells are packets/sec',
+    '# tx_size=1472 rx_size=32 port=5300',
+    '# every request of 1472 bytes is answered with a reply of 32 bytes',
+  ], 'in mx’s own header, a bit rate sent as full frames');
+  const head = lines.find((l) => l.startsWith('src\\dst,'));
+  eq(head, 'src\\dst,r1h1,r1h2,r1h3,r2h1,r2h2,r2h3', 'its hosts by the layout’s names');
+  const pps = String(Math.round((2e9) / ((1472 + 66) * 8)));
+  eq(lines[lines.length - 1], `r2h3,${[pps, pps, pps, pps, pps].join(',')}`, 'each cell 2 Gb/s in requests a second, the diagonal left empty');
+  ok(lines.filter((l) => l.startsWith('#')).every((l) => !/=/.test(l) || /^# tx_size=/.test(l)),
+     'and no comment says key=value but the config, which mx would read as config');
+  ok(mx.commands.includes('mx run --matrix matrix.csv --for 90 --streams 2'), 'run for as long as asked, a socket a connection');
+  ok(mx.commands.includes('mx export --matrix matrix.csv --peers -o mx_results.tsv'), 'and exported for the viewer');
+  const mxSized = buildMx(sized, {});
+  ok(mxSized.files[0].text.includes('# tx_size=434 rx_size=934 port=5300') && mxSized.files[0].text.includes(',1000'),
+     'a sized load keeps its sizes and its rate');
+
+  // iperf: one rate, one plan; -b each stream's share.
+  const ip = buildIperf(made, { seconds: 90, connections: 2 });
+  eq(ip.files.map((f) => f.name), ['iperf_plan.conf'], 'one rate is one plan');
+  const plan = ip.files[0].text;
+  ok(plan.includes('# port=5001 duration=90 streams=2\n# bandwidth=1000M\n'), 'its -b each of its two streams’ half of 2 Gb/s');
+  ok(plan.includes('src\\dst,r1h1,r1h2,r1h3,r2h1,r2h2,r2h3\nr1h1,,x,x,x,x,x\n'), 'and a pair grid of who sends to whom');
+  ok(ip.commands.includes('iperf-orchestrator run --plan iperf_plan.conf --servers iperf_plan.conf --run-id dcviz --for 90'),
+     'run from the plan, which is its own server list');
+  ok(ip.commands.some((c) => c.startsWith('iperf-orchestrator export-overlay') && c.includes('--overlay-out iperf_results.tsv')),
+     'and exported for the viewer');
+  // Two rates: two plans, two ports, one results file.
+  const mixed = { ...made, pairs: made.pairs.map((p, i) => ({ ...p, gbps: i % 2 ? 2 : 5 })) };
+  const ip2 = buildIperf(mixed, {});
+  eq(ip2.files.map((f) => f.name), ['iperf_plan-1.conf', 'iperf_plan-2.conf'], 'two rates are two plans');
+  ok(ip2.files[0].text.includes('# port=5001') && ip2.files[1].text.includes('# port=5002'), 'each on a port of its own, to run at once');
+  const exports = ip2.commands.filter((c) => c.includes('export-overlay'));
+  ok(exports.length === 2 && !exports[0].includes('--overlay-append') && exports[1].includes('--overlay-append'),
+     'both into one results file');
+  const many = rateGroups(made.pairs.map((p, i) => ({ ...p, gbps: 1 + i })));
+  ok(many.length <= 8 && many.reduce((n, g) => n + g.pairs.length, 0) === 30, 'thirty rates are binned into eight runs at most, every pair in one');
+  // An address the tools reach a host at, and the map back to its name.
+  const addressed = parseLayout('dc D\n  node a role=server addr=10.0.0.1\n  node b role=server\nnet n gbps=10\nlink n name=a name=b');
+  const madeA = runPairs(generateFlows(addressed, { pattern: 'all', value: 1, unit: 'Gb/s' }).flows, { toGbps: 1, unit: 'Gb/s', sized: null });
+  const ipA = buildIperf(madeA, {});
+  ok(ipA.files[0].text.includes('src\\dst,10.0.0.1,b'), 'iperf tests the address');
+  eq(ipA.files[1] && ipA.files[1].text, '10.0.0.1 a\n', 'and hosts.map turns it back into the layout’s name');
+  ok(ipA.commands.some((c) => c.includes('--overlay-map hosts.map')), 'for the export');
+  ok(buildMx(madeA, {}).files[0].text.includes('src\\dst,a=10.0.0.1,b'), 'mx takes name=address');
+
+  // netmesh: the pairs, probed.
+  const nm = buildNetmesh(made, { seconds: 90, connections: 2 });
+  ok(nm.files[0].text.includes('# size=64 port=5310 pps=10 flows=2\n'), 'netmesh probes ten a second, over as many flows as connections');
+  ok(nm.files[0].text.includes('\nr1h1,,10,10,10,10,10\n'), 'every pair of the load');
+  ok(nm.commands.some((c) => c.includes('--baseline 20 -- mx run')), 'idle first and then under the load, if you give it one');
+  const readme = runReadme(nm);
+  ok(readme.includes('mesh.csv') && readme.includes('dcimport netmesh_results.tsv --tidy reports/'), 'the notes and commands, as a file to keep');
+}
+
+// ------------------------------------------- a run against the model
+{
+  const m = parseLayout([
+    'dc D',
+    '  row A',
+    '    rack r[1..2] u=10',
+    '      node h[1..3] role=server name={rack}{id}',
+    '      node t role=tor +switch name={rack}tor',
+    '  row S',
+    '    rack SP u=4',
+    '      node spine role=spine +switch',
+    'net nic gbps=25',
+    'net up gbps=10',
+    'link nic scope=rack role=server role=tor',
+    'link up role=tor role=spine',
+  ].join('\n'));
+  const h = (name) => m.all.find((el) => el.name === name);
+  // Every server 10 Gb/s, 2 to each of the other five: each rack's 10G uplink
+  // is asked for 18G, so the cross-rack flows are held back there.
+  const gen = generateFlows(m, { pattern: 'all', value: 10, unit: 'Gb/s' });
+  const c = contend(m, gen.flows, { split: 'even', toGbps: 1 });
+  const pairs = modelPairs(c.contention.flows, 1);
+  const pairOf = (a, b) => pairs.get(`${h(a).key}\u0000${h(b).key}`);
+  eq(pairs.size, 30, 'the model’s flows, a pair each');
+  ok(Math.abs(pairOf('r1h1', 'r1h2').gbps - 2) < 1e-9 && pairOf('r1h1', 'r1h2').held.size === 0, 'inside a rack, all it asked');
+  const cross = pairOf('r1h1', 'r2h1');
+  ok(Math.abs(cross.offered - 2) < 1e-9 && Math.abs(cross.gbps - 10 / 9) < 1e-6 && cross.held.size === 1,
+     `across the uplink, less than it asked, and where it is held  (${cross.gbps.toFixed(3)} of 2 at ${[...cross.held]})`);
+  ok([...cross.held][0].includes('→'), 'held at a cable, named by its ends');
+
+  // The model's figures as a file, and back.
+  const text = modelResults(pairs, { summary: 'all to all', tool: 'iperf-orchestrator' });
+  ok(/^!test\tmodel_gbps\tunit=Gb\/s/m.test(text) && /^!test\tmodel_held\t/m.test(text), 'the model as a results file');
+  ok(!/model_pps/.test(text), 'with no requests a second for a bit rate it was not asked in');
+  const raw = new Map();
+  const warnings = [];
+  parseResults(text, raw, warnings, 'expected.tsv');
+  eq(warnings, [], 'a file the viewer reads without a warning');
+  const back = flowsOf(bindOverlay([...raw.values()].find((o) => o.name === 'model_gbps'), m), m).flows;
+  ok(back.length === 30 && back.every((f) => Math.abs(f.value - pairs.get(`${f.src.key}\u0000${f.dst.key}`).gbps) < 1e-4),
+     'and its flows read back as the model had them');
+  ok(/^model_out_gbps\t/m.test(text) && /^model_in_gbps\t/m.test(text), 'with what each host sends and takes in');
+  const mxText = modelResults(pairs, { txBytes: 1472 });
+  const pps = /^model_pps\t\S+\t(\S+)\tpeer=\S+r1\/h2/m.exec(mxText);
+  ok(pps && Math.abs(Number(pps[1]) - 2e9 / (1538 * 8)) < 1, 'a packet tool’s requests a second, at its packet size');
+
+  // A run: r1h1's NIC gives 30%, r2h2 says nothing, one flow nobody planned.
+  const model = new Map([...pairs].map(([key, p]) => [key, { src: p.src, dst: p.dst, value: p.gbps, offered: p.offered, held: p.held }]));
+  const measured = new Map();
+  for (const [key, p] of pairs) {
+    if (p.src === h('r2h2')) continue;
+    measured.set(key, { src: p.src, dst: p.dst, value: p.gbps * (p.src === h('r1h1') ? 0.3 : 1.05) });
+  }
+  measured.set(`${h('r1h2').key}\u0000${h('r1tor').key}`, { src: h('r1h2'), dst: h('r1tor'), value: 1 });
+  const lossy = new Map([[`${h('r2h1').key}\u0000${h('r1h1').key}`, { src: h('r2h1'), dst: h('r1h1'), value: 3 }],
+    [`${h('r1h2').key}\u0000${h('r1h3').key}`, { src: h('r1h2'), dst: h('r1h3'), value: 2 }]]);
+  const r = compareRuns(model, measured, { tolerance: 15, lossy });
+  eq(r.counts, { short: 5, over: 0, missing: 5, unplanned: 1, ok: 20 }, 'each flow as modeled, short, missing or unplanned');
+  eq(r.silent.map((el) => el.name), ['r2h2'], 'a host the model has sending and the run has nothing from');
+  eq(r.hosts.find((x) => x.el === h('r1h1')).verdict, 'short', 'and a host short as a whole');
+  ok(r.unexpected.length === 5 && r.unexpected.every((f) => f.src === h('r1h1')), 'the unexpected are what fell short');
+  eq(r.asModeled.map(([at, n]) => [at.replace(/D\/[AS]\//g, ''), n]).sort(), [['SP/spine→r2/t', 6], ['r2/t→SP/spine', 6]],
+     'the uplinks held as the model said, the way the flows go along them -- the six of each the run kept to');
+  eq(r.losses.map((l) => [l.src.name, l.expected]), [['r1h2', false], ['r2h1', true]],
+     'loss where the model has room comes first: the loss the load does not explain');
+  const strict = compareRuns(model, measured, { tolerance: 1 });
+  ok(strict.counts.over === 20 && strict.counts.ok === 0, 'a tolerance of 1%: the 5% over is over');
+
+  // Where to look: everything r1h1 sends fell short, and nothing else did --
+  // the host, rather than its cable inside it.
+  const route = (flows) => routeTraffic(m, flows, { split: 'even' }).loads;
+  const brief = (list) => list.map((x) => (x.kind === 'cable' ? `${x.from.name}→${x.to.name}` : `${x.kind}:${x.el.name}:${x.side || ''}`));
+  const found = suspects(r, route);
+  eq(brief(found), ['place:r1h1:src'], 'the host whose every flow fell short, and nothing a good flow shares');
+  eq([found[0].short, found[0].fine], [5, 0], 'five short, none that kept up');
+  eq(suspects(compareRuns(model, model), route), [], 'no short flows, nowhere to look');
+  // A rack's uplink at 30%: what leaves r1 for r2 fell short, what stays
+  // inside it did not, so neither rack is the answer -- the cable is.
+  const uplink = new Map();
+  for (const [key, p] of pairs) {
+    const away = p.src.parent === h('r1h1').parent && p.dst.parent !== h('r1h1').parent;
+    uplink.set(key, { src: p.src, dst: p.dst, value: p.gbps * (away ? 0.3 : 1) });
+  }
+  eq(brief(suspects(compareRuns(model, uplink), route)), ['r1tor→spine', 'spine→r2tor'],
+     'the uplink the short flows cross, and the way on; not the racks, whose own flows kept up');
+  // Two whole racks short: the racks, not each of their servers.
+  const racks = new Map();
+  for (const [key, p] of pairs) racks.set(key, { src: p.src, dst: p.dst, value: p.gbps * (p.src.name.startsWith('r1') ? 0.3 : 1) });
+  const rackFound = suspects(compareRuns(model, racks), route);
+  ok(rackFound[0].kind === 'place' && rackFound[0].el === h('r1h1').parent && rackFound.every((x) => x.kind !== 'place' || x.el === h('r1h1').parent || x.side === 'dst'),
+     `a rack whose every flow fell short is named once, its servers and switches inside it  (${brief(rackFound)})`);
+
+  // Per host only.
+  const hosts = compareHosts(new Map([[h('r1h1'), 10], [h('r1h2'), 10]]), new Map([[h('r1h1'), 9.5], [h('r2h1'), 3]]));
+  eq(hosts.map((x) => [x.el.name, x.verdict]), [['r1h1', 'ok'], ['r1h2', 'silent'], ['r2h1', 'unplanned']], 'hosts alone: as modeled, silent, unplanned');
+
+  // The comparison as a file: each host's share of the model, and its verdict.
+  const vs = comparisonResults(r, { summary: ['a line'] });
+  ok(/^vs_model_pct\t\S+r1\/h1\t30$/m.test(vs) && /^vs_model_verdict\t\S+r2\/h2\tsilent$/m.test(vs), 'what each host sent as a share of the model, and its verdict');
+  const raw2 = new Map();
+  const w2 = [];
+  parseResults(vs, raw2, w2, 'vs-model.tsv');
+  eq(w2, [], 'a file the viewer reads back');
+
+  // The run files carry the model, and the step that brings the run back with it.
+  const made = runPairs(gen.flows, { toGbps: 1, unit: 'Gb/s', sized: null });
+  const withModel = buildMx(made, { expected: text });
+  ok(withModel.files.some((f) => f.name === 'expected.tsv' && f.text === text), 'a tool’s files carry the model’s figures');
+  ok(withModel.commands.includes('cat expected.tsv mx_results.tsv > mx-run.tsv'), 'and collect the run with them into one file');
+  ok(!buildMx(made, {}).files.some((f) => f.name === 'expected.tsv'), 'not when there is no model to carry');
 }
 
 // ------------------------------------------------------------------ version
