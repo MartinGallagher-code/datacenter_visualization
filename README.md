@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.32.0** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.33.0** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -1115,6 +1115,70 @@ layout, and compare what ran with what the model said.
   model's queues predict.
 - Flows to or from anything taken out are left out — nothing runs there —
   and the panel says how many.
+- **`expected.tsv`** goes with every tool's files: the model's own figures
+  for this load — what it expects each flow to carry (`model_gbps`, and
+  `model_pps` for a packet tool), what each was asked to send
+  (`model_offered_gbps`), where it holds one back (`model_held`), and what
+  each host sends and takes in. The last command collects the run with it:
+
+  ```sh
+  cat expected.tsv mx_results.tsv > mx-run.tsv    # one file: the run and its model
+  ```
+
+#### Measured against the model
+
+Load a run's results — `mx-run.tsv`, or `expected.tsv` and the tool's export
+side by side — and **Measured against the model**, under Findings, sets
+what was measured beside what the model said that load would do. It
+appears whenever a rate is loaded, per flow (`peer=`: `iperf_mbps_out`,
+`mx_peer_pps`) or per host (`mx_egress_gbps`), and compares it against
+the `expected.tsv` loaded with it, or the load generator as it is set now
+when there is none.
+
+```
+43Gb/s measured, of the 50Gb/s the model expects on the same flows: 86%
+30 flows, within 15%: 20 as modeled, 5 short of it, 5 not measured
+6 hosts: 4 as modeled, 1 short, 0 over, 1 with nothing measured
+Where to look: what the short flows have in common
+  r1h1 sending: 5 of its 5 flows short
+1 host off the model by more than 15%
+  r1h1 sent 3Gb/s of 10Gb/s (30%) · 5 of its 5 flows, every one
+1 host with nothing measured
+  r2h2
+```
+
+- **Flow by flow**, within the tolerance either side of the model (15%
+  unless changed) is *as modeled*, below it *short*, above it *beat it*; a
+  flow the model has and the run does not is *not measured*, one the run
+  has and the model does not *not in the model*. A bit rate is compared in
+  Gb/s; requests a second (`mx_peer_pps`) in requests a second — or, against
+  a model in Gb/s, as bits at the size the run says its packets were.
+- **Against the model, not against what was asked.** A flow the model
+  expects to be held back at a full cable, measured so, is as modeled, and
+  listed under **As the model said** with where it was held. What falls
+  short of *that* is the surprise.
+- **Where to look**: what the short flows have in common that the flows
+  that kept up do not. A *place* — a server, a rack, a row — nearly every
+  flow out of (or into) fell short: one slow server names the server, four
+  racks at half rate name the four racks. A *switch* or a *cable* most
+  short flows cross and almost no good one does: a rack's uplink, when what
+  leaves the rack falls short and what stays inside it does not. The widest
+  place is kept over everything inside it — a rack, not its ToR, its
+  uplinks and its sixteen servers. Each side is routed one flow a pair, so
+  below the layer where routes fork it is as exact as the layout; above it,
+  as good as the model's guess of which way each flow hashed. Hosts are
+  named as the run named them where that name is theirs alone.
+- **Hosts**: one that is off the model as a whole is one line, not a line
+  per flow; one the model has sending and the run has nothing from is
+  listed apart — usually a host that never ran its part.
+- **Loss**: with a loss metric per flow loaded too (`mx_peer_loss`,
+  netmesh's `loss`), flows losing more than 1% are counted, and those
+  where the model has room called out: loss the load does not explain.
+- **Show on the floor plan** loads the comparison as overlays of its own —
+  `vs_model_pct`, each host's sending as a share of what the model expects,
+  red to blue around 100%; `vs_model_flow_pct`, each flow's; and
+  `vs_model_verdict` — and **Save vs-model.tsv** keeps them as a file to
+  load again later, its summary and suspects in its header.
 
 #### Hovering a cable
 

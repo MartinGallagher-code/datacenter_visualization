@@ -56,6 +56,9 @@ import {
   buildIperf, buildMx, buildNetmesh, hostToken, rateGroups, runPairs, runProblem, runReadme, runWhy,
 } from '../js/runfiles.js';
 import {
+  compareHosts, compareRuns, comparisonResults, modelPairs, modelResults, suspects,
+} from '../js/compare.js';
+import {
   columnLetter, commonDomain, layoutFromHosts, looksLikeTime, looksLikeWideTsv, markOf,
   matchesPattern, placeHost, readWideTsv, recordsSince, slugify, splitFlow, splitPreamble,
   tailRecords, timeValue,
@@ -5109,6 +5112,118 @@ if (python.error) {
   ok(nm.commands.some((c) => c.includes('--baseline 20 -- mx run')), 'idle first and then under the load, if you give it one');
   const readme = runReadme(nm);
   ok(readme.includes('mesh.csv') && readme.includes('dcimport netmesh_results.tsv --tidy reports/'), 'the notes and commands, as a file to keep');
+}
+
+// ------------------------------------------- a run against the model
+{
+  const m = parseLayout([
+    'dc D',
+    '  row A',
+    '    rack r[1..2] u=10',
+    '      node h[1..3] role=server name={rack}{id}',
+    '      node t role=tor +switch name={rack}tor',
+    '  row S',
+    '    rack SP u=4',
+    '      node spine role=spine +switch',
+    'net nic gbps=25',
+    'net up gbps=10',
+    'link nic scope=rack role=server role=tor',
+    'link up role=tor role=spine',
+  ].join('\n'));
+  const h = (name) => m.all.find((el) => el.name === name);
+  // Every server 10 Gb/s, 2 to each of the other five: each rack's 10G uplink
+  // is asked for 18G, so the cross-rack flows are held back there.
+  const gen = generateFlows(m, { pattern: 'all', value: 10, unit: 'Gb/s' });
+  const c = contend(m, gen.flows, { split: 'even', toGbps: 1 });
+  const pairs = modelPairs(c.contention.flows, 1);
+  const pairOf = (a, b) => pairs.get(`${h(a).key}\u0000${h(b).key}`);
+  eq(pairs.size, 30, 'the model’s flows, a pair each');
+  ok(Math.abs(pairOf('r1h1', 'r1h2').gbps - 2) < 1e-9 && pairOf('r1h1', 'r1h2').held.size === 0, 'inside a rack, all it asked');
+  const cross = pairOf('r1h1', 'r2h1');
+  ok(Math.abs(cross.offered - 2) < 1e-9 && Math.abs(cross.gbps - 10 / 9) < 1e-6 && cross.held.size === 1,
+     `across the uplink, less than it asked, and where it is held  (${cross.gbps.toFixed(3)} of 2 at ${[...cross.held]})`);
+  ok([...cross.held][0].includes('→'), 'held at a cable, named by its ends');
+
+  // The model's figures as a file, and back.
+  const text = modelResults(pairs, { summary: 'all to all', tool: 'iperf-orchestrator' });
+  ok(/^!test\tmodel_gbps\tunit=Gb\/s/m.test(text) && /^!test\tmodel_held\t/m.test(text), 'the model as a results file');
+  ok(!/model_pps/.test(text), 'with no requests a second for a bit rate it was not asked in');
+  const raw = new Map();
+  const warnings = [];
+  parseResults(text, raw, warnings, 'expected.tsv');
+  eq(warnings, [], 'a file the viewer reads without a warning');
+  const back = flowsOf(bindOverlay([...raw.values()].find((o) => o.name === 'model_gbps'), m), m).flows;
+  ok(back.length === 30 && back.every((f) => Math.abs(f.value - pairs.get(`${f.src.key}\u0000${f.dst.key}`).gbps) < 1e-4),
+     'and its flows read back as the model had them');
+  ok(/^model_out_gbps\t/m.test(text) && /^model_in_gbps\t/m.test(text), 'with what each host sends and takes in');
+  const mxText = modelResults(pairs, { txBytes: 1472 });
+  const pps = /^model_pps\t\S+\t(\S+)\tpeer=\S+r1\/h2/m.exec(mxText);
+  ok(pps && Math.abs(Number(pps[1]) - 2e9 / (1538 * 8)) < 1, 'a packet tool’s requests a second, at its packet size');
+
+  // A run: r1h1's NIC gives 30%, r2h2 says nothing, one flow nobody planned.
+  const model = new Map([...pairs].map(([key, p]) => [key, { src: p.src, dst: p.dst, value: p.gbps, offered: p.offered, held: p.held }]));
+  const measured = new Map();
+  for (const [key, p] of pairs) {
+    if (p.src === h('r2h2')) continue;
+    measured.set(key, { src: p.src, dst: p.dst, value: p.gbps * (p.src === h('r1h1') ? 0.3 : 1.05) });
+  }
+  measured.set(`${h('r1h2').key}\u0000${h('r1tor').key}`, { src: h('r1h2'), dst: h('r1tor'), value: 1 });
+  const lossy = new Map([[`${h('r2h1').key}\u0000${h('r1h1').key}`, { src: h('r2h1'), dst: h('r1h1'), value: 3 }],
+    [`${h('r1h2').key}\u0000${h('r1h3').key}`, { src: h('r1h2'), dst: h('r1h3'), value: 2 }]]);
+  const r = compareRuns(model, measured, { tolerance: 15, lossy });
+  eq(r.counts, { short: 5, over: 0, missing: 5, unplanned: 1, ok: 20 }, 'each flow as modeled, short, missing or unplanned');
+  eq(r.silent.map((el) => el.name), ['r2h2'], 'a host the model has sending and the run has nothing from');
+  eq(r.hosts.find((x) => x.el === h('r1h1')).verdict, 'short', 'and a host short as a whole');
+  ok(r.unexpected.length === 5 && r.unexpected.every((f) => f.src === h('r1h1')), 'the unexpected are what fell short');
+  eq(r.asModeled.map(([at, n]) => [at.replace(/D\/[AS]\//g, ''), n]).sort(), [['SP/spine→r2/t', 6], ['r2/t→SP/spine', 6]],
+     'the uplinks held as the model said, the way the flows go along them -- the six of each the run kept to');
+  eq(r.losses.map((l) => [l.src.name, l.expected]), [['r1h2', false], ['r2h1', true]],
+     'loss where the model has room comes first: the loss the load does not explain');
+  const strict = compareRuns(model, measured, { tolerance: 1 });
+  ok(strict.counts.over === 20 && strict.counts.ok === 0, 'a tolerance of 1%: the 5% over is over');
+
+  // Where to look: everything r1h1 sends fell short, and nothing else did --
+  // the host, rather than its cable inside it.
+  const route = (flows) => routeTraffic(m, flows, { split: 'even' }).loads;
+  const brief = (list) => list.map((x) => (x.kind === 'cable' ? `${x.from.name}→${x.to.name}` : `${x.kind}:${x.el.name}:${x.side || ''}`));
+  const found = suspects(r, route);
+  eq(brief(found), ['place:r1h1:src'], 'the host whose every flow fell short, and nothing a good flow shares');
+  eq([found[0].short, found[0].fine], [5, 0], 'five short, none that kept up');
+  eq(suspects(compareRuns(model, model), route), [], 'no short flows, nowhere to look');
+  // A rack's uplink at 30%: what leaves r1 for r2 fell short, what stays
+  // inside it did not, so neither rack is the answer -- the cable is.
+  const uplink = new Map();
+  for (const [key, p] of pairs) {
+    const away = p.src.parent === h('r1h1').parent && p.dst.parent !== h('r1h1').parent;
+    uplink.set(key, { src: p.src, dst: p.dst, value: p.gbps * (away ? 0.3 : 1) });
+  }
+  eq(brief(suspects(compareRuns(model, uplink), route)), ['r1tor→spine', 'spine→r2tor'],
+     'the uplink the short flows cross, and the way on; not the racks, whose own flows kept up');
+  // Two whole racks short: the racks, not each of their servers.
+  const racks = new Map();
+  for (const [key, p] of pairs) racks.set(key, { src: p.src, dst: p.dst, value: p.gbps * (p.src.name.startsWith('r1') ? 0.3 : 1) });
+  const rackFound = suspects(compareRuns(model, racks), route);
+  ok(rackFound[0].kind === 'place' && rackFound[0].el === h('r1h1').parent && rackFound.every((x) => x.kind !== 'place' || x.el === h('r1h1').parent || x.side === 'dst'),
+     `a rack whose every flow fell short is named once, its servers and switches inside it  (${brief(rackFound)})`);
+
+  // Per host only.
+  const hosts = compareHosts(new Map([[h('r1h1'), 10], [h('r1h2'), 10]]), new Map([[h('r1h1'), 9.5], [h('r2h1'), 3]]));
+  eq(hosts.map((x) => [x.el.name, x.verdict]), [['r1h1', 'ok'], ['r1h2', 'silent'], ['r2h1', 'unplanned']], 'hosts alone: as modeled, silent, unplanned');
+
+  // The comparison as a file: each host's share of the model, and its verdict.
+  const vs = comparisonResults(r, { summary: ['a line'] });
+  ok(/^vs_model_pct\t\S+r1\/h1\t30$/m.test(vs) && /^vs_model_verdict\t\S+r2\/h2\tsilent$/m.test(vs), 'what each host sent as a share of the model, and its verdict');
+  const raw2 = new Map();
+  const w2 = [];
+  parseResults(vs, raw2, w2, 'vs-model.tsv');
+  eq(w2, [], 'a file the viewer reads back');
+
+  // The run files carry the model, and the step that brings the run back with it.
+  const made = runPairs(gen.flows, { toGbps: 1, unit: 'Gb/s', sized: null });
+  const withModel = buildMx(made, { expected: text });
+  ok(withModel.files.some((f) => f.name === 'expected.tsv' && f.text === text), 'a tool’s files carry the model’s figures');
+  ok(withModel.commands.includes('cat expected.tsv mx_results.tsv > mx-run.tsv'), 'and collect the run with them into one file');
+  ok(!buildMx(made, {}).files.some((f) => f.name === 'expected.tsv'), 'not when there is no model to carry');
 }
 
 // ------------------------------------------------------------------ version

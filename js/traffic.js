@@ -1424,7 +1424,8 @@ export function contend(model, flows, opts = {}) {
     if (short) held++;
     const at = short ? sum.at : null;
     if (at && at.stream) streams.set(at.el, (streams.get(at.el) || 0) + 1);
-    return { ...flow, value: sum.carried, wanted: sum.wanted, heldAt: at ? at.link || at.el : null };
+    // heldDir: which way along a cable that holds it, 0 from its a end.
+    return { ...flow, value: sum.carried, wanted: sum.wanted, heldAt: at ? at.link || at.el : null, heldDir: at && at.link ? at.dir : null };
   });
   // The full cables, by how many flows each holds back each way, and the
   // full switches by how many in all. One filled exactly, holding nothing

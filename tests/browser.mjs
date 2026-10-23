@@ -106,7 +106,25 @@ const MIME = {
 const FEED_HEAD = 'Timestamp\thost\trtt\n';
 const FEED_ROW = (at, host, value) => `2026-09-16T12:00:${at}\t${host}\t${value}\n`;
 
+// Two racks of three named servers under one spine: small enough to read a
+// comparison off by eye.
+const TINY = [
+  'dc D',
+  '  row A',
+  '    rack r[1..2] u=10',
+  '      node h[1..3] role=server name={rack}{id}',
+  '      node t role=tor +switch name={rack}tor',
+  '  row S',
+  '    rack SP u=4',
+  '      node spine role=spine +switch',
+  'net nic gbps=25',
+  'net up gbps=100',
+  'link nic scope=rack role=server role=tor',
+  'link up role=tor role=spine',
+].join('\n');
+
 const fixtures = new Map([
+  ['/fx/tiny.dc', TINY],
   ['/fx/runs/monday/results.tsv', '!test alpha unit=A\nalpha\tDH1/A/R01/u01\t21\n'],
   ['/fx/runs/tuesday/results.tsv', '!test beta unit=B\nbeta\tDH1/A/R01/u02\t42\n'],
   // A file that grows between reads, which is what a live dashboard watches.
@@ -1395,6 +1413,64 @@ await test('the load as run files', async () => {
   await page.waitForTimeout(300);
   ok(!/mesh\.csv/.test(await files()), 'and its button again closes it');
 }, { url: '?layout=examples/dual-plane.dc' });
+
+// The real money: a run's results against the model that planned it. The
+// model's figures go out with the run files as expected.tsv; a run comes back
+// with r1h1's NIC giving 30% and r2h2 saying nothing.
+await test('a run against the model', async () => {
+  const panel = () => page.evaluate(() => (document.querySelector('#compare') || {}).innerText || '');
+  await page.locator('#load-gen select.gen-unit').selectOption('Gb/s');
+  await page.fill('#load-gen input.gen-value', '10');
+  await page.locator('#load-gen input.gen-value').dispatchEvent('change');
+  await page.locator('#load-gen button', { hasText: 'Run' }).click();
+  await page.waitForTimeout(400);
+  await page.locator('#load-gen button.run-tool-iperf').click();
+  await page.waitForTimeout(300);
+  ok(/cat expected\.tsv iperf_results\.tsv > iperf-run\.tsv/.test(await page.evaluate(() => document.querySelector('#load-gen .run-files').innerText)),
+     'the run files carry the model, and the step that collects the run with it');
+  const [saved] = await Promise.all([page.waitForEvent('download'),
+    page.locator('#load-gen button.run-save', { hasText: 'expected.tsv' }).click()]);
+  const expected = readFileSync(await saved.path(), 'utf8');
+  ok(/^model_gbps\tD\/A\/r1\/h1\t2\tpeer=D\/A\/r1\/h2/m.test(expected), 'expected.tsv: what the model expects each flow to carry');
+  const run = ['!test\tiperf_mbps_out\tunit=Mb/s'];
+  for (const line of expected.split('\n')) {
+    const [name, src, value, peer] = line.split('\t');
+    if (name !== 'model_gbps' || src.endsWith('r2/h2')) continue;
+    run.push(`iperf_mbps_out\t${src.split('/').slice(-2).join('')}\t${Math.round(Number(value) * 1000 * (src.endsWith('r1/h1') ? 0.3 : 1))}\tpeer=${peer.slice(5)}`);
+  }
+  fixtures.set('/fx/run/expected.tsv', expected);
+  fixtures.set('/fx/run/iperf_results.tsv', `${run.join('\n')}\n`);
+  ok(/Measured against the model/.test(await panel()) || !(await panel()), 'nothing to compare until a run is loaded');
+
+  await page.goto(`${base}?layout=fx/tiny.dc&results=fx/run/expected.tsv,fx/run/iperf_results.tsv`, { waitUntil: 'networkidle' });
+  await page.waitForTimeout(500);
+  const text = await panel();
+  ok(/43Gb\/s measured, of the 50Gb\/s the model expects on the same flows: 86%/.test(text), `how much of it arrived  (${text.split('\n')[3]})`);
+  ok(/30 flows, within 15%: 20 as modeled, 5 short of it, 5 not measured/.test(text), 'flow by flow');
+  ok(/r1h1 sent 3Gb\/s of 10Gb\/s \(30%\) · 5 of its 5 flows, every one/.test(text), 'the host that fell short, once, by its name');
+  ok(/Where to look[\s\S]*r1h1 sending: 5 of its 5 flows short/.test(text), 'and where to look: everything it sends');
+  ok(/1 host with nothing measured\s*r2h2/.test(text), 'and the host that said nothing');
+  await page.fill('#compare input.compare-tolerance', '80');
+  await page.locator('#compare input.compare-tolerance').dispatchEvent('change');
+  await page.waitForTimeout(300);
+  ok(/25 as modeled/.test(await panel()), 'a wider tolerance: 30% of the model is within 80% of it');
+  await page.locator('#compare button.compare-show').click();
+  await page.waitForTimeout(500);
+  const names = await page.evaluate(() => document.querySelector('#overlays').innerText);
+  ok(/as a share of what the model expects/.test(names), 'shown on the floor plan as overlays of its own');
+
+  // Against the load generator itself, with no expected.tsv.
+  await page.goto(`${base}?layout=fx/tiny.dc&results=fx/run/iperf_results.tsv`, { waitUntil: 'networkidle' });
+  await page.waitForTimeout(400);
+  ok(/load the run’s expected\.tsv, or run the load generator/.test(await panel()), 'with no model, it says where to get one');
+  await page.locator('#load-gen select.gen-unit').selectOption('Gb/s');
+  await page.fill('#load-gen input.gen-value', '10');
+  await page.locator('#load-gen input.gen-value').dispatchEvent('change');
+  await page.locator('#load-gen button', { hasText: 'Run' }).click();
+  await page.waitForTimeout(500);
+  ok(/5 short of it/.test(await panel()) && /the load generator now/.test(await page.evaluate(() => document.querySelector('#compare select.compare-against').innerText)),
+     'the load generator as it is set now is a model too');
+}, { url: '?layout=fx/tiny.dc' });
 
 // A hundred thousand flows and more: a random load at a few hundred peers
 // over a few hundred servers. Spreading that many flows into one push()

@@ -12,7 +12,7 @@ import {
   readingText, recomputeDomain, recomputeStats,
 } from './results.js';
 import {
-  cableTip, fillWarnings, renderBuild, renderCableLoad, renderFindings, renderInspector, renderLive, renderLoadGen,
+  cableTip, fillWarnings, formatPps, renderBuild, renderCableLoad, renderCompare, renderFindings, renderInspector, renderLive, renderLoadGen,
   hostTip, renderNets, renderNotices, renderOverlays, renderTree, renderWarnings, switchTip,
 } from './ui.js';
 import {
@@ -24,10 +24,13 @@ import { routesBetween } from './paths.js';
 import {
   adaptiveWeights, betweenPicks, busyable, busyOf, randomTakeouts, TAKEOUT_KINDS, explainResults, pathLatency, bitRate, cableKeys, CONNECTION_LIMITS, contend, countersOf, estimateFlows, flowsOf, flowsOver, GEN_LIMITS,
   findingsOf, generateFlows, hostCapacity, hostsOf, pairedFlows, TARGETED, loadable, loadUnit, mergeResults, packetGb, readsAsLoad, REPLY_IDS, routeEstimate,
-  routeTraffic, switchLoads, testFlows, trafficKind, viewOf,
+  routeTraffic, switchLoads, testFlows, trafficKind, viewOf, formatGbps,
 } from './traffic.js';
 import { VERSION } from './version.js';
-import { RUN_BUILDERS, runPairs, runWhy } from './runfiles.js';
+import { mxSizes, RUN_BUILDERS, RUN_LABELS, runPairs, runWhy } from './runfiles.js';
+import {
+  compareHosts, compareRuns, comparisonResults, DEFAULT_TOLERANCE, modelPairs, modelResults, suspects,
+} from './compare.js';
 import {
   classify, directoryFromDataTransfer, ensureRead, getFile, pathLabel, pickDirectory,
   namedAsData, probeSizes, readable, readDir, renderBrowser, supportsDirectoryPicker,
@@ -136,6 +139,11 @@ const state = {
   // The load generator's run files: which tool's are open, and for how long
   // the commands run it.
   runFiles: { tool: '', seconds: 60 },
+  // Measured against the model: which metric of a run, against which model
+  // -- 'gen' for the load generator as it stands, or the key of a loaded
+  // expected.tsv's model_gbps -- and how far either side still counts as
+  // as modeled, in per cent. '' picks for itself.
+  compare: { measured: '', against: '', tolerance: DEFAULT_TOLERANCE },
   capacityView: false,      // with no traffic shown, cable widths by gbps=
   maxLinksDrawn: 60000,
   warnings: [],
@@ -865,6 +873,7 @@ function refreshPanels() {
   renderLoadGen(state, $('load-gen'), actions, { unit: genUnit() });
   renderCableLoad(state, $('cable-load'), actions);
   renderFindings(state, $('findings'), actions);
+  renderCompare(state, $('compare'), actions);
   renderInspector(state, $('inspector'), actions);
   $('overlay-hint').textContent = state.activeOverlays.length > 1
     ? `— ${state.activeOverlays.length} shown side by side`
@@ -1275,13 +1284,43 @@ const actions = {
     const key = [tool, state.runFiles.seconds, state.traffic.connections, [...state.down.els].sort().join('\u0001')].join('\u0002');
     let cached = RUN_FILES_CACHE.get(run);
     if (!cached) RUN_FILES_CACHE.set(run, (cached = new Map()));
-    if (!cached.has(key)) cached.set(key, buildRunFiles(tool, run));
+    if (!cached.has(key)) cached.set(key, buildRunFiles(tool, view.model));
     return cached.get(key);
   },
 
   // Hand a file to the browser to save.
   saveText(name, text) {
     saveText(name, text);
+  },
+
+  // Measured against the model: what to compare, and how close is as modeled.
+  setCompare(patch) {
+    state.compare = { ...state.compare, ...patch };
+    refreshPanels();
+  },
+  compareChoices() {
+    return compareChoices();
+  },
+  comparison() {
+    const cmp = comparison();
+    return cmp.result ? { ...cmp, summary: compareSummary(cmp) } : cmp;
+  },
+  // The comparison as overlays: each host, and flow, as a share of the model.
+  showComparison() {
+    const cmp = actions.comparison();
+    if (!cmp.result) return;
+    const text = comparisonResults(cmp.result, { summary: cmp.summary, measuredName: cmp.measured.name, modelName: cmp.modelName });
+    loadResultsText([{ text, name: 'vs-model.tsv' }]);
+  },
+  saveComparison() {
+    const cmp = actions.comparison();
+    if (!cmp.result) return;
+    const n = (v) => Math.round(v * 10) / 10;
+    const lines = [...cmp.summary, ...cmp.suspects.map((x) => (x.kind === 'place'
+      ? `suspect: ${x.el.path}, ${x.side === 'src' ? 'sending' : 'taking in'}: ${n(x.short)} of its ${n(x.short + x.fine)} flows short`
+      : `suspect: ${x.kind === 'cable' ? `${x.from.path} to ${x.to.path}` : x.el.path}, ${n(x.short)} of ${x.of} short flows `
+        + `${x.kind === 'switch' ? 'pass it' : 'cross it'} and ${n(x.fine)} that kept up`))];
+    saveText('vs-model.tsv', comparisonResults(cmp.result, { summary: lines, measuredName: cmp.measured.name, modelName: cmp.modelName }));
   },
 
   // Which metric says how busy each server's CPU was ('' for their busy=).
@@ -2764,20 +2803,222 @@ $('editor-template').addEventListener('click', () => {
 // Each generated load's run files, by tool and setting.
 const RUN_FILES_CACHE = new WeakMap();
 
-/** One tool's run files for a generated load, or why it cannot have them. */
-function buildRunFiles(tool, run) {
-  const out = (el) => {
-    for (let p = el; p; p = p.parent) if (state.down.els.has(p.key)) return true;
-    return false;
+// ----------------------------------------------------------- vs the model
+
+/**
+ * What a run can be compared on, and against: the loaded rate metrics, per
+ * flow or per host, that are not the model's own; the expected.tsv files
+ * loaded; and the load generator, if it is running.
+ */
+function compareChoices() {
+  const measured = [];
+  const models = [];
+  for (const o of state.overlays.values()) {
+    if (o.name === 'model_gbps' || (o.name === 'model_pps' && !overlayNamed('model_gbps', o.source))) {
+      models.push(o);
+      continue;
+    }
+    if (/^(model_|vs_model)/.test(o.name)) continue;
+    const kind = trafficKind(o);
+    if (kind !== 'flows' && kind !== 'hosts') continue;
+    const unit = loadUnit(o, kind);
+    if (!unit.ok || (unit.toGbps === null && !/^\s*pps\s*$/i.test(o.unit))) continue;
+    measured.push(o);
+  }
+  // A run's own outbound figure first: what a host sent, flow by flow.
+  const rank = (o) => (trafficKind(o) === 'flows' ? 0 : 2) + (/out|peer_pps|sent|tx/i.test(o.name) ? 0 : 1);
+  measured.sort((a, b) => rank(a) - rank(b));
+  const view = state.cableView ? state.cableView() : null;
+  const gen = view && view.model && view.model.gen && !view.model.gen.why ? view.model : null;
+  return { measured, models, gen };
+}
+
+/** A loaded metric of a name from one file, or null. */
+function overlayNamed(name, source) {
+  for (const o of state.overlays.values()) if (o.name === name && o.source === source) return o;
+  return null;
+}
+
+/** An expected.tsv's figures as the model's pairs. */
+function filePairs(anchor) {
+  const pairs = new Map();
+  const of = (name) => overlayNamed(name, anchor.source);
+  const each = (overlay, fn) => {
+    if (!overlay) return;
+    for (const f of flowsOf(overlay, state.model).flows) {
+      const key = `${f.src.key}\u0000${f.dst.key}`;
+      let pair = pairs.get(key);
+      if (!pair) pairs.set(key, (pair = { src: f.src, dst: f.dst, gbps: null, offered: null, pps: null, offeredPps: null, held: new Set() }));
+      fn(pair, f.value);
+    }
   };
-  const made = runPairs(run.made, run.rate, state.down.els.size ? out : undefined);
+  each(of('model_gbps'), (p, v) => { p.gbps = v; });
+  each(of('model_offered_gbps'), (p, v) => { p.offered = v; });
+  each(of('model_pps'), (p, v) => { p.pps = v; });
+  each(of('model_offered_pps'), (p, v) => { p.offeredPps = v; });
+  const held = of('model_held');
+  if (held) {
+    for (const [key, list] of held.flowsByEl) {
+      for (const f of list) {
+        if (!f.peerEl || f.numeric) continue;
+        const pair = pairs.get(`${key}\u0000${f.peerEl.key}`);
+        if (pair) pair.held.add(String(f.value));
+      }
+    }
+  }
+  return pairs;
+}
+
+/**
+ * The comparison now: the chosen metric against the chosen model, or why
+ * there is none. Worked out again only when one of them, the tolerance or
+ * the layout changes.
+ */
+const compareCache = { inputs: null, value: null };
+function comparison() {
+  const c = state.compare;
+  const { measured: metrics, models, gen } = compareChoices();
+  if (!metrics.length) return { why: 'load a run’s results: a rate, per flow (peer=) or per host' };
+  const measured = metrics.find((o) => o.key === c.measured) || metrics[0];
+  const file = models.find((o) => o.key === c.against);
+  const against = file || (c.against === 'gen' && gen ? 'gen' : models[0] || (gen ? 'gen' : null));
+  if (!against) return { why: 'load the run’s expected.tsv, or run the load generator as the run was made', measured };
+  // A loss metric loaded beside it changes the comparison too.
+  const loaded = [...state.overlays.values()].map((o) => o.key).join('\u0001');
+  const inputs = [measured, against, against === 'gen' ? gen : null, c.tolerance, state.model, state.down.els.size,
+    state.traffic.split, state.traffic.connections, loaded];
+  if (compareCache.inputs && inputs.every((x, i) => x === compareCache.inputs[i])) return compareCache.value;
+  const value = { ...compareNow(measured, against, gen, c.tolerance), measured, against };
+  compareCache.inputs = inputs;
+  compareCache.value = value;
+  return value;
+}
+
+function compareNow(measured, against, gen, tolerance) {
+  const pairs = against === 'gen' ? livePairs(gen) : filePairs(against);
+  const modelName = against === 'gen' ? 'the load generator' : `${against.source || 'expected.tsv'}`;
+  const kind = trafficKind(measured);
+  const unit = loadUnit(measured, kind);
+  const anyPps = [...pairs.values()].some((p) => p.pps !== null);
+  const anyGbps = [...pairs.values()].some((p) => p.gbps !== null);
+  // In which terms: a bit rate as Gb/s; requests a second as such, where the
+  // model has them, or as Gb/s where the run says how big they were.
+  let terms = null;
+  let scale = 1;
+  if (unit.toGbps !== null) {
+    if (anyGbps) { terms = 'gbps'; scale = unit.toGbps; }
+  } else if (anyPps) terms = 'pps';
+  else if (anyGbps && measured.bytes > 0) { terms = 'gbps'; scale = packetGb(measured.bytes); }
+  if (!terms) {
+    return {
+      why: unit.toGbps !== null ? 'the model has no bit rates to set this against'
+        : 'this metric is in packets and the model in Gb/s: its packets need a size (bytes=)',
+    };
+  }
+  const model = new Map();
+  for (const [key, p] of pairs) {
+    const value = terms === 'gbps' ? p.gbps : p.pps;
+    if (value === null) continue;
+    const offered = terms === 'gbps' ? p.offered : p.offeredPps;
+    model.set(key, { src: p.src, dst: p.dst, value, offered: offered === null ? value : offered, held: p.held });
+  }
+  const caveats = [];
+  if (against === 'gen') {
+    if (!state.traffic.contention) caveats.push('contention is off, so the model expects every flow to get all it asked for');
+    if (state.traffic.key) caveats.push('a metric is on the cables under the generated load, and the model shares them with it');
+  }
+  const unitText = terms === 'gbps' ? 'Gb/s' : 'pps';
+  if (kind === 'hosts') {
+    const modelOut = new Map();
+    for (const m of model.values()) modelOut.set(m.src, (modelOut.get(m.src) || 0) + m.value);
+    const measuredOut = new Map();
+    for (const h of hostsOf(measured, state.model, false).hosts) measuredOut.set(h.el, h.value * scale);
+    const hosts = compareHosts(modelOut, measuredOut, { tolerance });
+    const result = { flows: [], hosts, counts: null, silent: hosts.filter((h) => h.verdict === 'silent').map((h) => h.el), unexpected: [], losses: [], asModeled: [], tolerance };
+    let mt = 0;
+    let gt = 0;
+    for (const h of hosts) if (h.model !== null && h.measured !== null) { mt += h.model; gt += h.measured; }
+    result.totals = { model: mt, measured: gt, offered: 0, modelAll: [...modelOut.values()].reduce((a, b) => a + b, 0) };
+    return { result, suspects: [], unit: unitText, kind, modelName, caveats };
+  }
+  const measuredMap = new Map();
+  for (const f of flowsOf(measured, state.model).flows) {
+    measuredMap.set(`${f.src.key}\u0000${f.dst.key}`, { src: f.src, dst: f.dst, value: f.value * scale });
+  }
+  // Loss on flows, from any loss metric loaded beside it.
+  let lossy = null;
+  for (const o of state.overlays.values()) {
+    if (trafficKind(o) !== 'flows' || !/loss/i.test(o.name) || String(o.unit).trim() !== '%') continue;
+    lossy = lossy || new Map();
+    for (const f of flowsOf(o, state.model).flows) {
+      const key = `${f.src.key}\u0000${f.dst.key}`;
+      const was = lossy.get(key);
+      if (!was || f.value > was.value) lossy.set(key, { src: f.src, dst: f.dst, value: f.value });
+    }
+  }
+  const result = compareRuns(model, measuredMap, { tolerance, lossy });
+  const t = state.traffic;
+  const opts = { split: t.split, connections: t.connections, seed: t.seed, down: state.takenOut() };
+  const found = suspects(result, (flows) => routeTraffic(state.model, flows, opts).loads);
+  return { result, suspects: found, unit: unitText, kind, modelName, caveats };
+}
+
+/** What a comparison says, line by line: for its header, and its file's. */
+function compareSummary(cmp) {
+  const { result, unit } = cmp;
+  const fmt = (v) => (unit === 'Gb/s' ? `${formatGbps(v)}b/s` : formatPps(v));
+  const lines = [];
+  const t = result.totals;
+  if (t.model > 0) {
+    lines.push(`${fmt(t.measured)} measured, of the ${fmt(t.model)} the model expects on the same `
+      + `${result.flows.length ? 'flows' : 'hosts'}: ${Math.round((t.measured / t.model) * 100)}%`);
+  }
+  if (result.counts) {
+    const c = result.counts;
+    const parts = [`${c.ok} as modeled`];
+    if (c.short) parts.push(`${c.short} short of it`);
+    if (c.over) parts.push(`${c.over} beat it`);
+    if (c.missing) parts.push(`${c.missing} not measured`);
+    if (c.unplanned) parts.push(`${c.unplanned} not in the model`);
+    lines.push(`${result.flows.length.toLocaleString()} flows, within ${result.tolerance}%: ${parts.join(', ')}`);
+  }
+  const h = { ok: 0, short: 0, over: 0, silent: 0 };
+  for (const x of result.hosts) if (h[x.verdict] !== undefined) h[x.verdict]++;
+  lines.push(`${result.hosts.length.toLocaleString()} hosts: ${h.ok} as modeled, ${h.short} short, ${h.over} over`
+    + `${h.silent ? `, ${h.silent} with nothing measured` : ''}`);
+  return lines;
+}
+
+/** Whether an element is taken out, or inside something that is. */
+function isOut(el) {
+  for (let p = el; p; p = p.parent) if (state.down.els.has(p.key)) return true;
+  return false;
+}
+
+/**
+ * One tool's run files for a generated load, or why it cannot have them,
+ * with the model's own figures for it beside them.
+ */
+function buildRunFiles(tool, view) {
+  const run = view.gen;
+  const out = state.down.els.size ? isOut : undefined;
+  const made = runPairs(run.made, run.rate, out);
   const why = runWhy(tool, made);
   if (why) return { why, dropped: made.dropped };
   const g = state.traffic.gen;
   const peers = run.pattern === 'random' || run.pattern === 'hotspot' ? ` to ${g.peers} peer${g.peers === 1 ? '' : 's'}` : '';
   const summary = `the ${run.pattern} pattern${peers}, ${run.from ? `${run.value}% of a metric` : `${run.value} ${run.unit}`}`
     + `${run.per === 'peer' ? ' to each peer' : ' from each host'}${g.hosts ? `, hosts ${g.hosts}` : ''}`;
-  return { built: RUN_BUILDERS[tool](made, { seconds: state.runFiles.seconds, connections: state.traffic.connections, summary }), dropped: made.dropped };
+  const pairs = livePairs(view);
+  const expected = pairs.size ? modelResults(pairs, { summary, txBytes: tool === 'mx' ? mxSizes(made).tx : 0, tool: RUN_LABELS[tool] }) : '';
+  const options = { seconds: state.runFiles.seconds, connections: state.traffic.connections, summary, expected };
+  return { built: RUN_BUILDERS[tool](made, options), dropped: made.dropped };
+}
+
+/** The generated load's flows as the model has them, by pair, nothing taken out among them. */
+function livePairs(view) {
+  const flows = state.down.els.size ? view.flows.filter((f) => !isOut(f.src) && !isOut(f.dst)) : view.flows;
+  return modelPairs(flows, view.toGbps);
 }
 
 /** Hand text to the browser as a file to save. */

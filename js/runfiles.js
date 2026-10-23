@@ -144,16 +144,37 @@ function describe(pairs, hosts, summary) {
   ].filter(Boolean);
 }
 
+/** The request and reply mx sends for a load: its own sizes, or full frames and the least reply. */
+export function mxSizes(made) {
+  const { sized } = made;
+  const clamp = (v) => Math.min(MX_SIZES[1], Math.max(MX_SIZES[0], Math.round(v)));
+  return { tx: clamp(sized ? sized.bytes : MX_BULK), rx: clamp(sized && sized.reply > 0 ? sized.reply : MX_REPLY) };
+}
+
+/**
+ * The model's own figures beside a tool's files, and how to bring the run
+ * back with them: both into one file the viewer loads, where Measured
+ * against the model compares them.
+ */
+function withExpected(built, expected, results) {
+  if (!expected) return built;
+  const tool = built.tool;
+  built.files.push({ name: 'expected.tsv', text: expected, note: 'what the model expects each flow and host to do' });
+  built.commands.push(
+    '# collect: the run and the model\'s figures in one file -- load it, and Measured against the model compares them',
+    `cat expected.tsv ${results} > ${tool}-run.tsv`,
+  );
+  return built;
+}
+
 /**
  * mx: matrix.csv, one cell a directed pair's requests a second, mx's own
  * sizes in its header. A sized load keeps its sizes; a bit rate goes in full
  * frames, answered by the smallest reply mx makes.
  */
-export function buildMx(made, { seconds = 60, connections = 1, summary = '' } = {}) {
+export function buildMx(made, { seconds = 60, connections = 1, summary = '', expected = '' } = {}) {
   const { pairs, hosts, sized } = made;
-  const clamp = (v) => Math.min(MX_SIZES[1], Math.max(MX_SIZES[0], Math.round(v)));
-  const tx = clamp(sized ? sized.bytes : MX_BULK);
-  const rx = clamp(sized && sized.reply > 0 ? sized.reply : MX_REPLY);
+  const { tx, rx } = mxSizes(made);
   const pps = (pair) => (pair.pps > 0 ? pair.pps : (pair.gbps * 1e9) / ((tx + WIRE_BYTES) * 8));
   const streams = mxStreams(connections);
   const matrix = [
@@ -164,7 +185,7 @@ export function buildMx(made, { seconds = 60, connections = 1, summary = '' } = 
     ...describe(pairs, hosts, summary).map((line) => `# ${prose(line)}`),
     grid(hosts, pairs, { head: token, row: nameOf }, (pair) => (pps(pair) > 0 ? cell(pps(pair)) : '')),
   ].join('\n');
-  return {
+  return withExpected({
     tool: 'mx',
     files: [{ name: 'matrix.csv', text: `${matrix}\n`, note: `${hosts.length.toLocaleString()} hosts` }],
     notes: [
@@ -181,7 +202,7 @@ export function buildMx(made, { seconds = 60, connections = 1, summary = '' } = 
       '# what it measured, for the viewer: load mx_results.tsv beside the layout',
       'mx export --matrix matrix.csv --peers -o mx_results.tsv',
     ],
-  };
+  }, expected, 'mx_results.tsv');
 }
 
 const mxStreams = (connections) => Math.min(MX_STREAMS, Math.max(1, Math.round(connections)));
@@ -230,7 +251,7 @@ const iperfRate = (gbps) => (gbps >= 0.001 ? `${Math.max(1, Math.round(gbps * 10
  * streams at -b). Different rates are different runs, each on its own port
  * so they can go at once. A sized load's replies go back as TCP the other way.
  */
-export function buildIperf(made, { seconds = 60, connections = 1, summary = '' } = {}) {
+export function buildIperf(made, { seconds = 60, connections = 1, summary = '', expected = '' } = {}) {
   const { pairs, hosts, sized } = made;
   const groups = rateGroups(pairs);
   const streams = Math.max(1, Math.round(connections));
@@ -266,7 +287,7 @@ export function buildIperf(made, { seconds = 60, connections = 1, summary = '' }
   commands.push('# what it measured, for the viewer: load iperf_results.tsv beside the layout');
   plans.forEach((plan, k) => commands.push(`iperf-orchestrator export-overlay --plan ${plan} --servers ${plan} --run-id ${id(k)}${map} `
     + `--overlay-run dcviz --overlay-out iperf_results.tsv${k ? ' --overlay-append' : ''}`));
-  return {
+  return withExpected({
     tool: 'iperf',
     files,
     notes: [
@@ -278,7 +299,7 @@ export function buildIperf(made, { seconds = 60, connections = 1, summary = '' }
       ...(renamed.length ? ['hosts.map turns the addresses it tests back into the layout’s names.'] : []),
     ],
     commands,
-  };
+  }, expected, 'iperf_results.tsv');
 }
 
 /**
@@ -286,7 +307,7 @@ export function buildIperf(made, { seconds = 60, connections = 1, summary = '' }
  * path MTU -- netmesh measures the network, it makes no load. Alone it probes
  * an idle network; run with the load after --, idle first and then under it.
  */
-export function buildNetmesh(made, { seconds = 60, connections = 1, summary = '' } = {}) {
+export function buildNetmesh(made, { seconds = 60, connections = 1, summary = '', expected = '' } = {}) {
   const { pairs, hosts } = made;
   const flows = Math.min(PROBE_FLOWS, Math.max(1, Math.round(connections)));
   const probed = pairs.filter((pair) => pair.gbps > 0 || pair.pps > 0);
@@ -297,7 +318,7 @@ export function buildNetmesh(made, { seconds = 60, connections = 1, summary = ''
     ...describe(pairs, hosts, summary).map((line) => `# ${prose(line)}`),
     grid(hosts, probed, { head: token, row: nameOf }, () => String(PROBES)),
   ].join('\n');
-  return {
+  return withExpected({
     tool: 'netmesh',
     files: [{ name: 'mesh.csv', text: `${mesh}\n`, note: `${probed.length.toLocaleString()} pairs` }],
     notes: [
@@ -313,7 +334,7 @@ export function buildNetmesh(made, { seconds = 60, connections = 1, summary = ''
       '# what it measured, for the viewer: load netmesh_results.tsv beside the layout',
       'dcimport netmesh_results.tsv --tidy reports/',
     ],
-  };
+  }, expected, 'netmesh_results.tsv');
 }
 
 export const RUN_BUILDERS = { iperf: buildIperf, mx: buildMx, netmesh: buildNetmesh };

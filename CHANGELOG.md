@@ -11,6 +11,26 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.33.0 — 2026-10-23
+
+- **Measured against the model**: a run's results beside what the model
+  said that load would do -- how much arrived, flow by flow and host by
+  host within a tolerance; the flows and hosts short of the model or beating
+  it, and those with nothing measured; the model's own bottlenecks that
+  held as it said; loss where the model has room; and **where to look**,
+  what the short flows have in common that the flows that kept up do not --
+  a server, a rack or a row whose every flow fell short, or a switch or a
+  cable they all cross.
+  Against a loaded `expected.tsv` or the load generator as it stands. Shown
+  on the floor plan as `vs_model_pct`, `vs_model_flow_pct` and
+  `vs_model_verdict`, and saved as `vs-model.tsv`.
+- **`expected.tsv`** with every tool's run files: the model's figures for
+  the load (`model_gbps`, `model_offered_gbps`, `model_pps`, `model_held`,
+  `model_out_gbps`, `model_in_gbps`), and a last command that collects the
+  run's export with it into one file.
+- A flow contention holds back says which way along the cable it is held.
+- 1.32.0 and 1.33.0 share one pull request.
+
 ## 1.32.0 — 2026-10-23
 
 - **Run it for real**, in the Load generator: the load as each load tool's
