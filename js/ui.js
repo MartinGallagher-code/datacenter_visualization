@@ -18,6 +18,7 @@ import {
   biggestChanges, burstRisk, busiest, busyable, cablesOf, counterparts, counterpartLevels, EXPLAIN_PATTERNS, takeoutCandidates, TAKEOUT_KINDS, formatGbps, hostLimits, GEN_UNITS, hostsFor, loadable, loadUnit, PATTERNS, reachKinds, TARGETED,
   CONNECTION_LIMITS, IMIX_BYTES, PACKET_PICKS, PER_CONNECTION, readsAsLoad, SPLITS, SPREADS, TEST_UNITS, trafficKind, utilOf,
 } from './traffic.js';
+import { RUN_LABELS, RUN_TOOLS, runReadme } from './runfiles.js';
 
 const el = (tag, cls, text) => {
   const n = document.createElement(tag);
@@ -2075,10 +2076,82 @@ export function renderLoadGen(state, host, actions, { unit } = {}) {
         + 'tag the switches, or name the hosts (role=server)'));
     }
     box.append(lines);
+    if (!run.why && run.flows) box.append(renderRunFiles(state, actions));
   } else if (!g.on) {
     box.append(el('p', 'muted cable-note', 'A made-up load, routed and drawn like a metric: no results file needed.'));
   }
   host.append(box);
+}
+
+/**
+ * Run it for real: the load as each tool's own input files, to save, and the
+ * commands that run it and export what it measured for this viewer. Nothing
+ * is run from here -- the files and the commands are handed over.
+ */
+function renderRunFiles(state, actions) {
+  const r = state.runFiles;
+  const wrap = el('div', 'run-files');
+  wrap.append(el('div', 'load-title', 'Run it for real'));
+  const row = el('div', 'gen-row');
+  const seconds = el('input', 'run-seconds');
+  seconds.type = 'number';
+  seconds.min = '1';
+  seconds.step = '1';
+  seconds.value = String(r.seconds);
+  seconds.title = 'How long the commands run the load for';
+  seconds.addEventListener('change', () => {
+    const v = Math.floor(Number(seconds.value));
+    if (v >= 1) actions.setRunFiles({ seconds: v });
+    else seconds.value = String(r.seconds);
+  });
+  row.append(el('span', null, 'the files and commands to run it for'), seconds, el('span', null, 's with'));
+  const tools = el('div', 'btnrow');
+  for (const tool of RUN_TOOLS) {
+    const button = el('button', `run-tool run-tool-${tool}${r.tool === tool ? ' active' : ''}`, RUN_LABELS[tool]);
+    button.title = r.tool === tool ? 'Close' : `The files ${RUN_LABELS[tool]} needs for this load, and the commands to run it`;
+    button.addEventListener('click', () => actions.setRunFiles({ tool: r.tool === tool ? '' : tool }));
+    tools.append(button);
+  }
+  wrap.append(row, tools);
+  if (!r.tool) return wrap;
+
+  const { built, why, dropped } = actions.runFilesFor(r.tool);
+  if (dropped) {
+    wrap.append(el('div', 'muted', `${dropped.toLocaleString()} flow${dropped === 1 ? '' : 's'} to or from something taken out `
+      + 'left out: nothing runs there'));
+  }
+  if (why) {
+    wrap.append(el('div', 'bad run-why', why));
+    return wrap;
+  }
+  const notes = el('div', 'muted run-notes');
+  for (const line of built.notes) notes.append(el('div', null, line));
+  wrap.append(notes);
+  const files = el('div', 'run-file-list');
+  for (const file of built.files) {
+    const item = el('div', 'gen-row');
+    const save = el('button', 'run-save', file.name);
+    save.title = `Save ${file.name}`;
+    save.addEventListener('click', () => actions.saveText(file.name, file.text));
+    item.append(save, el('span', 'muted', file.note));
+    files.append(item);
+  }
+  wrap.append(files);
+  const commands = el('pre', 'run-commands', built.commands.join('\n'));
+  wrap.append(commands);
+  const buttons = el('div', 'btnrow');
+  const copy = el('button', 'run-copy', 'Copy commands');
+  copy.addEventListener('click', () => {
+    const text = built.commands.join('\n');
+    if (navigator.clipboard) navigator.clipboard.writeText(text).then(() => { copy.textContent = 'Copied'; }, () => {});
+  });
+  const readme = `README-${r.tool}.txt`;
+  const notesButton = el('button', 'run-readme', `Save ${readme}`);
+  notesButton.title = 'The notes and the commands above, as a file to keep with the others';
+  notesButton.addEventListener('click', () => actions.saveText(readme, runReadme(built)));
+  buttons.append(copy, notesButton);
+  wrap.append(buttons);
+  return wrap;
 }
 
 /**

@@ -11,6 +11,19 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.32.0 — 2026-10-23
+
+- **Run it for real**, in the Load generator: the load as each load tool's
+  own input, to save, with the commands that run it and export what it
+  measured for this viewer -- `iperf_plan.conf` for iperf-orchestrator (a
+  pair grid, `-b` per stream, a plan per rate), `matrix.csv` for mx (requests
+  a second, the load's own sizes) and `mesh.csv` for netmesh (the load's
+  pairs, probed). The hosts go in by the layout's names, so the results land
+  back on the floor plan. Nothing is run from the page.
+- **`addr=`** on a server: the address the tools reach it at when its name
+  does not resolve. Not inherited. In the editor's completions and the
+  Syntax panel.
+
 ## 1.31.0 — 2026-10-22
 
 - **Expected**, in the inspector's Cable load: the selected element's

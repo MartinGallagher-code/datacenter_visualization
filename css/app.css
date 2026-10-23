@@ -775,6 +775,12 @@ body.resizing-rows { cursor: row-resize; user-select: none; }
 .size-picks button.active { border-color: #4fa3ff; color: #8cc4ff; }
 .explain-box { margin-top: 8px; }
 .takeouts { margin-top: 8px; }
+.run-files { margin-top: 8px; }
+.run-files .run-seconds { width: 5em; }
+.run-files .run-notes { font-size: 11px; margin: 4px 0; }
+.run-files .run-why { font-size: 11px; color: #f85149; margin: 4px 0; }
+.run-files .run-commands { font-size: 10.5px; white-space: pre-wrap; word-break: break-all; margin: 4px 0;
+  padding: 6px; background: rgba(127, 127, 127, 0.12); border-radius: 4px; user-select: text; }
 .takeouts .takeout-amount { width: 5em; }
 .takeouts .takeout-among { width: 10em; }
 .picks-list .random-out { font-style: italic; }

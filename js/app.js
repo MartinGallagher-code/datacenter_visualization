@@ -27,6 +27,7 @@ import {
   routeTraffic, switchLoads, testFlows, trafficKind, viewOf,
 } from './traffic.js';
 import { VERSION } from './version.js';
+import { RUN_BUILDERS, runPairs, runWhy } from './runfiles.js';
 import {
   classify, directoryFromDataTransfer, ensureRead, getFile, pathLabel, pickDirectory,
   namedAsData, probeSizes, readable, readDir, renderBrowser, supportsDirectoryPicker,
@@ -132,6 +133,9 @@ const state = {
     switches: { amount: 0, unit: '#', among: '' },
     seed: 1,
   },
+  // The load generator's run files: which tool's are open, and for how long
+  // the commands run it.
+  runFiles: { tool: '', seconds: 60 },
   capacityView: false,      // with no traffic shown, cable widths by gbps=
   maxLinksDrawn: 60000,
   warnings: [],
@@ -613,6 +617,10 @@ function modelSource(withDown) {
     genRun = {
       ...g, flows: g.flows.length, target, unit: genUnit(), pattern: gen.pattern, value: gen.value, per: gen.from ? 'host' : gen.per,
       from: from ? from.overlay : null, packets: genPackets,
+      // The flows as made, before sizing, and what their values are: what
+      // the run files are written from.
+      made: g.flows,
+      rate: { toGbps: sized ? null : unit.toGbps, unit: sized ? 'pps' : unit.unit, sized: sized ? { bytes: gen.bytes, reply: gen.reply } : null },
       offered: genPackets ? genFlows.reduce((sum, flow) => sum + flow.value, 0) : g.offered,
     };
   }
@@ -1249,6 +1257,34 @@ const actions = {
     refreshPanels();
   },
 
+  // The run files: which tool's are open ('' for none), and the run's length.
+  setRunFiles(patch) {
+    state.runFiles = { ...state.runFiles, ...patch };
+    refreshPanels();
+  },
+
+  // The generated load's run files for one tool, or why there are none:
+  // flows to and from anything taken out dropped, since nothing runs there.
+  runFilesFor(tool) {
+    const view = state.cableView ? state.cableView() : null;
+    const run = view && view.model && view.model.gen;
+    if (!run || !run.made) return { why: 'run the load generator first' };
+    if (run.why) return { why: run.why };
+    // Built once a load and setting: a floor's matrix is megabytes, and the
+    // panel redraws far more often than any of these change.
+    const key = [tool, state.runFiles.seconds, state.traffic.connections, [...state.down.els].sort().join('\u0001')].join('\u0002');
+    let cached = RUN_FILES_CACHE.get(run);
+    if (!cached) RUN_FILES_CACHE.set(run, (cached = new Map()));
+    if (!cached.has(key)) cached.set(key, buildRunFiles(tool, run));
+    return cached.get(key);
+  },
+
+  // Hand a file to the browser to save.
+  saveText(name, text) {
+    saveText(name, text);
+  },
+
+  // Which metric says how busy each server's CPU was ('' for their busy=).
   // Which metric says how busy each server's CPU was ('' for their busy=).
   setBusyFrom(key) {
     state.traffic.busyFrom = key || '';
@@ -2725,15 +2761,38 @@ $('editor-template').addEventListener('click', () => {
   applyEditor();
 });
 
-$('editor-download').addEventListener('click', () => {
-  const text = $('editor').hidden ? state.layoutText : $('editor-text').value;
-  const name = `${(state.model.title || 'layout').replace(/[^\w.-]+/g, '_')}.dc`;
+// Each generated load's run files, by tool and setting.
+const RUN_FILES_CACHE = new WeakMap();
+
+/** One tool's run files for a generated load, or why it cannot have them. */
+function buildRunFiles(tool, run) {
+  const out = (el) => {
+    for (let p = el; p; p = p.parent) if (state.down.els.has(p.key)) return true;
+    return false;
+  };
+  const made = runPairs(run.made, run.rate, state.down.els.size ? out : undefined);
+  const why = runWhy(tool, made);
+  if (why) return { why, dropped: made.dropped };
+  const g = state.traffic.gen;
+  const peers = run.pattern === 'random' || run.pattern === 'hotspot' ? ` to ${g.peers} peer${g.peers === 1 ? '' : 's'}` : '';
+  const summary = `the ${run.pattern} pattern${peers}, ${run.from ? `${run.value}% of a metric` : `${run.value} ${run.unit}`}`
+    + `${run.per === 'peer' ? ' to each peer' : ' from each host'}${g.hosts ? `, hosts ${g.hosts}` : ''}`;
+  return { built: RUN_BUILDERS[tool](made, { seconds: state.runFiles.seconds, connections: state.traffic.connections, summary }), dropped: made.dropped };
+}
+
+/** Hand text to the browser as a file to save. */
+function saveText(name, text) {
   const url = URL.createObjectURL(new Blob([text], { type: 'text/plain' }));
   const a = document.createElement('a');
   a.href = url;
   a.download = name;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+$('editor-download').addEventListener('click', () => {
+  const text = $('editor').hidden ? state.layoutText : $('editor-text').value;
+  saveText(`${(state.model.title || 'layout').replace(/[^\w.-]+/g, '_')}.dc`, text);
 });
 
 // -------------------------------------------------------------------- panels

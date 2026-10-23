@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.31.0** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.32.0** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -1065,6 +1065,56 @@ servers route in about a second. All-to-all grows with the square of the
 servers — a thousand of them is a million flows, past what the page will
 route — so above a few hundred, send to random hosts instead, with as many
 peers as the panel says fit, or narrow the hosts.
+
+#### Run it for real: the files and the commands
+
+Under a running load, **Run it for real** hands over what each load tool
+needs to make that same load on the real servers — its input files, to save,
+and the commands that run it and export what it measured for this viewer.
+Nothing is run from the page. Set how long the run lasts (60 s unless
+changed), pick a tool, and save its files into one directory:
+
+| Tool | Files | What it is given |
+|---|---|---|
+| **iperf-orchestrator** ([iperf_orchestrator](https://github.com/MartinGallagher-code/iperf_orchestrator)) | `iperf_plan.conf` (one per rate), `hosts.map` | a pair grid of who sends to whom, `-b` each stream's share of the pair's rate, `-P` the routing box's *connections a flow* |
+| **mx** ([matrix_orchestrator](https://github.com/MartinGallagher-code/matrix_orchestrator)) | `matrix.csv` | each pair's requests a second; a sized load's request and reply sizes as they are, a bit rate as 1472-byte requests (full 1500-byte frames) answered by mx's smallest reply, 32 B; `--streams` the connections |
+| **netmesh** ([binnacle](https://github.com/MartinGallagher-code/binnacle)) | `mesh.csv` | the load's pairs, probed ten times a second for latency, jitter, loss and path MTU |
+
+The commands come with them, ready to copy — for mx, say:
+
+```sh
+mx check --matrix matrix.csv            # what each host will send and take in
+mx run --matrix matrix.csv --for 60 --streams 1
+mx export --matrix matrix.csv --peers -o mx_results.tsv
+```
+
+and **Save README-mx.txt** keeps the notes and commands beside the files.
+Each tool's export lands back on the floor plan, because **the hosts go
+into the files by the layout's own names**: load `mx_results.tsv`,
+`iperf_results.tsv` or `netmesh_results.tsv` (made by `dcimport`) beside the
+layout, and compare what ran with what the model said.
+
+- **A host the tools cannot reach by its name** gets an `addr=` — the
+  address they reach it at, `node s7 role=server addr=10.1.7.15`, or one
+  per server from the line that makes them, `addr=10.1.{rack}.{id}`. An
+  address is one device's own, so a rack's `addr=` is not its servers'.
+  mx and netmesh take it as `name=address`; iperf tests the address, and
+  `hosts.map` turns it back into the name for the export.
+- **Names must tell the hosts apart**, and be letters, digits, `.`, `_`
+  and `-`: a layout whose racks all hold an `s1` cannot say which `s1` a
+  result is for, so the panel asks for names first (`name={rack}{id}`).
+- **iperf's `-b` is one rate a run.** A load where every pair sends the
+  same — all-to-all, random peers, a ring at one amount — is one plan. Pairs
+  at different rates make a plan per rate (up to eight; more are binned),
+  each on its own port so they run at once in separate terminals, and their
+  exports go into one `iperf_results.tsv`. iperf sends TCP, so a sized load's
+  replies go back as TCP the other way at their own bit rate.
+- **netmesh makes no load.** It measures the network: run alone it probes
+  the idle network; `netmesh run --mesh mesh.csv --baseline 20 -- mx run …`
+  probes 20 s idle and then under the load, which is the latency the
+  model's queues predict.
+- Flows to or from anything taken out are left out — nothing runs there —
+  and the panel says how many.
 
 #### Hovering a cable
 

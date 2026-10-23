@@ -1352,6 +1352,50 @@ await test('the load generator', async () => {
   eq(await count(), '16 hosts', 'and not: every server outside pod 1');
 }, { url: '?layout=examples/dual-plane.dc' });
 
+// The load, to run for real: each tool's files to save, and the commands to
+// run them. Nothing is run from the page.
+await test('the load as run files', async () => {
+  const files = () => page.evaluate(() => (document.querySelector('#load-gen .run-files') || {}).innerText || '');
+  await page.locator('#load-gen button', { hasText: 'Run' }).click();
+  await page.waitForTimeout(400);
+  await page.locator('#load-gen button.run-tool-mx').click();
+  await page.waitForTimeout(300);
+  ok(/two hosts are both called s1/.test(await files()), 'hosts of one name cannot go into a tool’s files, and it says why');
+  await openLayout([
+    'dc D',
+    '  row A',
+    '    rack r[1..2] u=10',
+    '      node h[1..3] role=server name={rack}{id}',
+    '      node t role=tor +switch name={rack}tor',
+    '  row S',
+    '    rack SP u=4',
+    '      node spine role=spine +switch',
+    'net nic gbps=25',
+    'net up gbps=100',
+    'link nic scope=rack role=server role=tor',
+    'link up role=tor role=spine',
+  ].join('\n'));
+  await page.waitForTimeout(400);
+  ok(/mx check --matrix matrix\.csv/.test(await files()) && /mx run --matrix matrix\.csv --for 60 --streams 1/.test(await files()),
+     `named hosts: mx’s file and the commands that run it  (${(await files()).split('\n').slice(-6).join(' | ')})`);
+  const [saved] = await Promise.all([page.waitForEvent('download'), page.locator('#load-gen button.run-save').first().click()]);
+  eq(saved.suggestedFilename(), 'matrix.csv', 'its file to save');
+  const text = readFileSync(await saved.path(), 'utf8');
+  ok(/^src\\dst,r1h1,r1h2,r1h3,r2h1,r2h2,r2h3$/m.test(text) && /^# tx_size=1472 rx_size=32 port=5300$/m.test(text),
+     'a matrix mx reads, by the layout’s names');
+  await page.fill('#load-gen input.run-seconds', '300');
+  await page.locator('#load-gen input.run-seconds').dispatchEvent('change');
+  await page.locator('#load-gen button.run-tool-iperf').click();
+  await page.waitForTimeout(300);
+  ok(/iperf_plan\.conf/.test(await files()) && /--run-id dcviz --for 300/.test(await files()), 'iperf’s plan, for as long as asked');
+  await page.locator('#load-gen button.run-tool-netmesh').click();
+  await page.waitForTimeout(300);
+  ok(/mesh\.csv/.test(await files()) && /netmesh makes no load/.test(await files()), 'netmesh’s mesh, and what it measures');
+  await page.locator('#load-gen button.run-tool-netmesh').click();
+  await page.waitForTimeout(300);
+  ok(!/mesh\.csv/.test(await files()), 'and its button again closes it');
+}, { url: '?layout=examples/dual-plane.dc' });
+
 // A hundred thousand flows and more: a random load at a few hundred peers
 // over a few hundred servers. Spreading that many flows into one push()
 // overflowed the stack, and the page went blank.
