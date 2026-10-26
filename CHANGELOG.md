@@ -11,6 +11,15 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.35.0 — 2026-10-26
+
+- **Save run-mx.tar** (run-iperf.tar, run-netmesh.tar): a tool's files,
+  `expected.tsv` and its `run-<tool>.sh` in one tar archive, in a folder of
+  their own, the script executable -- `tar -xf run-mx.tar`, then
+  `./run-mx/run-mx.sh`. One download, which a browser cannot rename file
+  by file beside an earlier run's.
+- 1.34.0 and 1.35.0 share one pull request.
+
 ## 1.34.0 — 2026-10-26
 
 - **Save run-mx.sh** (run-iperf.sh, run-netmesh.sh) in place of the

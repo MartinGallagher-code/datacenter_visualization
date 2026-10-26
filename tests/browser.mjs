@@ -1411,6 +1411,11 @@ await test('the load as run files', async () => {
   ok(script.suggestedFilename() === 'run-iperf.sh' && scriptText.startsWith('#!/usr/bin/env bash')
      && /^iperf-orchestrator run --plan iperf_plan\.conf .* --for 300$/m.test(scriptText) && /^# 6 hosts, /m.test(scriptText),
      'and its notes and commands as a script to edit and run: the notes comments, the commands as they are');
+  const [archive] = await Promise.all([page.waitForEvent('download'), page.locator('#load-gen button.run-tar').click()]);
+  const listed = spawnSync('tar', ['-tf', await archive.path()], { encoding: 'utf8' });
+  ok(archive.suggestedFilename() === 'run-iperf.tar'
+     && listed.stdout.trim().split('\n').join(' ') === 'run-iperf/ run-iperf/iperf_plan.conf run-iperf/expected.tsv run-iperf/run-iperf.sh',
+     `and all of it as one archive tar reads  (${listed.stdout.trim().split('\n').join(' ')})`);
   await page.locator('#load-gen button.run-tool-netmesh').click();
   await page.waitForTimeout(300);
   ok(/mesh\.csv/.test(await files()) && /netmesh makes no load/.test(await files()), 'netmesh’s mesh, and what it measures');

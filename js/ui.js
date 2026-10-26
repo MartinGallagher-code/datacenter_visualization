@@ -18,7 +18,7 @@ import {
   biggestChanges, burstRisk, busiest, busyable, cablesOf, counterparts, counterpartLevels, EXPLAIN_PATTERNS, takeoutCandidates, TAKEOUT_KINDS, formatGbps, hostLimits, GEN_UNITS, hostsFor, loadable, loadUnit, PATTERNS, reachKinds, TARGETED,
   CONNECTION_LIMITS, IMIX_BYTES, PACKET_PICKS, PER_CONNECTION, readsAsLoad, SPLITS, SPREADS, TEST_UNITS, trafficKind, utilOf,
 } from './traffic.js';
-import { RUN_LABELS, RUN_TOOLS, runScript, scriptName } from './runfiles.js';
+import { RUN_LABELS, RUN_TOOLS, runScript, runTar, scriptName, tarName } from './runfiles.js';
 
 const el = (tag, cls, text) => {
   const n = document.createElement(tag);
@@ -2150,7 +2150,12 @@ function renderRunFiles(state, actions) {
   scriptButton.title = 'The notes and the commands above as a shell script: every note a comment, every command as it is -- '
     + `edit it, then run it with bash ${script} beside the files`;
   scriptButton.addEventListener('click', () => actions.saveText(script, runScript(built)));
-  buttons.append(copy, scriptButton);
+  const tar = tarName(r.tool);
+  const tarButton = el('button', 'run-tar', `Save ${tar}`);
+  tarButton.title = `Everything above in one archive: ${built.files.map((f) => f.name).join(', ')} and ${script}, `
+    + `in a folder of their own -- tar -xf ${tar}, then bash ${tar.replace(/\.tar$/, '')}/${script}`;
+  tarButton.addEventListener('click', () => actions.saveText(tar, runTar(built), 'application/x-tar'));
+  buttons.append(tarButton, copy, scriptButton);
   wrap.append(buttons);
   return wrap;
 }

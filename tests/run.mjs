@@ -53,7 +53,7 @@ import {
   droppedLayoutsNotice, layoutNotice, prefixed, resultsFileNotice,
 } from '../js/report.js';
 import {
-  buildIperf, buildMx, buildNetmesh, hostToken, rateGroups, runPairs, runProblem, runScript, runWhy, scriptName,
+  buildIperf, buildMx, buildNetmesh, hostToken, rateGroups, runPairs, runProblem, runScript, runTar, runWhy, scriptName, tarball, tarName,
 } from '../js/runfiles.js';
 import {
   compareHosts, compareRuns, comparisonResults, modelPairs, modelResults, suspects,
@@ -5155,8 +5155,35 @@ if (python.error) {
     const missing = spawnSync('bash', [join(runs, 'run-mx.sh')], { encoding: 'utf8', env, cwd: dir });
     ok(missing.status === 1 && /matrix\.csv is not beside this script/.test(missing.stderr) && !missing.stdout,
        'and stops before anything starts when a file is not beside it');
+
+    // All of it as one archive: tar reads it, and what comes out runs.
+    eq(tarName('mx'), 'run-mx.tar', 'saved as run-<tool>.tar');
+    const tar = spawnSync('tar', ['--version'], { encoding: 'utf8' });
+    if (tar.status !== 0) skip('a run-<tool>.tar unpacked', 'tar is not here');
+    else {
+      writeFileSync(join(dir, 'run-mx.tar'), runTar(mxBuilt, { mtime: Date.UTC(2026, 9, 26) }));
+      const listed = spawnSync('tar', ['-tvf', join(dir, 'run-mx.tar')], { encoding: 'utf8' });
+      const lines = listed.stdout.trim().split('\n');
+      eq([listed.status, lines.map((l) => l.split(/\s+/).pop())], [0, ['run-mx/', 'run-mx/matrix.csv', 'run-mx/expected.tsv', 'run-mx/run-mx.sh']],
+         'tar reads it: a folder of its own, the tool’s files and its script');
+      ok(/^-rwxr-xr-x/.test(lines[3]) && /^-rw-r--r--/.test(lines[1]), 'the script executable, the files not');
+      const out = join(dir, 'unpacked');
+      mkdirSync(out);
+      eq(spawnSync('tar', ['-xf', join(dir, 'run-mx.tar'), '-C', out]).status, 0, 'and unpacks');
+      eq(readFileSync(join(out, 'run-mx', 'matrix.csv'), 'utf8'), mxBuilt.files[0].text, 'byte for byte');
+      writeFileSync(join(out, 'run-mx', 'mx_results.tsv'), '');
+      const direct = spawnSync(join(out, 'run-mx', 'run-mx.sh'), [], { encoding: 'utf8', env, cwd: dir });
+      eq([direct.status, direct.stdout.trim().split('\n').length], [0, 3], 'and its script runs as it comes out, no chmod');
+    }
     rmSync(dir, { recursive: true, force: true });
   }
+  // The archive's own shape: headers, padding, an end.
+  const bytes = tarball([{ name: 'd/a', text: 'é' }], { dir: 'd', mtime: 0 });
+  eq(bytes.length, 512 * 5, 'a folder header, a file header, its block, and two empty blocks');
+  eq(new TextDecoder().decode(bytes.slice(512 + 124, 512 + 135)), '00000000002', 'sizes in bytes: é is two');
+  let threw = false;
+  try { tarball([{ name: `${'x'.repeat(101)}`, text: '' }]); } catch { threw = true; }
+  ok(threw, 'a name too long for a tar header is refused, not cut');
 }
 
 // ------------------------------------------- a run against the model

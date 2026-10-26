@@ -1289,8 +1289,8 @@ const actions = {
   },
 
   // Hand a file to the browser to save.
-  saveText(name, text) {
-    saveText(name, text);
+  saveText(name, text, type) {
+    saveText(name, text, type);
   },
 
   // Measured against the model: what to compare, and how close is as modeled.
@@ -3021,9 +3021,9 @@ function livePairs(view) {
   return modelPairs(flows, view.toGbps);
 }
 
-/** Hand text to the browser as a file to save. */
-function saveText(name, text) {
-  const url = URL.createObjectURL(new Blob([text], { type: 'text/plain' }));
+/** Hand text, or bytes, to the browser as a file to save. */
+function saveText(name, text, type = 'text/plain') {
+  const url = URL.createObjectURL(new Blob([text], { type }));
   const a = document.createElement('a');
   a.href = url;
   a.download = name;

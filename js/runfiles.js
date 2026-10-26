@@ -397,3 +397,72 @@ export function runScript(built) {
     '',
   ].join('\n');
 }
+
+/** What a tool's archive is saved as, and the folder it opens into. */
+export const tarName = (tool) => `run-${tool}.tar`;
+
+/**
+ * A tool's files and its script in one tar archive, in a folder of their
+ * own: one download instead of several, which a browser cannot rename one
+ * at a time to `matrix (1).csv` beside an older `matrix.csv`. The script is
+ * executable. Plain ustar, which every tar reads.
+ */
+export function runTar(built, { mtime = Date.now() } = {}) {
+  const dir = tarName(built.tool).replace(/\.tar$/, '');
+  const entries = [
+    ...built.files.map((f) => ({ name: `${dir}/${f.name}`, text: f.text, mode: 0o644 })),
+    { name: `${dir}/${scriptName(built.tool)}`, text: runScript(built), mode: 0o755 },
+  ];
+  return tarball(entries, { dir, mtime });
+}
+
+/**
+ * A ustar archive of text files, as bytes: a 512-byte header each, its
+ * contents padded to 512, and two empty blocks to end it.
+ *
+ * @param entries  [{ name, text, mode }] -- names under 100 bytes
+ * @param opts     { dir: a folder entry first, mtime in ms }
+ */
+export function tarball(entries, { dir = '', mtime = Date.now() } = {}) {
+  const enc = new TextEncoder();
+  const seconds = Math.floor(mtime / 1000);
+  const blocks = [];
+  let total = 0;
+  const header = (name, size, mode, type) => {
+    const h = new Uint8Array(512);
+    const put = (offset, length, text) => {
+      const bytes = enc.encode(text);
+      if (bytes.length > length) throw new Error(`tar: ${name} is too long a name for a tar header`);
+      h.set(bytes, offset);
+    };
+    const octal = (offset, length, value) => put(offset, length, `${value.toString(8).padStart(length - 1, '0')}\0`);
+    put(0, 100, name);
+    octal(100, 8, mode);
+    octal(108, 8, 0);            // uid
+    octal(116, 8, 0);            // gid
+    octal(124, 12, size);
+    octal(136, 12, seconds);
+    h.fill(32, 148, 156);        // the checksum counts its own field as spaces
+    put(156, 1, type);
+    put(257, 6, 'ustar\0');
+    put(263, 2, '00');
+    let sum = 0;
+    for (const b of h) sum += b;
+    put(148, 8, `${sum.toString(8).padStart(6, '0')}\0 `);
+    return h;
+  };
+  const push = (bytes) => { blocks.push(bytes); total += bytes.length; };
+  if (dir) push(header(`${dir}/`, 0, 0o755, '5'));
+  for (const e of entries) {
+    const body = enc.encode(e.text);
+    push(header(e.name, body.length, e.mode || 0o644, '0'));
+    push(body);
+    const pad = (512 - (body.length % 512)) % 512;
+    if (pad) push(new Uint8Array(pad));
+  }
+  push(new Uint8Array(1024));
+  const out = new Uint8Array(total);
+  let at = 0;
+  for (const b of blocks) { out.set(b, at); at += b.length; }
+  return out;
+}
