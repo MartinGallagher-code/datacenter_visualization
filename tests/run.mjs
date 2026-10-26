@@ -12,7 +12,7 @@
 
 // Headless test suite: node tests/run.mjs
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -53,7 +53,7 @@ import {
   droppedLayoutsNotice, layoutNotice, prefixed, resultsFileNotice,
 } from '../js/report.js';
 import {
-  buildIperf, buildMx, buildNetmesh, hostToken, rateGroups, runPairs, runProblem, runReadme, runWhy,
+  buildIperf, buildMx, buildNetmesh, hostToken, rateGroups, runPairs, runProblem, runScript, runWhy, scriptName,
 } from '../js/runfiles.js';
 import {
   compareHosts, compareRuns, comparisonResults, modelPairs, modelResults, suspects,
@@ -5110,8 +5110,53 @@ if (python.error) {
   ok(nm.files[0].text.includes('# size=64 port=5310 pps=10 flows=2\n'), 'netmesh probes ten a second, over as many flows as connections');
   ok(nm.files[0].text.includes('\nr1h1,,10,10,10,10,10\n'), 'every pair of the load');
   ok(nm.commands.some((c) => c.includes('--baseline 20 -- mx run')), 'idle first and then under the load, if you give it one');
-  const readme = runReadme(nm);
-  ok(readme.includes('mesh.csv') && readme.includes('dcimport netmesh_results.tsv --tidy reports/'), 'the notes and commands, as a file to keep');
+  ok(nm.commands.filter((c) => !c.startsWith('#')).every((c) => !c.includes('--baseline')),
+     'the run under the load is there to swap in, commented, so the script runs one netmesh run');
+
+  // Two rates: the iperf runs go at once, in the background, and are waited for.
+  const both = buildIperf(mixed, { seconds: 30 }).commands;
+  ok(both.filter((c) => / run .*> iperf-run-\d\.log 2>&1 &$/.test(c)).length === 2 && both.includes('wait')
+     && both.indexOf('wait') < both.findIndex((c) => c.includes('export-overlay')), 'two runs at once, each logged, and both done before the export');
+
+  // The notes and commands as a script: every line not a command a comment.
+  eq(scriptName('netmesh'), 'run-netmesh.sh', 'saved as run-<tool>.sh');
+  const script = runScript(nm);
+  ok(script.startsWith('#!/usr/bin/env bash\n'), 'a bash script');
+  const preamble = ['cd "$(dirname "$0")" || exit 1', 'for f in mesh.csv; do',
+    '  [ -f "$f" ] || { echo "$f is not beside this script: save it here first" >&2; exit 1; }', 'done'];
+  const strays = script.split('\n').filter((line) => line && !line.startsWith('#') && !preamble.includes(line) && !nm.commands.includes(line));
+  eq(strays, [], 'every line that is not a command is a comment');
+  ok(nm.notes.every((note) => script.includes(`# ${note}`)) && script.includes('#   mesh.csv -- '), 'the notes and the files, as comments');
+  // Run, with stand-ins for the tools that only say what they were asked.
+  const bash = spawnSync('bash', ['--version'], { encoding: 'utf8' });
+  if (bash.status !== 0) skip('a run-<tool>.sh run', 'bash is not here');
+  else {
+    const dir = mkdtempSync(join(tmpdir(), 'dcviz-script-'));
+    const bin = join(dir, 'bin');
+    mkdirSync(bin);
+    for (const tool of ['mx', 'iperf-orchestrator', 'netmesh', 'dcimport']) {
+      writeFileSync(join(bin, tool), `#!/bin/sh\necho "${tool} $*"\n`);
+      chmodSync(join(bin, tool), 0o755);
+    }
+    const env = { ...process.env, PATH: `${bin}:${process.env.PATH}` };
+    const mxBuilt = buildMx(made, { seconds: 30, expected: '# model\n' });
+    const runs = join(dir, 'runs');
+    mkdirSync(runs);
+    for (const f of mxBuilt.files) writeFileSync(join(runs, f.name), f.text);
+    writeFileSync(join(runs, 'run-mx.sh'), runScript(mxBuilt));
+    writeFileSync(join(runs, 'mx_results.tsv'), '');
+    // From somewhere else: it runs where it was saved.
+    const ran = spawnSync('bash', [join(runs, 'run-mx.sh')], { encoding: 'utf8', env, cwd: dir });
+    eq([ran.status, ran.stdout.trim().split('\n')], [0, [
+      'mx check --matrix matrix.csv', 'mx run --matrix matrix.csv --for 30 --streams 1', 'mx export --matrix matrix.csv --peers -o mx_results.tsv',
+    ]], 'a script that runs its commands, in order, wherever it is run from');
+    ok(readFileSync(join(runs, 'mx-run.tsv'), 'utf8').startsWith('# model'), 'and collects the run with the model');
+    rmSync(join(runs, 'matrix.csv'));
+    const missing = spawnSync('bash', [join(runs, 'run-mx.sh')], { encoding: 'utf8', env, cwd: dir });
+    ok(missing.status === 1 && /matrix\.csv is not beside this script/.test(missing.stderr) && !missing.stdout,
+       'and stops before anything starts when a file is not beside it');
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 // ------------------------------------------- a run against the model

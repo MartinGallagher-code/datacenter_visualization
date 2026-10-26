@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.33.0** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.34.0** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -1088,7 +1088,13 @@ mx run --matrix matrix.csv --for 60 --streams 1
 mx export --matrix matrix.csv --peers -o mx_results.tsv
 ```
 
-and **Save README-mx.txt** keeps the notes and commands beside the files.
+and **Save run-mx.sh** saves them as a script to edit and run: every note
+a comment, every command as it is, and a check that its files are beside
+it before anything starts. Save it with the files, change what you like —
+`--for`, `--user root`, a line commented out — and run `bash run-mx.sh`.
+For iperf at more than one rate its runs go together, in the background,
+each into its own log, and are waited for before the export; for netmesh
+the run under the load is there commented, to swap in for the idle one.
 Each tool's export lands back on the floor plan, because **the hosts go
 into the files by the layout's own names**: load `mx_results.tsv`,
 `iperf_results.tsv` or `netmesh_results.tsv` (made by `dcimport`) beside the

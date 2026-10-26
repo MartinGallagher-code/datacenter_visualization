@@ -11,6 +11,18 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.34.0 — 2026-10-26
+
+- **Save run-mx.sh** (run-iperf.sh, run-netmesh.sh) in place of the
+  README: a tool's notes and commands as a shell script to edit and run.
+  Every line that is not a command is a comment; it runs where it was
+  saved, and stops before anything starts if one of its files is missing.
+- iperf at more than one rate: the runs go in the background, each into
+  its own log, and are waited for before the export, rather than being
+  left to start by hand in separate terminals.
+- netmesh: the run under the load is a commented line to swap in for the
+  idle run, so the script runs one of them.
+
 ## 1.33.0 — 2026-10-23
 
 - **Measured against the model**: a run's results beside what the model

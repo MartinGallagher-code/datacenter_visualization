@@ -18,7 +18,7 @@ import {
   biggestChanges, burstRisk, busiest, busyable, cablesOf, counterparts, counterpartLevels, EXPLAIN_PATTERNS, takeoutCandidates, TAKEOUT_KINDS, formatGbps, hostLimits, GEN_UNITS, hostsFor, loadable, loadUnit, PATTERNS, reachKinds, TARGETED,
   CONNECTION_LIMITS, IMIX_BYTES, PACKET_PICKS, PER_CONNECTION, readsAsLoad, SPLITS, SPREADS, TEST_UNITS, trafficKind, utilOf,
 } from './traffic.js';
-import { RUN_LABELS, RUN_TOOLS, runReadme } from './runfiles.js';
+import { RUN_LABELS, RUN_TOOLS, runScript, scriptName } from './runfiles.js';
 
 const el = (tag, cls, text) => {
   const n = document.createElement(tag);
@@ -2145,11 +2145,12 @@ function renderRunFiles(state, actions) {
     const text = built.commands.join('\n');
     if (navigator.clipboard) navigator.clipboard.writeText(text).then(() => { copy.textContent = 'Copied'; }, () => {});
   });
-  const readme = `README-${r.tool}.txt`;
-  const notesButton = el('button', 'run-readme', `Save ${readme}`);
-  notesButton.title = 'The notes and the commands above, as a file to keep with the others';
-  notesButton.addEventListener('click', () => actions.saveText(readme, runReadme(built)));
-  buttons.append(copy, notesButton);
+  const script = scriptName(r.tool);
+  const scriptButton = el('button', 'run-script', `Save ${script}`);
+  scriptButton.title = 'The notes and the commands above as a shell script: every note a comment, every command as it is -- '
+    + `edit it, then run it with bash ${script} beside the files`;
+  scriptButton.addEventListener('click', () => actions.saveText(script, runScript(built)));
+  buttons.append(copy, scriptButton);
   wrap.append(buttons);
   return wrap;
 }

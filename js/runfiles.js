@@ -281,9 +281,16 @@ export function buildIperf(made, { seconds = 60, connections = 1, summary = '', 
   const map = renamed.length ? ' --overlay-map hosts.map' : '';
   const id = (k) => (groups.length === 1 ? 'dcviz' : `dcviz-${k + 1}`);
   const commands = [];
-  if (groups.length > 1) commands.push(`# ${groups.length} runs, one per rate: start them together, each in its own terminal`);
-  else commands.push('# the run: add --keep-going, --bind ... as you would to any run');
-  plans.forEach((plan, k) => commands.push(`iperf-orchestrator run --plan ${plan} --servers ${plan} --run-id ${id(k)} --for ${seconds}`));
+  const run = (plan, k) => `iperf-orchestrator run --plan ${plan} --servers ${plan} --run-id ${id(k)} --for ${seconds}`;
+  if (groups.length > 1) {
+    // All at once, in the background, each one's output in its own log.
+    commands.push(`# ${groups.length} runs, one per rate, all at once: each one's output goes to its own log`);
+    plans.forEach((plan, k) => commands.push(`${run(plan, k)} > iperf-run-${k + 1}.log 2>&1 &`));
+    commands.push('wait');
+  } else {
+    commands.push('# the run: add --keep-going, --bind ... as you would to any run');
+    plans.forEach((plan, k) => commands.push(run(plan, k)));
+  }
   commands.push('# what it measured, for the viewer: load iperf_results.tsv beside the layout');
   plans.forEach((plan, k) => commands.push(`iperf-orchestrator export-overlay --plan ${plan} --servers ${plan} --run-id ${id(k)}${map} `
     + `--overlay-run dcviz --overlay-out iperf_results.tsv${k ? ' --overlay-append' : ''}`));
@@ -329,8 +336,9 @@ export function buildNetmesh(made, { seconds = 60, connections = 1, summary = ''
     commands: [
       '# the idle network',
       `netmesh run --mesh mesh.csv --for ${seconds}`,
-      '# ... or 20 s idle, then under the load (the mx run, with matrix.csv beside it)',
-      `netmesh run --mesh mesh.csv --baseline 20 -- ${mxRun(seconds, connections)}`,
+      '# ... or 20 s idle, then under the load (the mx run, with matrix.csv beside it):',
+      '# put this line in place of the one above',
+      `# netmesh run --mesh mesh.csv --baseline 20 -- ${mxRun(seconds, connections)}`,
       '# what it measured, for the viewer: load netmesh_results.tsv beside the layout',
       'dcimport netmesh_results.tsv --tidy reports/',
     ],
@@ -355,20 +363,37 @@ export function runWhy(tool, made) {
   return '';
 }
 
-/** A tool's commands and notes as one text file: what to run, and why. */
-export function runReadme(built) {
+/** What a tool's script is saved as. */
+export const scriptName = (tool) => `run-${tool}.sh`;
+
+/**
+ * A tool's notes and commands as a shell script to edit and run: every line
+ * that is not a command is a comment, and the commands are the panel's. It
+ * runs where it is saved, and stops before anything starts if a file it
+ * needs is not there beside it.
+ */
+export function runScript(built) {
+  const name = scriptName(built.tool);
+  const comment = (line) => (line ? `# ${line}` : '#');
   return [
-    `${RUN_LABELS[built.tool]}: the load generator's load, to run for real`,
-    `Made by datacenter_visualization ${VERSION}.`,
+    '#!/usr/bin/env bash',
+    `# ${name} -- ${RUN_LABELS[built.tool]}: the load generator's load, to run for real.`,
+    `# Made by datacenter_visualization ${VERSION}.`,
+    '#',
+    '# Save it beside the files below, change any line you like, and run it:',
+    `#   bash ${name}`,
+    '#',
+    ...built.notes.map(comment),
+    '#',
+    '# Files, beside this script:',
+    ...built.files.map((f) => `#   ${f.name} -- ${f.note}`),
     '',
-    ...built.notes,
+    'cd "$(dirname "$0")" || exit 1',
+    `for f in ${built.files.map((f) => f.name).join(' ')}; do`,
+    '  [ -f "$f" ] || { echo "$f is not beside this script: save it here first" >&2; exit 1; }',
+    'done',
     '',
-    'Files:',
-    ...built.files.map((f) => `  ${f.name}  -- ${f.note}`),
-    '',
-    'Commands, from the directory the files are in:',
-    '',
-    ...built.commands.map((line) => (line.startsWith('#') ? line : `  ${line}`)),
+    ...built.commands,
     '',
   ].join('\n');
 }

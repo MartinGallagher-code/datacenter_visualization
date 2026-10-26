@@ -1406,6 +1406,11 @@ await test('the load as run files', async () => {
   await page.locator('#load-gen button.run-tool-iperf').click();
   await page.waitForTimeout(300);
   ok(/iperf_plan\.conf/.test(await files()) && /--run-id dcviz --for 300/.test(await files()), 'iperf’s plan, for as long as asked');
+  const [script] = await Promise.all([page.waitForEvent('download'), page.locator('#load-gen button.run-script').click()]);
+  const scriptText = readFileSync(await script.path(), 'utf8');
+  ok(script.suggestedFilename() === 'run-iperf.sh' && scriptText.startsWith('#!/usr/bin/env bash')
+     && /^iperf-orchestrator run --plan iperf_plan\.conf .* --for 300$/m.test(scriptText) && /^# 6 hosts, /m.test(scriptText),
+     'and its notes and commands as a script to edit and run: the notes comments, the commands as they are');
   await page.locator('#load-gen button.run-tool-netmesh').click();
   await page.waitForTimeout(300);
   ok(/mesh\.csv/.test(await files()) && /netmesh makes no load/.test(await files()), 'netmesh’s mesh, and what it measures');
