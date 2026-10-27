@@ -1443,9 +1443,11 @@ await test('a run against the model', async () => {
   const expected = readFileSync(await saved.path(), 'utf8');
   ok(/^model_gbps\tD\/A\/r1\/h1\t2\tpeer=D\/A\/r1\/h2/m.test(expected), 'expected.tsv: what the model expects each flow to carry');
   const run = ['!test\tiperf_mbps_out\tunit=Mb/s'];
+  ok(/^model_payload_gbps\t/m.test(expected), 'iperf’s expected.tsv carries the payload TCP will report, beside the wire rate');
   for (const line of expected.split('\n')) {
     const [name, src, value, peer] = line.split('\t');
-    if (name !== 'model_gbps' || src.endsWith('r2/h2')) continue;
+    // iperf reports TCP payload: a run that did as asked measures the payload.
+    if (name !== 'model_payload_gbps' || src.endsWith('r2/h2')) continue;
     run.push(`iperf_mbps_out\t${src.split('/').slice(-2).join('')}\t${Math.round(Number(value) * 1000 * (src.endsWith('r1/h1') ? 0.3 : 1))}\tpeer=${peer.slice(5)}`);
   }
   fixtures.set('/fx/run/expected.tsv', expected);
@@ -1455,9 +1457,12 @@ await test('a run against the model', async () => {
   await page.goto(`${base}?layout=fx/tiny.dc&results=fx/run/expected.tsv,fx/run/iperf_results.tsv`, { waitUntil: 'networkidle' });
   await page.waitForTimeout(500);
   const text = await panel();
-  ok(/43Gb\/s measured, of the 50Gb\/s the model expects on the same flows: 86%/.test(text), `how much of it arrived  (${text.split('\n')[3]})`);
+  // iperf counts payload: 94.1% of the model's wire rate at MTU 1500.
+  ok(/40\.5Gb\/s measured, of the 47\.1Gb\/s the model expects on the same flows: 86%/.test(text), `how much of it arrived  (${text.split('\n')[3]})`);
+  ok(/iperf counts TCP payload: it is set against the model’s payload, 94\.1% of what the model puts on the cables/.test(text),
+     'set against the payload of the model’s rate, and it says so');
   ok(/30 flows, within 15%: 20 as modeled, 5 short of it, 5 not measured/.test(text), 'flow by flow');
-  ok(/r1h1 sent 3Gb\/s of 10Gb\/s \(30%\) · 5 of its 5 flows, every one/.test(text), 'the host that fell short, once, by its name');
+  ok(/r1h1 sent 2\.8Gb\/s of 9\.4Gb\/s \(30%\) · 5 of its 5 flows, every one/.test(text), 'the host that fell short, once, by its name');
   ok(/Where to look[\s\S]*r1h1 sending: 5 of its 5 flows short/.test(text), 'and where to look: everything it sends');
   ok(/1 host with nothing measured\s*r2h2/.test(text), 'and the host that said nothing');
   await page.fill('#compare input.compare-tolerance', '80');

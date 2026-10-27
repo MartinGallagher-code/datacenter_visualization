@@ -27,7 +27,7 @@ import {
   routeTraffic, switchLoads, testFlows, trafficKind, viewOf, formatGbps,
 } from './traffic.js';
 import { VERSION } from './version.js';
-import { mxSizes, RUN_BUILDERS, RUN_LABELS, runPairs, runWhy } from './runfiles.js';
+import { mxSizes, RUN_BUILDERS, RUN_LABELS, runPairs, runWhy, tcpPayloadShare } from './runfiles.js';
 import {
   compareHosts, compareRuns, comparisonResults, DEFAULT_TOLERANCE, modelPairs, modelResults, suspects,
 } from './compare.js';
@@ -138,7 +138,7 @@ const state = {
   },
   // The load generator's run files: which tool's are open, and for how long
   // the commands run it.
-  runFiles: { tool: '', seconds: 60 },
+  runFiles: { tool: '', seconds: 60, mtu: 1500 },
   // Whether anything has been done since the page loaded -- a file dropped
   // or opened, a box typed in, a setting changed, a button pressed -- so a
   // reload would lose it.
@@ -1285,7 +1285,7 @@ const actions = {
     if (run.why) return { why: run.why };
     // Built once a load and setting: a floor's matrix is megabytes, and the
     // panel redraws far more often than any of these change.
-    const key = [tool, state.runFiles.seconds, state.traffic.connections, [...state.down.els].sort().join('\u0001')].join('\u0002');
+    const key = [tool, state.runFiles.seconds, state.runFiles.mtu, state.traffic.connections, [...state.down.els].sort().join('\u0001')].join('\u0002');
     let cached = RUN_FILES_CACHE.get(run);
     if (!cached) RUN_FILES_CACHE.set(run, (cached = new Map()));
     if (!cached.has(key)) cached.set(key, buildRunFiles(tool, view.model));
@@ -2852,12 +2852,13 @@ function filePairs(anchor) {
     for (const f of flowsOf(overlay, state.model).flows) {
       const key = `${f.src.key}\u0000${f.dst.key}`;
       let pair = pairs.get(key);
-      if (!pair) pairs.set(key, (pair = { src: f.src, dst: f.dst, gbps: null, offered: null, pps: null, offeredPps: null, held: new Set() }));
+      if (!pair) pairs.set(key, (pair = { src: f.src, dst: f.dst, gbps: null, offered: null, payload: null, pps: null, offeredPps: null, held: new Set() }));
       fn(pair, f.value);
     }
   };
   each(of('model_gbps'), (p, v) => { p.gbps = v; });
   each(of('model_offered_gbps'), (p, v) => { p.offered = v; });
+  each(of('model_payload_gbps'), (p, v) => { p.payload = v; });
   each(of('model_pps'), (p, v) => { p.pps = v; });
   each(of('model_offered_pps'), (p, v) => { p.offeredPps = v; });
   const held = of('model_held');
@@ -2920,13 +2921,29 @@ function compareNow(measured, against, gen, tolerance) {
     };
   }
   const model = new Map();
+  // iperf measures TCP payload, and the model the cable: its figures are set
+  // against the payload of the model's, as expected.tsv wrote it for iperf,
+  // or at the MTU the run files are made for.
+  const tcp = terms === 'gbps' && /^iperf_/i.test(measured.name);
+  const liveShare = tcpPayloadShare(state.runFiles.mtu);
+  let share = null;
   for (const [key, p] of pairs) {
-    const value = terms === 'gbps' ? p.gbps : p.pps;
+    let value = terms === 'gbps' ? p.gbps : p.pps;
     if (value === null) continue;
-    const offered = terms === 'gbps' ? p.offered : p.offeredPps;
-    model.set(key, { src: p.src, dst: p.dst, value, offered: offered === null ? value : offered, held: p.held });
+    let offered = terms === 'gbps' ? p.offered : p.offeredPps;
+    if (offered === null) offered = value;
+    if (tcp) {
+      share = p.payload !== null && p.payload !== undefined && p.gbps > 0 ? p.payload / p.gbps : liveShare;
+      value *= share;
+      offered *= share;
+    }
+    model.set(key, { src: p.src, dst: p.dst, value, offered, held: p.held });
   }
   const caveats = [];
+  if (tcp && share !== null) {
+    caveats.push(`iperf counts TCP payload: it is set against the model’s payload, ${(share * 100).toFixed(1)}% of what `
+      + 'the model puts on the cables -- the rest is headers and framing');
+  }
   if (against === 'gen') {
     if (!state.traffic.contention) caveats.push('contention is off, so the model expects every flow to get all it asked for');
     if (state.traffic.key) caveats.push('a metric is on the cables under the generated load, and the model shares them with it');
@@ -3014,8 +3031,12 @@ function buildRunFiles(tool, view) {
   const summary = `the ${run.pattern} pattern${peers}, ${run.from ? `${run.value}% of a metric` : `${run.value} ${run.unit}`}`
     + `${run.per === 'peer' ? ' to each peer' : ' from each host'}${g.hosts ? `, hosts ${g.hosts}` : ''}`;
   const pairs = livePairs(view);
-  const expected = pairs.size ? modelResults(pairs, { summary, txBytes: tool === 'mx' ? mxSizes(made).tx : 0, tool: RUN_LABELS[tool] }) : '';
-  const options = { seconds: state.runFiles.seconds, connections: state.traffic.connections, summary, expected };
+  const { mtu } = state.runFiles;
+  const expected = pairs.size ? modelResults(pairs, {
+    summary, txBytes: tool === 'mx' ? mxSizes(made, mtu).tx : 0, tool: RUN_LABELS[tool],
+    payloadShare: tool === 'iperf' ? tcpPayloadShare(mtu) : 0,
+  }) : '';
+  const options = { seconds: state.runFiles.seconds, connections: state.traffic.connections, summary, expected, mtu };
   return { built: RUN_BUILDERS[tool](made, options), dropped: made.dropped };
 }
 

@@ -15,7 +15,12 @@ export const RUN_LABELS = { iperf: 'iperf-orchestrator', mx: 'mx', netmesh: 'net
 
 const WIRE_BYTES = 66;          // what a packet costs on the wire past its payload, as mx counts it
 const MX_SIZES = [32, 65507];   // the payloads mx takes, its header to the largest UDP datagram
-const MX_BULK = 1472;           // a full 1500-byte frame's payload: a bit rate's packets
+// The fabric's MTU, which sets what one packet carries: a full frame's
+// payload for mx, and how much of a TCP packet is payload for iperf.
+export const MTUS = [1500, 9000];
+const UDP_IP = 28;              // a UDP datagram's IP and UDP headers: a full frame's payload is the MTU less these
+const TCP_IP = 52;              // TCP and IP headers, timestamps on (Linux's default)
+const FRAMING = 38;             // Ethernet header, FCS, preamble and gap: WIRE_BYTES less UDP_IP
 const MX_REPLY = 32;            // mx answers every request; the least it can answer with
 const MX_STREAMS = 256;
 const IPERF_GROUPS = 8;         // concurrent runs, one per rate, before rates are binned
@@ -27,6 +32,13 @@ const PROBE_FLOWS = 64;
 const TOKEN = /^[A-Za-z0-9._-]+$/;
 
 const packetGb = (bytes) => ((bytes + WIRE_BYTES) * 8) / 1e9;
+
+/**
+ * How much of what TCP puts on the cable is payload, at an MTU: iperf paces
+ * and reports payload, and the cable carries its headers and framing too --
+ * 1448 bytes of payload in every 1538 on the wire at 1500, 94.1%.
+ */
+export const tcpPayloadShare = (mtu = 1500) => (mtu - TCP_IP) / (mtu + FRAMING);
 const byPath = (a, b) => a.path.localeCompare(b.path, undefined, { numeric: true });
 
 /** A host as the tools know it: its name, and the address they reach it at. */
@@ -144,11 +156,11 @@ function describe(pairs, hosts, summary) {
   ].filter(Boolean);
 }
 
-/** The request and reply mx sends for a load: its own sizes, or full frames and the least reply. */
-export function mxSizes(made) {
+/** The request and reply mx sends for a load: its own sizes, or full frames at the MTU and the least reply. */
+export function mxSizes(made, mtu = 1500) {
   const { sized } = made;
   const clamp = (v) => Math.min(MX_SIZES[1], Math.max(MX_SIZES[0], Math.round(v)));
-  return { tx: clamp(sized ? sized.bytes : MX_BULK), rx: clamp(sized && sized.reply > 0 ? sized.reply : MX_REPLY) };
+  return { tx: clamp(sized ? sized.bytes : mtu - UDP_IP), rx: clamp(sized && sized.reply > 0 ? sized.reply : MX_REPLY) };
 }
 
 /**
@@ -172,9 +184,9 @@ function withExpected(built, expected, results) {
  * sizes in its header. A sized load keeps its sizes; a bit rate goes in full
  * frames, answered by the smallest reply mx makes.
  */
-export function buildMx(made, { seconds = 60, connections = 1, summary = '', expected = '' } = {}) {
+export function buildMx(made, { seconds = 60, connections = 1, summary = '', expected = '', mtu = 1500 } = {}) {
   const { pairs, hosts, sized } = made;
-  const { tx, rx } = mxSizes(made);
+  const { tx, rx } = mxSizes(made, mtu);
   const pps = (pair) => (pair.pps > 0 ? pair.pps : (pair.gbps * 1e9) / ((tx + WIRE_BYTES) * 8));
   const streams = mxStreams(connections);
   const matrix = [
@@ -191,7 +203,7 @@ export function buildMx(made, { seconds = 60, connections = 1, summary = '', exp
     notes: [
       ...describe(pairs, hosts, summary),
       sized ? `Requests of ${tx} bytes, each answered by ${rx} bytes back, as the generator sized them.`
-        : `A bit rate, sent as ${tx}-byte requests (full 1500-byte frames), each answered by mx’s smallest reply, ${rx} bytes.`,
+        : `A bit rate, sent as ${tx}-byte requests (full ${mtu}-byte frames), each answered by mx’s smallest reply, ${rx} bytes.`,
       `Each pair’s rate is split over ${streams} socket${streams === 1 ? '' : 's'} (--streams), as the model’s connections.`,
     ],
     commands: [
@@ -242,10 +254,20 @@ export function rateGroups(pairs, most = IPERF_GROUPS) {
     .sort((a, b) => b.pairs.length - a.pairs.length || b.gbps - a.gbps);
 }
 
-// iperf2's -b, in decimal units: Mb/s with a lowercase m, or kb/s under one.
-// iperf2 reads an uppercase suffix as binary -- 1000M is 1000 x 2^20 bits,
-// 1.0486 Gb/s -- so an M asked every flow for 4.9% more than the model did.
-const iperfRate = (gbps) => (gbps >= 0.001 ? `${Math.max(1, Math.round(gbps * 1000))}m` : `${Math.max(1, Math.round(gbps * 1e6))}k`);
+// iperf2's -b, in decimal units: Mb/s with a lowercase m, or kb/s under one,
+// to four figures. iperf2 reads an uppercase suffix as binary -- 1000M is
+// 1000 x 2^20 bits, 1.0486 Gb/s -- so an M asked for 4.9% more than meant.
+// iperf2's write size, -l, for a slow stream: 10 ms of it. Its default is
+// 128 KiB a write, which iperf2 refuses outright at under a second's worth
+// (about 1 Mb/s) and which overshoots a slow rate by a write at the end of
+// the run -- 7.5% at 470k over 6 s. Measured with iperf 2.1.9: 10 ms
+// writes land every rate from 470k to 941m within 0.05%.
+const IPERF_WRITE = 131072;
+const iperfLength = (gbps) => {
+  const bytesPer10ms = (gbps * 1e9) / 8 / 100;
+  return bytesPer10ms < IPERF_WRITE ? ` length=${Math.max(64, Math.floor(bytesPer10ms))}` : '';
+};
+const iperfRate = (gbps) => (gbps >= 0.001 ? `${Number((gbps * 1000).toPrecision(4))}m` : `${Math.max(1, Number((gbps * 1e6).toPrecision(4)))}k`);
 
 /**
  * iperf-orchestrator: a plan per rate, each a pair grid of the pairs at that
@@ -253,10 +275,13 @@ const iperfRate = (gbps) => (gbps >= 0.001 ? `${Math.max(1, Math.round(gbps * 10
  * streams at -b). Different rates are different runs, each on its own port
  * so they can go at once. A sized load's replies go back as TCP the other way.
  */
-export function buildIperf(made, { seconds = 60, connections = 1, summary = '', expected = '' } = {}) {
+export function buildIperf(made, { seconds = 60, connections = 1, summary = '', expected = '', mtu = 1500 } = {}) {
   const { pairs, hosts, sized } = made;
   const groups = rateGroups(pairs);
   const streams = Math.max(1, Math.round(connections));
+  // -b paces payload: the share of the model's wire rate that is payload,
+  // so headers and framing bring the cable to exactly the model's figure.
+  const payload = tcpPayloadShare(mtu);
   const renamed = hosts.filter((el) => addrOf(el) !== nameOf(el));
   const plans = groups.map((group, k) => (groups.length === 1 ? 'iperf_plan.conf' : `iperf_plan-${k + 1}.conf`));
   const files = groups.map((group, k) => ({
@@ -265,9 +290,9 @@ export function buildIperf(made, { seconds = 60, connections = 1, summary = '', 
       '# iperf-orchestrator plan v1 -- one file drives every command',
       '# mode=parallel',
       `# port=${IPERF_PORT + k} duration=${seconds} streams=${streams}`,
-      `# bandwidth=${iperfRate(group.gbps / streams)}`,
+      `# bandwidth=${iperfRate((group.gbps * payload) / streams)}${iperfLength((group.gbps * payload) / streams)}`,
       `# made by datacenter_visualization ${VERSION}: rate ${k + 1} of ${groups.length}, `
-        + `${group.pairs.length} pairs at ${prose(gbText(group.gbps))} each`,
+        + `${group.pairs.length} pairs at ${prose(gbText(group.gbps))} each on the wire, MTU ${mtu}`,
       grid(hosts.filter((el) => group.hosts.has(el)), group.pairs, { head: addrOf, row: addrOf }, () => 'x'),
       '',
     ].join('\n'),
@@ -304,7 +329,9 @@ export function buildIperf(made, { seconds = 60, connections = 1, summary = '', 
       ...(sized ? [`The generator’s requests of ${sized.bytes} bytes${sized.reply > 0 ? ` and replies of ${sized.reply}` : ''} go as TCP at the same bit rates.`] : []),
       groups.length === 1 ? `Every pair at ${gbText(groups[0].gbps)}: iperf’s -b is one rate a run.`
         : `${groups.length} rates, so ${groups.length} plans, each on its own port: iperf’s -b is one rate a run.`,
-      `${streams} stream${streams === 1 ? '' : 's'} a pair (-P), as the model’s connections; -b is each stream’s share.`,
+      `${streams} stream${streams === 1 ? '' : 's'} a pair (-P), as the model’s connections; -b is each stream’s share of the payload.`,
+      `iperf paces payload: -b is ${(payload * 100).toFixed(1)}% of the model’s rate, so with TCP/IP headers and Ethernet framing `
+        + `(MTU ${mtu}) the cables carry exactly what the model shows.`,
       ...(renamed.length ? ['hosts.map turns the addresses it tests back into the layout’s names.'] : []),
     ],
     commands,

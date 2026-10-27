@@ -11,6 +11,25 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.38.0 — 2026-10-27
+
+- **iperf runs put exactly the model's load on the cables.** iperf paces
+  and reports TCP payload, and its headers and framing ride on top -- 6.2%
+  more on the wire at MTU 1500. The plans now ask `-b` for the payload
+  share of the model's rate (941.5m for each 1 Gb/s at MTU 1500, 990m at
+  9000), and the comparison sets an iperf metric against the model's
+  payload, which `expected.tsv` carries as `model_payload_gbps`, so a run
+  that did as asked still reads 100%.
+- **An MTU choice** in Run it for real, 1500 or 9000: it sets that
+  allowance, and mx's full frames for a bit rate -- 8972-byte requests at
+  9000, a sixth of the packets for the same load.
+- **Slow iperf streams run.** Under about 1 Mb/s a stream, iperf2 refused
+  the plans outright -- its default 128 KiB writes are more than a
+  second's worth -- and up to about 100 Mb/s a final write overshot a short
+  run (7.5% at 470k over 6 s). The plans now set `length=`, iperf's `-l`,
+  to 10 ms of the stream there; measured with iperf 2.1.9, every rate from
+  470k to 941m lands within 0.05%.
+
 ## 1.37.1 — 2026-10-27
 
 - **iperf ran every flow 4.9% fast.** The plans wrote `-b` as `1000M`, and

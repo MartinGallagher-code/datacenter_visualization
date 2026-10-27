@@ -88,7 +88,7 @@ export function modelPairs(flows, toGbps) {
  * held; per host what it sends and takes in. `txBytes` turns a bit rate into
  * the requests a packet tool was asked for, at its own packet size.
  */
-export function modelResults(pairs, { summary = '', txBytes = 0, tool = '' } = {}) {
+export function modelResults(pairs, { summary = '', txBytes = 0, tool = '', payloadShare = 0 } = {}) {
   const lines = [
     `# datacenter_visualization ${VERSION} -- the model's own figures for this load${tool ? `, as ${tool} was given it` : ''}`,
     '# load it beside the run\'s results: Measured against the model compares them',
@@ -99,6 +99,8 @@ export function modelResults(pairs, { summary = '', txBytes = 0, tool = '' } = {
     ['model_offered_gbps', 'unit=Gb/s', 'higher=good', 'decimals=3', 'short=ASKED', 'label="What each flow was asked to send"'],
     ['model_pps', 'unit=pps', 'higher=good', 'decimals=0', 'short=MPPS', 'label="Requests a second the model expects each flow to carry"'],
     ['model_offered_pps', 'unit=pps', 'higher=good', 'decimals=0', 'short=APPS', 'label="Requests a second each flow was asked for"'],
+    ['model_payload_gbps', 'unit=Gb/s', 'higher=good', 'decimals=3', 'short=PAY',
+      'label="The payload of what the model expects each flow to carry, as TCP counts it"'],
     ['model_held', 'short=HELD', 'label="Where the model holds a flow back"'],
     ['model_out_gbps', 'unit=Gb/s', 'higher=good', 'decimals=3', 'short=MOUT', 'label="What the model expects each host to send"'],
     ['model_in_gbps', 'unit=Gb/s', 'higher=good', 'decimals=3', 'short=MIN', 'label="What the model expects each host to take in"'],
@@ -114,6 +116,8 @@ export function modelResults(pairs, { summary = '', txBytes = 0, tool = '' } = {
     if (pair.gbps !== null) {
       row('model_gbps', pair.gbps);
       row('model_offered_gbps', pair.offered);
+      // What a TCP tool reports of it: its payload, the rest headers and framing.
+      if (payloadShare > 0) row('model_payload_gbps', pair.gbps * payloadShare);
       out.set(pair.src, (out.get(pair.src) || 0) + pair.gbps);
       into.set(pair.dst, (into.get(pair.dst) || 0) + pair.gbps);
     }

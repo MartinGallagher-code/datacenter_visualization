@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.37.1** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.38.0** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -1072,12 +1072,13 @@ Under a running load, **Run it for real** hands over what each load tool
 needs to make that same load on the real servers — its input files, to save,
 and the commands that run it and export what it measured for this viewer.
 Nothing is run from the page. Set how long the run lasts (60 s unless
-changed), pick a tool, and save its files into one directory:
+changed) and the fabric's MTU (1500 or 9000), pick a tool, and save its
+files into one directory:
 
 | Tool | Files | What it is given |
 |---|---|---|
-| **iperf-orchestrator** ([iperf_orchestrator](https://github.com/MartinGallagher-code/iperf_orchestrator)) | `iperf_plan.conf` (one per rate), `hosts.map` | a pair grid of who sends to whom, `-b` each stream's share of the pair's rate, `-P` the routing box's *connections a flow* |
-| **mx** ([matrix_orchestrator](https://github.com/MartinGallagher-code/matrix_orchestrator)) | `matrix.csv` | each pair's requests a second; a sized load's request and reply sizes as they are, a bit rate as 1472-byte requests (full 1500-byte frames) answered by mx's smallest reply, 32 B; `--streams` the connections |
+| **iperf-orchestrator** ([iperf_orchestrator](https://github.com/MartinGallagher-code/iperf_orchestrator)) | `iperf_plan.conf` (one per rate), `hosts.map` | a pair grid of who sends to whom, `-b` each stream's share of the pair's payload, `-P` the routing box's *connections a flow* |
+| **mx** ([matrix_orchestrator](https://github.com/MartinGallagher-code/matrix_orchestrator)) | `matrix.csv` | each pair's requests a second; a sized load's request and reply sizes as they are, a bit rate as full frames at the MTU — 1472-byte requests at 1500, 8972 at 9000, a sixth of the packets — answered by mx's smallest reply, 32 B; `--streams` the connections |
 | **netmesh** ([binnacle](https://github.com/MartinGallagher-code/binnacle)) | `mesh.csv` | the load's pairs, probed ten times a second for latency, jitter, loss and path MTU |
 
 The commands come with them, ready to copy — for mx, say:
@@ -1118,6 +1119,19 @@ layout, and compare what ran with what the model said.
 - **Names must tell the hosts apart**, and be letters, digits, `.`, `_`
   and `-`: a layout whose racks all hold an `s1` cannot say which `s1` a
   result is for, so the panel asks for names first (`name={rack}{id}`).
+- **The cables carry exactly what the model shows.** iperf paces and reports
+  TCP *payload*, and every packet also carries 52 bytes of TCP/IP headers
+  (timestamps on, as Linux sends them) and 38 of Ethernet framing — 1448
+  bytes of payload in every 1538 on the wire at MTU 1500. So `-b` asks for
+  that share of the model's rate: 941.5m for each 1 Gb/s on the cable at
+  1500 (94.1%), 990m at 9000 (99.0%). The comparison knows it: an iperf
+  metric is set against the model's payload, which `expected.tsv` carries
+  as `model_payload_gbps`, so a run that did as asked reads 100%. A stream
+  slower than about 100 Mb/s is written 10 ms at a time (`length=`, iperf's
+  `-l`): iperf2's own 128 KiB writes are refused under about 1 Mb/s, and
+  overshoot a short run above it. mx needs
+  no such allowance: its packets are counted with their framing on both
+  sides.
 - **iperf's `-b` is one rate a run.** A load where every pair sends the
   same — all-to-all, random peers, a ring at one amount — is one plan. Pairs
   at different rates make a plan per rate (up to eight; more are binned),

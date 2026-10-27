@@ -18,7 +18,7 @@ import {
   biggestChanges, burstRisk, busiest, busyable, cablesOf, counterparts, counterpartLevels, EXPLAIN_PATTERNS, takeoutCandidates, TAKEOUT_KINDS, formatGbps, hostLimits, GEN_UNITS, hostsFor, loadable, loadUnit, PATTERNS, reachKinds, TARGETED,
   CONNECTION_LIMITS, IMIX_BYTES, PACKET_PICKS, PER_CONNECTION, readsAsLoad, SPLITS, SPREADS, TEST_UNITS, trafficKind, utilOf,
 } from './traffic.js';
-import { RUN_LABELS, RUN_TOOLS, runScript, runTar, scriptName, tarName } from './runfiles.js';
+import { MTUS, RUN_LABELS, RUN_TOOLS, runScript, runTar, scriptName, tarName } from './runfiles.js';
 
 const el = (tag, cls, text) => {
   const n = document.createElement(tag);
@@ -2104,7 +2104,17 @@ function renderRunFiles(state, actions) {
     if (v >= 1) actions.setRunFiles({ seconds: v });
     else seconds.value = String(r.seconds);
   });
-  row.append(el('span', null, 'the files and commands to run it for'), seconds, el('span', null, 's with'));
+  const mtu = el('select', 'run-mtu');
+  for (const value of MTUS) {
+    const opt = el('option', null, `MTU ${value}`);
+    opt.value = String(value);
+    opt.selected = value === r.mtu;
+    mtu.append(opt);
+  }
+  mtu.title = 'The fabric’s MTU: how much of a TCP packet is payload, which iperf’s -b paces, '
+    + 'and how big mx’s full frames are -- so the cables carry exactly what the model shows';
+  mtu.addEventListener('change', () => actions.setRunFiles({ mtu: Number(mtu.value) }));
+  row.append(el('span', null, 'the files and commands to run it for'), seconds, el('span', null, 's at'), mtu, el('span', null, 'with'));
   const tools = el('div', 'btnrow');
   for (const tool of RUN_TOOLS) {
     const button = el('button', `run-tool run-tool-${tool}${r.tool === tool ? ' active' : ''}`, RUN_LABELS[tool]);
