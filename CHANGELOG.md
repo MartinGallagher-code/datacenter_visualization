@@ -11,6 +11,19 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.41.0 — 2026-10-27
+
+- **mx runs are measured clear of their start and stop.** mx's agents
+  start and stop host by host over ssh, seconds apart, and mx counts a
+  request as arrived from the receiver's rows -- written only while it is
+  up -- but a reply as back from the sender's, which run throughout. A
+  peer not yet started, or already stopped, so read as replies lost on the
+  way back, on cables nowhere near full: about 1.7% a second in a minute,
+  and the run files' 60 s run exported over a 60 s window took in both
+  ends. `run-mx.sh` now holds the run 20 s longer than asked, leaves the
+  agents running (`--keep`), exports the time asked (`--window`) while
+  they all are, and stops them from a trap however the script ends.
+
 ## 1.40.1 — 2026-10-27
 
 - **A pair only replies travel expected requests it never sends.** With

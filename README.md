@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.40.1** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.41.0** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -1085,9 +1085,19 @@ The commands come with them, ready to copy — for mx, say:
 
 ```sh
 mx check --matrix matrix.csv            # what each host will send and take in
-mx run --matrix matrix.csv --for 60 --streams 1
-mx export --matrix matrix.csv --peers -o mx_results.tsv
+trap 'mx stop --matrix matrix.csv' EXIT # the agents stop however the script ends
+mx run --matrix matrix.csv --for 80 --streams 1 --keep
+mx export --matrix matrix.csv --peers --window 60 -o mx_results.tsv
 ```
+
+mx's run holds 20 s longer than the time asked, and is exported over that
+time while every agent is still running. The agents start and stop host by
+host over ssh, seconds apart, and mx counts a request as arrived from the
+receiver's rows, which exist only while it is up, but a reply as back from
+the sender's, which run the whole time: a peer not yet started, or already
+stopped, reads as *replies lost on the way back* — about 1.7% for each
+second of it in a minute. Measured mid-run, `mx_return_loss` is the return
+leg's own.
 
 **Save run-mx.tar** puts all of it — the tool's files, `expected.tsv` and
 the script — in one archive, a folder of its own, the script executable:

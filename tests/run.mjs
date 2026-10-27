@@ -5070,8 +5070,12 @@ if (python.error) {
   eq(lines[lines.length - 1], `r2h3,${[pps, pps, pps, pps, pps].join(',')}`, 'each cell 2 Gb/s in requests a second, the diagonal left empty');
   ok(lines.filter((l) => l.startsWith('#')).every((l) => !/=/.test(l) || /^# tx_size=/.test(l)),
      'and no comment says key=value but the config, which mx would read as config');
-  ok(mx.commands.includes('mx run --matrix matrix.csv --for 90 --streams 2'), 'run for as long as asked, a socket a connection');
-  ok(mx.commands.includes('mx export --matrix matrix.csv --peers -o mx_results.tsv'), 'and exported for the viewer');
+  ok(mx.commands.includes('mx run --matrix matrix.csv --for 110 --streams 2 --keep'),
+     'run 20 s longer than asked, a socket a connection, and left running for the export');
+  ok(mx.commands.includes('mx export --matrix matrix.csv --peers --window 90 -o mx_results.tsv'),
+     'exported for the viewer over the time asked, while every agent is still up -- clear of the seconds they take to start and stop');
+  ok(mx.commands.indexOf("trap 'mx stop --matrix matrix.csv' EXIT") < mx.commands.findIndex((c) => c.startsWith('mx run')),
+     'and stopped however the script ends, Ctrl+C included');
   const mxSized = buildMx(sized, {});
   ok(mxSized.files[0].text.includes('# tx_size=434 rx_size=934 port=5300') && mxSized.files[0].text.includes(',1000'),
      'a sized load keeps its sizes and its rate');
@@ -5141,12 +5145,12 @@ if (python.error) {
   ok(ipB.notes.some((n) => /NIC matching mlx5/.test(n)), 'and the notes say which NIC the traffic rides');
   ok(!plan.includes('bind='), 'no bind= without one');
   ok(buildMx(made, { seconds: 90, connections: 2, bind: 'eth1' }).commands
-    .includes('mx run --matrix matrix.csv --for 90 --streams 2 --bind eth1'), 'mx: --bind on the run');
+    .includes('mx run --matrix matrix.csv --for 110 --streams 2 --bind eth1 --keep'), 'mx: --bind on the run');
   const nmB = buildNetmesh(made, { seconds: 90, connections: 2, bind: 'eth1' });
   ok(nmB.commands.includes('netmesh run --mesh mesh.csv --for 90 --bind eth1'), 'netmesh: --bind on the run');
   ok(nmB.commands.some((c) => c.includes('--baseline 20 --bind eth1 -- mx run') && c.endsWith('--streams 2 --bind eth1')),
      'and on the mx run under it');
-  ok(buildMx(made, { bind: 'eth[12]' }).commands.some((c) => c.endsWith("--bind 'eth[12]'")), 'a pattern the shell would expand goes quoted');
+  ok(buildMx(made, { bind: 'eth[12]' }).commands.some((c) => c.endsWith("--bind 'eth[12]' --keep")), 'a pattern the shell would expand goes quoted');
   ok(!buildMx(made, { bind: 'eth 1' }).commands.some((c) => c.includes('--bind eth')), 'and one that cannot be a pattern goes nowhere');
 
   // Two rates: the iperf runs go at once, in the background, and are waited for.
@@ -5184,8 +5188,9 @@ if (python.error) {
     // From somewhere else: it runs where it was saved.
     const ran = spawnSync('bash', [join(runs, 'run-mx.sh')], { encoding: 'utf8', env, cwd: dir });
     eq([ran.status, ran.stdout.trim().split('\n')], [0, [
-      'mx check --matrix matrix.csv', 'mx run --matrix matrix.csv --for 30 --streams 1', 'mx export --matrix matrix.csv --peers -o mx_results.tsv',
-    ]], 'a script that runs its commands, in order, wherever it is run from');
+      'mx check --matrix matrix.csv', 'mx run --matrix matrix.csv --for 50 --streams 1 --keep',
+      'mx export --matrix matrix.csv --peers --window 30 -o mx_results.tsv', 'mx stop --matrix matrix.csv',
+    ]], 'a script that runs its commands, in order, wherever it is run from -- the agents stopped last, by its trap');
     ok(readFileSync(join(runs, 'mx-run.tsv'), 'utf8').startsWith('# model'), 'and collects the run with the model');
     rmSync(join(runs, 'matrix.csv'));
     const missing = spawnSync('bash', [join(runs, 'run-mx.sh')], { encoding: 'utf8', env, cwd: dir });
@@ -5209,7 +5214,7 @@ if (python.error) {
       eq(readFileSync(join(out, 'run-mx', 'matrix.csv'), 'utf8'), mxBuilt.files[0].text, 'byte for byte');
       writeFileSync(join(out, 'run-mx', 'mx_results.tsv'), '');
       const direct = spawnSync(join(out, 'run-mx', 'run-mx.sh'), [], { encoding: 'utf8', env, cwd: dir });
-      eq([direct.status, direct.stdout.trim().split('\n').length], [0, 3], 'and its script runs as it comes out, no chmod');
+      eq([direct.status, direct.stdout.trim().split('\n').length], [0, 4], 'and its script runs as it comes out, no chmod');
     }
     rmSync(dir, { recursive: true, force: true });
   }

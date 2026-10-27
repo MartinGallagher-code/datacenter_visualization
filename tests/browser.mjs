@@ -1394,7 +1394,7 @@ await test('the load as run files', async () => {
     'link up role=tor role=spine',
   ].join('\n'));
   await page.waitForTimeout(400);
-  ok(/mx check --matrix matrix\.csv/.test(await files()) && /mx run --matrix matrix\.csv --for 60 --streams 1/.test(await files()),
+  ok(/mx check --matrix matrix\.csv/.test(await files()) && /mx run --matrix matrix\.csv --for 80 --streams 1 --keep/.test(await files()),
      `named hosts: mx’s file and the commands that run it  (${(await files()).split('\n').slice(-6).join(' | ')})`);
   const [saved] = await Promise.all([page.waitForEvent('download'), page.locator('#load-gen button.run-save').first().click()]);
   eq(saved.suggestedFilename(), 'matrix.csv', 'its file to save');
@@ -1433,7 +1433,7 @@ await test('--bind goes into the run files and is kept', async () => {
     await page.waitForTimeout(400);
     await page.locator('#load-gen button.run-tool-mx').click();
     await page.waitForTimeout(300);
-    ok(/mx run --matrix matrix\.csv --for 60 --streams 1\n/.test(await files()) && /add --user, --bind/.test(await files()),
+    ok(/mx run --matrix matrix\.csv --for 80 --streams 1 --keep\n/.test(await files()) && /add --user, --bind/.test(await files()),
        'none at first: the run as ever, and where a --bind would go');
     await page.fill('#load-gen input.run-bind', 'eth 1');
     await page.locator('#load-gen input.run-bind').dispatchEvent('change');
@@ -1442,7 +1442,7 @@ await test('--bind goes into the run files and is kept', async () => {
     await page.fill('#load-gen input.run-bind', 'mlx5');
     await page.locator('#load-gen input.run-bind').dispatchEvent('change');
     await page.waitForTimeout(300);
-    ok(/mx run --matrix matrix\.csv --for 60 --streams 1 --bind mlx5/.test(await files()) && !/no spaces/.test(await files()),
+    ok(/mx run --matrix matrix\.csv --for 80 --streams 1 --bind mlx5 --keep/.test(await files()) && !/no spaces/.test(await files()),
        'mx runs on it');
     await page.locator('#load-gen button.run-tool-iperf').click();
     await page.waitForTimeout(300);

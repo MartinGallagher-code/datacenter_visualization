@@ -229,14 +229,22 @@ export function buildMx(made, { seconds = 60, connections = 1, summary = '', exp
     commands: [
       '# what each host will send and take in, before anything starts',
       'mx check --matrix matrix.csv',
-      `# the run: add --user${bind ? '' : ', --bind'} ... as you would to any mx run`,
-      mxRun(seconds, connections, bind),
-      '# what it measured, for the viewer: load mx_results.tsv beside the layout',
-      'mx export --matrix matrix.csv --peers -o mx_results.tsv',
+      `# the run: add --user${bind ? '' : ', --bind'} ... as you would to any mx run (or set MX_USER, which every mx command reads)`,
+      `# it holds ${MX_SETTLE} s longer than the ${seconds} s measured and leaves the agents running (--keep), so the`,
+      '# export reads a window clear of the seconds they take to start and stop on every host -- a peer not',
+      '# yet up, or already gone, reads as replies lost on the way back. The trap stops them however this ends.',
+      "trap 'mx stop --matrix matrix.csv' EXIT",
+      `${mxRun(seconds + MX_SETTLE, connections, bind)} --keep`,
+      `# what it measured, for the viewer: the last ${seconds} s, with every agent still running -- load mx_results.tsv beside the layout`,
+      `mx export --matrix matrix.csv --peers --window ${seconds} -o mx_results.tsv`,
     ],
   }, expected, 'mx_results.tsv');
 }
 
+// How much longer an mx run holds than the window it is measured over: the
+// agents start and stop host by host over ssh, seconds apart, and a peer not
+// yet up or already gone books its silence as replies lost on the way back.
+const MX_SETTLE = 20;
 const mxStreams = (connections) => Math.min(MX_STREAMS, Math.max(1, Math.round(connections)));
 const mxRun = (seconds, connections, bind = '') => `mx run --matrix matrix.csv --for ${seconds} --streams ${mxStreams(connections)}${bindFlag(bind)}`;
 
