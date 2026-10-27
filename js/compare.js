@@ -88,7 +88,7 @@ export function modelPairs(flows, toGbps) {
  * held; per host what it sends and takes in. `txBytes` turns a bit rate into
  * the requests a packet tool was asked for, at its own packet size.
  */
-export function modelResults(pairs, { summary = '', txBytes = 0, tool = '', payloadShare = 0 } = {}) {
+export function modelResults(pairs, { summary = '', txBytes = 0, tool = '', payloadShare = 0, rtt = null, mtu = 0 } = {}) {
   const lines = [
     `# datacenter_visualization ${VERSION} -- the model's own figures for this load${tool ? `, as ${tool} was given it` : ''}`,
     '# load it beside the run\'s results: Measured against the model compares them',
@@ -102,6 +102,11 @@ export function modelResults(pairs, { summary = '', txBytes = 0, tool = '', payl
     ['model_payload_gbps', 'unit=Gb/s', 'higher=good', 'decimals=3', 'short=PAY',
       'label="The payload of what the model expects each flow to carry, as TCP counts it"'],
     ['model_held', 'short=HELD', 'label="Where the model holds a flow back"'],
+    ['model_rtt_us', 'unit=us', 'higher=bad', 'decimals=2', 'short=MRTT',
+      'label="The fabric\'s own round trip for each pair, idle: switches and cables, not the hosts"'],
+    ['model_rtt_load_us', 'unit=us', 'higher=bad', 'decimals=2', 'short=MRTL',
+      'label="The fabric\'s own round trip for each pair, under the load"'],
+    ['model_path_mtu', 'unit=B', 'higher=good', 'decimals=0', 'short=MMTU', 'label="The MTU every path is meant to carry"'],
     ['model_out_gbps', 'unit=Gb/s', 'higher=good', 'decimals=3', 'short=MOUT', 'label="What the model expects each host to send"'],
     ['model_in_gbps', 'unit=Gb/s', 'higher=good', 'decimals=3', 'short=MIN', 'label="What the model expects each host to take in"'],
   ];
@@ -127,6 +132,13 @@ export function modelResults(pairs, { summary = '', txBytes = 0, tool = '', payl
     if (pps !== null) row('model_pps', pps);
     if (asked !== null) row('model_offered_pps', asked);
     if (pair.held.size) rows.push(`model_held\t${pair.src.path}\t${[...pair.held].sort()[0]}\t${tags}`);
+    // For a prober: the fabric's round trip, idle and under the load, and the MTU.
+    const trip = rtt && rtt.get(`${pair.src.key}\u0000${pair.dst.key}`);
+    if (trip) {
+      row('model_rtt_us', trip.idle * 1e6);
+      if (trip.loaded !== null && trip.loaded !== undefined) row('model_rtt_load_us', trip.loaded * 1e6);
+    }
+    if (mtu > 0) row('model_path_mtu', mtu);
   }
   for (const [el, v] of out) rows.push(`model_out_gbps\t${el.path}\t${num(v)}\trun=model`);
   for (const [el, v] of into) rows.push(`model_in_gbps\t${el.path}\t${num(v)}\trun=model`);
@@ -230,6 +242,100 @@ export function compareRuns(model, measured, { tolerance = DEFAULT_TOLERANCE, lo
     totals: { model: modelTotal, measured: measuredTotal, offered: offeredTotal, modelAll },
     tolerance: Math.max(0, tolerance),
   };
+}
+
+// A round trip's unit, in seconds.
+export const LATENCY_UNITS = { ns: 1e-9, us: 1e-6, 'µs': 1e-6, ms: 1e-3, s: 1 };
+
+const median = (values) => {
+  if (!values.length) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = sorted.length >> 1;
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+};
+
+/**
+ * Round trips against the model, pair by pair. The model knows the fabric
+ * -- its switches' latency=, its cables' speeds and, under a load, their
+ * queues -- but rarely the hosts' own stacks and the probing tool, which
+ * are most of a measured round trip and much the same for every pair. So
+ * that part is found rather than assumed: the median of what each pair
+ * measured beyond the model, `common`, is added to every pair's
+ * expectation, and a pair is slow when it takes more than the tolerance
+ * past that -- a path, not the hosts.
+ *
+ * @param model     Map key -> { src, dst, value } -- the model's round trip, in seconds
+ * @param measured  Map key -> { src, dst, value } -- the run's, in seconds
+ * @returns the shape compareRuns returns -- `short` a pair slower than
+ *          expected, `over` one faster -- with `common`, in seconds
+ */
+export function compareLatency(model, measured, { tolerance = DEFAULT_TOLERANCE } = {}) {
+  const tol = Math.max(0, tolerance) / 100;
+  const excess = [];
+  for (const [key, m] of model) {
+    const got = measured.get(key);
+    if (got) excess.push(got.value - m.value);
+  }
+  const common = median(excess);
+  const flows = [];
+  for (const [key, m] of model) {
+    const got = measured.get(key);
+    const want = m.value + common;
+    const base = { key, src: m.src, dst: m.dst, model: want, base: m.value, offered: want, held: m.held || new Set() };
+    if (!got) { flows.push({ ...base, measured: null, verdict: 'missing' }); continue; }
+    const ratio = want > 0 ? got.value / want : 1;
+    flows.push({ ...base, measured: got.value, verdict: ratio > 1 + tol ? 'short' : ratio < 1 - tol ? 'over' : 'ok' });
+  }
+  for (const [key, got] of measured) {
+    if (!model.has(key)) flows.push({ key, src: got.src, dst: got.dst, model: null, base: null, offered: null, held: new Set(), measured: got.value, verdict: 'unplanned' });
+  }
+  const counts = Object.fromEntries(VERDICTS.map((v) => [v, 0]));
+  for (const f of flows) counts[f.verdict]++;
+  // Hosts: each one's round trips taken together, the mean against the mean.
+  const hostMap = new Map();
+  for (const f of flows) {
+    let h = hostMap.get(f.src);
+    if (!h) hostMap.set(f.src, (h = { el: f.src, model: 0, measured: 0, flows: 0, measuredFlows: 0, short: 0, over: 0, n: 0 }));
+    if (f.model !== null) h.flows++;
+    if (f.model !== null && f.measured !== null) { h.model += f.model; h.measured += f.measured; h.n++; }
+    if (f.measured !== null) h.measuredFlows++;
+    if (f.verdict === 'short') h.short++;
+    if (f.verdict === 'over') h.over++;
+  }
+  const hosts = [...hostMap.values()].map((h) => {
+    const model = h.n ? h.model / h.n : 0;
+    const got = h.n ? h.measured / h.n : 0;
+    const ratio = model > 0 ? got / model : 1;
+    const verdict = h.flows && !h.measuredFlows ? 'silent' : !h.flows ? 'unplanned'
+      : ratio > 1 + tol ? 'short' : ratio < 1 - tol ? 'over' : 'ok';
+    return { ...h, model, measured: got, verdict };
+  });
+  const both = flows.filter((f) => f.model !== null && f.measured !== null);
+  const unexpected = flows.filter((f) => f.verdict === 'short' || f.verdict === 'over')
+    .sort((a, b) => b.measured / b.model - a.measured / a.model);
+  return {
+    kind: 'latency', flows, hosts, counts, unexpected, losses: [], asModeled: [],
+    silent: hosts.filter((h) => h.verdict === 'silent').map((h) => h.el),
+    common,
+    totals: {
+      model: median(both.map((f) => f.base)), measured: median(both.map((f) => f.measured)), offered: 0, modelAll: 0,
+    },
+    tolerance: Math.max(0, tolerance),
+  };
+}
+
+/**
+ * Path MTUs against the fabric's: a pair whose path carries less than the
+ * MTU every cable is meant to has a hop that does not -- a port, a switch
+ * or a tunnel set lower. Shaped as compareRuns is, `short` the pairs under
+ * it, so `suspects` can say which hop they share.
+ */
+export function compareMtu(measured, mtu) {
+  const flows = [];
+  for (const [key, got] of measured) {
+    flows.push({ key, src: got.src, dst: got.dst, model: mtu, measured: got.value, held: new Set(), verdict: got.value < mtu ? 'short' : 'ok' });
+  }
+  return { flows, small: flows.filter((f) => f.verdict === 'short').sort((a, b) => a.measured - b.measured), mtu };
 }
 
 /**
@@ -339,22 +445,29 @@ export function suspects(result, route, { most = 6 } = {}) {
  * the floor plan; saved, it keeps the comparison with the run.
  */
 export function comparisonResults(result, { summary = [], measuredName = '', modelName = '' } = {}) {
+  // A round trip is better short: its overlays are its own, red past 100%.
+  const rtt = result.kind === 'latency';
+  const host = rtt ? 'vs_model_rtt_pct' : 'vs_model_pct';
+  const flow = rtt ? 'vs_model_rtt_flow_pct' : 'vs_model_flow_pct';
+  const verdict = rtt ? 'vs_model_rtt_verdict' : 'vs_model_verdict';
   const lines = [
     `# datacenter_visualization ${VERSION} -- ${measuredName || 'the run'} measured against ${modelName || 'the model'}`,
     ...summary.map((line) => `# ${String(line).replace(/\s+/g, ' ')}`),
-    ['!test', 'vs_model_pct', 'unit=%', 'higher=good', 'palette=rdbu', 'min=0', 'max=200', 'agg=median', 'decimals=0', 'short=VSM',
-      'label="Sent, as a share of what the model expects"'].join('\t'),
-    ['!test', 'vs_model_flow_pct', 'unit=%', 'higher=good', 'palette=rdbu', 'min=0', 'max=200', 'agg=min', 'decimals=0', 'short=VSMF',
-      'label="Each flow, as a share of what the model expects"'].join('\t'),
-    ['!test', 'vs_model_verdict', 'agg=last', 'short=VERD', 'label="Measured against the model"'].join('\t'),
+    ['!test', host, 'unit=%', rtt ? 'higher=bad' : 'higher=good', 'palette=rdbu', 'min=0', 'max=200', 'agg=median', 'decimals=0',
+      `short=${rtt ? 'VSRT' : 'VSM'}`,
+      rtt ? 'label="Round trip, as a share of what the model expects"' : 'label="Sent, as a share of what the model expects"'].join('\t'),
+    ['!test', flow, 'unit=%', rtt ? 'higher=bad' : 'higher=good', 'palette=rdbu', 'min=0', 'max=200', rtt ? 'agg=max' : 'agg=min',
+      'decimals=0', `short=${rtt ? 'VSRF' : 'VSMF'}`,
+      rtt ? 'label="Each pair\'s round trip, as a share of what the model expects"' : 'label="Each flow, as a share of what the model expects"'].join('\t'),
+    ['!test', verdict, 'agg=last', 'short=VERD', `label="${rtt ? 'Round trips' : 'Measured'} against the model"`].join('\t'),
   ];
   const pct = (got, want) => String(Math.round((got / want) * 1000) / 10);
   for (const h of result.hosts) {
-    if (h.model > 0 && h.verdict !== 'silent') lines.push(`vs_model_pct\t${h.el.path}\t${pct(h.measured, h.model)}`);
-    lines.push(`vs_model_verdict\t${h.el.path}\t${h.verdict}`);
+    if (h.model > 0 && h.verdict !== 'silent') lines.push(`${host}\t${h.el.path}\t${pct(h.measured, h.model)}`);
+    lines.push(`${verdict}\t${h.el.path}\t${rtt && h.verdict === 'short' ? 'slow' : rtt && h.verdict === 'over' ? 'fast' : h.verdict}`);
   }
   for (const f of result.flows || []) {
-    if (f.model > 0 && f.measured !== null) lines.push(`vs_model_flow_pct\t${f.src.path}\t${pct(f.measured, f.model)}\tpeer=${f.dst.path}`);
+    if (f.model > 0 && f.measured !== null) lines.push(`${flow}\t${f.src.path}\t${pct(f.measured, f.model)}\tpeer=${f.dst.path}`);
   }
   return `${lines.join('\n')}\n`;
 }

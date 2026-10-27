@@ -11,6 +11,34 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.39.0 — 2026-10-27
+
+- **netmesh results compare against the model.** The "Measured against the
+  model" panel only took rates, so a netmesh run -- round trips, loss and
+  path MTU per pair -- had nothing to compare. Its `rtt_p50` and `rtt_p99`
+  (or any per-pair round trip in ns, us, ms or s) are now set against the
+  fabric's own round trip for each pair, there and back at 64 bytes,
+  idle or, ticked, under the generator's load. That needs only the layout,
+  so **Against** offers *the layout* when there is nothing else. What every
+  pair has beyond the fabric -- the hosts' stacks and the prober -- is
+  found as the median excess, added to each pair's expectation, and the
+  pairs more than the tolerance past it are *slower*, with where to look
+  and the `latency=` on the servers that would put the common part in the
+  model. **Show on the floor plan** and **Save vs-model.tsv** give
+  `vs_model_rtt_pct`, `vs_model_rtt_flow_pct` and `vs_model_rtt_verdict`,
+  red where slow.
+- **Path MTU and loss beside it**: pairs whose `path_mtu` is under the
+  fabric's MTU are listed with where to look; `loss` as for mx. The loss
+  the model does not explain is now listed pair by pair, for rate tools
+  too, where before it was only counted.
+- **netmesh's expected.tsv carries the model's round trips** --
+  `model_rtt_us`, `model_rtt_load_us` under the generator's load, and
+  `model_path_mtu`.
+- **Path latency is about seven times faster.** The latency between two
+  points now steps through each switch once per arriving speed and route
+  depth rather than once per route, and shares that work across pairs:
+  4,096 pairs both ways take 1.3 s, not 9.8, with the same answers.
+
 ## 1.38.0 — 2026-10-27
 
 - **iperf runs put exactly the model's load on the cables.** iperf paces

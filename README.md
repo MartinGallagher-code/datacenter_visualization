@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.38.0** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.39.0** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -1202,7 +1202,30 @@ Where to look: what the short flows have in common
   listed apart — usually a host that never ran its part.
 - **Loss**: with a loss metric per flow loaded too (`mx_peer_loss`,
   netmesh's `loss`), flows losing more than 1% are counted, and those
-  where the model has room called out: loss the load does not explain.
+  where the model has room called out by pair: loss the load does not
+  explain.
+- **Round trips** — netmesh's `rtt_p50` and `rtt_p99`, or any per-pair
+  metric in a time unit (`ns`, `us`, `ms`, `s`) whose name says round trip,
+  RTT or latency — are set against the fabric's own round trip for each
+  pair: there and back, 64-byte probes, every switch's `latency=` and every
+  cable's time to send. That needs no load and no `expected.tsv` — the
+  layout alone says it, so **Against** offers *the layout* — and netmesh's
+  `expected.tsv` from **Run it for real** carries it too, as
+  `model_rtt_us` (and `model_rtt_load_us`, with the generator's queues).
+  A measured round trip is mostly the hosts' stacks and the prober, much
+  the same for every pair, and rarely in the model; so that part is found,
+  not assumed: the median of what each pair measured beyond the fabric is
+  **common to every pair**, added to each pair's expectation, and a pair
+  more than the tolerance past it is *slower* — a path, not the hosts. The
+  panel says what to put in the model for the common part, a `latency=`
+  on the servers (a quarter of it: a round trip crosses each end's stack
+  twice). **Measured under the load** sets it against the fabric with the
+  generator's queues, for a netmesh run beside an mx one.
+- **Path MTU**: with netmesh's `path_mtu` loaded, the pairs whose path
+  carries less than the fabric's MTU (the one in Run it for real, or
+  `expected.tsv`'s `model_path_mtu`) are listed, with where to look — a
+  port, a switch or a tunnel set lower. Its `loss` is listed as a rate
+  tool's is.
 - **Show on the floor plan** loads the comparison as overlays of its own —
   `vs_model_pct`, each host's sending as a share of what the model expects,
   red to blue around 100%; `vs_model_flow_pct`, each flow's; and

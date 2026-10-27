@@ -1487,6 +1487,41 @@ await test('a run against the model', async () => {
      'the load generator as it is set now is a model too');
 }, { url: '?layout=fx/tiny.dc' });
 
+// netmesh measures round trips, not rates: its rtt_p50 against what the
+// fabric takes, with what every pair has beyond it found rather than
+// assumed. Every pair 40 µs, r1h1's 120; one path that will not carry
+// 1500 bytes, and a loss.
+await test('netmesh round trips against the model', async () => {
+  const panel = () => page.evaluate(() => (document.querySelector('#compare') || {}).innerText || '');
+  const hosts = ['r1h1', 'r1h2', 'r1h3', 'r2h1', 'r2h2', 'r2h3'];
+  const lines = ['!test\trtt_p50\tunit=us\thigher=bad', '!test\tpath_mtu\tunit=B\thigher=good', '!test\tloss\tunit=%\thigher=bad'];
+  for (const a of hosts) {
+    for (const b of hosts) {
+      if (a === b) continue;
+      lines.push(`rtt_p50\t${a}\t${a === 'r1h1' ? 120 : 40}\tpeer=${b}`);
+      lines.push(`path_mtu\t${a}\t${a === 'r1h3' && b === 'r2h3' ? 1400 : 1500}\tpeer=${b}`);
+      lines.push(`loss\t${a}\t${a === 'r2h1' && b === 'r1h1' ? 3 : 0}\tpeer=${b}`);
+    }
+  }
+  fixtures.set('/fx/mesh/netmesh_results.tsv', `${lines.join('\n')}\n`);
+  await page.goto(`${base}?layout=fx/tiny.dc&results=fx/mesh/netmesh_results.tsv`, { waitUntil: 'networkidle' });
+  await page.waitForTimeout(500);
+  const text = await panel();
+  ok(/rtt_p50/.test(await page.evaluate(() => document.querySelector('#compare select.compare-measured').innerText)), 'a round trip is something to compare');
+  ok(/the layout/.test(await page.evaluate(() => document.querySelector('#compare select.compare-against').innerText)),
+     'and with no load and no expected.tsv, against the layout itself');
+  ok(/µs is common to every pair/.test(text), 'what every pair has beyond the fabric, found');
+  ok(/latency=\d[\d.]*us on the servers/.test(text), 'and what to put in the model for it');
+  ok(/30 pairs, within 15%: 25 as expected, 5 slower/.test(text), 'pair by pair: r1h1’s five slower');
+  ok(/Where to look[\s\S]*r1h1/.test(text), 'and where to look: r1h1');
+  ok(/1 pair with a path MTU under the fabric’s 1500/.test(text) && /r1h3 → r2h3 carries 1,?400 bytes/.test(text), 'the path that will not carry the fabric’s MTU');
+  ok(/1 pair losing more than 1%[\s\S]*r2h1 → r1h1 losing 3%/.test(text), 'and the loss, by pair');
+  await page.locator('#compare button.compare-show').click();
+  await page.waitForTimeout(500);
+  ok(/Round trip, as a share of what the model expects/.test(await page.evaluate(() => document.querySelector('#overlays').innerText)),
+     'shown on the floor plan, red where slow');
+}, { url: '?layout=fx/tiny.dc' });
+
 // Reloading empties the viewer, so Ctrl+R does nothing while there is
 // something to lose, and leaving asks first. Untouched, a page reloads.
 await test('Ctrl+R and Restart cannot empty the viewer unasked', async () => {

@@ -12,7 +12,7 @@ import {
   readingText, recomputeDomain, recomputeStats,
 } from './results.js';
 import {
-  cableTip, fillWarnings, formatPps, renderBuild, renderCableLoad, renderCompare, renderFindings, renderInspector, renderLive, renderLoadGen,
+  cableTip, fillWarnings, formatPps, formatTime, renderBuild, renderCableLoad, renderCompare, renderFindings, renderInspector, renderLive, renderLoadGen,
   hostTip, renderNets, renderNotices, renderOverlays, renderTree, renderWarnings, switchTip,
 } from './ui.js';
 import {
@@ -29,7 +29,8 @@ import {
 import { VERSION } from './version.js';
 import { mxSizes, RUN_BUILDERS, RUN_LABELS, runPairs, runWhy, tcpPayloadShare } from './runfiles.js';
 import {
-  compareHosts, compareRuns, comparisonResults, DEFAULT_TOLERANCE, modelPairs, modelResults, suspects,
+  compareHosts, compareLatency, compareMtu, compareRuns, comparisonResults, DEFAULT_TOLERANCE, LATENCY_UNITS, LOSSY,
+  modelPairs, modelResults, suspects,
 } from './compare.js';
 import {
   classify, directoryFromDataTransfer, ensureRead, getFile, pathLabel, pickDirectory,
@@ -147,7 +148,7 @@ const state = {
   // -- 'gen' for the load generator as it stands, or the key of a loaded
   // expected.tsv's model_gbps -- and how far either side still counts as
   // as modeled, in per cent. '' picks for itself.
-  compare: { measured: '', against: '', tolerance: DEFAULT_TOLERANCE },
+  compare: { measured: '', against: '', tolerance: DEFAULT_TOLERANCE, underLoad: false },
   capacityView: false,      // with no traffic shown, cable widths by gbps=
   maxLinksDrawn: 60000,
   warnings: [],
@@ -2825,16 +2826,25 @@ function compareChoices() {
     if (/^(model_|vs_model)/.test(o.name)) continue;
     const kind = trafficKind(o);
     if (kind !== 'flows' && kind !== 'hosts') continue;
+    // A round trip per pair, a prober's: set against the fabric's own.
+    if (isRoundTrip(o)) { measured.push(o); continue; }
     const unit = loadUnit(o, kind);
     if (!unit.ok || (unit.toGbps === null && !/^\s*pps\s*$/i.test(o.unit))) continue;
     measured.push(o);
   }
-  // A run's own outbound figure first: what a host sent, flow by flow.
-  const rank = (o) => (trafficKind(o) === 'flows' ? 0 : 2) + (/out|peer_pps|sent|tx/i.test(o.name) ? 0 : 1);
+  // A run's own outbound figure first: what a host sent, flow by flow; then
+  // a round trip, its middle before its tail.
+  const rank = (o) => (isRoundTrip(o) ? 4 + (/p50|avg|mean|median/i.test(o.name) ? 0 : 1)
+    : (trafficKind(o) === 'flows' ? 0 : 2) + (/out|peer_pps|sent|tx/i.test(o.name) ? 0 : 1));
   measured.sort((a, b) => rank(a) - rank(b));
   const view = state.cableView ? state.cableView() : null;
   const gen = view && view.model && view.model.gen && !view.model.gen.why ? view.model : null;
   return { measured, models, gen };
+}
+
+/** Whether a metric is a round trip measured per pair: netmesh's rtt_p50, say. */
+function isRoundTrip(o) {
+  return trafficKind(o) === 'flows' && LATENCY_UNITS[String(o.unit || '').trim()] !== undefined && /rtt|latency|round/i.test(o.name);
 }
 
 /** A loaded metric of a name from one file, or null. */
@@ -2883,15 +2893,16 @@ const compareCache = { inputs: null, value: null };
 function comparison() {
   const c = state.compare;
   const { measured: metrics, models, gen } = compareChoices();
-  if (!metrics.length) return { why: 'load a run’s results: a rate, per flow (peer=) or per host' };
+  if (!metrics.length) return { why: 'load a run’s results: a rate, per flow (peer=) or per host, or a round trip per pair' };
   const measured = metrics.find((o) => o.key === c.measured) || metrics[0];
   const file = models.find((o) => o.key === c.against);
   const against = file || (c.against === 'gen' && gen ? 'gen' : models[0] || (gen ? 'gen' : null));
-  if (!against) return { why: 'load the run’s expected.tsv, or run the load generator as the run was made', measured };
+  // A round trip needs no load: the layout alone says what the fabric takes.
+  if (!against && !isRoundTrip(measured)) return { why: 'load the run’s expected.tsv, or run the load generator as the run was made', measured };
   // A loss metric loaded beside it changes the comparison too.
   const loaded = [...state.overlays.values()].map((o) => o.key).join('\u0001');
-  const inputs = [measured, against, against === 'gen' ? gen : null, c.tolerance, state.model, state.down.els.size,
-    state.traffic.split, state.traffic.connections, loaded];
+  const inputs = [measured, against, against === 'gen' || c.underLoad ? gen : null, c.tolerance, state.model, state.down.els.size,
+    state.traffic.split, state.traffic.connections, loaded, c.underLoad, state.runFiles.mtu];
   if (compareCache.inputs && inputs.every((x, i) => x === compareCache.inputs[i])) return compareCache.value;
   const value = { ...compareNow(measured, against, gen, c.tolerance), measured, against };
   compareCache.inputs = inputs;
@@ -2900,6 +2911,7 @@ function comparison() {
 }
 
 function compareNow(measured, against, gen, tolerance) {
+  if (isRoundTrip(measured)) return compareRoundTrips(measured, against, gen, tolerance);
   const pairs = against === 'gen' ? livePairs(gen) : filePairs(against);
   const modelName = against === 'gen' ? 'the load generator' : `${against.source || 'expected.tsv'}`;
   const kind = trafficKind(measured);
@@ -2984,8 +2996,158 @@ function compareNow(measured, against, gen, tolerance) {
   return { result, suspects: found, unit: unitText, kind, modelName, caveats };
 }
 
+// A prober's packet: netmesh's are 64 bytes, and come back the same size.
+const PROBE_BYTES = 64;
+
+/**
+ * The fabric's own round trip for each pair -- there and back, over every
+ * shortest route each way, idle and, given a load, with its queues -- in
+ * seconds. Worked out once a layout, take-out and load, the steps towards
+ * each destination shared by every pair.
+ */
+const rttCache = new WeakMap();
+function roundTrips(pairs, load) {
+  const owner = load ? load.loads : state.model;
+  let cache = rttCache.get(owner);
+  const downKey = [...state.down.els].sort().join('\u0001');
+  if (!cache || cache.model !== state.model || cache.down !== downKey) {
+    rttCache.set(owner, (cache = { model: state.model, down: downKey, trips: new Map() }));
+    cache.idle = { down: state.takenOut(), shared: {} };
+    cache.loaded = load ? { down: state.takenOut(), shared: {}, load } : null;
+  }
+  const mid = (x) => (x.min + x.max) / 2;
+  for (const [key, p] of pairs) {
+    if (cache.trips.has(key)) continue;
+    const there = pathLatency(state.model, p.src, p.dst, PROBE_BYTES, cache.idle);
+    const back = pathLatency(state.model, p.dst, p.src, PROBE_BYTES, cache.idle);
+    let loaded = null;
+    if (cache.loaded) {
+      const a = pathLatency(state.model, p.src, p.dst, PROBE_BYTES, cache.loaded);
+      const b = pathLatency(state.model, p.dst, p.src, PROBE_BYTES, cache.loaded);
+      if (a && b) loaded = (a.loaded.min + a.loaded.max) / 2 + (b.loaded.min + b.loaded.max) / 2;
+    }
+    cache.trips.set(key, there && back ? { idle: mid(there) + mid(back), loaded } : null);
+  }
+  return cache.trips;
+}
+
+/** The generator's load, as pathLatency takes one, or null. */
+const loadOf = (gen) => (gen && gen.toGbps !== null && gen.toGbps !== undefined
+  ? { loads: gen.loads, toGbps: gen.toGbps, packetBytes: gen.packets ? gen.packets.bytes : 0 } : null);
+
+/**
+ * A prober's round trips against the fabric's, pair by pair, with the path
+ * MTU and loss it measured beside them: what netmesh says.
+ */
+function compareRoundTrips(measured, against, gen, tolerance) {
+  const scale = LATENCY_UNITS[String(measured.unit).trim()];
+  const keyOf = (f) => `${f.src.key}\u0000${f.dst.key}`;
+  const measuredMap = new Map();
+  for (const f of flowsOf(measured, state.model).flows) measuredMap.set(keyOf(f), { src: f.src, dst: f.dst, value: f.value * scale });
+  const file = against && against !== 'gen' ? against : null;
+  // The pairs the model has: expected.tsv's, or the generator's; and every
+  // pair measured, whose round trip the layout alone can say.
+  const planned = file ? filePairs(file) : against === 'gen' ? livePairs(gen) : new Map();
+  const all = new Map(planned);
+  for (const [key, m] of measuredMap) if (!all.has(key)) all.set(key, m);
+  const fromFile = new Map();
+  if (file) {
+    const read = (name, field) => {
+      const o = overlayNamed(name, file.source);
+      if (!o) return;
+      for (const f of flowsOf(o, state.model).flows) {
+        const rec = fromFile.get(keyOf(f)) || {};
+        rec[field] = f.value * 1e-6;
+        fromFile.set(keyOf(f), rec);
+      }
+    };
+    read('model_rtt_us', 'idle');
+    read('model_rtt_load_us', 'loaded');
+  }
+  const caveats = [];
+  const under = !!state.compare.underLoad;
+  const load = under ? loadOf(gen) : null;
+  if (under && !load && ![...fromFile.values()].some((r) => r.loaded !== undefined)) {
+    caveats.push('no load to queue behind -- run the load generator, or load an expected.tsv made under it -- so set against the idle fabric');
+  }
+  const live = roundTrips(all, load);
+  const model = new Map();
+  for (const [key, p] of all) {
+    const rec = fromFile.get(key) || {};
+    const trip = live.get(key);
+    const value = under && rec.loaded !== undefined ? rec.loaded
+      : under && trip && trip.loaded !== null ? trip.loaded
+        : rec.idle !== undefined ? rec.idle : trip ? trip.idle : null;
+    if (value === null) continue;
+    if (!planned.size && !measuredMap.has(key)) continue;
+    model.set(key, { src: p.src, dst: p.dst, value, held: p.held || new Set() });
+  }
+  const result = compareLatency(model, measuredMap, { tolerance });
+  const t = state.traffic;
+  const route = (flows) => routeTraffic(state.model, flows, { split: t.split, connections: t.connections, seed: t.seed, down: state.takenOut() }).loads;
+  const found = suspects(result, route);
+
+  // The path MTU beside it: under the fabric's, a hop that is not.
+  let mtu = null;
+  const mtuOverlay = overlayNamed('path_mtu', measured.source)
+    || [...state.overlays.values()].find((o) => trafficKind(o) === 'flows' && /mtu/i.test(o.name) && !/^model_/.test(o.name));
+  if (mtuOverlay) {
+    let fabricMtu = state.runFiles.mtu;
+    const said = file && overlayNamed('model_path_mtu', file.source);
+    if (said) {
+      const first = flowsOf(said, state.model).flows[0];
+      if (first) fabricMtu = first.value;
+    }
+    const got = new Map();
+    for (const f of flowsOf(mtuOverlay, state.model).flows) got.set(keyOf(f), { src: f.src, dst: f.dst, value: f.value });
+    mtu = compareMtu(got, fabricMtu);
+    mtu.suspects = suspects(mtu, route);
+  }
+  // And loss: where the model has room, the surprise.
+  const lossOverlay = overlayNamed('loss', measured.source)
+    || [...state.overlays.values()].find((o) => trafficKind(o) === 'flows' && /loss/i.test(o.name) && String(o.unit).trim() === '%');
+  if (lossOverlay) {
+    for (const f of flowsOf(lossOverlay, state.model).flows) {
+      if (!(f.value >= LOSSY)) continue;
+      const p = planned.get(keyOf(f));
+      result.losses.push({ key: keyOf(f), src: f.src, dst: f.dst, loss: f.value, expected: !!(p && p.held && p.held.size), modeled: !!p });
+    }
+    result.losses.sort((a, b) => a.expected - b.expected || b.loss - a.loss);
+  }
+  const modelName = file ? file.source || 'expected.tsv' : against === 'gen' ? 'the load generator' : 'the layout';
+  return { result, suspects: found, unit: 's', kind: 'latency', modelName, caveats, mtu, under: under && !caveats.length };
+}
+
+/** What a round-trip comparison says, line by line. */
+function roundTripSummary(cmp) {
+  const { result } = cmp;
+  const t = result.totals;
+  const lines = [];
+  lines.push(`${cmp.measured.name}: ${formatTime(t.measured)} for the middle pair; the fabric accounts for ${formatTime(t.model)}`
+    + `${cmp.under ? ' with the load’s queues' : ''}, and ${formatTime(result.common)} is common to every pair -- the hosts’ stacks and the prober`);
+  if (result.common > 0) {
+    // A round trip goes through each end's stack twice, there and back.
+    lines.push(`to put that in the model: latency=${Number((result.common / 4 * 1e6).toPrecision(3))}us on the servers`
+      + ' (a round trip crosses both ends’ stacks twice)');
+  }
+  const c = result.counts;
+  const parts = [`${c.ok} as expected`];
+  if (c.short) parts.push(`${c.short} slower`);
+  if (c.over) parts.push(`${c.over} faster`);
+  if (c.missing) parts.push(`${c.missing} not measured`);
+  if (c.unplanned) parts.push(`${c.unplanned} not in the model`);
+  lines.push(`${result.flows.length.toLocaleString()} pairs, within ${result.tolerance}%: ${parts.join(', ')}`);
+  if (cmp.mtu) {
+    lines.push(cmp.mtu.small.length
+      ? `${cmp.mtu.small.length.toLocaleString()} pair${cmp.mtu.small.length === 1 ? '' : 's'} with a path MTU under the fabric’s ${cmp.mtu.mtu}`
+      : `every path carries the fabric’s ${cmp.mtu.mtu}-byte MTU`);
+  }
+  return lines;
+}
+
 /** What a comparison says, line by line: for its header, and its file's. */
 function compareSummary(cmp) {
+  if (cmp.kind === 'latency') return roundTripSummary(cmp);
   const { result, unit } = cmp;
   const fmt = (v) => (unit === 'Gb/s' ? `${formatGbps(v)}b/s` : formatPps(v));
   const lines = [];
@@ -3035,6 +3197,8 @@ function buildRunFiles(tool, view) {
   const expected = pairs.size ? modelResults(pairs, {
     summary, txBytes: tool === 'mx' ? mxSizes(made, mtu).tx : 0, tool: RUN_LABELS[tool],
     payloadShare: tool === 'iperf' ? tcpPayloadShare(mtu) : 0,
+    rtt: tool === 'netmesh' ? roundTrips(pairs, loadOf(view)) : null,
+    mtu: tool === 'netmesh' ? mtu : 0,
   }) : '';
   const options = { seconds: state.runFiles.seconds, connections: state.traffic.connections, summary, expected, mtu };
   return { built: RUN_BUILDERS[tool](made, options), dropped: made.dropped };
