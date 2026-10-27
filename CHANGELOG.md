@@ -11,6 +11,19 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.40.1 — 2026-10-27
+
+- **A pair only replies travel expected requests it never sends.** With
+  replies on and a pattern where a pair is not called both ways -- random
+  to one peer, incast, a ring -- the way back from a called host carries
+  its caller's replies and nothing else. `expected.tsv` read those reply
+  bits as requests at the request size: 1000 replies of 500 B became
+  `model_pps` 4354 requests of 64 B, so a host asked for 1000 a second was
+  expected to send 5354, and mx's 999 read as far short. Such a pair now
+  has no requests a second in the file; its bits stay in `model_gbps`.
+  The comparison against the load generator itself was never affected.
+- 1.40.0 and 1.40.1 share one pull request.
+
 ## 1.40.0 — 2026-10-27
 
 - **Every titled part of the side panels folds.** The load generator, cable

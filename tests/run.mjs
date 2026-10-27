@@ -5272,6 +5272,29 @@ if (python.error) {
   const pps = /^model_pps\t\S+\t(\S+)\tpeer=\S+r1\/h2/m.exec(mxText);
   ok(pps && Math.abs(Number(pps[1]) - 2e9 / (1538 * 8)) < 1, 'a packet tool’s requests a second, at its packet size');
 
+  // A random pattern to one peer, requests of 64 B answered by 500: r1h1
+  // calls r2h1, so r2h1 -> r1h1 carries r1h1's replies and nothing else. It
+  // has no requests a second -- read as requests, its 1000 replies of 500 B
+  // were once 4354 of 64, and r2h1 was expected to send 5354.
+  const req = { gen: true, id: 1, src: h('r1h1'), dst: h('r2h1'), value: 1000 * packetGb(64), pps: 1000 };
+  const rep = { gen: true, id: 2, src: h('r2h1'), dst: h('r1h1'), value: 1000 * packetGb(500), pps: 1000, reply: true };
+  const own = { gen: true, id: 3, src: h('r2h1'), dst: h('r1h2'), value: 1000 * packetGb(64), pps: 1000 };
+  const replyPairs = modelPairs([req, rep, own], 1);
+  const replyText = modelResults(replyPairs, { txBytes: 64 });
+  const ppsOf = (name, a, b) => {
+    const m = new RegExp(`^${name}\\t\\S+${a}\\t(\\S+)\\tpeer=\\S+${b}\\t`, 'm').exec(replyText);
+    return m ? Number(m[1]) : null;
+  };
+  eq([ppsOf('model_pps', 'r1/h1', 'r2/h1'), ppsOf('model_offered_pps', 'r1/h1', 'r2/h1')], [1000, 1000], 'a request: its own rate');
+  eq([ppsOf('model_pps', 'r2/h1', 'r1/h1'), ppsOf('model_offered_pps', 'r2/h1', 'r1/h1')], [null, null],
+     'a pair only replies travel has no requests a second -- not its reply bits read as requests');
+  ok(ppsOf('model_gbps', 'r2/h1', 'r1/h1') > 0, 'though its bits are still on the cables');
+  eq(ppsOf('model_pps', 'r2/h1', 'r1/h2'), 1000, 'and r2h1 is expected to send its own 1000 a second, not 5354');
+  // A bit rate, sent as a tool's packets, still turns into requests a second.
+  const bitPairs = modelPairs([{ gen: true, id: 4, src: h('r1h1'), dst: h('r1h2'), value: 1 }], 1);
+  ok(Math.abs(/^model_pps\t\S+\t(\S+)/m.exec(modelResults(bitPairs, { txBytes: 1472 }))[1] - 1e9 / (1538 * 8)) < 1,
+     'a bit rate with no replies: its bits at the tool’s size, as before');
+
   // A run: r1h1's NIC gives 30%, r2h2 says nothing, one flow nobody planned.
   const model = new Map([...pairs].map(([key, p]) => [key, { src: p.src, dst: p.dst, value: p.gbps, offered: p.offered, held: p.held }]));
   const measured = new Map();
