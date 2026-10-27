@@ -139,6 +139,10 @@ const state = {
   // The load generator's run files: which tool's are open, and for how long
   // the commands run it.
   runFiles: { tool: '', seconds: 60 },
+  // Whether anything has been done since the page loaded -- a file dropped
+  // or opened, a box typed in, a setting changed, a button pressed -- so a
+  // reload would lose it.
+  touched: false,
   // Measured against the model: which metric of a run, against which model
   // -- 'gen' for the load generator as it stands, or the key of a loaded
   // expected.tsv's model_gbps -- and how far either side still counts as
@@ -3370,6 +3374,40 @@ window.addEventListener('keydown', (e) => {
   }
   else if (e.key === '/') { e.preventDefault(); $('filter').focus(); }
   else if (e.key === ' ' && state.selected) { e.preventDefault(); actions.toggleCollapse(state.selected); }
+});
+
+// Reloading empties the viewer: whatever was dropped, built, edited or set
+// is gone, and nothing on the page brings it back. So while there is
+// anything to lose, the reload keys are not the browser's -- the one chord
+// taken from it, in the capture phase so a text box cannot let it through --
+// and leaving the page any other way (its reload button, closing the tab)
+// asks first. A page as its URL loaded it, untouched, reloads as ever: the
+// reload brings all of it back.
+for (const type of ['input', 'change', 'drop']) document.addEventListener(type, () => { state.touched = true; }, true);
+document.addEventListener('click', (e) => {
+  if (e.target && e.target.closest && e.target.closest('button')) state.touched = true;
+}, true);
+
+/** Whether a reload would lose anything: something loaded or written, and touched since. */
+function workToLose() {
+  if (!state.touched) return false;
+  return state.rawOverlays.size > 0 || !!String(state.layoutText || '').trim() || !!$('editor-text').value.trim();
+}
+
+const RELOAD_NOTE = 'Ctrl+R (⌘R, F5) would reload the page and empty the viewer, so here it does nothing. '
+  + 'To reload anyway, use the browser’s own reload button: it asks first.';
+window.addEventListener('keydown', (e) => {
+  const reload = e.key === 'F5' || ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === 'r' || e.key === 'R'));
+  if (!reload || !workToLose()) return;
+  e.preventDefault();
+  e.stopPropagation();
+  if (!state.notices.some((n) => n.text === RELOAD_NOTE)) note('note', RELOAD_NOTE);
+  actions.toggleNotices(true);
+}, true);
+window.addEventListener('beforeunload', (e) => {
+  if (!workToLose()) return;
+  e.preventDefault();
+  e.returnValue = '';
 });
 
 window.addEventListener('resize', invalidate);

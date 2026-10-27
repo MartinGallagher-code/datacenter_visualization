@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.35.0** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.36.0** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -2191,6 +2191,11 @@ quietly left stale.
   thousands of elements smooth). `f` fits selection, `0` fits all. Labels grow
   with the zoom — each is sized from its element's on-screen height — so
   zooming in to read something makes it bigger, up to a ceiling.
+- **Reloading cannot empty it by accident.** A reload loses everything
+  loaded, built, edited or set, so once you have done anything since the
+  page opened, Ctrl+R (⌘R, F5) does nothing and a note says so, and the
+  browser's reload button or closing the tab asks first. A page just as its
+  URL loaded it, untouched, reloads as ever: the reload brings it all back.
 - **Expand / collapse** — double-click any container, use the tree, or the
   Collapse racks/rows/rooms buttons. Collapsed containers show their
   aggregate results computed from all raw samples inside them.

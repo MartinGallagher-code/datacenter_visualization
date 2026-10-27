@@ -11,6 +11,16 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.36.0 — 2026-10-27
+
+- **Ctrl+R can no longer empty the viewer.** Reloading loses everything
+  loaded, built, edited or set, so once anything has been done since the
+  page opened, Ctrl+R, ⌘R and F5 do nothing and a note says why; the
+  browser's reload button, and closing the tab, ask first. Untouched, a
+  page reloads as before, its URL bringing it all back. The only chord the
+  viewer takes from the browser.
+- 1.34.0, 1.35.0 and 1.36.0 share one pull request.
+
 ## 1.35.0 — 2026-10-26
 
 - **Save run-mx.tar** (run-iperf.tar, run-netmesh.tar): a tool's files,

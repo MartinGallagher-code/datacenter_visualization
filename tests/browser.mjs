@@ -1482,6 +1482,30 @@ await test('a run against the model', async () => {
      'the load generator as it is set now is a model too');
 }, { url: '?layout=fx/tiny.dc' });
 
+// Reloading empties the viewer, so Ctrl+R does nothing while there is
+// something to lose, and leaving asks first. Untouched, a page reloads.
+await test('Ctrl+R cannot empty the viewer', async () => {
+  const reloadKey = (key, mods) => page.evaluate(([k, m]) => {
+    const e = new KeyboardEvent('keydown', { key: k, ...m, bubbles: true, cancelable: true });
+    window.dispatchEvent(e);
+    return e.defaultPrevented;
+  }, [key, mods]);
+  const leaving = () => page.evaluate(() => {
+    const e = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(e);
+    return e.defaultPrevented;
+  });
+  ok(!(await reloadKey('r', { ctrlKey: true })) && !(await leaving()), 'a page as its URL loaded it, untouched, reloads as ever');
+  await page.fill('#filter', 's3');
+  await page.waitForTimeout(300);
+  ok(await reloadKey('r', { ctrlKey: true }), 'touched: Ctrl+R does nothing');
+  ok(await reloadKey('R', { metaKey: true, shiftKey: true }) && await reloadKey('F5', {}), 'nor ⌘⇧R, nor F5');
+  ok(!(await reloadKey('f', { ctrlKey: true })), 'and every other chord is still the browser’s');
+  ok(/would reload the page and empty the viewer/.test(await page.evaluate(() => document.querySelector('#notices').innerText)),
+     'and it says why, and what to do instead');
+  ok(await leaving(), 'leaving any other way asks first');
+}, { url: '?layout=examples/dual-plane.dc' });
+
 // A hundred thousand flows and more: a random load at a few hundred peers
 // over a few hundred servers. Spreading that many flows into one push()
 // overflowed the stack, and the page went blank.
