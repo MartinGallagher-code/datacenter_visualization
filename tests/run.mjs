@@ -53,7 +53,7 @@ import {
   droppedLayoutsNotice, layoutNotice, prefixed, resultsFileNotice,
 } from '../js/report.js';
 import {
-  buildIperf, buildMx, buildNetmesh, hostToken, rateGroups, runPairs, runProblem, runScript, runTar, runWhy, scriptName, tarball, tarName,
+  buildIperf, buildMx, buildNetmesh, hostToken, mxSizes, rateGroups, runPairs, runProblem, runScript, runTar, runWhy, scriptName, tarball, tarName, tcpPayloadShare,
 } from '../js/runfiles.js';
 import {
   compareHosts, compareRuns, comparisonResults, modelPairs, modelResults, suspects,
@@ -5075,15 +5075,27 @@ if (python.error) {
   const mxSized = buildMx(sized, {});
   ok(mxSized.files[0].text.includes('# tx_size=434 rx_size=934 port=5300') && mxSized.files[0].text.includes(',1000'),
      'a sized load keeps its sizes and its rate');
+  const jumbo = buildMx(made, { mtu: 9000 }).files[0].text;
+  ok(jumbo.includes('# tx_size=8972 rx_size=32 port=5300') && jumbo.includes(`,${Math.round(2e9 / ((8972 + 66) * 8))},`),
+     'at MTU 9000, a bit rate goes as full jumbo frames: a sixth of the packets');
+  eq(mxSizes(sized, 9000).tx, 434, 'and a sized load keeps its own size whatever the MTU');
 
   // iperf: one rate, one plan; -b each stream's share.
   const ip = buildIperf(made, { seconds: 90, connections: 2 });
   eq(ip.files.map((f) => f.name), ['iperf_plan.conf'], 'one rate is one plan');
   const plan = ip.files[0].text;
-  ok(plan.includes('# port=5001 duration=90 streams=2\n# bandwidth=1000m\n'),
-     'its -b each of its two streams’ half of 2 Gb/s, in iperf2’s decimal m -- its M is 2^20, 4.9% more');
-  ok(/# bandwidth=500k\n/.test(buildIperf({ ...made, pairs: made.pairs.map((p) => ({ ...p, gbps: 0.0005 })) }, {}).files[0].text),
-     'and under a megabit, in decimal kilobits');
+  // 2 Gb/s on the wire a pair, 1 a stream; iperf paces payload, 1448 bytes
+  // of every 1538 on the wire at MTU 1500.
+  eq(tcpPayloadShare(1500), 1448 / 1538, 'TCP payload at MTU 1500: 1448 bytes of every 1538 on the wire');
+  eq(tcpPayloadShare(9000), 8948 / 9038, 'and at 9000, 8948 of 9038');
+  ok(plan.includes('# port=5001 duration=90 streams=2\n# bandwidth=941.5m\n'),
+     'its -b each stream’s share of the payload, so the cable carries exactly the model’s 1 Gb/s a stream -- in iperf2’s decimal m, its M being 2^20 -- in its own 128 KiB writes');
+  ok(/# bandwidth=990m\n/.test(buildIperf(made, { connections: 2, mtu: 9000 }).files[0].text), 'at MTU 9000, less of it is headers');
+  ok(/# bandwidth=470\.7k length=588\n/.test(buildIperf({ ...made, pairs: made.pairs.map((p) => ({ ...p, gbps: 0.0005 })) }, {}).files[0].text),
+     'under a megabit, in decimal kilobits, written 10 ms at a time -- iperf2 refuses its 128 KiB writes at that rate');
+  ok(/# bandwidth=94\.15m length=117685\n/.test(buildIperf({ ...made, pairs: made.pairs.map((p) => ({ ...p, gbps: 0.1 })) }, {}).files[0].text),
+     'and 10 ms writes up to where they reach its own 128 KiB');
+  ok(ip.notes.some((n) => /-b is 94\.1% of the model’s rate/.test(n)), 'and the notes say why');
   ok(plan.includes('src\\dst,r1h1,r1h2,r1h3,r2h1,r2h2,r2h3\nr1h1,,x,x,x,x,x\n'), 'and a pair grid of who sends to whom');
   ok(ip.commands.includes('iperf-orchestrator run --plan iperf_plan.conf --servers iperf_plan.conf --run-id dcviz --for 90'),
      'run from the plan, which is its own server list');
@@ -5223,6 +5235,10 @@ if (python.error) {
   const text = modelResults(pairs, { summary: 'all to all', tool: 'iperf-orchestrator' });
   ok(/^!test\tmodel_gbps\tunit=Gb\/s/m.test(text) && /^!test\tmodel_held\t/m.test(text), 'the model as a results file');
   ok(!/model_pps/.test(text), 'with no requests a second for a bit rate it was not asked in');
+  ok(!/model_payload_gbps/.test(text), 'and no payload figure unless a TCP tool is given it');
+  const forTcp = modelResults(pairs, { payloadShare: 1448 / 1538 });
+  const pay = /^model_payload_gbps\t\S+r1\/h1\t(\S+)\tpeer=\S+r1\/h2/m.exec(forTcp);
+  ok(pay && Math.abs(Number(pay[1]) - 2 * 1448 / 1538) < 1e-5, 'for iperf, each flow’s payload: what TCP will report of it');
   const raw = new Map();
   const warnings = [];
   parseResults(text, raw, warnings, 'expected.tsv');
