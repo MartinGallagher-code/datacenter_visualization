@@ -242,8 +242,10 @@ export function rateGroups(pairs, most = IPERF_GROUPS) {
     .sort((a, b) => b.pairs.length - a.pairs.length || b.gbps - a.gbps);
 }
 
-// iperf2's -b: Mb/s with an M, or k/s under one.
-const iperfRate = (gbps) => (gbps >= 0.001 ? `${Math.max(1, Math.round(gbps * 1000))}M` : `${Math.max(1, Math.round(gbps * 1e6))}K`);
+// iperf2's -b, in decimal units: Mb/s with a lowercase m, or kb/s under one.
+// iperf2 reads an uppercase suffix as binary -- 1000M is 1000 x 2^20 bits,
+// 1.0486 Gb/s -- so an M asked every flow for 4.9% more than the model did.
+const iperfRate = (gbps) => (gbps >= 0.001 ? `${Math.max(1, Math.round(gbps * 1000))}m` : `${Math.max(1, Math.round(gbps * 1e6))}k`);
 
 /**
  * iperf-orchestrator: a plan per rate, each a pair grid of the pairs at that

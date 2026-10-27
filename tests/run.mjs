@@ -5080,7 +5080,10 @@ if (python.error) {
   const ip = buildIperf(made, { seconds: 90, connections: 2 });
   eq(ip.files.map((f) => f.name), ['iperf_plan.conf'], 'one rate is one plan');
   const plan = ip.files[0].text;
-  ok(plan.includes('# port=5001 duration=90 streams=2\n# bandwidth=1000M\n'), 'its -b each of its two streams’ half of 2 Gb/s');
+  ok(plan.includes('# port=5001 duration=90 streams=2\n# bandwidth=1000m\n'),
+     'its -b each of its two streams’ half of 2 Gb/s, in iperf2’s decimal m -- its M is 2^20, 4.9% more');
+  ok(/# bandwidth=500k\n/.test(buildIperf({ ...made, pairs: made.pairs.map((p) => ({ ...p, gbps: 0.0005 })) }, {}).files[0].text),
+     'and under a megabit, in decimal kilobits');
   ok(plan.includes('src\\dst,r1h1,r1h2,r1h3,r2h1,r2h2,r2h3\nr1h1,,x,x,x,x,x\n'), 'and a pair grid of who sends to whom');
   ok(ip.commands.includes('iperf-orchestrator run --plan iperf_plan.conf --servers iperf_plan.conf --run-id dcviz --for 90'),
      'run from the plan, which is its own server list');

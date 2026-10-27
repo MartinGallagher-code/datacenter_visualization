@@ -11,6 +11,15 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.37.1 — 2026-10-27
+
+- **iperf ran every flow 4.9% fast.** The plans wrote `-b` as `1000M`, and
+  iperf2 reads an uppercase suffix as binary: `1000M` is 1000 × 2^20 bits,
+  1.0486 Gb/s, so a run measured against the model came out at 105%. They
+  write `1000m` now, decimal megabits (and `k` below one). Measured with
+  iperf 2.1.9: `-b 1000M` sent 1044.5 Mb/s, `-b 1000m` 998.6.
+- 1.34.0 to 1.37.1 share one pull request.
+
 ## 1.37.0 — 2026-10-27
 
 - **Restart asks first** while there is anything to lose -- "Restart empties
