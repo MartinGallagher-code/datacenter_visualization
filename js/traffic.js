@@ -2349,11 +2349,9 @@ export function switchBuffer(el) {
 
 /** A device's own latency per packet, in seconds: its latency=, or null. */
 export function switchLatency(el) {
-  return el && el.attrs && el.attrs.latency !== undefined ? readDuration(el.attrs.latency) : null;
+  return latencyOf(el);
 }
-
-// How many routes pathLatency walks before it settles for those.
-export const LATENCY_LIMITS = { routes: 20000 };
+const latencyOf = (el) => (el && el.attrs && el.attrs.latency !== undefined ? readDuration(el.attrs.latency) : null);
 
 /**
  * How long one packet of `bytes` takes from one device to another over the
@@ -2388,17 +2386,27 @@ export const LATENCY_LIMITS = { routes: 20000 };
  *          route
  */
 export function pathLatency(model, src, dst, bytes, opts = {}) {
-  const f = fabric(model, opts);
+  // Many pairs over one fabric and load share one `opts.shared` ({}): the
+  // fabric, the full ports, each switch's latency= and the steps towards
+  // each destination are then worked out once for all of them.
+  const shared = opts.shared || {};
+  const f = shared.f || (shared.f = fabric(model, opts));
   if (src === dst || cannotStart(src, dst, f)) return null;
   const route = f.route(dst);
   if (!route.dist.has(src)) return null;
   const bits = (bytes + FRAMING_BYTES) * 8;
   const time = (gbps) => (gbps ? bits / (gbps * 1e9) : 0);
+  const lat = shared.lat || (shared.lat = new Map());
+  const switchLatency = (el) => {
+    if (!lat.has(el)) lat.set(el, latencyOf(el));
+    return lat.get(el);
+  };
   // Under a load: each cable's wait, each way, and how many full ports
   // share each switch's buffer.
   const load = opts.load && opts.load.loads && opts.load.toGbps ? opts.load : null;
-  const fullOut = new Map();
-  if (load) {
+  const fullOut = shared.fullOut || (shared.fullOut = new Map());
+  if (load && !shared.counted) {
+    shared.counted = true;
     for (const [link, l] of load.loads) {
       if (!link.gbps) continue;
       for (let d = 0; d < 2; d++) {
@@ -2427,33 +2435,37 @@ export function pathLatency(model, src, dst, bytes, opts = {}) {
     const wait = (rho / (1 - rho)) * (loadBits / rate);
     return [ceiling === null ? wait : Math.min(wait, ceiling), 0, 0, 0];
   };
-  let qMin = Infinity;
-  let qMax = -Infinity;
-  let full = 0;
-  let unbounded = 0;
-  let hostsFull = 0;
-  let min = Infinity;
-  let max = -Infinity;
-  let routes = 0;
-  let capped = false;
+  // Every shortest route, but each step worked out once: what is left of a
+  // route from a hop depends only on where it is, the speed it came in at
+  // and the slowest cable of the cut-through run it is in -- not on how it
+  // got there -- so the rest from there is remembered. Walking each route
+  // whole took a second per hundred pairs over a fabric with 1,536 routes
+  // a pair; this is the same figures from a few hundred steps.
+  //
+  // Each `rest` is, over the routes on from a hop: the least and most time
+  // (t*) and time with the queues (q*), and the most full cables, cables
+  // with no ceiling known, full host NICs, switches crossed and switches
+  // with no latency= on any one of them; and how many routes there are.
   let noSpeed = false;
-  let unknown = 0;
-  let switches = 0;
-  const walk = (u, inGbps, slowest, total, crossed, unsaid, queued) => {
-    if (routes >= LATENCY_LIMITS.routes) { capped = true; return; }
+  const memos = shared.memos || (shared.memos = new Map());
+  const memoKey = `${dst.key}\u0000${bytes}`;
+  let memo = memos.get(memoKey);
+  if (!memo) memos.set(memoKey, (memo = new Map()));
+  const rest = (u, inGbps, slowest, first) => {
+    const key = `${u.key}\u0000${inGbps}\u0000${slowest}\u0000${first ? 1 : 0}`;
+    if (memo.has(key)) return memo.get(key);
+    let acc = null;
     for (const link of route.next(u)) {
       const out = link.gbps || 0;
-      if (!out) noSpeed = true;
-      let t = total;
-      let run = slowest;
-      let hops = crossed;
-      let blank = unsaid;
       const [wait, isFull, open, host] = queueOf(link, u);
-      const q = [queued[0] + wait, queued[1] + isFull, queued[2] + open, queued[3] + host];
-      if (u !== src) {
-        hops++;
+      let t = 0;
+      let run = slowest;
+      let hop = 0;
+      let blank = 0;
+      if (!first) {
+        hop = 1;
         const own = switchLatency(u);
-        if (own === null) blank++;
+        if (own === null) blank = 1;
         else t += own;
         // Faster out than in: the whole packet is in before it goes on.
         if (out && inGbps && out > inGbps) { t += time(run); run = out; }
@@ -2462,29 +2474,39 @@ export function pathLatency(model, src, dst, bytes, opts = {}) {
         run = out;
       }
       const v = other(link, u);
+      let next;
       if (v === dst) {
-        const whole = t + time(run);
-        if (whole < min) min = whole;
-        if (whole > max) max = whole;
-        if (whole + q[0] < qMin) qMin = whole + q[0];
-        if (whole + q[0] > qMax) qMax = whole + q[0];
-        full = Math.max(full, q[1]);
-        unbounded = Math.max(unbounded, q[2]);
-        hostsFull = Math.max(hostsFull, q[3]);
-        switches = Math.max(switches, hops);
-        unknown = Math.max(unknown, blank);
-        routes++;
-        if (routes >= LATENCY_LIMITS.routes) { capped = true; return; }
+        const last = time(run);
+        next = { tMin: last, tMax: last, qMin: last, qMax: last, full: 0, open: 0, host: 0, hops: 0, blank: 0, routes: 1, slow: false };
       } else {
-        walk(v, out, run, t, hops, blank, q);
+        next = rest(v, out, run, false);
+        if (!next) continue;
       }
+      const here = {
+        tMin: t + next.tMin, tMax: t + next.tMax, qMin: t + wait + next.qMin, qMax: t + wait + next.qMax,
+        full: isFull + next.full, open: open + next.open, host: host + next.host,
+        hops: hop + next.hops, blank: blank + next.blank, routes: next.routes, slow: !out || next.slow,
+      };
+      acc = !acc ? here : {
+        tMin: Math.min(acc.tMin, here.tMin), tMax: Math.max(acc.tMax, here.tMax),
+        qMin: Math.min(acc.qMin, here.qMin), qMax: Math.max(acc.qMax, here.qMax),
+        full: Math.max(acc.full, here.full), open: Math.max(acc.open, here.open), host: Math.max(acc.host, here.host),
+        hops: Math.max(acc.hops, here.hops), blank: Math.max(acc.blank, here.blank), routes: acc.routes + here.routes,
+        slow: acc.slow || here.slow,
+      };
     }
+    memo.set(key, acc);
+    return acc;
   };
   const ends = (switchLatency(src) || 0) + (switchLatency(dst) || 0);
-  walk(src, 0, 0, ends, 0, 0, [0, 0, 0, 0]);
-  if (!routes) return null;
-  const loaded = load ? { min: qMin, max: qMax, full, unbounded, hosts: hostsFull } : null;
-  return { min, max, routes, capped, switches, unknown, noSpeed, loaded };
+  const all = rest(src, 0, 0, true);
+  if (!all) return null;
+  noSpeed = all.slow;
+  const loaded = load ? { min: ends + all.qMin, max: ends + all.qMax, full: all.full, unbounded: all.open, hosts: all.host } : null;
+  return {
+    min: ends + all.tMin, max: ends + all.tMax, routes: all.routes, capped: false,
+    switches: all.hops, unknown: all.blank, noSpeed, loaded,
+  };
 }
 
 // A cable this full counts as full: its queue sits at the buffer's limit.

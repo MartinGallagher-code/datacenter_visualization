@@ -2346,7 +2346,10 @@ export function renderCompare(state, host, actions) {
     row.append(pick);
   }
   const against = el('select', 'compare-against');
+  const latency = cmp.kind === 'latency';
   const choices = [...(gen ? [['gen', 'the load generator now']] : []), ...models.map((o) => [o.key, o.source || o.name])];
+  // A round trip needs no load or file: the layout says what the fabric takes.
+  if (latency && !choices.length) choices.push(['', 'the layout']);
   for (const [value, text] of choices) {
     const opt = el('option', null, text);
     opt.value = value;
@@ -2368,6 +2371,17 @@ export function renderCompare(state, host, actions) {
   });
   row.append(el('span', null, 'against'), against, el('span', null, 'within'), tol, el('span', null, '%'));
   box.append(row);
+  if (latency) {
+    const queued = el('label', 'chk compare-under');
+    const check = el('input');
+    check.type = 'checkbox';
+    check.checked = !!c.underLoad;
+    check.addEventListener('change', () => actions.setCompare({ underLoad: check.checked }));
+    queued.append(check, el('span', null, 'measured under the load'));
+    queued.title = 'Probed while the load ran (netmesh --baseline ... -- the load): the model’s round trips then queue '
+      + 'behind it, as the load generator or expected.tsv has it';
+    box.append(queued);
+  }
   if (!choices.length && !cmp.why) box.append(el('div', 'muted', 'load the run’s expected.tsv, or run the load generator as the run was made'));
   if (cmp.why) {
     box.append(el('div', 'muted compare-why', cmp.why));
@@ -2376,7 +2390,11 @@ export function renderCompare(state, host, actions) {
   }
 
   const { result, unit } = cmp;
-  const fmt = (v) => (v === null || v === undefined ? '—' : unit === 'Gb/s' ? `${formatGbps(v)}b/s` : formatPps(v));
+  const fmt = (v) => (v === null || v === undefined ? '—' : unit === 'Gb/s' ? `${formatGbps(v)}b/s`
+    : unit === 's' ? formatTime(v) : formatPps(v));
+  // Words for what is compared: flows that fall short, or pairs that are slow.
+  const w = latency ? { short: 'slow pairs', thing: 'pair', things: 'pairs' } : { short: 'short flows', thing: 'flow', things: 'flows' };
+  const against_ = (got, want) => (latency ? ` ${fmt(got)} against ${fmt(want)} expected (${pct(got, want)})` : ` ${fmt(got)} of ${fmt(want)} (${pct(got, want)})`);
   // By the name the run knew it by, where it is one of its own and no other
   // element has it; else by where it is.
   const names = nameCounts(state.model);
@@ -2395,13 +2413,13 @@ export function renderCompare(state, host, actions) {
     const name = el('span', 'pick', `${shortPath(f.src)} → ${shortPath(f.dst)}`);
     name.title = `${f.src.path} → ${f.dst.path}\nClick to go to the sender`;
     name.addEventListener('click', () => actions.focus(f.src));
-    line.append(name, el('span', null, ` ${fmt(f.measured)} of ${fmt(f.model)} (${pct(f.measured, f.model)})`));
+    line.append(name, el('span', null, against_(f.measured, f.model)));
     if (f.held.size) line.append(el('span', 'muted', ` · the model holds it at ${[...f.held][0]}`));
     return line;
   };
 
   if (cmp.suspects.length) {
-    section('Where to look: what the short flows have in common');
+    section(`Where to look: what the ${w.short} have in common`);
     const n = (v) => String(Math.round(v * 10) / 10);
     for (const x of cmp.suspects) {
       const line = el('div', 'compare-suspect');
@@ -2411,10 +2429,10 @@ export function renderCompare(state, host, actions) {
       name.addEventListener('click', () => actions.focus(x.el));
       let text;
       if (x.kind === 'place') {
-        text = ` ${x.side === 'src' ? 'sending' : 'taking in'}: ${n(x.short)} of its ${n(x.short + x.fine)} flows short`
+        text = ` ${x.side === 'src' ? 'sending' : 'taking in'}: ${n(x.short)} of its ${n(x.short + x.fine)} ${w.things} ${latency ? 'slow' : 'short'}`
           + `${x.el.children.length ? ` -- look at its switches and uplinks` : ''}`;
       } else {
-        text = ` ${n(x.short)} of the ${x.of} short flows ${x.kind === 'switch' ? 'pass it' : 'cross it'}, ${n(x.fine)} that kept up`;
+        text = ` ${n(x.short)} of the ${x.of} ${w.short} ${x.kind === 'switch' ? 'pass it' : 'cross it'}, ${n(x.fine)} that kept up`;
       }
       line.append(name, el('span', null, text));
       box.append(line);
@@ -2432,20 +2450,20 @@ export function renderCompare(state, host, actions) {
       const name = el('span', 'pick', shortPath(h.el));
       name.title = `${h.el.path}\nClick to go to it`;
       name.addEventListener('click', () => actions.focus(h.el));
-      const flows = h.flows ? ` · ${h.short + h.over} of its ${h.measuredFlows} flows${whole.has(h.el) ? ', every one' : ''}` : '';
-      line.append(name, el('span', null, ` sent ${fmt(h.measured)} of ${fmt(h.model)} (${pct(h.measured, h.model)})${flows}`));
+      const flows = h.flows ? ` · ${h.short + h.over} of its ${h.measuredFlows} ${w.things}${whole.has(h.el) ? ', every one' : ''}` : '';
+      line.append(name, el('span', null, `${latency ? ' round trips' : ' sent'}${against_(h.measured, h.model)}${flows}`));
       box.append(line);
     }
     if (offHosts.length > COMPARE_SHOWN) box.append(el('div', 'muted', `+${(offHosts.length - COMPARE_SHOWN).toLocaleString()} more`));
   }
   const loose = result.unexpected.filter((f) => !whole.has(f.src));
   if (loose.length) {
-    section(`${loose.length.toLocaleString()} flow${loose.length === 1 ? '' : 's'} off the model by more than ${result.tolerance}%`);
+    section(`${loose.length.toLocaleString()} ${loose.length === 1 ? w.thing : w.things} off the model by more than ${result.tolerance}%`);
     for (const f of loose.slice(0, COMPARE_SHOWN)) box.append(flowLine(f, f.verdict === 'short' ? 'bad' : 'over'));
     if (loose.length > COMPARE_SHOWN) box.append(el('div', 'muted', `+${(loose.length - COMPARE_SHOWN).toLocaleString()} more`));
   }
   if (!offHosts.length && !loose.length && result.flows.length && result.counts.ok) {
-    box.append(el('div', 'compare-good', `every measured flow within ${result.tolerance}% of the model`));
+    box.append(el('div', 'compare-good', `every measured ${w.thing} within ${result.tolerance}% of the model`));
   }
 
   if (result.asModeled.length) {
@@ -2472,6 +2490,32 @@ export function renderCompare(state, host, actions) {
     box.append(el('div', surprises.length ? 'bad' : 'muted', surprises.length
       ? `${surprises.length.toLocaleString()} where the model has room: loss the load does not explain`
       : 'every one where the model holds the flow back: full cables drop'));
+  }
+
+  // The path MTU a prober measured: a pair under the fabric's has a hop that is.
+  if (cmp.mtu && cmp.mtu.small.length) {
+    const small = cmp.mtu.small;
+    section(`${small.length.toLocaleString()} pair${small.length === 1 ? '' : 's'} with a path MTU under the fabric’s ${cmp.mtu.mtu}`, 'bad');
+    for (const f of small.slice(0, COMPARE_SHOWN)) {
+      const line = el('div', 'compare-flow bad');
+      const name = el('span', 'pick', `${shortPath(f.src)} → ${shortPath(f.dst)}`);
+      name.title = `${f.src.path} → ${f.dst.path}\nClick to go to the sender`;
+      name.addEventListener('click', () => actions.focus(f.src));
+      line.append(name, el('span', null, ` carries ${f.measured.toLocaleString()} bytes`));
+      box.append(line);
+    }
+    if (small.length > COMPARE_SHOWN) box.append(el('div', 'muted', `+${(small.length - COMPARE_SHOWN).toLocaleString()} more`));
+    for (const x of cmp.mtu.suspects || []) {
+      const label = x.kind === 'cable' ? `${shortPath(x.from)} → ${shortPath(x.to)}` : shortPath(x.el);
+      const line = el('div', 'compare-suspect');
+      const name = el('span', 'pick', label);
+      name.title = `${x.kind === 'cable' ? `${x.from.path} → ${x.to.path}` : x.el.path}\nClick to go to it`;
+      name.addEventListener('click', () => actions.focus(x.el));
+      line.append(name, el('span', null, x.kind === 'place'
+        ? ` ${x.side === 'src' ? 'sending' : 'taking in'}: ${Math.round(x.short)} of its ${Math.round(x.short + x.fine)} paths under it`
+        : ` ${Math.round(x.short * 10) / 10} of those paths cross it, ${Math.round(x.fine * 10) / 10} that carry the full MTU`));
+      box.append(line);
+    }
   }
 
   const buttons = el('div', 'btnrow');
@@ -3039,8 +3083,8 @@ function renderPicks(state, host, actions) {
 
 /** A time, at the scale a packet's trip is: 940 ns, 3.7 µs, 1.2 ms. */
 export function formatTime(t) {
-  if (t >= 1e-3) return `${trimNum(Math.round(t * 1e5) / 100)} ms`;
-  if (t >= 1e-6) return `${trimNum(Math.round(t * 1e8) / 100)} µs`;
+  if (Math.abs(t) >= 1e-3) return `${trimNum(Math.round(t * 1e5) / 100)} ms`;
+  if (Math.abs(t) >= 1e-6) return `${trimNum(Math.round(t * 1e8) / 100)} µs`;
   return `${Math.round(t * 1e9)} ns`;
 }
 

@@ -56,7 +56,7 @@ import {
   buildIperf, buildMx, buildNetmesh, hostToken, mxSizes, rateGroups, runPairs, runProblem, runScript, runTar, runWhy, scriptName, tarball, tarName, tcpPayloadShare,
 } from '../js/runfiles.js';
 import {
-  compareHosts, compareRuns, comparisonResults, modelPairs, modelResults, suspects,
+  compareHosts, compareLatency, compareMtu, compareRuns, comparisonResults, modelPairs, modelResults, suspects,
 } from '../js/compare.js';
 import {
   columnLetter, commonDomain, layoutFromHosts, looksLikeTime, looksLikeWideTsv, markOf,
@@ -5315,6 +5315,59 @@ if (python.error) {
   ok(withModel.files.some((f) => f.name === 'expected.tsv' && f.text === text), 'a tool’s files carry the model’s figures');
   ok(withModel.commands.includes('cat expected.tsv mx_results.tsv > mx-run.tsv'), 'and collect the run with them into one file');
   ok(!buildMx(made, {}).files.some((f) => f.name === 'expected.tsv'), 'not when there is no model to carry');
+
+  // Round trips: the fabric's, from the layout, and a prober's against it.
+  const shared = { shared: {} };
+  const trips = new Map();
+  for (const [key, p] of pairs) {
+    const there = pathLatency(m, p.src, p.dst, 64, shared);
+    const back = pathLatency(m, p.dst, p.src, 64, shared);
+    const alone = pathLatency(m, p.src, p.dst, 64);
+    ok(there.min === alone.min && there.max === alone.max && there.routes === alone.routes, `a shared cache changes no trip  (${p.src.name}→${p.dst.name})`);
+    trips.set(key, { idle: (there.min + there.max) / 2 + (back.min + back.max) / 2, loaded: null });
+  }
+  const rttText = modelResults(pairs, { rtt: trips, mtu: 9000 });
+  ok(/^!test\tmodel_rtt_us\tunit=us\thigher=bad/m.test(rttText) && /^!test\tmodel_path_mtu\tunit=B/m.test(rttText), 'a prober’s model: each pair’s round trip and the MTU');
+  ok(!/^model_rtt_load_us\t/m.test(rttText), 'and no loaded round trip when there was no load');
+  ok(!/model_rtt/.test(text) && !/model_path_mtu/.test(text), 'neither for a rate tool');
+  const rawRtt = new Map();
+  const wRtt = [];
+  parseResults(rttText, rawRtt, wRtt, 'expected.tsv');
+  eq(wRtt, [], 'a prober’s expected.tsv the viewer reads');
+  const rttBack = flowsOf(bindOverlay([...rawRtt.values()].find((o) => o.name === 'model_rtt_us'), m), m).flows;
+  ok(rttBack.length === 30 && rttBack.every((f) => Math.abs(f.value * 1e-6 - trips.get(`${f.src.key}\u0000${f.dst.key}`).idle) < 1e-11),
+     'its round trips read back in microseconds');
+
+  // Every pair 40 µs beyond the fabric -- the hosts' stacks -- and r1h1's
+  // trips three times that: its pairs are slow, the rest are not.
+  const rttModel = new Map([...trips].map(([key, t]) => [key, { src: pairs.get(key).src, dst: pairs.get(key).dst, value: t.idle }]));
+  const rttMeasured = new Map();
+  for (const [key, mm] of rttModel) {
+    if (mm.src === h('r2h2')) continue;
+    const slow = mm.src === h('r1h1');
+    rttMeasured.set(key, { src: mm.src, dst: mm.dst, value: mm.value + (slow ? 120e-6 : 40e-6) });
+  }
+  const lat = compareLatency(rttModel, rttMeasured, { tolerance: 20 });
+  ok(Math.abs(lat.common - 40e-6) < 1e-12, `what every pair has beyond the fabric, found  (${(lat.common * 1e6).toFixed(2)} µs)`);
+  eq(lat.counts, { short: 5, over: 0, missing: 5, unplanned: 0, ok: 20 }, 'each pair as expected, slow or not measured');
+  ok(lat.unexpected.length === 5 && lat.unexpected.every((f) => f.src === h('r1h1')), 'the slow ones are r1h1’s');
+  eq(lat.silent.map((el) => el.name), ['r2h2'], 'a host that answered nothing');
+  eq(compareLatency(rttModel, rttModel).common, 0, 'a run that is the fabric alone has nothing common to add');
+  const latFound = suspects(lat, route);
+  ok(latFound.length && latFound[0].kind === 'place' && latFound[0].el === h('r1h1'), `where to look: r1h1  (${brief(latFound)})`);
+  const latVs = comparisonResults(lat, { summary: ['a line'] });
+  ok(/^!test\tvs_model_rtt_pct\tunit=%\thigher=bad/m.test(latVs) && /^vs_model_rtt_verdict\t\S+r1\/h1\tslow$/m.test(latVs),
+     'as a file: each host’s round trip as a share of the model, slow rather than short');
+  const rawLat = new Map();
+  const wLat = [];
+  parseResults(latVs, rawLat, wLat, 'vs-model.tsv');
+  eq(wLat, [], 'and the viewer reads it back');
+
+  // Path MTU: one pair carrying 1500 on a 9000 fabric.
+  const mtus = new Map([...rttModel].map(([key, mm]) => [key, { src: mm.src, dst: mm.dst, value: mm.src === h('r1h3') && mm.dst === h('r2h3') ? 1500 : 9000 }]));
+  const small = compareMtu(mtus, 9000);
+  eq(small.small.map((f) => [f.src.name, f.dst.name, f.measured]), [['r1h3', 'r2h3', 1500]], 'the one path under the fabric’s MTU');
+  eq(compareMtu(mtus, 1500).small, [], 'and none under a 1500 fabric');
 }
 
 // ------------------------------------------------------------------ version
