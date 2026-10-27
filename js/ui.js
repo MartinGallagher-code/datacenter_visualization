@@ -18,7 +18,8 @@ import {
   biggestChanges, burstRisk, busiest, busyable, cablesOf, counterparts, counterpartLevels, EXPLAIN_PATTERNS, takeoutCandidates, TAKEOUT_KINDS, formatGbps, hostLimits, GEN_UNITS, hostsFor, loadable, loadUnit, PATTERNS, reachKinds, TARGETED,
   CONNECTION_LIMITS, IMIX_BYTES, PACKET_PICKS, PER_CONNECTION, readsAsLoad, SPLITS, SPREADS, TEST_UNITS, trafficKind, utilOf,
 } from './traffic.js';
-import { MTUS, RUN_LABELS, RUN_TOOLS, runScript, runTar, scriptName, tarName } from './runfiles.js';
+import { bindProblem, MTUS, RUN_LABELS, RUN_TOOLS, runScript, runTar, scriptName, tarName } from './runfiles.js';
+import { foldAll, foldRuns, makeFold, pane, setNote } from './fold.js';
 
 const el = (tag, cls, text) => {
   const n = document.createElement(tag);
@@ -1355,18 +1356,16 @@ export function renderCableLoad(state, host, actions) {
   const view = state.cableView ? state.cableView() : null;
   const down = state.takenOut ? state.takenOut() : { size: 0, els: [], links: [] };
   if (!view) {
-    if (state.capacityView) renderCapacityKey(state, host);
-    if (down.size) renderWhatIf(state, host, actions, down, null);
+    if (!state.capacityView && !down.size) return;
+    const box = pane(host, 'cable-load', 'Cables', { note: down.size ? `${down.size} taken out` : 'width by capacity' });
+    if (state.capacityView) renderCapacityKey(state, box);
+    if (down.size) renderWhatIf(state, box, actions, down, null);
     return;
   }
-  const box = el('div', 'cable-load');
-  const head = el('div', 'picks-head');
-  head.append(el('strong', null, 'Cable load'));
   const off = el('button', null, 'Off');
   off.title = 'Draw the cables plainly again';
   off.addEventListener('click', () => actions.clearTraffic());
-  head.append(off);
-  box.append(head);
+  const box = pane(host, 'cable-load', 'Cable load', { tools: [off], cls: 'cable-load' });
   renderHeadline(state, view, box);
 
   if (view.views.length > 1) {
@@ -1749,7 +1748,9 @@ export function renderCableLoad(state, host, actions) {
     }
     box.append(list);
   }
-  host.append(box);
+  foldAll(box, 'cable-load');
+  const big = box.querySelector('.headline-big');
+  setNote(host, big ? big.textContent : '');
 }
 
 const SWITCHES_SHOWN = 5;
@@ -1815,15 +1816,13 @@ export function renderLoadGen(state, host, actions, { unit } = {}) {
   host.textContent = '';
   if (!state.model.links.length) return;
   const g = state.traffic.gen;
-  const box = el('div', 'load-gen');
-  const head = el('div', 'picks-head');
-  head.append(el('strong', null, 'Load generator'));
   const go = el('button', g.on ? 'active' : null, g.on ? 'Stop' : 'Run');
   go.title = g.on ? 'Take the generated load off the cables'
     : 'Put this load on the cables, routed like a metric -- no results file needed';
   go.addEventListener('click', () => actions.setGen({ on: !g.on }));
-  head.append(go);
-  box.append(head);
+  const box = pane(host, 'load-gen', 'Load generator', {
+    tools: [go], note: g.on ? `running: ${PATTERN_LABELS[g.pattern] || g.pattern}` : '', cls: 'load-gen',
+  });
 
   const choose = (options, labels, value, onChange) => {
     const select = el('select');
@@ -2080,7 +2079,7 @@ export function renderLoadGen(state, host, actions, { unit } = {}) {
   } else if (!g.on) {
     box.append(el('p', 'muted cable-note', 'A made-up load, routed and drawn like a metric: no results file needed.'));
   }
-  host.append(box);
+  foldAll(box, 'load-gen');
 }
 
 /**
@@ -2114,7 +2113,26 @@ function renderRunFiles(state, actions) {
   mtu.title = 'The fabric’s MTU: how much of a TCP packet is payload, which iperf’s -b paces, '
     + 'and how big mx’s full frames are -- so the cables carry exactly what the model shows';
   mtu.addEventListener('change', () => actions.setRunFiles({ mtu: Number(mtu.value) }));
-  row.append(el('span', null, 'the files and commands to run it for'), seconds, el('span', null, 's at'), mtu, el('span', null, 'with'));
+  // The NIC the traffic rides, where ssh reaches the hosts over another.
+  const bind = el('input', 'run-bind');
+  bind.type = 'text';
+  bind.value = r.bind || '';
+  bind.placeholder = 'the login NIC';
+  bind.spellcheck = false;
+  bind.title = 'The NIC to load, where ssh reaches the hosts over another: an interface name (eth1, mlx5) or part of '
+    + 'an address (10.20.), matched against `ip -o -4 addr show` on each host. It goes into the files as --bind -- '
+    + 'iperf’s plan as bind=, mx’s and netmesh’s runs as --bind -- and is kept for next time. Empty: none';
+  const bindWhy = el('div', 'bad run-bind-why');
+  bind.addEventListener('change', () => {
+    const v = bind.value.trim();
+    const why = bindProblem(v);
+    bindWhy.textContent = why ? `--bind: ${why}` : '';
+    if (!why) actions.setRunFiles({ bind: v });
+  });
+  const nic = el('div', 'gen-row');
+  nic.append(el('span', null, 'over'), bind, el('span', 'muted', '(--bind)'));
+  row.append(el('span', null, 'the files and commands to run it for'), seconds, el('span', null, 's at'), mtu);
+  nic.append(el('span', null, 'with'));
   const tools = el('div', 'btnrow');
   for (const tool of RUN_TOOLS) {
     const button = el('button', `run-tool run-tool-${tool}${r.tool === tool ? ' active' : ''}`, RUN_LABELS[tool]);
@@ -2122,7 +2140,7 @@ function renderRunFiles(state, actions) {
     button.addEventListener('click', () => actions.setRunFiles({ tool: r.tool === tool ? '' : tool }));
     tools.append(button);
   }
-  wrap.append(row, tools);
+  wrap.append(row, nic, bindWhy, tools);
   if (!r.tool) return wrap;
 
   const { built, why, dropped } = actions.runFilesFor(r.tool);
@@ -2257,9 +2275,6 @@ export function renderFindings(state, host, actions) {
   host.textContent = '';
   const { groups } = state.findings ? state.findings() : { groups: [] };
   if (!groups.length) return;
-  const box = el('div', 'findings');
-  const head = el('div', 'picks-head');
-  head.append(el('strong', null, 'Findings'));
   const mark = el('label', 'chk');
   const check = el('input');
   check.type = 'checkbox';
@@ -2267,8 +2282,10 @@ export function renderFindings(state, host, actions) {
   check.addEventListener('change', () => actions.setShowFindings(check.checked));
   mark.append(check, el('span', null, 'mark on the floor'));
   mark.title = 'A mark in the corner of every server with a finding: red critical, amber drops, magenta contention';
-  head.append(mark);
-  box.append(head);
+  const servers = new Set(groups.flatMap((g) => g.hosts)).size;
+  const box = pane(host, 'findings', 'Findings', {
+    tools: [mark], note: `${servers} server${servers === 1 ? '' : 's'}`, cls: 'findings',
+  });
   for (const g of groups) {
     const row = el('div', 'finding-group');
     const dot = el('span', 'dot');
@@ -2296,7 +2313,6 @@ export function renderFindings(state, host, actions) {
     }
     box.append(chips);
   }
-  host.append(box);
 }
 
 // ------------------------------------------------- measured against the model
@@ -2326,10 +2342,7 @@ export function renderCompare(state, host, actions) {
   const { measured, models, gen } = actions.compareChoices();
   if (!measured.length && !models.length) return;
   const c = state.compare;
-  const box = el('div', 'compare');
-  const head = el('div', 'picks-head');
-  head.append(el('strong', null, 'Measured against the model'));
-  box.append(head);
+  const box = pane(host, 'compare', 'Measured against the model', { cls: 'compare' });
 
   const cmp = actions.comparison();
   const row = el('div', 'gen-row');
@@ -2385,7 +2398,6 @@ export function renderCompare(state, host, actions) {
   if (!choices.length && !cmp.why) box.append(el('div', 'muted', 'load the run’s expected.tsv, or run the load generator as the run was made'));
   if (cmp.why) {
     box.append(el('div', 'muted compare-why', cmp.why));
-    host.append(box);
     return;
   }
 
@@ -2535,8 +2547,14 @@ export function renderCompare(state, host, actions) {
   save.title = 'The comparison as a results file: load it later, beside the layout, to see it again';
   save.addEventListener('click', () => actions.saveComparison());
   buttons.append(show, save);
+  buttons.classList.add('fold-stop');
   box.append(buttons);
-  host.append(box);
+  foldAll(box, 'compare');
+  // Folded, it still says how the run stands against the model.
+  const counts = result.counts;
+  const off = counts ? counts.short + counts.over : 0;
+  setNote(host, counts ? (off ? `${off} ${off === 1 ? w.thing : w.things} off the model` : 'as modeled')
+    : result.totals && result.totals.model > 0 ? pct(result.totals.measured, result.totals.model) : '');
 }
 
 /** The selected server's findings, in the inspector. */
@@ -2799,6 +2817,7 @@ function renderWhatIf(state, host, actions, down, view) {
   back.addEventListener('click', () => actions.putAllBack());
   head.append(back);
   box.append(head);
+  makeFold(box, head, 'card:what-if');
   const chips = el('div', 'picks-list');
   // Those taken out at random are one chip, however many: a tenth of four
   // thousand servers is four hundred names.
@@ -3048,6 +3067,7 @@ function renderPicks(state, host, actions) {
   clear.addEventListener('click', () => actions.clearPicks());
   head.append(clear);
   box.append(head);
+  makeFold(box, head, 'card:picks');
 
   const list = el('div', 'picks-list');
   state.picked.forEach((node, i) => {
@@ -3347,6 +3367,10 @@ export function renderInspector(state, host, actions) {
   renderElementLoad(state, host, node, actions);
   renderElementFindings(state, host, node, actions);
   renderFlows(state, host, node);
+  // Each titled part folds on its own -- Readings, Cable load, Findings,
+  // Measured flows -- and the lists inside them, as in the panes above.
+  foldRuns(host, 'inspector', 'h2');
+  foldAll(host, 'inspector');
 }
 
 const FLOWS_SHOWN = 12;

@@ -131,11 +131,13 @@ Insert template (above) drops in a commented starting point."></textarea>
       <label class="chk" title="Draw each cable as thick as what it can carry (gbps= on its net or link rule), when no traffic is loaded onto the cables">
         <input type="checkbox" id="cable-capacity"> width by capacity
       </label>
-      <div id="load-gen"></div>
-      <div id="cable-load"></div>
-      <div id="findings"></div>
-      <div id="compare"></div>
     </section>
+
+    <!-- Each drawn by its renderer, heading and all; empty, it is not shown. -->
+    <section class="block pane" id="load-gen"></section>
+    <section class="block pane" id="cable-load"></section>
+    <section class="block pane" id="findings"></section>
+    <section class="block pane" id="compare"></section>
 
     <section class="block">
       <h2>Inspector</h2>

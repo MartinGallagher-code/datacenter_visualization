@@ -27,7 +27,8 @@ import {
   routeTraffic, switchLoads, testFlows, trafficKind, viewOf, formatGbps,
 } from './traffic.js';
 import { VERSION } from './version.js';
-import { mxSizes, RUN_BUILDERS, RUN_LABELS, runPairs, runWhy, tcpPayloadShare } from './runfiles.js';
+import { makeFold, setFolded } from './fold.js';
+import { bindProblem, mxSizes, RUN_BUILDERS, RUN_LABELS, runPairs, runWhy, tcpPayloadShare } from './runfiles.js';
 import {
   compareHosts, compareLatency, compareMtu, compareRuns, comparisonResults, DEFAULT_TOLERANCE, LATENCY_UNITS, LOSSY,
   modelPairs, modelResults, suspects,
@@ -41,6 +42,17 @@ import {
 const $ = (id) => document.getElementById(id);
 
 const AUTO_COLLAPSE_ABOVE = 20000;   // elements, before racks start out collapsed
+
+// The run files' --bind, kept from one visit to the next.
+const BIND_STORE = 'dcviewer.bind';
+function storedBind() {
+  try {
+    const v = localStorage.getItem(BIND_STORE) || '';
+    return bindProblem(v) ? '' : v;
+  } catch {
+    return '';
+  }
+}
 
 const state = {
   model: parseLayout(''),
@@ -139,7 +151,7 @@ const state = {
   },
   // The load generator's run files: which tool's are open, and for how long
   // the commands run it.
-  runFiles: { tool: '', seconds: 60, mtu: 1500 },
+  runFiles: { tool: '', seconds: 60, mtu: 1500, bind: storedBind() },
   // Whether anything has been done since the page loaded -- a file dropped
   // or opened, a box typed in, a setting changed, a button pressed -- so a
   // reload would lose it.
@@ -1271,9 +1283,14 @@ const actions = {
     refreshPanels();
   },
 
-  // The run files: which tool's are open ('' for none), and the run's length.
+  // The run files: which tool's are open ('' for none), the run's length,
+  // the MTU and the NIC it rides. The NIC is a fleet's, not a run's, so it
+  // is kept for next time.
   setRunFiles(patch) {
     state.runFiles = { ...state.runFiles, ...patch };
+    if ('bind' in patch) {
+      try { localStorage.setItem(BIND_STORE, state.runFiles.bind); } catch { /* not fatal */ }
+    }
     refreshPanels();
   },
 
@@ -1286,7 +1303,8 @@ const actions = {
     if (run.why) return { why: run.why };
     // Built once a load and setting: a floor's matrix is megabytes, and the
     // panel redraws far more often than any of these change.
-    const key = [tool, state.runFiles.seconds, state.runFiles.mtu, state.traffic.connections, [...state.down.els].sort().join('\u0001')].join('\u0002');
+    const key = [tool, state.runFiles.seconds, state.runFiles.mtu, state.runFiles.bind, state.traffic.connections,
+      [...state.down.els].sort().join('\u0001')].join('\u0002');
     let cached = RUN_FILES_CACHE.get(run);
     if (!cached) RUN_FILES_CACHE.set(run, (cached = new Map()));
     if (!cached.has(key)) cached.set(key, buildRunFiles(tool, view.model));
@@ -3200,7 +3218,7 @@ function buildRunFiles(tool, view) {
     rtt: tool === 'netmesh' ? roundTrips(pairs, loadOf(view)) : null,
     mtu: tool === 'netmesh' ? mtu : 0,
   }) : '';
-  const options = { seconds: state.runFiles.seconds, connections: state.traffic.connections, summary, expected, mtu };
+  const options = { seconds: state.runFiles.seconds, connections: state.traffic.connections, summary, expected, mtu, bind: state.runFiles.bind };
   return { built: RUN_BUILDERS[tool](made, options), dropped: made.dropped };
 }
 
@@ -3287,33 +3305,16 @@ function setPanelCollapsed(side, off) {
 const sectionKey = (block) => block.dataset.section
   || (block.querySelector('h2')?.textContent || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-');
 
+// The sections written into the page fold as every drawn tile does. Which
+// were folded used to be kept with the panel widths; it is moved over once.
 function setupSections() {
-  for (const block of document.querySelectorAll('.panel .block')) {
-    const head = block.querySelector('h2');
+  for (const key of Object.keys(panelState.sections || {})) setFolded(`section:${key}`, true);
+  if (Object.keys(panelState.sections || {}).length) { panelState.sections = {}; savePanels(); }
+  for (const block of document.querySelectorAll('.panel .block:not(.pane)')) {
+    const head = block.querySelector(':scope > h2');
     if (!head) continue;
     const key = sectionKey(block);
-    if (!key) continue;
-
-    const caret = document.createElement('span');
-    caret.className = 'caret section-caret';
-    caret.textContent = '▸';
-    head.prepend(caret);
-
-    const apply = () => {
-      const off = !!panelState.sections[key];
-      block.classList.toggle('off', off);
-      caret.classList.toggle('open', !off);
-      head.title = off ? 'Show this section' : 'Hide this section';
-    };
-    head.addEventListener('click', (e) => {
-      if (e.target.closest('.collapse-panel')) return;   // that hides the whole panel
-      if (panelState.sections[key]) delete panelState.sections[key];
-      else panelState.sections[key] = true;
-      apply();
-      savePanels();
-      invalidate();
-    });
-    apply();
+    if (key) makeFold(block, head, `section:${key}`, { onChange: invalidate });
   }
 }
 

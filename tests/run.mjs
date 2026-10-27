@@ -53,7 +53,7 @@ import {
   droppedLayoutsNotice, layoutNotice, prefixed, resultsFileNotice,
 } from '../js/report.js';
 import {
-  buildIperf, buildMx, buildNetmesh, hostToken, mxSizes, rateGroups, runPairs, runProblem, runScript, runTar, runWhy, scriptName, tarball, tarName, tcpPayloadShare,
+  bindProblem, buildIperf, buildMx, buildNetmesh, hostToken, mxSizes, rateGroups, runPairs, runProblem, runScript, runTar, runWhy, scriptName, tarball, tarName, tcpPayloadShare,
 } from '../js/runfiles.js';
 import {
   compareHosts, compareLatency, compareMtu, compareRuns, comparisonResults, modelPairs, modelResults, suspects,
@@ -5127,6 +5127,27 @@ if (python.error) {
   ok(nm.commands.some((c) => c.includes('--baseline 20 -- mx run')), 'idle first and then under the load, if you give it one');
   ok(nm.commands.filter((c) => !c.startsWith('#')).every((c) => !c.includes('--baseline')),
      'the run under the load is there to swap in, commented, so the script runs one netmesh run');
+
+  // --bind: the NIC to load, where ssh goes over another -- a plan setting
+  // for iperf, on the run for mx and netmesh, and the mx under netmesh too.
+  eq(bindProblem(''), '', 'no --bind is fine');
+  eq(bindProblem('eth1'), '', 'an interface name is a pattern');
+  eq(bindProblem('10.20.'), '', 'so is part of an address');
+  ok(/no spaces/.test(bindProblem('eth 1')) && /shell/.test(bindProblem('eth1;reboot')) && /shell/.test(bindProblem("e'1")),
+     'a space, a quote or shell syntax is not');
+  const ipB = buildIperf(made, { seconds: 90, connections: 2, bind: 'mlx5' });
+  ok(ipB.files[0].text.includes('# bandwidth=941.5m\n# bind=mlx5\n'), 'iperf: bind= in the plan, which every command reads');
+  ok(!ipB.commands.some((c) => c.includes('--bind')), 'so no command needs it');
+  ok(ipB.notes.some((n) => /NIC matching mlx5/.test(n)), 'and the notes say which NIC the traffic rides');
+  ok(!plan.includes('bind='), 'no bind= without one');
+  ok(buildMx(made, { seconds: 90, connections: 2, bind: 'eth1' }).commands
+    .includes('mx run --matrix matrix.csv --for 90 --streams 2 --bind eth1'), 'mx: --bind on the run');
+  const nmB = buildNetmesh(made, { seconds: 90, connections: 2, bind: 'eth1' });
+  ok(nmB.commands.includes('netmesh run --mesh mesh.csv --for 90 --bind eth1'), 'netmesh: --bind on the run');
+  ok(nmB.commands.some((c) => c.includes('--baseline 20 --bind eth1 -- mx run') && c.endsWith('--streams 2 --bind eth1')),
+     'and on the mx run under it');
+  ok(buildMx(made, { bind: 'eth[12]' }).commands.some((c) => c.endsWith("--bind 'eth[12]'")), 'a pattern the shell would expand goes quoted');
+  ok(!buildMx(made, { bind: 'eth 1' }).commands.some((c) => c.includes('--bind eth')), 'and one that cannot be a pattern goes nowhere');
 
   // Two rates: the iperf runs go at once, in the background, and are waited for.
   const both = buildIperf(mixed, { seconds: 30 }).commands;
