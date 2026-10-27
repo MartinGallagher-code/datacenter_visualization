@@ -46,21 +46,14 @@ const CONTROL = 'button, input, select, textarea, label, a, .pick, .overlay-x';
 /**
  * Make `box` fold to `head` (one of its children) on a click on the head.
  * Folded, the box keeps only its head; `onChange` is told after each click.
+ * The caret is drawn by the stylesheet, so a title's text is only its own.
  */
 export function makeFold(box, head, key, { onChange } = {}) {
-  let caret = head.querySelector(':scope > .fold-caret');
-  if (!caret) {
-    caret = document.createElement('span');
-    caret.className = 'caret fold-caret';
-    caret.textContent = '▸';
-    head.prepend(caret);
-  }
   box.classList.add('fold');
   head.classList.add('fold-head');
   const apply = () => {
     const off = isFolded(key);
     box.classList.toggle('off', off);
-    caret.classList.toggle('open', !off);
     head.title = off ? 'Show this' : 'Hide this';
   };
   head.addEventListener('click', (e) => {

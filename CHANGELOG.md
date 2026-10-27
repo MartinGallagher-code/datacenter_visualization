@@ -11,6 +11,32 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.40.0 — 2026-10-27
+
+- **Every titled part of the side panels folds.** The load generator, cable
+  load, findings and the comparison were tiles inside Networks; each is
+  now a section of its own, with its title, and its buttons (Run/Stop,
+  Off, mark on the floor) in the title. Every titled list inside a
+  section -- Busiest cables, Run it for real, Take out at random, Where
+  to look -- and each part of the inspector -- Readings, Cable load,
+  Findings, Measured flows -- folds to its title on a click, as the
+  what-if and picks boxes do. What is folded stays folded across redraws
+  and reloads.
+- **A folded section still says how things stand**: the cables' total,
+  how many servers have findings, how many flows or pairs are off the
+  model, which pattern the generator is running.
+- **Easier to read**: a section with nothing to show is not shown; a
+  section's title stays at the top of the panel while its contents scroll
+  under it; the inspector's "expected" label wraps instead of running off
+  the panel.
+- **The NIC to load, once.** Run it for real takes a `--bind` pattern --
+  an interface name or part of an address, as all three tools match it
+  against `ip -o -4 addr show` -- and writes it into the files: iperf's
+  plans as `bind=`, mx's and netmesh's runs as `--bind`, the mx run under
+  netmesh too. It is kept for next time, so a fleet whose ssh goes over a
+  management NIC needs no editing of the files. A pattern with a space,
+  a quote or shell syntax is refused, with why.
+
 ## 1.39.0 — 2026-10-27
 
 - **netmesh results compare against the model.** The "Measured against the

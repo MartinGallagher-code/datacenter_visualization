@@ -119,8 +119,12 @@ input[type="checkbox"] { accent-color: var(--accent); }
    Every titled part folds: a section, a tile in it, a list in the tile.
    Folded, it keeps its title and, for a section, a few words of how things
    stand (.fold-note), so a panel of folded sections still reads. */
-.fold-caret { width: 11px; flex: none; font-size: 9px; }
 .fold-head { cursor: pointer; user-select: none; }
+.fold-head::before {
+  content: '▸'; display: inline-block; width: 11px; flex: none; font-size: 9px; text-align: center;
+  color: var(--ink-dim); transition: transform 0.12s;
+}
+.fold:not(.off) > .fold-head::before { transform: rotate(90deg); }
 .fold.off > :not(.fold-head) { display: none; }
 .fold-run > .fold-head { display: flex; align-items: center; gap: 2px; }
 .fold-run > .fold-head:hover, .picks-head.fold-head:hover { color: var(--ink); }
