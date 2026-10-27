@@ -242,8 +242,10 @@ export function rateGroups(pairs, most = IPERF_GROUPS) {
     .sort((a, b) => b.pairs.length - a.pairs.length || b.gbps - a.gbps);
 }
 
-// iperf2's -b: Mb/s with an M, or k/s under one.
-const iperfRate = (gbps) => (gbps >= 0.001 ? `${Math.max(1, Math.round(gbps * 1000))}M` : `${Math.max(1, Math.round(gbps * 1e6))}K`);
+// iperf2's -b, in decimal units: Mb/s with a lowercase m, or kb/s under one.
+// iperf2 reads an uppercase suffix as binary -- 1000M is 1000 x 2^20 bits,
+// 1.0486 Gb/s -- so an M asked every flow for 4.9% more than the model did.
+const iperfRate = (gbps) => (gbps >= 0.001 ? `${Math.max(1, Math.round(gbps * 1000))}m` : `${Math.max(1, Math.round(gbps * 1e6))}k`);
 
 /**
  * iperf-orchestrator: a plan per rate, each a pair grid of the pairs at that
@@ -281,9 +283,16 @@ export function buildIperf(made, { seconds = 60, connections = 1, summary = '', 
   const map = renamed.length ? ' --overlay-map hosts.map' : '';
   const id = (k) => (groups.length === 1 ? 'dcviz' : `dcviz-${k + 1}`);
   const commands = [];
-  if (groups.length > 1) commands.push(`# ${groups.length} runs, one per rate: start them together, each in its own terminal`);
-  else commands.push('# the run: add --keep-going, --bind ... as you would to any run');
-  plans.forEach((plan, k) => commands.push(`iperf-orchestrator run --plan ${plan} --servers ${plan} --run-id ${id(k)} --for ${seconds}`));
+  const run = (plan, k) => `iperf-orchestrator run --plan ${plan} --servers ${plan} --run-id ${id(k)} --for ${seconds}`;
+  if (groups.length > 1) {
+    // All at once, in the background, each one's output in its own log.
+    commands.push(`# ${groups.length} runs, one per rate, all at once: each one's output goes to its own log`);
+    plans.forEach((plan, k) => commands.push(`${run(plan, k)} > iperf-run-${k + 1}.log 2>&1 &`));
+    commands.push('wait');
+  } else {
+    commands.push('# the run: add --keep-going, --bind ... as you would to any run');
+    plans.forEach((plan, k) => commands.push(run(plan, k)));
+  }
   commands.push('# what it measured, for the viewer: load iperf_results.tsv beside the layout');
   plans.forEach((plan, k) => commands.push(`iperf-orchestrator export-overlay --plan ${plan} --servers ${plan} --run-id ${id(k)}${map} `
     + `--overlay-run dcviz --overlay-out iperf_results.tsv${k ? ' --overlay-append' : ''}`));
@@ -329,8 +338,9 @@ export function buildNetmesh(made, { seconds = 60, connections = 1, summary = ''
     commands: [
       '# the idle network',
       `netmesh run --mesh mesh.csv --for ${seconds}`,
-      '# ... or 20 s idle, then under the load (the mx run, with matrix.csv beside it)',
-      `netmesh run --mesh mesh.csv --baseline 20 -- ${mxRun(seconds, connections)}`,
+      '# ... or 20 s idle, then under the load (the mx run, with matrix.csv beside it):',
+      '# put this line in place of the one above',
+      `# netmesh run --mesh mesh.csv --baseline 20 -- ${mxRun(seconds, connections)}`,
       '# what it measured, for the viewer: load netmesh_results.tsv beside the layout',
       'dcimport netmesh_results.tsv --tidy reports/',
     ],
@@ -355,20 +365,106 @@ export function runWhy(tool, made) {
   return '';
 }
 
-/** A tool's commands and notes as one text file: what to run, and why. */
-export function runReadme(built) {
+/** What a tool's script is saved as. */
+export const scriptName = (tool) => `run-${tool}.sh`;
+
+/**
+ * A tool's notes and commands as a shell script to edit and run: every line
+ * that is not a command is a comment, and the commands are the panel's. It
+ * runs where it is saved, and stops before anything starts if a file it
+ * needs is not there beside it.
+ */
+export function runScript(built) {
+  const name = scriptName(built.tool);
+  const comment = (line) => (line ? `# ${line}` : '#');
   return [
-    `${RUN_LABELS[built.tool]}: the load generator's load, to run for real`,
-    `Made by datacenter_visualization ${VERSION}.`,
+    '#!/usr/bin/env bash',
+    `# ${name} -- ${RUN_LABELS[built.tool]}: the load generator's load, to run for real.`,
+    `# Made by datacenter_visualization ${VERSION}.`,
+    '#',
+    '# Save it beside the files below, change any line you like, and run it:',
+    `#   bash ${name}`,
+    '#',
+    ...built.notes.map(comment),
+    '#',
+    '# Files, beside this script:',
+    ...built.files.map((f) => `#   ${f.name} -- ${f.note}`),
     '',
-    ...built.notes,
+    'cd "$(dirname "$0")" || exit 1',
+    `for f in ${built.files.map((f) => f.name).join(' ')}; do`,
+    '  [ -f "$f" ] || { echo "$f is not beside this script: save it here first" >&2; exit 1; }',
+    'done',
     '',
-    'Files:',
-    ...built.files.map((f) => `  ${f.name}  -- ${f.note}`),
-    '',
-    'Commands, from the directory the files are in:',
-    '',
-    ...built.commands.map((line) => (line.startsWith('#') ? line : `  ${line}`)),
+    ...built.commands,
     '',
   ].join('\n');
+}
+
+/** What a tool's archive is saved as, and the folder it opens into. */
+export const tarName = (tool) => `run-${tool}.tar`;
+
+/**
+ * A tool's files and its script in one tar archive, in a folder of their
+ * own: one download instead of several, which a browser cannot rename one
+ * at a time to `matrix (1).csv` beside an older `matrix.csv`. The script is
+ * executable. Plain ustar, which every tar reads.
+ */
+export function runTar(built, { mtime = Date.now() } = {}) {
+  const dir = tarName(built.tool).replace(/\.tar$/, '');
+  const entries = [
+    ...built.files.map((f) => ({ name: `${dir}/${f.name}`, text: f.text, mode: 0o644 })),
+    { name: `${dir}/${scriptName(built.tool)}`, text: runScript(built), mode: 0o755 },
+  ];
+  return tarball(entries, { dir, mtime });
+}
+
+/**
+ * A ustar archive of text files, as bytes: a 512-byte header each, its
+ * contents padded to 512, and two empty blocks to end it.
+ *
+ * @param entries  [{ name, text, mode }] -- names under 100 bytes
+ * @param opts     { dir: a folder entry first, mtime in ms }
+ */
+export function tarball(entries, { dir = '', mtime = Date.now() } = {}) {
+  const enc = new TextEncoder();
+  const seconds = Math.floor(mtime / 1000);
+  const blocks = [];
+  let total = 0;
+  const header = (name, size, mode, type) => {
+    const h = new Uint8Array(512);
+    const put = (offset, length, text) => {
+      const bytes = enc.encode(text);
+      if (bytes.length > length) throw new Error(`tar: ${name} is too long a name for a tar header`);
+      h.set(bytes, offset);
+    };
+    const octal = (offset, length, value) => put(offset, length, `${value.toString(8).padStart(length - 1, '0')}\0`);
+    put(0, 100, name);
+    octal(100, 8, mode);
+    octal(108, 8, 0);            // uid
+    octal(116, 8, 0);            // gid
+    octal(124, 12, size);
+    octal(136, 12, seconds);
+    h.fill(32, 148, 156);        // the checksum counts its own field as spaces
+    put(156, 1, type);
+    put(257, 6, 'ustar\0');
+    put(263, 2, '00');
+    let sum = 0;
+    for (const b of h) sum += b;
+    put(148, 8, `${sum.toString(8).padStart(6, '0')}\0 `);
+    return h;
+  };
+  const push = (bytes) => { blocks.push(bytes); total += bytes.length; };
+  if (dir) push(header(`${dir}/`, 0, 0o755, '5'));
+  for (const e of entries) {
+    const body = enc.encode(e.text);
+    push(header(e.name, body.length, e.mode || 0o644, '0'));
+    push(body);
+    const pad = (512 - (body.length % 512)) % 512;
+    if (pad) push(new Uint8Array(pad));
+  }
+  push(new Uint8Array(1024));
+  const out = new Uint8Array(total);
+  let at = 0;
+  for (const b of blocks) { out.set(b, at); at += b.length; }
+  return out;
 }

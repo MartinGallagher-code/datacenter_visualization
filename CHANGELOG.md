@@ -11,6 +11,53 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.37.1 — 2026-10-27
+
+- **iperf ran every flow 4.9% fast.** The plans wrote `-b` as `1000M`, and
+  iperf2 reads an uppercase suffix as binary: `1000M` is 1000 × 2^20 bits,
+  1.0486 Gb/s, so a run measured against the model came out at 105%. They
+  write `1000m` now, decimal megabits (and `k` below one). Measured with
+  iperf 2.1.9: `-b 1000M` sent 1044.5 Mb/s, `-b 1000m` 998.6.
+- 1.34.0 to 1.37.1 share one pull request.
+
+## 1.37.0 — 2026-10-27
+
+- **Restart asks first** while there is anything to lose -- "Restart empties
+  the viewer: the floor plan and 12 metrics will be gone. Restart anyway?"
+  An empty viewer restarts without asking.
+- 1.34.0 to 1.37.0 share one pull request.
+
+## 1.36.0 — 2026-10-27
+
+- **Ctrl+R can no longer empty the viewer.** Reloading loses everything
+  loaded, built, edited or set, so once anything has been done since the
+  page opened, Ctrl+R, ⌘R and F5 do nothing and a note says why; the
+  browser's reload button, and closing the tab, ask first. Untouched, a
+  page reloads as before, its URL bringing it all back. The only chord the
+  viewer takes from the browser.
+- 1.34.0, 1.35.0 and 1.36.0 share one pull request.
+
+## 1.35.0 — 2026-10-26
+
+- **Save run-mx.tar** (run-iperf.tar, run-netmesh.tar): a tool's files,
+  `expected.tsv` and its `run-<tool>.sh` in one tar archive, in a folder of
+  their own, the script executable -- `tar -xf run-mx.tar`, then
+  `./run-mx/run-mx.sh`. One download, which a browser cannot rename file
+  by file beside an earlier run's.
+- 1.34.0 and 1.35.0 share one pull request.
+
+## 1.34.0 — 2026-10-26
+
+- **Save run-mx.sh** (run-iperf.sh, run-netmesh.sh) in place of the
+  README: a tool's notes and commands as a shell script to edit and run.
+  Every line that is not a command is a comment; it runs where it was
+  saved, and stops before anything starts if one of its files is missing.
+- iperf at more than one rate: the runs go in the background, each into
+  its own log, and are waited for before the export, rather than being
+  left to start by hand in separate terminals.
+- netmesh: the run under the load is a commented line to swap in for the
+  idle run, so the script runs one of them.
+
 ## 1.33.0 — 2026-10-23
 
 - **Measured against the model**: a run's results beside what the model

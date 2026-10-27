@@ -1406,6 +1406,16 @@ await test('the load as run files', async () => {
   await page.locator('#load-gen button.run-tool-iperf').click();
   await page.waitForTimeout(300);
   ok(/iperf_plan\.conf/.test(await files()) && /--run-id dcviz --for 300/.test(await files()), 'iperf’s plan, for as long as asked');
+  const [script] = await Promise.all([page.waitForEvent('download'), page.locator('#load-gen button.run-script').click()]);
+  const scriptText = readFileSync(await script.path(), 'utf8');
+  ok(script.suggestedFilename() === 'run-iperf.sh' && scriptText.startsWith('#!/usr/bin/env bash')
+     && /^iperf-orchestrator run --plan iperf_plan\.conf .* --for 300$/m.test(scriptText) && /^# 6 hosts, /m.test(scriptText),
+     'and its notes and commands as a script to edit and run: the notes comments, the commands as they are');
+  const [archive] = await Promise.all([page.waitForEvent('download'), page.locator('#load-gen button.run-tar').click()]);
+  const listed = spawnSync('tar', ['-tf', await archive.path()], { encoding: 'utf8' });
+  ok(archive.suggestedFilename() === 'run-iperf.tar'
+     && listed.stdout.trim().split('\n').join(' ') === 'run-iperf/ run-iperf/iperf_plan.conf run-iperf/expected.tsv run-iperf/run-iperf.sh',
+     `and all of it as one archive tar reads  (${listed.stdout.trim().split('\n').join(' ')})`);
   await page.locator('#load-gen button.run-tool-netmesh').click();
   await page.waitForTimeout(300);
   ok(/mesh\.csv/.test(await files()) && /netmesh makes no load/.test(await files()), 'netmesh’s mesh, and what it measures');
@@ -1471,6 +1481,48 @@ await test('a run against the model', async () => {
   ok(/5 short of it/.test(await panel()) && /the load generator now/.test(await page.evaluate(() => document.querySelector('#compare select.compare-against').innerText)),
      'the load generator as it is set now is a model too');
 }, { url: '?layout=fx/tiny.dc' });
+
+// Reloading empties the viewer, so Ctrl+R does nothing while there is
+// something to lose, and leaving asks first. Untouched, a page reloads.
+await test('Ctrl+R and Restart cannot empty the viewer unasked', async () => {
+  const reloadKey = (key, mods) => page.evaluate(([k, m]) => {
+    const e = new KeyboardEvent('keydown', { key: k, ...m, bubbles: true, cancelable: true });
+    window.dispatchEvent(e);
+    return e.defaultPrevented;
+  }, [key, mods]);
+  const leaving = () => page.evaluate(() => {
+    const e = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(e);
+    return e.defaultPrevented;
+  });
+  ok(!(await reloadKey('r', { ctrlKey: true })) && !(await leaving()), 'a page as its URL loaded it, untouched, reloads as ever');
+  await page.fill('#filter', 's3');
+  await page.waitForTimeout(300);
+  ok(await reloadKey('r', { ctrlKey: true }), 'touched: Ctrl+R does nothing');
+  ok(await reloadKey('R', { metaKey: true, shiftKey: true }) && await reloadKey('F5', {}), 'nor ⌘⇧R, nor F5');
+  ok(!(await reloadKey('f', { ctrlKey: true })), 'and every other chord is still the browser’s');
+  ok(/would reload the page and empty the viewer/.test(await page.evaluate(() => document.querySelector('#notices').innerText)),
+     'and it says why, and what to do instead');
+  ok(await leaving(), 'leaving any other way asks first');
+
+  // Restart empties it too, so it asks, and says what would go.
+  const asked = [];
+  page.once('dialog', (d) => { asked.push(d.message()); d.dismiss(); });
+  await page.locator('#btn-restart').click();
+  await page.waitForTimeout(300);
+  ok(/^Restart empties the viewer: the floor plan will be gone\. Restart anyway\?$/.test(asked[0] || ''), `Restart asks first, and says what goes  (${asked[0]})`);
+  ok(await page.evaluate(() => document.querySelector('#tree').innerText.trim().length > 0), 'and No keeps the floor plan');
+  page.once('dialog', (d) => { asked.push(d.message()); d.accept(); });
+  await page.locator('#btn-restart').click();
+  await page.waitForTimeout(300);
+  ok(asked.length === 2 && !(await page.evaluate(() => document.querySelector('#tree').innerText.trim())), 'and Yes empties it');
+  let again = false;
+  page.once('dialog', (d) => { again = true; d.dismiss(); });
+  await page.locator('#btn-restart').click();
+  await page.waitForTimeout(300);
+  ok(!again, 'an empty viewer restarts without asking');
+  page.removeAllListeners('dialog');
+}, { url: '?layout=examples/dual-plane.dc' });
 
 // A hundred thousand flows and more: a random load at a few hundred peers
 // over a few hundred servers. Spreading that many flows into one push()

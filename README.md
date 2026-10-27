@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.33.0** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.37.1** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -1088,7 +1088,22 @@ mx run --matrix matrix.csv --for 60 --streams 1
 mx export --matrix matrix.csv --peers -o mx_results.tsv
 ```
 
-and **Save README-mx.txt** keeps the notes and commands beside the files.
+**Save run-mx.tar** puts all of it — the tool's files, `expected.tsv` and
+the script — in one archive, a folder of its own, the script executable:
+
+```sh
+tar -xf run-mx.tar && cd run-mx && ./run-mx.sh
+```
+
+One download rather than four, so a browser cannot quietly save a second
+run's matrix as `matrix (1).csv` beside the first one's `matrix.csv`.
+**Save run-mx.sh** saves the script alone: every note
+a comment, every command as it is, and a check that its files are beside
+it before anything starts. Save it with the files, change what you like —
+`--for`, `--user root`, a line commented out — and run `bash run-mx.sh`.
+For iperf at more than one rate its runs go together, in the background,
+each into its own log, and are waited for before the export; for netmesh
+the run under the load is there commented, to swap in for the idle one.
 Each tool's export lands back on the floor plan, because **the hosts go
 into the files by the layout's own names**: load `mx_results.tsv`,
 `iperf_results.tsv` or `netmesh_results.tsv` (made by `dcimport`) beside the
@@ -2176,6 +2191,13 @@ quietly left stale.
   thousands of elements smooth). `f` fits selection, `0` fits all. Labels grow
   with the zoom — each is sized from its element's on-screen height — so
   zooming in to read something makes it bigger, up to a ceiling.
+- **Reloading cannot empty it by accident.** A reload loses everything
+  loaded, built, edited or set, so once you have done anything since the
+  page opened, Ctrl+R (⌘R, F5) does nothing and a note says so, and the
+  browser's reload button or closing the tab asks first. A page just as its
+  URL loaded it, untouched, reloads as ever: the reload brings it all back.
+  **Restart** empties the viewer too, so it asks first while there is a
+  floor plan or a metric to lose, and says which.
 - **Expand / collapse** — double-click any container, use the tree, or the
   Collapse racks/rows/rooms buttons. Collapsed containers show their
   aggregate results computed from all raw samples inside them.
