@@ -1424,6 +1424,89 @@ await test('the load as run files', async () => {
   ok(!/mesh\.csv/.test(await files()), 'and its button again closes it');
 }, { url: '?layout=examples/dual-plane.dc' });
 
+// The NIC to load, typed once: it goes into every tool's files and is kept
+// for next time, so a fleet's run files need no editing.
+await test('--bind goes into the run files and is kept', async () => {
+  try {
+    const files = () => page.evaluate(() => (document.querySelector('#load-gen .run-files') || {}).innerText || '');
+    await page.locator('#load-gen button', { hasText: 'Run' }).click();
+    await page.waitForTimeout(400);
+    await page.locator('#load-gen button.run-tool-mx').click();
+    await page.waitForTimeout(300);
+    ok(/mx run --matrix matrix\.csv --for 60 --streams 1\n/.test(await files()) && /add --user, --bind/.test(await files()),
+       'none at first: the run as ever, and where a --bind would go');
+    await page.fill('#load-gen input.run-bind', 'eth 1');
+    await page.locator('#load-gen input.run-bind').dispatchEvent('change');
+    await page.waitForTimeout(300);
+    ok(/--bind: no spaces/.test(await files()) && !/--bind eth/.test(await files()), 'a pattern no tool could take is refused, and why');
+    await page.fill('#load-gen input.run-bind', 'mlx5');
+    await page.locator('#load-gen input.run-bind').dispatchEvent('change');
+    await page.waitForTimeout(300);
+    ok(/mx run --matrix matrix\.csv --for 60 --streams 1 --bind mlx5/.test(await files()) && !/no spaces/.test(await files()),
+       'mx runs on it');
+    await page.locator('#load-gen button.run-tool-iperf').click();
+    await page.waitForTimeout(300);
+    const [saved] = await Promise.all([page.waitForEvent('download'), page.locator('#load-gen button.run-save', { hasText: 'iperf_plan.conf' }).click()]);
+    ok(/^# bind=mlx5$/m.test(readFileSync(await saved.path(), 'utf8')), 'iperf’s plan carries it as bind=');
+    await page.reload({ waitUntil: 'networkidle' });
+    await page.locator('#load-gen button', { hasText: 'Run' }).click();
+    await page.waitForTimeout(400);
+    eq(await page.inputValue('#load-gen input.run-bind'), 'mlx5', 'and it is there next time');
+    await page.locator('#load-gen button.run-tool-netmesh').click();
+    await page.waitForTimeout(300);
+    ok(/netmesh run --mesh mesh\.csv --for 60 --bind mlx5/.test(await files()), 'netmesh runs on it too');
+    await page.fill('#load-gen input.run-bind', '');
+    await page.locator('#load-gen input.run-bind').dispatchEvent('change');
+    await page.waitForTimeout(300);
+    ok(!/--bind mlx5/.test(await files()), 'and emptied, it is gone');
+  } finally {
+    await page.evaluate(() => localStorage.removeItem('dcviewer.bind'));
+  }
+}, { url: '?layout=fx/tiny.dc' });
+
+// Every titled part of the side panels folds to its title and stays folded:
+// a section, a tile, a list inside one. Folded, a section says in a few
+// words how things stand, and its own buttons still work.
+await test('every titled part folds, and stays folded', async () => {
+  const off = (sel) => page.evaluate((s) => document.querySelector(s).classList.contains('off'), sel);
+  const shown = (sel) => page.evaluate((s) => { const e = document.querySelector(s); return !!e && e.offsetParent !== null; }, sel);
+  try {
+    await page.locator('#load-gen button', { hasText: 'Run' }).click();
+    await page.waitForTimeout(400);
+    const heads = await page.evaluate(() => [...document.querySelectorAll('#right > .block')].filter((b) => b.offsetParent !== null)
+      .map((b) => [...b.querySelector(':scope > h2').childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join('').trim()));
+    eq(heads, ['Overlays', 'Networks', 'Load generator', 'Cable load', 'Inspector'],
+       'the load generator and cable load are sections of their own, and nothing empty is shown');
+    await page.locator('#cable-load > h2').click();
+    await page.waitForTimeout(200);
+    ok(await off('#cable-load') && !(await shown('#cable-load .headline')), 'a click on its title folds a section to it');
+    ok(/Gb\/s/.test(await page.evaluate(() => document.querySelector('#cable-load .fold-note').innerText)),
+       'and folded, it still says how much the cables carry');
+    await page.locator('#load-gen .fold-head', { hasText: 'Run it for real' }).click();
+    await page.waitForTimeout(200);
+    ok(!(await shown('#load-gen .run-tool-mx')) && await shown('#load-gen .run-files .fold-head'), 'a list inside a section folds too');
+    await page.locator('#load-gen > h2 .head-tools button', { hasText: 'Stop' }).click();
+    await page.waitForTimeout(300);
+    ok(!(await off('#load-gen')) && !(await shown('#cable-load')), 'a button in a title acts, without folding it: Stop took the load off');
+    await page.reload({ waitUntil: 'networkidle' });
+    await page.locator('#load-gen button', { hasText: 'Run' }).click();
+    await page.waitForTimeout(400);
+    ok(await off('#cable-load') && !(await shown('#load-gen .run-tool-mx')), 'and all of it stays as it was, reloaded');
+    // The inspector's parts: what the selection carries, folded on its own.
+    await page.evaluate(() => [...document.querySelectorAll('#tree .tree-row')].find((r) => /\br1h1\b/.test(r.textContent)).click());
+    await page.waitForTimeout(300);
+    const part = page.locator('#inspector .fold-head', { hasText: 'Cable load' });
+    ok(await part.count() === 1, 'the inspector’s parts have titles that fold');
+    await part.click();
+    await page.waitForTimeout(200);
+    ok(await page.evaluate(() => [...document.querySelectorAll('#inspector .fold-run')].some((f) => f.classList.contains('off'))),
+       'and fold');
+  } finally {
+    // Put everything back for the tests after this one.
+    await page.evaluate(() => localStorage.removeItem('dcviewer.folds'));
+  }
+}, { url: '?layout=fx/tiny.dc' });
+
 // The real money: a run's results against the model that planned it. The
 // model's figures go out with the run files as expected.tsv; a run comes back
 // with r1h1's NIC giving 30% and r2h2 saying nothing.

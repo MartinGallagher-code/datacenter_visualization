@@ -61,6 +61,9 @@ export function modelPairs(flows, toGbps) {
       pairs.set(key, (pair = {
         src: flow.src, dst: flow.dst, gbps: toGbps === null ? null : 0, offered: toGbps === null ? null : 0,
         pps: null, offeredPps: null, held: new Set(),
+        // Whether any of it is requests: a pair the replies alone travel
+        // has no requests a second, whatever bits it carries.
+        requests: false, requestGbps: 0, requestOffered: 0,
       }));
     }
     const carried = Math.max(0, flow.value);
@@ -70,6 +73,11 @@ export function modelPairs(flows, toGbps) {
       pair.offered += wanted * toGbps;
     }
     if (!flow.reply) {
+      pair.requests = true;
+      if (toGbps !== null) {
+        pair.requestGbps += carried * toGbps;
+        pair.requestOffered += wanted * toGbps;
+      }
       // Requests a second: a sized load knows them; a load in pps is them.
       const asked = flow.pps > 0 ? flow.pps : toGbps === null ? wanted : null;
       if (asked !== null) {
@@ -126,9 +134,13 @@ export function modelResults(pairs, { summary = '', txBytes = 0, tool = '', payl
       out.set(pair.src, (out.get(pair.src) || 0) + pair.gbps);
       into.set(pair.dst, (into.get(pair.dst) || 0) + pair.gbps);
     }
-    // A bit rate sent as packets of the tool's size: its requests a second.
-    const pps = pair.pps !== null ? pair.pps : perPacket && pair.gbps !== null ? pair.gbps / perPacket : null;
-    const asked = pair.offeredPps !== null ? pair.offeredPps : perPacket && pair.offered !== null ? pair.offered / perPacket : null;
+    // A bit rate sent as packets of the tool's size: its requests a second --
+    // of the requests' bits alone. A pair only replies travel has none: read
+    // as requests, 1000 replies of 500 B were once 4354 requests of 64.
+    const bits = perPacket && pair.gbps !== null && pair.requests !== false;
+    const pps = pair.pps !== null ? pair.pps : bits ? (pair.requestGbps ?? pair.gbps) / perPacket : null;
+    const asked = pair.offeredPps !== null ? pair.offeredPps
+      : bits && pair.offered !== null ? (pair.requestOffered ?? pair.offered) / perPacket : null;
     if (pps !== null) row('model_pps', pps);
     if (asked !== null) row('model_offered_pps', asked);
     if (pair.held.size) rows.push(`model_held\t${pair.src.path}\t${[...pair.held].sort()[0]}\t${tags}`);

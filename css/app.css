@@ -115,7 +115,37 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .rail:hover { background: #1c2330; color: var(--ink); }
 .rail[hidden] { display: none; }
 
-.section-caret { width: 11px; flex: none; font-size: 9px; }
+/* -------------------------------------------------------------- folding
+   Every titled part folds: a section, a tile in it, a list in the tile.
+   Folded, it keeps its title and, for a section, a few words of how things
+   stand (.fold-note), so a panel of folded sections still reads. */
+.fold-head { cursor: pointer; user-select: none; }
+.fold-head::before {
+  content: '▸'; display: inline-block; width: 11px; flex: none; font-size: 9px; text-align: center;
+  color: var(--ink-dim); transition: transform 0.12s;
+}
+.fold:not(.off) > .fold-head::before { transform: rotate(90deg); }
+.fold.off > :not(.fold-head) { display: none; }
+.fold-run > .fold-head { display: flex; align-items: center; gap: 2px; }
+.fold-run > .fold-head:hover, .picks-head.fold-head:hover { color: var(--ink); }
+.picks-head.fold-head > strong { margin-right: auto; }
+.picks-head.fold-head { justify-content: flex-start; }
+.fold.off > .picks-head { margin-bottom: 0; }
+.fold-note { margin-left: 6px; text-transform: none; letter-spacing: 0; font-weight: 400;
+             color: var(--ink-dim); font-size: 10.5px; overflow: hidden; text-overflow: ellipsis;
+             white-space: nowrap; min-width: 0; }
+.block:not(.off) .fold-note { display: none; }
+.head-tools { margin-left: auto; display: flex; align-items: center; gap: 6px;
+              text-transform: none; letter-spacing: 0; font-weight: 400; color: var(--ink); }
+.head-tools button { font-size: 11px; padding: 1px 7px; }
+.head-tools .chk { font-size: 11px; }
+.head-tools button.active { border-color: #4fa3ff; color: #8cc4ff; }
+/* A section drawn by its renderer, with nothing to say, is not there. */
+.block.pane:empty { display: none; }
+/* A long panel keeps the title of the section in view while it scrolls. */
+.panel .block > h2 { position: sticky; top: 0; z-index: 2; background: var(--panel);
+                     margin: -10px -11px 8px; padding: 10px 11px 2px; }
+.panel .block.off > h2 { margin-bottom: -2px; padding-bottom: 0; }
 .block h2:hover { color: var(--ink); }
 
 .collapse-panel {
@@ -138,7 +168,6 @@ body.resizing { cursor: col-resize; user-select: none; }
 .block { padding: 10px 11px; border-bottom: 1px solid var(--line); }
 /* A collapsed section keeps only its heading, so the panel stays navigable. */
 .block.off > *:not(h2) { display: none; }
-.block.off h2 { margin-bottom: 0; }
 .block h2 {
   display: flex;
   align-items: center;
@@ -696,13 +725,15 @@ body.resizing-rows { cursor: row-resize; user-select: none; }
                  background: #ffffff10; color: var(--ink); }
 .net .netspeed.muted { color: var(--ink-dim); }
 .cable-note { font-size: 11px; margin: 4px 0 6px; }
-.cable-load { border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; margin-top: 8px; font-size: 12px; }
+.cable-load { font-size: 12px; }
 .cable-load select { font-size: 11.5px; }
 .load-key { display: flex; align-items: center; gap: 5px; font-size: 10.5px; color: var(--ink-dim); margin: 4px 0; }
 .load-ramp { flex: 1; min-width: 50px; height: 7px; border-radius: 2px; }
 .load-chip { width: 10px; height: 7px; border-radius: 2px; flex: none; margin-left: 4px; }
 .cable-summary { font-size: 11px; margin: 4px 0; }
 .chk.duplex { white-space: normal; flex-wrap: wrap; margin: 2px 0; }
+/* A long label wraps inside the panel rather than running off its edge. */
+.chk.expected { white-space: normal; align-items: flex-start; }
 .headline { margin: 2px 0 6px; }
 .headline-big { font-size: 20px; font-weight: 600; line-height: 1.2; }
 .headline .muted { font-size: 11px; }
@@ -737,14 +768,16 @@ body.resizing-rows { cursor: row-resize; user-select: none; }
 
 /* --------------------------------------------------------- load generator */
 
-.load-gen { border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; margin-top: 8px; font-size: 12px; }
+.load-gen { font-size: 12px; }
 .load-gen .bad { color: #f85149; }
 .load-gen > .muted { font-size: 11px; margin: 4px 0; }
-.load-gen .picks-head button.active { border-color: #4fa3ff; color: #8cc4ff; }
 .gen-row { display: flex; align-items: center; gap: 5px; margin: 4px 0; flex-wrap: wrap; font-size: 11.5px; }
 .gen-row select, .gen-row button, .gen-row input { font-size: 11.5px; }
 .gen-row input[type="number"] { width: 64px; padding: 1px 4px; }
 .gen-row input.gen-peers { width: 44px; }
+.gen-row input.run-bind { flex: 1; min-width: 0; padding: 1px 4px; font-family: var(--mono); }
+.run-bind-why:empty { display: none; }
+.run-bind-why { font-size: 11px; }
 .gen-row .gen-pattern { flex: 1; min-width: 0; }
 .gen-row .gen-hosts { flex: 1; min-width: 0; padding: 1px 4px; font-family: var(--mono); }
 .list-more { margin: 0 0 6px; }
@@ -754,8 +787,7 @@ body.resizing-rows { cursor: row-resize; user-select: none; }
 
 /* --------------------------------------------------------------- findings */
 
-.findings { border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; margin-top: 8px; font-size: 12px; }
-.findings .picks-head .chk { font-size: 11px; }
+.findings { font-size: 12px; }
 .finding-group { display: flex; align-items: center; gap: 6px; margin-top: 6px; font-size: 11.5px; }
 .finding-group .dot { width: 9px; height: 9px; border-radius: 2px; flex: none; }
 .finding-note { font-size: 10.5px; margin: 1px 0 0 15px; }
@@ -776,7 +808,7 @@ body.resizing-rows { cursor: row-resize; user-select: none; }
 .explain-box { margin-top: 8px; }
 .takeouts { margin-top: 8px; }
 .run-files { margin-top: 8px; }
-.compare { margin-top: 10px; }
+.compare { font-size: 12px; }
 .compare .compare-tolerance { width: 4em; }
 .compare .compare-measured, .compare .compare-against { max-width: 14em; }
 .compare .compare-flow, .compare .compare-suspect { font-size: 11px; margin: 2px 0; }

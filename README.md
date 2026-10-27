@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.39.0** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.40.1** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -1110,6 +1110,16 @@ into the files by the layout's own names**: load `mx_results.tsv`,
 `iperf_results.tsv` or `netmesh_results.tsv` (made by `dcimport`) beside the
 layout, and compare what ran with what the model said.
 
+- **The NIC to load** goes in the box beside the MTU, as the tools' own
+  `--bind` takes it: an interface name (`eth1`, `mlx5`) or part of an
+  address (`10.20.`), matched against `ip -o -4 addr show` on each host,
+  for a fleet reached over a management NIC whose traffic should ride
+  another. It goes into the files — iperf's plans as `bind=`, which every
+  command run against the plan reads; mx's and netmesh's runs as
+  `--bind`, the mx run under netmesh too — and is kept for next time, so
+  the files need no editing. Empty, there is none. A pattern a shell would
+  expand (`eth[12]`) goes quoted; one with a space, a quote or shell syntax
+  in it is refused, and the box says why.
 - **A host the tools cannot reach by its name** gets an `addr=` — the
   address they reach it at, `node s7 role=server addr=10.1.7.15`, or one
   per server from the line that makes them, `addr=10.1.{rack}.{id}`. An
@@ -2159,6 +2169,18 @@ quietly left stale.
 
 ## The viewer
 
+- **Every titled part of the side panels folds**: a section (Files,
+  Structure, Overlays, Networks, Load generator, Cable load, Findings,
+  Measured against the model, Inspector), a list inside one (Busiest
+  cables, Run it for real, Where to look …) and each part of the
+  inspector (Readings, Cable load, Findings, Measured flows). A click on a
+  title folds it to that title, and what is folded stays folded across
+  redraws and reloads. A folded section still says in a few words how
+  things stand — the cables' total, how many servers have findings, how
+  many flows are off the model — and the buttons in its title (Run/Stop,
+  Off, mark on the floor) work without unfolding it. A section with nothing
+  to show is not shown, and a section's title stays at the top of the panel
+  while its contents scroll under it.
 - **What connects these?** Shift-click (or Ctrl/⌘-click) elements on the
   floor plan or in the tree to pick them; each pick gets a numbered tag.
   With two or more picked, only the cables between them are drawn: for each

@@ -18,6 +18,25 @@ const MX_SIZES = [32, 65507];   // the payloads mx takes, its header to the larg
 // The fabric's MTU, which sets what one packet carries: a full frame's
 // payload for mx, and how much of a TCP packet is payload for iperf.
 export const MTUS = [1500, 9000];
+
+/**
+ * A --bind pattern as all three tools take it -- an interface name or part
+ * of an address, matched against `ip -o -4 addr show` on each host -- or
+ * why it cannot be one: it goes into a shell script and, for iperf, a plan
+ * file's space-separated settings, so no spaces, quotes or shell syntax.
+ */
+export function bindProblem(bind) {
+  if (!bind) return '';
+  if (/\s/.test(bind)) return 'no spaces: an interface name, or part of an address';
+  if (/['"`$\\;|&<>(){}]/.test(bind)) return 'no quotes or shell characters: an interface name, or part of an address';
+  return '';
+}
+// A pattern for the shell: as it is, or quoted where it has a regular
+// expression's characters ([, *, ^) a shell would expand.
+const shellWord = (word) => (/^[\w.:/@%+=,-]+$/.test(word) ? word : `'${word}'`);
+const bindFlag = (bind) => (bind && !bindProblem(bind) ? ` --bind ${shellWord(bind)}` : '');
+const bindNote = (bind) => (bind && !bindProblem(bind)
+  ? [`Traffic rides the NIC matching ${bind} on each host (--bind): ssh still goes to the addresses the files name.`] : []);
 const UDP_IP = 28;              // a UDP datagram's IP and UDP headers: a full frame's payload is the MTU less these
 const TCP_IP = 52;              // TCP and IP headers, timestamps on (Linux's default)
 const FRAMING = 38;             // Ethernet header, FCS, preamble and gap: WIRE_BYTES less UDP_IP
@@ -184,7 +203,7 @@ function withExpected(built, expected, results) {
  * sizes in its header. A sized load keeps its sizes; a bit rate goes in full
  * frames, answered by the smallest reply mx makes.
  */
-export function buildMx(made, { seconds = 60, connections = 1, summary = '', expected = '', mtu = 1500 } = {}) {
+export function buildMx(made, { seconds = 60, connections = 1, summary = '', expected = '', mtu = 1500, bind = '' } = {}) {
   const { pairs, hosts, sized } = made;
   const { tx, rx } = mxSizes(made, mtu);
   const pps = (pair) => (pair.pps > 0 ? pair.pps : (pair.gbps * 1e9) / ((tx + WIRE_BYTES) * 8));
@@ -205,12 +224,13 @@ export function buildMx(made, { seconds = 60, connections = 1, summary = '', exp
       sized ? `Requests of ${tx} bytes, each answered by ${rx} bytes back, as the generator sized them.`
         : `A bit rate, sent as ${tx}-byte requests (full ${mtu}-byte frames), each answered by mx’s smallest reply, ${rx} bytes.`,
       `Each pair’s rate is split over ${streams} socket${streams === 1 ? '' : 's'} (--streams), as the model’s connections.`,
+      ...bindNote(bind),
     ],
     commands: [
       '# what each host will send and take in, before anything starts',
       'mx check --matrix matrix.csv',
-      '# the run: add --user, --bind ... as you would to any mx run',
-      mxRun(seconds, connections),
+      `# the run: add --user${bind ? '' : ', --bind'} ... as you would to any mx run`,
+      mxRun(seconds, connections, bind),
       '# what it measured, for the viewer: load mx_results.tsv beside the layout',
       'mx export --matrix matrix.csv --peers -o mx_results.tsv',
     ],
@@ -218,7 +238,7 @@ export function buildMx(made, { seconds = 60, connections = 1, summary = '', exp
 }
 
 const mxStreams = (connections) => Math.min(MX_STREAMS, Math.max(1, Math.round(connections)));
-const mxRun = (seconds, connections) => `mx run --matrix matrix.csv --for ${seconds} --streams ${mxStreams(connections)}`;
+const mxRun = (seconds, connections, bind = '') => `mx run --matrix matrix.csv --for ${seconds} --streams ${mxStreams(connections)}${bindFlag(bind)}`;
 
 /**
  * The pairs in groups of one rate each, since iperf's -b is one rate for a
@@ -275,7 +295,7 @@ const iperfRate = (gbps) => (gbps >= 0.001 ? `${Number((gbps * 1000).toPrecision
  * streams at -b). Different rates are different runs, each on its own port
  * so they can go at once. A sized load's replies go back as TCP the other way.
  */
-export function buildIperf(made, { seconds = 60, connections = 1, summary = '', expected = '', mtu = 1500 } = {}) {
+export function buildIperf(made, { seconds = 60, connections = 1, summary = '', expected = '', mtu = 1500, bind = '' } = {}) {
   const { pairs, hosts, sized } = made;
   const groups = rateGroups(pairs);
   const streams = Math.max(1, Math.round(connections));
@@ -291,6 +311,8 @@ export function buildIperf(made, { seconds = 60, connections = 1, summary = '', 
       '# mode=parallel',
       `# port=${IPERF_PORT + k} duration=${seconds} streams=${streams}`,
       `# bandwidth=${iperfRate((group.gbps * payload) / streams)}${iperfLength((group.gbps * payload) / streams)}`,
+      // A plan setting, so every command run against the plan takes it.
+      ...(bindFlag(bind) ? [`# bind=${bind}`] : []),
       `# made by datacenter_visualization ${VERSION}: rate ${k + 1} of ${groups.length}, `
         + `${group.pairs.length} pairs at ${prose(gbText(group.gbps))} each on the wire, MTU ${mtu}`,
       grid(hosts.filter((el) => group.hosts.has(el)), group.pairs, { head: addrOf, row: addrOf }, () => 'x'),
@@ -315,7 +337,7 @@ export function buildIperf(made, { seconds = 60, connections = 1, summary = '', 
     plans.forEach((plan, k) => commands.push(`${run(plan, k)} > iperf-run-${k + 1}.log 2>&1 &`));
     commands.push('wait');
   } else {
-    commands.push('# the run: add --keep-going, --bind ... as you would to any run');
+    commands.push(`# the run: add --keep-going${bind ? '' : ', --bind'} ... as you would to any run`);
     plans.forEach((plan, k) => commands.push(run(plan, k)));
   }
   commands.push('# what it measured, for the viewer: load iperf_results.tsv beside the layout');
@@ -333,6 +355,7 @@ export function buildIperf(made, { seconds = 60, connections = 1, summary = '', 
       `iperf paces payload: -b is ${(payload * 100).toFixed(1)}% of the model’s rate, so with TCP/IP headers and Ethernet framing `
         + `(MTU ${mtu}) the cables carry exactly what the model shows.`,
       ...(renamed.length ? ['hosts.map turns the addresses it tests back into the layout’s names.'] : []),
+      ...bindNote(bind),
     ],
     commands,
   }, expected, 'iperf_results.tsv');
@@ -343,7 +366,7 @@ export function buildIperf(made, { seconds = 60, connections = 1, summary = '', 
  * path MTU -- netmesh measures the network, it makes no load. Alone it probes
  * an idle network; run with the load after --, idle first and then under it.
  */
-export function buildNetmesh(made, { seconds = 60, connections = 1, summary = '', expected = '' } = {}) {
+export function buildNetmesh(made, { seconds = 60, connections = 1, summary = '', expected = '', bind = '' } = {}) {
   const { pairs, hosts } = made;
   const flows = Math.min(PROBE_FLOWS, Math.max(1, Math.round(connections)));
   const probed = pairs.filter((pair) => pair.gbps > 0 || pair.pps > 0);
@@ -361,13 +384,14 @@ export function buildNetmesh(made, { seconds = 60, connections = 1, summary = ''
       ...describe(pairs, hosts, summary),
       `netmesh makes no load: it probes the load’s ${probed.length.toLocaleString()} pairs, ${PROBES} a second each, for latency, jitter, loss and path MTU.`,
       'Run it alone for the idle network, or with the load after -- for idle first and then under it.',
+      ...bindNote(bind),
     ],
     commands: [
       '# the idle network',
-      `netmesh run --mesh mesh.csv --for ${seconds}`,
+      `netmesh run --mesh mesh.csv --for ${seconds}${bindFlag(bind)}`,
       '# ... or 20 s idle, then under the load (the mx run, with matrix.csv beside it):',
       '# put this line in place of the one above',
-      `# netmesh run --mesh mesh.csv --baseline 20 -- ${mxRun(seconds, connections)}`,
+      `# netmesh run --mesh mesh.csv --baseline 20${bindFlag(bind)} -- ${mxRun(seconds, connections, bind)}`,
       '# what it measured, for the viewer: load netmesh_results.tsv beside the layout',
       'dcimport netmesh_results.tsv --tidy reports/',
     ],

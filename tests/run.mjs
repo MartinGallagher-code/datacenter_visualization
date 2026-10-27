@@ -53,7 +53,7 @@ import {
   droppedLayoutsNotice, layoutNotice, prefixed, resultsFileNotice,
 } from '../js/report.js';
 import {
-  buildIperf, buildMx, buildNetmesh, hostToken, mxSizes, rateGroups, runPairs, runProblem, runScript, runTar, runWhy, scriptName, tarball, tarName, tcpPayloadShare,
+  bindProblem, buildIperf, buildMx, buildNetmesh, hostToken, mxSizes, rateGroups, runPairs, runProblem, runScript, runTar, runWhy, scriptName, tarball, tarName, tcpPayloadShare,
 } from '../js/runfiles.js';
 import {
   compareHosts, compareLatency, compareMtu, compareRuns, comparisonResults, modelPairs, modelResults, suspects,
@@ -5128,6 +5128,27 @@ if (python.error) {
   ok(nm.commands.filter((c) => !c.startsWith('#')).every((c) => !c.includes('--baseline')),
      'the run under the load is there to swap in, commented, so the script runs one netmesh run');
 
+  // --bind: the NIC to load, where ssh goes over another -- a plan setting
+  // for iperf, on the run for mx and netmesh, and the mx under netmesh too.
+  eq(bindProblem(''), '', 'no --bind is fine');
+  eq(bindProblem('eth1'), '', 'an interface name is a pattern');
+  eq(bindProblem('10.20.'), '', 'so is part of an address');
+  ok(/no spaces/.test(bindProblem('eth 1')) && /shell/.test(bindProblem('eth1;reboot')) && /shell/.test(bindProblem("e'1")),
+     'a space, a quote or shell syntax is not');
+  const ipB = buildIperf(made, { seconds: 90, connections: 2, bind: 'mlx5' });
+  ok(ipB.files[0].text.includes('# bandwidth=941.5m\n# bind=mlx5\n'), 'iperf: bind= in the plan, which every command reads');
+  ok(!ipB.commands.some((c) => c.includes('--bind')), 'so no command needs it');
+  ok(ipB.notes.some((n) => /NIC matching mlx5/.test(n)), 'and the notes say which NIC the traffic rides');
+  ok(!plan.includes('bind='), 'no bind= without one');
+  ok(buildMx(made, { seconds: 90, connections: 2, bind: 'eth1' }).commands
+    .includes('mx run --matrix matrix.csv --for 90 --streams 2 --bind eth1'), 'mx: --bind on the run');
+  const nmB = buildNetmesh(made, { seconds: 90, connections: 2, bind: 'eth1' });
+  ok(nmB.commands.includes('netmesh run --mesh mesh.csv --for 90 --bind eth1'), 'netmesh: --bind on the run');
+  ok(nmB.commands.some((c) => c.includes('--baseline 20 --bind eth1 -- mx run') && c.endsWith('--streams 2 --bind eth1')),
+     'and on the mx run under it');
+  ok(buildMx(made, { bind: 'eth[12]' }).commands.some((c) => c.endsWith("--bind 'eth[12]'")), 'a pattern the shell would expand goes quoted');
+  ok(!buildMx(made, { bind: 'eth 1' }).commands.some((c) => c.includes('--bind eth')), 'and one that cannot be a pattern goes nowhere');
+
   // Two rates: the iperf runs go at once, in the background, and are waited for.
   const both = buildIperf(mixed, { seconds: 30 }).commands;
   ok(both.filter((c) => / run .*> iperf-run-\d\.log 2>&1 &$/.test(c)).length === 2 && both.includes('wait')
@@ -5250,6 +5271,29 @@ if (python.error) {
   const mxText = modelResults(pairs, { txBytes: 1472 });
   const pps = /^model_pps\t\S+\t(\S+)\tpeer=\S+r1\/h2/m.exec(mxText);
   ok(pps && Math.abs(Number(pps[1]) - 2e9 / (1538 * 8)) < 1, 'a packet tool’s requests a second, at its packet size');
+
+  // A random pattern to one peer, requests of 64 B answered by 500: r1h1
+  // calls r2h1, so r2h1 -> r1h1 carries r1h1's replies and nothing else. It
+  // has no requests a second -- read as requests, its 1000 replies of 500 B
+  // were once 4354 of 64, and r2h1 was expected to send 5354.
+  const req = { gen: true, id: 1, src: h('r1h1'), dst: h('r2h1'), value: 1000 * packetGb(64), pps: 1000 };
+  const rep = { gen: true, id: 2, src: h('r2h1'), dst: h('r1h1'), value: 1000 * packetGb(500), pps: 1000, reply: true };
+  const own = { gen: true, id: 3, src: h('r2h1'), dst: h('r1h2'), value: 1000 * packetGb(64), pps: 1000 };
+  const replyPairs = modelPairs([req, rep, own], 1);
+  const replyText = modelResults(replyPairs, { txBytes: 64 });
+  const ppsOf = (name, a, b) => {
+    const m = new RegExp(`^${name}\\t\\S+${a}\\t(\\S+)\\tpeer=\\S+${b}\\t`, 'm').exec(replyText);
+    return m ? Number(m[1]) : null;
+  };
+  eq([ppsOf('model_pps', 'r1/h1', 'r2/h1'), ppsOf('model_offered_pps', 'r1/h1', 'r2/h1')], [1000, 1000], 'a request: its own rate');
+  eq([ppsOf('model_pps', 'r2/h1', 'r1/h1'), ppsOf('model_offered_pps', 'r2/h1', 'r1/h1')], [null, null],
+     'a pair only replies travel has no requests a second -- not its reply bits read as requests');
+  ok(ppsOf('model_gbps', 'r2/h1', 'r1/h1') > 0, 'though its bits are still on the cables');
+  eq(ppsOf('model_pps', 'r2/h1', 'r1/h2'), 1000, 'and r2h1 is expected to send its own 1000 a second, not 5354');
+  // A bit rate, sent as a tool's packets, still turns into requests a second.
+  const bitPairs = modelPairs([{ gen: true, id: 4, src: h('r1h1'), dst: h('r1h2'), value: 1 }], 1);
+  ok(Math.abs(/^model_pps\t\S+\t(\S+)/m.exec(modelResults(bitPairs, { txBytes: 1472 }))[1] - 1e9 / (1538 * 8)) < 1,
+     'a bit rate with no replies: its bits at the tool’s size, as before');
 
   // A run: r1h1's NIC gives 30%, r2h2 says nothing, one flow nobody planned.
   const model = new Map([...pairs].map(([key, p]) => [key, { src: p.src, dst: p.dst, value: p.gbps, offered: p.offered, held: p.held }]));
