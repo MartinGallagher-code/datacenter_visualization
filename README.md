@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.41.0** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.41.1** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -1997,6 +1997,18 @@ so the viewer's own aggregation menu does the reducing: `mean` reads as
 "across peers and intervals", `max` as "the worst peer", `last` as "right
 now". `--reduce` collapses to one sample per host per metric (median) for
 meshes big enough that the raw row count matters.
+
+**Only while every agent was running.** `netmesh start` and `stop` reach
+the hosts over ssh a batch at a time, so a run's first and last seconds are
+not a mesh: a probe to a peer not yet up, or already gone, is never
+answered and reads as loss on a network that lost nothing. `dcimport`
+imports the rows written while every agent was running, read off the
+reports the way netmesh's own summary reads them — from the first row of
+the last host to start to the last row of the first host to stop — and
+says what it left out, on stderr and as a `#` line in the file. A host
+that starts or stops 15 s (three report intervals, if longer) or more
+apart from the rest came late or died, and its loss stays in.
+`--whole-run` imports every row.
 
 A blank cell means "not measured" and is skipped rather than read as zero —
 averaging a blank as 0 is the one mistake that quietly makes every one of these

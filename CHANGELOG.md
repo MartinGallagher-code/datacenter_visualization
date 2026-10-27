@@ -11,6 +11,17 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.41.1 — 2026-10-27
+
+- **dcimport leaves out the seconds netmesh's agents took to start and
+  stop.** They come up and go down host by host over ssh, and a probe to
+  a peer not yet up, or already gone, went in as 100% loss on a network
+  that lost nothing. Only the rows written while every agent was running
+  are imported now, read off the reports the way netmesh's own summary
+  reads them (binnacle's fix for the same edge), and dcimport says what it
+  left out. `--whole-run` keeps every row.
+- 1.41.0 and 1.41.1 share one pull request.
+
 ## 1.41.0 — 2026-10-27
 
 - **mx's requests alone are set against the model's requests.** With
