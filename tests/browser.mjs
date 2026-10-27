@@ -1475,8 +1475,8 @@ await test('every titled part folds, and stays folded', async () => {
     await page.waitForTimeout(400);
     const heads = await page.evaluate(() => [...document.querySelectorAll('#right > .block')].filter((b) => b.offsetParent !== null)
       .map((b) => [...b.querySelector(':scope > h2').childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join('').trim()));
-    eq(heads, ['Overlays', 'Networks', 'Load generator', 'Cable load', 'Inspector'],
-       'the load generator and cable load are sections of their own, and nothing empty is shown');
+    eq(heads, ['Inspector', 'Overlays', 'Networks', 'Load generator', 'Cable load'],
+       'the inspector first; the load generator and cable load sections of their own; nothing empty shown');
     await page.locator('#cable-load > h2').click();
     await page.waitForTimeout(200);
     ok(await off('#cable-load') && !(await shown('#cable-load .headline')), 'a click on its title folds a section to it');
@@ -1501,10 +1501,81 @@ await test('every titled part folds, and stays folded', async () => {
     await page.waitForTimeout(200);
     ok(await page.evaluate(() => [...document.querySelectorAll('#inspector .fold-run')].some((f) => f.classList.contains('off'))),
        'and fold');
+    // Alt+click: that one alone, and again, all of them.
+    const folded = () => page.evaluate(() => [...document.querySelectorAll('#right > .block.fold')]
+      .filter((b) => b.offsetParent !== null).map((b) => b.classList.contains('off')));
+    await page.locator('#right > .block[data-section="overlays"] > h2').click({ modifiers: ['Alt'] });
+    await page.waitForTimeout(200);
+    eq(await folded(), [true, false, true, true, true], 'Alt+click on a title: that section alone open, every other folded');
+    await page.locator('#right > .block[data-section="overlays"] > h2').click({ modifiers: ['Alt'] });
+    await page.waitForTimeout(200);
+    eq(await folded(), [false, false, false, false, false], 'and again: all of them open');
   } finally {
     // Put everything back for the tests after this one.
     await page.evaluate(() => localStorage.removeItem('dcviewer.folds'));
   }
+}, { url: '?layout=fx/tiny.dc' });
+
+// Light or dark: the panels by the stylesheet, the floor plan by the canvas,
+// kept from one visit to the next.
+await test('a light look, kept', async () => {
+  const look = () => page.evaluate(() => ({
+    theme: document.documentElement.dataset.theme || 'dark',
+    bg: getComputedStyle(document.body).backgroundColor,
+    button: document.getElementById('btn-theme').textContent,
+  }));
+  try {
+    eq((await look()).theme, 'dark', 'dark, as ever, to begin with');
+    await page.locator('#btn-theme').click();
+    await page.waitForTimeout(200);
+    const light = await look();
+    ok(light.theme === 'light' && light.bg === 'rgb(246, 248, 250)' && light.button === 'Dark', `light, and the button offers dark back  (${JSON.stringify(light)})`);
+    await page.reload({ waitUntil: 'networkidle' });
+    eq((await look()).theme, 'light', 'kept, reloaded');
+    const corner = await page.evaluate(() => {
+      const c = document.getElementById('view');
+      return [...c.getContext('2d').getImageData(2, 2, 1, 1).data].slice(0, 3);
+    });
+    ok(corner[0] > 200 && corner[1] > 200 && corner[2] > 200, `and the floor plan drawn light too  (${corner})`);
+    await page.locator('#btn-theme').click();
+    await page.waitForTimeout(200);
+    eq((await look()).theme, 'dark', 'and back');
+  } finally {
+    await page.evaluate(() => localStorage.removeItem('dcviewer.theme'));
+  }
+}, { url: '?layout=fx/tiny.dc' });
+
+// mx with replies on: its requests alone (mx_request_gbps) are set against
+// the model's requests, not the egress with the replies; and a host whose
+// agent was pegged is said to have hit the agent's ceiling, not the
+// network's.
+await test('an mx run: requests alone, and an agent at its ceiling', async () => {
+  const panel = () => page.evaluate(() => (document.querySelector('#compare') || {}).innerText || '');
+  await page.locator('#load-gen select.gen-unit').selectOption('pps');
+  await page.waitForTimeout(150);
+  await page.fill('#load-gen input.gen-value', '1000');
+  await page.locator('#load-gen input.gen-value').dispatchEvent('change');
+  await page.fill('#load-gen input.gen-bytes', '64');
+  await page.locator('#load-gen input.gen-bytes').dispatchEvent('change');
+  await page.fill('#load-gen input.gen-reply', '500');
+  await page.locator('#load-gen input.gen-reply').dispatchEvent('change');
+  await page.locator('#load-gen button', { hasText: 'Run' }).click();
+  await page.waitForTimeout(500);
+  const hosts = ['r1h1', 'r1h2', 'r1h3', 'r2h1', 'r2h2', 'r2h3'];
+  const requests = 1000 * (64 + 66) * 8 / 1e9;
+  const lines = ['!test\tmx_request_gbps\tunit=Gb/s\thigher=good', '!test\tmx_agent_cpu\tunit=%\thigher=bad'];
+  for (const h of hosts) {
+    lines.push(`mx_request_gbps\t${h}\t${h === 'r1h1' ? requests * 0.3 : requests}`);
+    lines.push(`mx_agent_cpu\t${h}\t${h === 'r1h1' ? 100 : 20}`);
+  }
+  await drop('mx_results.tsv', `${lines.join('\n')}\n`);
+  await page.waitForTimeout(600);
+  const text = await panel();
+  ok(/mx_request_gbps counts requests only: it is set against the model’s requests, without the replies/.test(text),
+     'requests alone are set against the model’s requests, and it says so');
+  ok(/6 hosts: 5 as modeled, 1 short/.test(text), `the five that sent as asked read as modeled, not a fifth of it  (${text.split('\n').slice(4, 9).join(' | ')})`);
+  ok(/every one of the 1 host that fell short had its agent at 90% of a core or more \(mx_agent_cpu: r1h1\) -- the agent, not the network/.test(text),
+     'and the one short host’s agent was pegged: its ceiling, not the network’s');
 }, { url: '?layout=fx/tiny.dc' });
 
 // The real money: a run's results against the model that planned it. The

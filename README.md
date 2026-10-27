@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.40.1** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.41.0** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -1236,6 +1236,18 @@ Where to look: what the short flows have in common
   `expected.tsv`'s `model_path_mtu`) are listed, with where to look — a
   port, a switch or a tunnel set lower. Its `loss` is listed as a rate
   tool's is.
+- **Requests alone.** With replies on, what a host sends is its requests
+  and the replies it owes the hosts that call it. mx's `mx_request_gbps`
+  counts the requests alone, so it is set against the model's requests —
+  `expected.tsv` carries them as `model_request_gbps` when there are
+  replies — and the panel says so; `mx_egress_gbps` is the figure with the
+  replies.
+- **An agent at its ceiling.** With the run's `mx_agent_cpu` (or netmesh's
+  `agent_cpu`) loaded, the hosts that fell short with their agent at 90% of
+  a core or more are named, in amber, above the rest: mx's agent is Python,
+  a core a worker, and short for want of CPU looks just like short for want
+  of a cable. More workers (`mx start --workers`), more `--streams`, or
+  bigger packets.
 - **Show on the floor plan** loads the comparison as overlays of its own —
   `vs_model_pct`, each host's sending as a share of what the model expects,
   red to blue around 100%; `vs_model_flow_pct`, each flow's; and
@@ -2180,7 +2192,14 @@ quietly left stale.
   many flows are off the model — and the buttons in its title (Run/Stop,
   Off, mark on the floor) work without unfolding it. A section with nothing
   to show is not shown, and a section's title stays at the top of the panel
-  while its contents scroll under it.
+  while its contents scroll under it. **Alt+click** a title to open that one
+  alone, every other beside it folded; Alt+click it again to open them all.
+  The **Inspector** is the right panel's first section — what was clicked
+  is what is being looked at — and its own parts sit a step below the
+  panel's sections.
+- **Light or dark**: the **Light** button in the top bar turns the panels
+  and the floor plan light, for a bright room or a printout, and **Dark**
+  turns them back. The choice is kept for next time.
 - **What connects these?** Shift-click (or Ctrl/⌘-click) elements on the
   floor plan or in the tree to pick them; each pick gets a numbered tag.
   With two or more picked, only the cables between them are drawn: for each

@@ -2221,7 +2221,7 @@ function renderTakeouts(state, actions) {
     amount.value = String(t[kind].amount);
     amount.addEventListener('change', () => actions.setTakeouts(kind, { amount: Math.max(0, Number(amount.value) || 0) }));
     const unit = el('select', `takeout-unit takeout-unit-${kind}`);
-    for (const [v, text] of [['#', 'of the'], ['%', '% of the']]) {
+    for (const [v, text] of [['#', 'of'], ['%', '% of']]) {
       const opt = el('option', null, text);
       opt.value = v;
       opt.selected = t[kind].unit === v;
@@ -2414,6 +2414,7 @@ export function renderCompare(state, host, actions) {
   const pct = (got, want) => (want > 0 ? `${Math.round((got / want) * 100)}%` : '—');
   const summary = el('div', 'cable-summary compare-summary');
   for (const line of cmp.summary) summary.append(el('div', null, line));
+  for (const line of cmp.ceiling || []) summary.append(el('div', 'warn compare-ceiling', line));
   for (const line of cmp.caveats) summary.append(el('div', 'muted', line));
   box.append(summary);
 

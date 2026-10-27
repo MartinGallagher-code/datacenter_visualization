@@ -31,6 +31,7 @@ SPDX-FileCopyrightText: 2026 Martin J. Gallagher
     <button id="btn-fit" title="Fit to view (F)">Fit</button>
     <button id="btn-load">Load files…</button>
     <button id="btn-edit" title="Write or tweak the layout right here — the floor plan follows as you type">Edit layout</button>
+    <button id="btn-theme" title="Light or dark: the panels and the floor plan both, kept for next time">Light</button>
     <button id="btn-restart" title="Empty the viewer: no floor plan, no overlays, a blank canvas. Panel widths and the folder open in Files are kept.">Restart</button>
     <button id="notices-btn" class="notice-chip" hidden></button>
   </div>
@@ -114,8 +115,15 @@ Insert template (above) drops in a commented starting point."></textarea>
   <button class="rail" id="right-rail" hidden title="Show the overlays panel">‹</button>
   <div class="resizer" id="right-resize" title="Drag to resize · double-click to reset"></div>
   <aside id="right" class="panel">
-    <section class="block">
-      <h2><button class="collapse-panel" data-panel="right" title="Hide this panel">›</button>Overlays <span id="overlay-hint" class="hint"></span></h2>
+    <!-- First: what was clicked is what is being looked at, and below a
+         panel of load and comparisons it was a scroll away. -->
+    <section class="block" data-section="inspector">
+      <h2><button class="collapse-panel" data-panel="right" title="Hide this panel">›</button>Inspector</h2>
+      <div id="inspector" class="inspector"><p class="muted">Click an element.</p></div>
+    </section>
+
+    <section class="block" data-section="overlays">
+      <h2>Overlays <span id="overlay-hint" class="hint"></span></h2>
       <div id="overlays"></div>
     </section>
 
@@ -139,10 +147,6 @@ Insert template (above) drops in a commented starting point."></textarea>
     <section class="block pane" id="findings"></section>
     <section class="block pane" id="compare"></section>
 
-    <section class="block">
-      <h2>Inspector</h2>
-      <div id="inspector" class="inspector"><p class="muted">Click an element.</p></div>
-    </section>
   </aside>
 </main>
 

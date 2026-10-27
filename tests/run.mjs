@@ -5290,6 +5290,10 @@ if (python.error) {
      'a pair only replies travel has no requests a second -- not its reply bits read as requests');
   ok(ppsOf('model_gbps', 'r2/h1', 'r1/h1') > 0, 'though its bits are still on the cables');
   eq(ppsOf('model_pps', 'r2/h1', 'r1/h2'), 1000, 'and r2h1 is expected to send its own 1000 a second, not 5354');
+  ok(Math.abs(ppsOf('model_request_gbps', 'r1/h1', 'r2/h1') - 1000 * packetGb(64)) < 1e-9 && ppsOf('model_request_gbps', 'r2/h1', 'r1/h1') === 0,
+     'with replies on, each flow’s requests alone too: what mx_request_gbps is set against');
+  ok(Math.abs(ppsOf('model_gbps', 'r2/h1', 'r1/h1') - 1000 * packetGb(500)) < 1e-9, 'beside its bits with the replies');
+  ok(!/model_request_gbps/.test(text.split('\n').filter((l) => !l.startsWith('!test')).join('\n')), 'and none without replies: the requests are all of it');
   // A bit rate, sent as a tool's packets, still turns into requests a second.
   const bitPairs = modelPairs([{ gen: true, id: 4, src: h('r1h1'), dst: h('r1h2'), value: 1 }], 1);
   ok(Math.abs(/^model_pps\t\S+\t(\S+)/m.exec(modelResults(bitPairs, { txBytes: 1472 }))[1] - 1e9 / (1538 * 8)) < 1,
