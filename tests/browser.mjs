@@ -1507,7 +1507,6 @@ await test('netmesh round trips against the model', async () => {
   await page.goto(`${base}?layout=fx/tiny.dc&results=fx/mesh/netmesh_results.tsv`, { waitUntil: 'networkidle' });
   await page.waitForTimeout(500);
   const text = await panel();
-  console.log(text);
   ok(/rtt_p50/.test(await page.evaluate(() => document.querySelector('#compare select.compare-measured').innerText)), 'a round trip is something to compare');
   ok(/the layout/.test(await page.evaluate(() => document.querySelector('#compare select.compare-against').innerText)),
      'and with no load and no expected.tsv, against the layout itself');
@@ -1515,8 +1514,8 @@ await test('netmesh round trips against the model', async () => {
   ok(/latency=\d[\d.]*us on the servers/.test(text), 'and what to put in the model for it');
   ok(/30 pairs, within 15%: 25 as expected, 5 slower/.test(text), 'pair by pair: r1h1’s five slower');
   ok(/Where to look[\s\S]*r1h1/.test(text), 'and where to look: r1h1');
-  ok(/1 pair with a path MTU under the fabric’s 1500/.test(text) && /r1h3[\s\S]{0,20}r2h3[\s\S]{0,40}1400/.test(text), 'the path that will not carry the fabric’s MTU');
-  ok(/r2h1[\s\S]{0,20}r1h1[\s\S]{0,40}3%/.test(text), 'and the loss');
+  ok(/1 pair with a path MTU under the fabric’s 1500/.test(text) && /r1h3 → r2h3 carries 1,?400 bytes/.test(text), 'the path that will not carry the fabric’s MTU');
+  ok(/1 pair losing more than 1%[\s\S]*r2h1 → r1h1 losing 3%/.test(text), 'and the loss, by pair');
   await page.locator('#compare button.compare-show').click();
   await page.waitForTimeout(500);
   ok(/Round trip, as a share of what the model expects/.test(await page.evaluate(() => document.querySelector('#overlays').innerText)),

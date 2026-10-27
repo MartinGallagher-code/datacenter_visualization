@@ -2486,10 +2486,19 @@ export function renderCompare(state, host, actions) {
   }
   const surprises = result.losses.filter((l) => !l.expected);
   if (result.losses.length) {
-    section(`${result.losses.length.toLocaleString()} flow${result.losses.length === 1 ? '' : 's'} losing more than 1%`, surprises.length ? 'bad' : '');
+    section(`${result.losses.length.toLocaleString()} ${result.losses.length === 1 ? w.thing : w.things} losing more than 1%`, surprises.length ? 'bad' : '');
     box.append(el('div', surprises.length ? 'bad' : 'muted', surprises.length
       ? `${surprises.length.toLocaleString()} where the model has room: loss the load does not explain`
       : 'every one where the model holds the flow back: full cables drop'));
+    for (const l of surprises.slice(0, COMPARE_SHOWN)) {
+      const line = el('div', 'compare-flow bad');
+      const name = el('span', 'pick', `${shortPath(l.src)} → ${shortPath(l.dst)}`);
+      name.title = `${l.src.path} → ${l.dst.path}\nClick to go to the sender`;
+      name.addEventListener('click', () => actions.focus(l.src));
+      line.append(name, el('span', null, ` losing ${trimNum(Math.round(l.loss * 100) / 100)}%`));
+      box.append(line);
+    }
+    if (surprises.length > COMPARE_SHOWN) box.append(el('div', 'muted', `+${(surprises.length - COMPARE_SHOWN).toLocaleString()} more`));
   }
 
   // The path MTU a prober measured: a pair under the fabric's has a hop that is.

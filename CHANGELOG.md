@@ -28,7 +28,9 @@ their shapes are not a promise.
   `vs_model_rtt_pct`, `vs_model_rtt_flow_pct` and `vs_model_rtt_verdict`,
   red where slow.
 - **Path MTU and loss beside it**: pairs whose `path_mtu` is under the
-  fabric's MTU are listed with where to look; `loss` as for mx.
+  fabric's MTU are listed with where to look; `loss` as for mx. The loss
+  the model does not explain is now listed pair by pair, for rate tools
+  too, where before it was only counted.
 - **netmesh's expected.tsv carries the model's round trips** --
   `model_rtt_us`, `model_rtt_load_us` under the generator's load, and
   `model_path_mtu`.

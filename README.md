@@ -1202,7 +1202,8 @@ Where to look: what the short flows have in common
   listed apart — usually a host that never ran its part.
 - **Loss**: with a loss metric per flow loaded too (`mx_peer_loss`,
   netmesh's `loss`), flows losing more than 1% are counted, and those
-  where the model has room called out: loss the load does not explain.
+  where the model has room called out by pair: loss the load does not
+  explain.
 - **Round trips** — netmesh's `rtt_p50` and `rtt_p99`, or any per-pair
   metric in a time unit (`ns`, `us`, `ms`, `s`) whose name says round trip,
   RTT or latency — are set against the fabric's own round trip for each
