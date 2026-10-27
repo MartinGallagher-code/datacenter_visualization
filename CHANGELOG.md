@@ -11,6 +11,13 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.37.0 — 2026-10-27
+
+- **Restart asks first** while there is anything to lose -- "Restart empties
+  the viewer: the floor plan and 12 metrics will be gone. Restart anyway?"
+  An empty viewer restarts without asking.
+- 1.34.0 to 1.37.0 share one pull request.
+
 ## 1.36.0 — 2026-10-27
 
 - **Ctrl+R can no longer empty the viewer.** Reloading loses everything

@@ -3227,7 +3227,21 @@ $('opt-values').addEventListener('change', (e) => { state.showValues = e.target.
 $('btn-fit').addEventListener('click', () => { renderer.fit(); invalidate(); });
 $('btn-load').addEventListener('click', () => pickFiles());
 $('notices-btn').addEventListener('click', () => actions.toggleNotices());
-$('btn-restart').addEventListener('click', () => actions.restart());
+// Restart empties the viewer as surely as a reload, so it asks first while
+// there is anything in it to lose, and says what.
+$('btn-restart').addEventListener('click', () => {
+  const what = restartLoses();
+  if (what && !window.confirm(`Restart empties the viewer: ${what} will be gone. Restart anyway?`)) return;
+  actions.restart();
+});
+
+/** What a restart would throw away, in words, or '' for nothing. */
+function restartLoses() {
+  const parts = [];
+  if (String(state.layoutText || '').trim() || $('editor-text').value.trim()) parts.push('the floor plan');
+  if (state.rawOverlays.size) parts.push(plural(state.rawOverlays.size, 'metric'));
+  return parts.join(' and ');
+}
 $('filepicker').addEventListener('change', (e) => ingestFiles(asItems(e.target.files)));
 $('dirpicker').addEventListener('change', (e) => {
   const files = [...e.target.files];

@@ -1484,7 +1484,7 @@ await test('a run against the model', async () => {
 
 // Reloading empties the viewer, so Ctrl+R does nothing while there is
 // something to lose, and leaving asks first. Untouched, a page reloads.
-await test('Ctrl+R cannot empty the viewer', async () => {
+await test('Ctrl+R and Restart cannot empty the viewer unasked', async () => {
   const reloadKey = (key, mods) => page.evaluate(([k, m]) => {
     const e = new KeyboardEvent('keydown', { key: k, ...m, bubbles: true, cancelable: true });
     window.dispatchEvent(e);
@@ -1504,6 +1504,24 @@ await test('Ctrl+R cannot empty the viewer', async () => {
   ok(/would reload the page and empty the viewer/.test(await page.evaluate(() => document.querySelector('#notices').innerText)),
      'and it says why, and what to do instead');
   ok(await leaving(), 'leaving any other way asks first');
+
+  // Restart empties it too, so it asks, and says what would go.
+  const asked = [];
+  page.once('dialog', (d) => { asked.push(d.message()); d.dismiss(); });
+  await page.locator('#btn-restart').click();
+  await page.waitForTimeout(300);
+  ok(/^Restart empties the viewer: the floor plan will be gone\. Restart anyway\?$/.test(asked[0] || ''), `Restart asks first, and says what goes  (${asked[0]})`);
+  ok(await page.evaluate(() => document.querySelector('#tree').innerText.trim().length > 0), 'and No keeps the floor plan');
+  page.once('dialog', (d) => { asked.push(d.message()); d.accept(); });
+  await page.locator('#btn-restart').click();
+  await page.waitForTimeout(300);
+  ok(asked.length === 2 && !(await page.evaluate(() => document.querySelector('#tree').innerText.trim())), 'and Yes empties it');
+  let again = false;
+  page.once('dialog', (d) => { again = true; d.dismiss(); });
+  await page.locator('#btn-restart').click();
+  await page.waitForTimeout(300);
+  ok(!again, 'an empty viewer restarts without asking');
+  page.removeAllListeners('dialog');
 }, { url: '?layout=examples/dual-plane.dc' });
 
 // A hundred thousand flows and more: a random load at a few hundred peers
