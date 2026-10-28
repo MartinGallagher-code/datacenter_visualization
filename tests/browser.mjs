@@ -1477,7 +1477,7 @@ await test('every titled part folds, and stays folded', async () => {
     await page.waitForTimeout(400);
     const heads = await page.evaluate(() => [...document.querySelectorAll('#right > .block')].filter((b) => b.offsetParent !== null)
       .map((b) => [...b.querySelector(':scope > h2').childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join('').trim()));
-    eq(heads, ['Inspector', 'Overlays', 'Networks', 'Load generator', 'Cable load'],
+    eq(heads, ['Inspector', 'Overlays', 'Networks', 'Load generator', 'Cable load', 'Host status'],
        'the inspector first; the load generator and cable load sections of their own; nothing empty shown');
     await page.locator('#cable-load > h2').click();
     await page.waitForTimeout(200);
@@ -1508,10 +1508,10 @@ await test('every titled part folds, and stays folded', async () => {
       .filter((b) => b.offsetParent !== null).map((b) => b.classList.contains('off')));
     await page.locator('#right > .block[data-section="overlays"] > h2').click({ modifiers: ['Alt'] });
     await page.waitForTimeout(200);
-    eq(await folded(), [true, false, true, true, true], 'Alt+click on a title: that section alone open, every other folded');
+    eq(await folded(), [true, false, true, true, true, true], 'Alt+click on a title: that section alone open, every other folded');
     await page.locator('#right > .block[data-section="overlays"] > h2').click({ modifiers: ['Alt'] });
     await page.waitForTimeout(200);
-    eq(await folded(), [false, false, false, false, false], 'and again: all of them open');
+    eq(await folded(), [false, false, false, false, false, false], 'and again: all of them open');
   } finally {
     // Put everything back for the tests after this one.
     await page.evaluate(() => localStorage.removeItem('dcviewer.folds'));
