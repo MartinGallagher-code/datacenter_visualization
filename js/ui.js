@@ -2410,7 +2410,17 @@ export function renderHostStatus(state, host, actions) {
   copy.addEventListener('click', () => {
     if (navigator.clipboard) navigator.clipboard.writeText(files.commands.join('\n')).then(() => { copy.textContent = 'Copied'; }, () => {});
   });
-  buttons.append(copy);
+  // As a run tool's: the script alone, or the script and hosts.txt in one
+  // archive, in a folder of their own.
+  const scriptButton = el('button', 'probe-script', `Save ${files.script}`);
+  scriptButton.title = 'The notes and the commands above as a shell script: preflight, then one scan -- '
+    + `edit it, then run it with bash ${files.script} beside hosts.txt`;
+  scriptButton.addEventListener('click', () => actions.saveText(files.script, runScript(files)));
+  const tarButton = el('button', 'probe-tar', `Save ${files.tar}`);
+  tarButton.title = `hosts.txt and ${files.script} in one archive, in a folder of their own -- `
+    + `tar -xf ${files.tar}, then bash ${files.tar.replace(/\.tar$/, '')}/${files.script}`;
+  tarButton.addEventListener('click', () => actions.saveText(files.tar, runTar(files), 'application/x-tar'));
+  buttons.append(tarButton, copy, scriptButton);
   wrap.append(buttons);
   box.append(wrap);
   foldRuns(box, 'host-status');

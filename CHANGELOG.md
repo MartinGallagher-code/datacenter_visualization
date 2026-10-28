@@ -11,6 +11,17 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.44.0 — 2026-10-28
+
+- **Host status saves its files as one archive.** **Save probe-hosts.tar**
+  holds `hosts.txt` and `probe-hosts.sh`, executable, in a folder of their
+  own, as a run tool's tar does; **Save probe-hosts.sh** saves the script
+  alone. The script stops before anything starts, saying how to get it,
+  when `dcprobe` is not on `PATH`; otherwise it runs preflight and then one
+  scan, the scan running even when a host is not ready. `runScript` and
+  `runTar` take a script and archive name of their own and commands the
+  script needs on `PATH`. `js/probe.js`, `js/runfiles.js`, `js/ui.js`.
+
 ## 1.43.0 — 2026-10-28
 
 1.42.0 shares a pull request with this, so it is not published on its own.

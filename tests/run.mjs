@@ -57,7 +57,7 @@ import {
   bindProblem, buildIperf, buildMx, buildNetmesh, hostToken, mxSizes, rateGroups, runPairs, runProblem, runScript, runTar, runWhy, scriptName, tarball, tarName, tcpPayloadShare,
 } from '../js/runfiles.js';
 import { asFile, layoutSha, modelBlock, readStamp, runStamp, sha256 } from '../js/stamp.js';
-import { probeFiles, probeSummary, TOOL_PORTS } from '../js/probe.js';
+import { PROBE_SCRIPT, PROBE_TAR, probeFiles, probeSummary, TOOL_PORTS } from '../js/probe.js';
 import {
   compareHosts, compareLatency, compareMtu, compareRuns, comparisonResults, modelPairs, modelResults, suspects,
 } from '../js/compare.js';
@@ -3446,6 +3446,35 @@ if (python.error) {
   ok(files.commands.some((c) => c.startsWith('# dcprobe watch') && c.includes('--every 15 --history host_history.tsv')), 'watch at the interval set');
   ok(!probeFiles(hosts, { tools: ['mx', 'netmesh'] }).commands.some((c) => c.includes('--tools')), 'mx and netmesh need only python3 on the hosts');
   eq(TOOL_PORTS, { mx: 5300, netmesh: 5310, iperf: 5001 }, 'the ports each tool listens on');
+
+  // As a run tool's files: a script, and an archive of it and hosts.txt.
+  const script = runScript(files);
+  ok(script.startsWith(`#!/usr/bin/env bash\n# ${PROBE_SCRIPT} -- dcprobe: how every host in the layout is doing.\n`), 'a script of its own name');
+  ok(script.includes('command -v dcprobe >/dev/null 2>&1 || { echo "dcprobe is not on PATH: pip install datacenter-layout-viewer')
+     && script.indexOf('command -v dcprobe') < script.indexOf('dcprobe preflight'), 'that says so before anything starts when dcprobe is not on PATH');
+  const bash = spawnSync('bash', ['--version'], { encoding: 'utf8' });
+  const tarOk = spawnSync('tar', ['--version'], { encoding: 'utf8' });
+  if (bash.status !== 0 || tarOk.status !== 0) skip('probe-hosts.tar unpacked and run', 'bash or tar is not here');
+  else {
+    const dir = mkdtempSync(join(tmpdir(), 'probe-tar-'));
+    writeFileSync(join(dir, PROBE_TAR), runTar(files, { mtime: Date.UTC(2026, 9, 28) }));
+    const listed = spawnSync('tar', ['-tvf', join(dir, PROBE_TAR)], { encoding: 'utf8' });
+    const lines = listed.stdout.trim().split('\n');
+    eq(lines.map((l) => l.split(/\s+/).pop()), ['probe-hosts/', 'probe-hosts/hosts.txt', 'probe-hosts/probe-hosts.sh'],
+       'probe-hosts.tar: a folder of its own, hosts.txt and the script');
+    ok(/^-rwxr-xr-x/.test(lines[2]), 'the script executable');
+    spawnSync('tar', ['-xf', join(dir, PROBE_TAR), '-C', dir]);
+    const bin = join(dir, 'bin');
+    mkdirSync(bin);
+    writeFileSync(join(bin, 'dcprobe'), '#!/bin/sh\necho "dcprobe $*"\n[ "$1" = preflight ] && exit 1\nexit 0\n');
+    chmodSync(join(bin, 'dcprobe'), 0o755);
+    const ran = spawnSync(join(dir, 'probe-hosts', PROBE_SCRIPT), [], { encoding: 'utf8', cwd: dir, env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } });
+    eq([ran.status, ran.stdout.trim().split('\n').map((l) => l.split(' ').slice(0, 2).join(' '))], [0, ['dcprobe preflight', 'dcprobe scan']],
+       'it runs as it comes out: preflight, then the scan, even when a host is not ready');
+    const bare = spawnSync(join(dir, 'probe-hosts', PROBE_SCRIPT), [], { encoding: 'utf8', cwd: dir, env: { ...process.env, PATH: '/usr/bin:/bin' } });
+    ok(bare.status === 1 && /dcprobe is not on PATH/.test(bare.stderr) && !bare.stdout, 'and without dcprobe, stops before anything starts');
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 // ------------------------------------------------------------------ dcprobe

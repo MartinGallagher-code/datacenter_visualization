@@ -11,6 +11,10 @@
 import { hostToken } from './runfiles.js';
 import { overlayValue } from './results.js';
 
+/** What the probe's script and archive are saved as. */
+export const PROBE_SCRIPT = 'probe-hosts.sh';
+export const PROBE_TAR = 'probe-hosts.tar';
+
 /** The UDP ports each tool's run listens on, for preflight to find free. */
 export const TOOL_PORTS = { mx: 5300, netmesh: 5310, iperf: 5001 };
 
@@ -42,6 +46,14 @@ export function probeFiles(hosts, { speed = () => 0, bind = '', mtu = 0, every =
   // there, which preflight always checks; iperf needs iperf2 on every host.
   const needs = tools.includes('iperf') ? ['iperf'] : [];
   return {
+    // As a run tool's files are: saved alone, as a script, or as one archive
+    // (runScript and runTar), under names of their own.
+    tool: 'probe',
+    label: 'dcprobe',
+    what: 'how every host in the layout is doing',
+    script: PROBE_SCRIPT,
+    tar: PROBE_TAR,
+    needs: [{ command: 'dcprobe', how: 'pip install datacenter-layout-viewer, or put the tools/ folder of a clone of datacenter_visualization on PATH' }],
     files: [{ name: 'hosts.txt', text, note: `${hosts.length.toLocaleString()} host${hosts.length === 1 ? '' : 's'}` }],
     commands: [
       '# can every host run the load? ssh, the tools, --bind, the ports, the clocks',

@@ -460,11 +460,16 @@ export const scriptName = (tool) => `run-${tool}.sh`;
  * needs is not there beside it.
  */
 export function runScript(built) {
-  const name = scriptName(built.tool);
+  const name = built.script || scriptName(built.tool);
   const comment = (line) => (line ? `# ${line}` : '#');
+  // A command the script needs on PATH, said before anything starts rather
+  // than as "command not found" halfway down.
+  const needs = (built.needs || []).flatMap((n) => [
+    `command -v ${n.command} >/dev/null 2>&1 || { echo "${n.command} is not on PATH: ${n.how}" >&2; exit 1; }`,
+  ]);
   return [
     '#!/usr/bin/env bash',
-    `# ${name} -- ${RUN_LABELS[built.tool]}: the load generator's load, to run for real.`,
+    `# ${name} -- ${built.label || RUN_LABELS[built.tool]}: ${built.what || 'the load generator\'s load, to run for real'}.`,
     `# Made by datacenter_visualization ${VERSION}.`,
     '#',
     '# Save it beside the files below, change any line you like, and run it:',
@@ -479,6 +484,7 @@ export function runScript(built) {
     `for f in ${built.files.filter((f) => !f.keep).map((f) => f.name).join(' ')}; do`,
     '  [ -f "$f" ] || { echo "$f is not beside this script: save it here first" >&2; exit 1; }',
     'done',
+    ...needs,
     '',
     ...built.commands,
     '',
@@ -495,10 +501,10 @@ export const tarName = (tool) => `run-${tool}.tar`;
  * executable. Plain ustar, which every tar reads.
  */
 export function runTar(built, { mtime = Date.now() } = {}) {
-  const dir = tarName(built.tool).replace(/\.tar$/, '');
+  const dir = (built.tar || tarName(built.tool)).replace(/\.tar$/, '');
   const entries = [
     ...built.files.map((f) => ({ name: `${dir}/${f.name}`, text: f.text, mode: 0o644 })),
-    { name: `${dir}/${scriptName(built.tool)}`, text: runScript(built), mode: 0o755 },
+    { name: `${dir}/${built.script || scriptName(built.tool)}`, text: runScript(built), mode: 0o755 },
   ];
   return tarball(entries, { dir, mtime });
 }
