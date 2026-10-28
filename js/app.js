@@ -12,7 +12,7 @@ import {
   readingText, recomputeDomain, recomputeStats,
 } from './results.js';
 import {
-  cableTip, fillWarnings, formatPps, formatTime, renderBuild, renderCableLoad, renderCompare, renderFindings, renderInspector, renderLive, renderLoadGen,
+  cableTip, fillWarnings, formatPps, formatTime, renderBuild, renderCableLoad, renderCompare, renderFindings, renderHostStatus, renderInspector, renderLive, renderLoadGen,
   hostTip, renderNets, renderNotices, renderOverlays, renderTree, renderWarnings, switchTip,
 } from './ui.js';
 import {
@@ -23,13 +23,14 @@ import { layoutFromHosts, matchesPattern, recordsSince, tailRecords } from './ts
 import { routesBetween } from './paths.js';
 import {
   adaptiveWeights, betweenPicks, busyable, busyOf, randomTakeouts, TAKEOUT_KINDS, explainResults, pathLatency, bitRate, cableKeys, CONNECTION_LIMITS, contend, countersOf, estimateFlows, flowsOf, flowsOver, GEN_LIMITS,
-  findingsOf, generateFlows, hostCapacity, hostsOf, pairedFlows, TARGETED, loadable, loadUnit, mergeResults, packetGb, readsAsLoad, REPLY_IDS, routeEstimate,
+  findingsOf, generateFlows, hostCapacity, hostsFor, hostsOf, pairedFlows, TARGETED, loadable, loadUnit, mergeResults, packetGb, readsAsLoad, REPLY_IDS, routeEstimate,
   routeTraffic, switchLoads, testFlows, trafficKind, viewOf, formatGbps,
 } from './traffic.js';
 import { layoutSha, modelBlock, readStamp, runStamp } from './stamp.js';
 import { VERSION } from './version.js';
 import { makeFold, setFolded } from './fold.js';
-import { bindProblem, mxSizes, RUN_BUILDERS, RUN_LABELS, runPairs, runWhy, tcpPayloadShare } from './runfiles.js';
+import { bindProblem, mxSizes, RUN_BUILDERS, RUN_LABELS, runPairs, runProblem, runWhy, tcpPayloadShare } from './runfiles.js';
+import { PROBE_TESTS, probeFiles, probeSummary } from './probe.js';
 import {
   compareHosts, compareLatency, compareMtu, compareRuns, comparisonResults, DEFAULT_TOLERANCE, LATENCY_UNITS, LOSSY,
   modelPairs, modelResults, suspects,
@@ -153,6 +154,7 @@ const state = {
   // The load generator's run files: which tool's are open, and for how long
   // the commands run it.
   runFiles: { tool: '', seconds: 60, mtu: 1500, bind: storedBind() },
+  probe: { whySlow: false, every: 30 },   // Host status: how dcprobe is to be run
   // Whether anything has been done since the page loaded -- a file dropped
   // or opened, a box typed in, a setting changed, a button pressed -- so a
   // reload would lose it.
@@ -891,6 +893,7 @@ function refreshPanels() {
   renderLoadGen(state, $('load-gen'), actions, { unit: genUnit() });
   renderCableLoad(state, $('cable-load'), actions);
   renderFindings(state, $('findings'), actions);
+  renderHostStatus(state, $('host-status'), actions);
   renderCompare(state, $('compare'), actions);
   renderInspector(state, $('inspector'), actions);
   $('overlay-hint').textContent = state.activeOverlays.length > 1
@@ -1287,6 +1290,40 @@ const actions = {
   // The run files: which tool's are open ('' for none), the run's length,
   // the MTU and the NIC it rides. The NIC is a fleet's, not a run's, so it
   // is kept for next time.
+  setProbe(patch) {
+    state.probe = { ...state.probe, ...patch };
+    refreshPanels();
+  },
+
+  // dcprobe's hosts.txt and commands for the layout's hosts, or why they
+  // cannot have them; null with no hosts at all. Each host goes with the
+  // speed of its fastest NIC, as the layout gives it, and the run's --bind
+  // and MTU, so a scan judges the NIC the run will load.
+  probeFiles() {
+    const { hosts } = hostsFor(state.model);
+    if (!hosts.length) return null;
+    const why = runProblem(hosts);
+    if (why) return { why };
+    const speed = (el) => {
+      let best = 0;
+      for (const link of el.links) {
+        const net = state.model.nets.get(link.net);
+        if (net && net.traffic === false) continue;
+        best = Math.max(best, link.gbps || 0);
+      }
+      return best;
+    };
+    return probeFiles(hosts, {
+      speed, bind: state.runFiles.bind, mtu: state.runFiles.mtu, every: state.probe.every, whySlow: state.probe.whySlow,
+    });
+  },
+
+  // A loaded scan, read back into the lists worth a look; null with none.
+  probeSummary() {
+    if (![...state.overlays.values()].some((o) => PROBE_TESTS.has(o.name))) return null;
+    return probeSummary(new Map([...state.overlays.values()].map((o) => [o.name, o])), state.model);
+  },
+
   setRunFiles(patch) {
     state.runFiles = { ...state.runFiles, ...patch };
     if ('bind' in patch) {

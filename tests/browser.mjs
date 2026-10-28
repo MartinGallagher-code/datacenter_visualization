@@ -1643,6 +1643,44 @@ await test('a run against the model', async () => {
      'the load generator as it is set now is a model too');
 }, { url: '?layout=fx/tiny.dc' });
 
+// Host status: dcprobe's hosts.txt and commands for the layout's hosts, and a
+// loaded scan read back into the hosts worth a look.
+await test('host status from dcprobe', async () => {
+  const pane = () => page.evaluate(() => (document.querySelector('#host-status') || {}).innerText || '');
+  ok(/host status/i.test(await pane()) && /not probed yet/.test(await page.evaluate(() => document.querySelector('#host-status h2').textContent)),
+     'a layout with hosts offers to probe them');
+  const [saved] = await Promise.all([page.waitForEvent('download'), page.locator('#host-status button.probe-save').click()]);
+  const hostsTxt = readFileSync(await saved.path(), 'utf8');
+  eq([saved.suggestedFilename(), hostsTxt.split('\n').filter((l) => l && !l.startsWith('#'))],
+     ['hosts.txt', ['r1h1 gbps=25', 'r1h2 gbps=25', 'r1h3 gbps=25', 'r2h1 gbps=25', 'r2h2 gbps=25', 'r2h3 gbps=25']],
+     'hosts.txt: every host, with the speed the layout gives its NIC');
+  ok(/dcprobe scan --servers hosts\.txt -o host_status\.tsv --mtu 1500\n/.test(await pane()), 'and the scan to run');
+  await page.locator('#host-status input.probe-why-slow').check();
+  await page.waitForTimeout(200);
+  ok(/dcprobe scan --servers hosts\.txt -o host_status\.tsv --mtu 1500 --why-slow/.test(await pane()), 'why-slow too, when ticked');
+
+  const scan = [
+    '!test\tprobe_reach\tshort=REACH', '!test\tnic_check\tfinding=verdict', '!test\thost_cpu_pct\tunit=% higher=bad agg=last',
+    ...['r1h1', 'r1h2', 'r1h3', 'r2h1', 'r2h2'].map((h) => `probe_reach\t${h}\tPASS\tat=2026-10-28T10:00:00Z`),
+    'probe_reach\tr2h3\tFAIL\tat=2026-10-28T10:00:00Z', 'probe_why\tr2h3\t"ssh: connect to host r2h3 port 22: No route to host"',
+    'nic_check\tr1h1\tPASS', 'nic_check\tr1h2\tFAIL', 'nic_why\tr1h2\t"eth1 at 10G, the layout says 25G"',
+    ...['r1h1', 'r1h2', 'r1h3', 'r2h1', 'r2h2'].map((h, i) => `host_cpu_pct\t${h}\t${i === 0 ? 96 : 12}`),
+  ].join('\n');
+  await drop('host_status.tsv', `${scan}\n`);
+  await page.waitForTimeout(600);
+  const text = await pane();
+  ok(/5 of 6 hosts answered the probe; 3 worth a look\./.test(text), `how many answered, and how many need a look  (${text.split('\n').slice(1, 3).join(' | ')})`);
+  ok(/did not answer: 1 host/.test(text) && /NIC not as the layout says: 1 host/.test(text) && /CPU busy \(90% or more\): 1 host/.test(text),
+     'who did not answer, whose NIC is off the layout, who is busy');
+  const chip = page.locator('#host-status .finding-hosts .pick', { hasText: 'r1/h2' });
+  ok(/eth1 at 10G, the layout says 25G/.test(await chip.getAttribute('title')), 'each host with what it said');
+  await chip.click();
+  await page.waitForTimeout(300);
+  ok(/r1h2|r1\/h2/.test(await page.evaluate(() => document.querySelector('#inspector').innerText)), 'and a click goes to it');
+  ok(/5 of 6 answered · 3 to look at/.test(await page.evaluate(() => document.querySelector('#host-status h2').textContent)),
+     'folded, it still says how things stand');
+}, { url: '?layout=fx/tiny.dc' });
+
 // A run carries the layout it was made on: model.dc in the tar, the layout
 // whole in expected.tsv, and a run file loaded brings it back -- asking first
 // when another layout is in the viewer.

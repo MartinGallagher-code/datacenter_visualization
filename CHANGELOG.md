@@ -11,6 +11,36 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.43.0 — 2026-10-28
+
+1.42.0 shares a pull request with this, so it is not published on its own.
+
+- **`dcprobe`: how every host is doing, as results the viewer paints.**
+  A new tool beside `dcadd` and `dcimport` (`tools/dcprobe`, and `dcprobe`
+  on `PATH` from the package). One shell script goes to each host over
+  ssh — nothing installed, nothing left behind — and reads `/proc` and
+  `/sys` twice a second apart. `scan` makes one pass; `watch` a pass every
+  N seconds, rewriting its file so it always says how things are now
+  (`--history` keeps every pass); `preflight` checks a host can run the
+  load (ssh, python3, iperf, `--bind`, the run's ports, the clock, open
+  files); `diff` says what changed between two scans. It measures load,
+  CPU (busy, iowait, steal), memory, swap, the fullest disk, the kernel's
+  backlog drops, each physical NIC (link, speed, MTU, rates, drops at the
+  NIC and in its rings, errors) against the layout's speed and the run's
+  MTU, kernel errors since the last pass, the busiest processes, and what
+  the host is. `--why-slow` pipes binnacle's why-slow to each host too. A
+  host that does not answer is a sample with ssh's reason, never a gap.
+  `python/dcviz/dcprobe.py` (new), `tools/dcprobe` (new),
+  `pyproject.toml`.
+- **Host status, in the right panel.** It writes dcprobe's `hosts.txt` —
+  each host by the layout's name, at its `addr=`, with its NIC's speed —
+  and the commands, with the run's `--bind` and MTU; and reads a loaded
+  scan back: who did not answer, who is not ready, whose NIC is not as the
+  layout says, what why-slow found, kernel errors, and who is busy,
+  swapping or full, each host a chip a click from the floor plan. Drops,
+  errors and verdicts reach Findings by their own `finding=`.
+  `js/probe.js` (new), `js/ui.js`, `js/app.js`, `index.html`.
+
 ## 1.42.0 — 2026-10-28
 
 - **A run carries the layout it was made on.** Run it for real's tar

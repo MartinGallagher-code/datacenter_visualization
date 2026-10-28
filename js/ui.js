@@ -2316,6 +2316,106 @@ export function renderFindings(state, host, actions) {
   }
 }
 
+// --------------------------------------------------------------- host status
+
+/**
+ * Host status: how every host is doing, from dcprobe -- which hosts did not
+ * answer, are not ready to run, have a NIC off the layout, are busy, swapping
+ * or full -- and, below, dcprobe's hosts.txt and commands for this layout's
+ * hosts. Nothing is run from here: the files and the commands are handed over.
+ */
+export function renderHostStatus(state, host, actions) {
+  host.textContent = '';
+  const files = actions.probeFiles();
+  const summary = actions.probeSummary();
+  if (!files && !summary) return;
+  const flagged = summary ? new Set(summary.groups.flatMap((g) => g.hosts.map((h) => h.el))).size : 0;
+  const note = !summary ? 'not probed yet'
+    : `${summary.answered} of ${summary.probed} answered${flagged ? ` · ${flagged} to look at` : ''}`;
+  const box = pane(host, 'host-status', 'Host status', { note, cls: 'host-status' });
+
+  if (summary) {
+    box.append(el('div', summary.answered < summary.probed ? 'bad' : 'muted',
+      `${summary.answered.toLocaleString()} of ${summary.probed.toLocaleString()} host${summary.probed === 1 ? '' : 's'} answered the probe`
+      + `${flagged ? `; ${flagged.toLocaleString()} worth a look` : ', and none needs a look'}.`));
+    for (const g of summary.groups) {
+      const row = el('div', 'finding-group');
+      const dot = el('span', 'dot');
+      dot.style.background = g.severity === 'critical' ? 'var(--bad, #e5534b)' : 'var(--warn, #d29922)';
+      row.append(dot, el('span', 'finding-title', `${g.label}: ${g.hosts.length} host${g.hosts.length === 1 ? '' : 's'}`));
+      box.append(row);
+      const chips = el('div', 'picks-list finding-hosts');
+      for (const { el: node, text } of g.hosts.slice(0, FINDINGS_SHOWN)) {
+        const chip = el('span', `pick finding-${g.severity}`, shortPath(node));
+        chip.title = `${node.path}\n${text}\nClick to go to it`;
+        chip.addEventListener('click', () => actions.focus(node));
+        chips.append(chip);
+      }
+      if (g.hosts.length > FINDINGS_SHOWN) {
+        const rest = el('span', 'muted', `+${g.hosts.length - FINDINGS_SHOWN} more`);
+        rest.title = g.hosts.slice(FINDINGS_SHOWN).map((h) => `${h.el.path}: ${h.text}`).join('\n');
+        chips.append(rest);
+      }
+      box.append(chips);
+    }
+  }
+  if (!files) return;
+
+  const wrap = el('div', 'probe-files');
+  wrap.append(el('div', 'load-title', 'Probe the hosts'));
+  if (files.why) {
+    wrap.append(el('div', 'bad run-why', files.why));
+    box.append(wrap);
+    foldRuns(box, 'host-status');
+    return;
+  }
+  const row = el('div', 'gen-row');
+  const ws = el('label', 'chk');
+  const wsBox = el('input', 'probe-why-slow');
+  wsBox.type = 'checkbox';
+  wsBox.checked = !!state.probe.whySlow;
+  wsBox.addEventListener('change', () => actions.setProbe({ whySlow: wsBox.checked }));
+  ws.append(wsBox, el('span', null, 'why-slow too'));
+  ws.title = 'Run binnacle’s why-slow on every host as well: its verdict and first finding, beside the readings. '
+    + 'Needs python3 on the hosts and binnacle where dcprobe runs';
+  const every = el('input', 'probe-every');
+  every.type = 'number';
+  every.min = '5';
+  every.step = '5';
+  every.value = String(state.probe.every);
+  every.title = 'Seconds between passes of dcprobe watch';
+  every.addEventListener('change', () => {
+    const v = Math.floor(Number(every.value));
+    if (v >= 5) actions.setProbe({ every: v });
+    else every.value = String(state.probe.every);
+  });
+  row.append(ws, el('span', null, 'watch every'), every, el('span', null, 's'));
+  wrap.append(row);
+  const notes = el('div', 'muted run-notes');
+  for (const line of files.notes) notes.append(el('div', null, line));
+  wrap.append(notes);
+  const list = el('div', 'run-file-list');
+  for (const file of files.files) {
+    const item = el('div', 'gen-row');
+    const save = el('button', 'probe-save', file.name);
+    save.title = `Save ${file.name}`;
+    save.addEventListener('click', () => actions.saveText(file.name, file.text));
+    item.append(save, el('span', 'muted', file.note));
+    list.append(item);
+  }
+  wrap.append(list);
+  wrap.append(el('pre', 'run-commands probe-commands', files.commands.join('\n')));
+  const buttons = el('div', 'btnrow');
+  const copy = el('button', 'probe-copy', 'Copy commands');
+  copy.addEventListener('click', () => {
+    if (navigator.clipboard) navigator.clipboard.writeText(files.commands.join('\n')).then(() => { copy.textContent = 'Copied'; }, () => {});
+  });
+  buttons.append(copy);
+  wrap.append(buttons);
+  box.append(wrap);
+  foldRuns(box, 'host-status');
+}
+
 // ------------------------------------------------- measured against the model
 
 const COMPARE_SHOWN = 10;

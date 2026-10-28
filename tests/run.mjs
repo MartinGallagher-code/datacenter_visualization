@@ -57,6 +57,7 @@ import {
   bindProblem, buildIperf, buildMx, buildNetmesh, hostToken, mxSizes, rateGroups, runPairs, runProblem, runScript, runTar, runWhy, scriptName, tarball, tarName, tcpPayloadShare,
 } from '../js/runfiles.js';
 import { asFile, layoutSha, modelBlock, readStamp, runStamp, sha256 } from '../js/stamp.js';
+import { probeFiles, probeSummary, TOOL_PORTS } from '../js/probe.js';
 import {
   compareHosts, compareLatency, compareMtu, compareRuns, comparisonResults, modelPairs, modelResults, suspects,
 } from '../js/compare.js';
@@ -3429,6 +3430,24 @@ if (python.error) {
   ok(rackLoad.value > 0, 'and a rack sums the hosts beneath it');
 }
 
+// ------------------------------------------------------- dcprobe's hosts.txt
+{
+  const m = parseLayout([
+    'dc D', '  rack r u=10', '    node a role=server addr=10.0.0.1', '    node b role=server',
+    '    node t role=tor +switch', 'net nic gbps=25', 'net mgmt gbps=1', 'link nic role=server role=tor', 'link mgmt role=server role=tor',
+  ].join('\n'));
+  const hosts = m.all.filter((el) => el.name === 'a' || el.name === 'b');
+  const files = probeFiles(hosts, { speed: () => 25, bind: 'data', mtu: 9000, every: 15, whySlow: true });
+  eq(files.files[0].text.split('\n').slice(1), ['a=10.0.0.1 gbps=25', 'b gbps=25', ''], 'hosts.txt: each host by the layout’s name, at its addr=, with its NIC’s speed');
+  ok(files.commands.includes('dcprobe preflight --servers hosts.txt -o preflight.tsv --tools iperf --ports 5300,5310,5001 --bind data'),
+     'preflight: iperf2 on every host, the run tools’ ports free, the --bind there');
+  ok(files.commands.includes('dcprobe scan --servers hosts.txt -o host_status.tsv --nic data --mtu 9000 --why-slow'),
+     'scan: the NIC the run will load, judged against its MTU, with why-slow when asked');
+  ok(files.commands.some((c) => c.startsWith('# dcprobe watch') && c.includes('--every 15 --history host_history.tsv')), 'watch at the interval set');
+  ok(!probeFiles(hosts, { tools: ['mx', 'netmesh'] }).commands.some((c) => c.includes('--tools')), 'mx and netmesh need only python3 on the hosts');
+  eq(TOOL_PORTS, { mx: 5300, netmesh: 5310, iperf: 5001 }, 'the ports each tool listens on');
+}
+
 // ------------------------------------------------------------------ dcprobe
 // dcprobe reaches every host over ssh. Here a stand-in ssh runs the probe on
 // this machine -- real /proc, real /sys -- and answers for two made-up hosts
@@ -3544,6 +3563,23 @@ if (python.error) {
   ok(changed.status === 1 && /^fast\n  kernel: 6\.1\.0-18-amd64 -> 6\.1\.0-21-amd64$/m.test(changed.stdout)
      && /^probe_changed\tfast\t1\tat=\S+\twhat="kernel: 6\.1\.0-18-amd64 -> 6\.1\.0-21-amd64"$/m.test(readFileSync(join(dir, 'chg.tsv'), 'utf8')),
      `diff names what changed, host by host, and as a metric  (${changed.stdout.trim().split('\n').slice(0, 3).join(' | ')})`);
+  // Read back on a floor plan: the lists worth a look.
+  const floor = parseLayout(['dc D', '  rack r u=10', '    node fast role=server', '    node slow role=server', '    node local role=server',
+    '    node down role=server'].join('\n'));
+  const scanRaw = new Map();
+  parseResults(text, scanRaw, [], 'host_status.tsv');
+  const bound = new Map([...scanRaw.values()].map((o) => [o.name, bindOverlay(o, floor)]));
+  const summary = probeSummary(bound, floor);
+  eq([summary.probed, summary.answered], [4, 3], 'four probed, three answered');
+  const group = (key) => (summary.groups.find((g) => g.key === key) || { hosts: [] }).hosts.map((h) => `${h.el.name}: ${h.text}`);
+  eq(group('unreachable'), ['down: FAIL -- ssh: connect to host down port 22: No route to host'], 'who did not answer, and why');
+  eq(group('nic'), ["slow: FAIL -- eth1 at 10G, the layout says 25G; eth1 MTU 1500, the run's is 9000"], 'whose NIC is not as the layout says, and how');
+  eq(group('whyslow').map((t) => t.split(' -- ')[0]), ['fast: FAIL', 'slow: FAIL', 'local: FAIL'], 'why-slow’s failures, on every host it ran on');
+  ok(group('disk').some((t) => /^fast: 97% -- /.test(t) || t === 'fast: 97%'), 'a disk nearly full');
+  ok(group('kernel').some((t) => t.startsWith('fast: 2 -- NETDEV WATCHDOG')), 'kernel errors, with the last');
+  eq(summary.groups[0].severity, 'critical', 'the serious lists first');
+  eq(probeSummary(new Map(), floor), null, 'no scan, no summary');
+
   rmSync(dir, { recursive: true, force: true });
 }
 

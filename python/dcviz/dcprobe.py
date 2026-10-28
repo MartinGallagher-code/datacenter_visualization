@@ -3,7 +3,7 @@
 """How every host is doing, as overlay samples the viewer paints.
 
     dcprobe scan      --servers hosts.txt -o host_status.tsv
-    dcprobe watch     --servers hosts.txt -o host_status.tsv --every 30
+    dcprobe watch     --servers hosts.txt -o host_status.tsv --every 30 --history host_history.tsv
     dcprobe preflight --servers hosts.txt -o preflight.tsv --bind data --tools mx,netmesh --ports 5300,5310
     dcprobe diff      old.tsv new.tsv
 
@@ -26,9 +26,10 @@ A host that does not answer is a sample too (probe_reach FAIL, with the
 reason), never a gap: a host missing from the floor plan's colours looks like
 a host that is fine.
 
-Every value is one sample on the host's own name, so the viewer reduces a
-`watch` file's passes with the aggregation you pick there -- `last` is set as
-each metric's default, which reads as "right now".
+Every value is one sample on the host's own name. `watch` rewrites its file
+each pass, so it always says how things are now -- a verdict that failed an
+hour ago does not stay red -- and the viewer's Live reload follows it;
+`--history` keeps every pass in a second file.
 """
 
 import argparse
@@ -173,6 +174,7 @@ META = [
     ("nic_err_ps", 'unit=/s higher=bad decimals=1 agg=last finding=errors short=NERR label="NIC errors a second"'),
     ("nic_ring_drop_ps", 'unit=/s higher=bad decimals=1 agg=last finding=drops short=RING label="NIC ring and buffer drops a second"'),
     ("nic_check", 'finding=verdict short=NIC label="NIC as the layout says"'),
+    ("nic_why", 'short=NICW label="What is off about the NIC"'),
     ("inv_kernel", 'short=KERN label=Kernel'),
     ("inv_os", 'short=OS label="Operating system"'),
     ("inv_cpu", 'short=CPUM label="CPU model"'),
@@ -524,6 +526,7 @@ def read_probe(host, text, seconds, since, want, out):
         else:
             verdict = "WARN" if problems else "PASS"
         out.add("nic_check", host, verdict, why="; ".join(problems))
+        out.add("nic_why", host, "; ".join(problems)[:200])
 
     inv = {}
     for line in s.get("inventory", []):
@@ -646,6 +649,11 @@ def stamp():
 
 
 def write(args, out, header=None):
+    """The pass's samples: to stdout, appended (--append), or as the whole
+    file, swapped in at once so a viewer reloading it never reads half a
+    pass. watch rewrites its file each pass -- the file is always now, and a
+    verdict that was FAIL an hour ago does not stay red -- and keeps every
+    pass in --history when asked."""
     lines = out.lines(stamp(), with_meta=not args.no_meta)
     if header and lines:
         lines.insert(0, header)
@@ -654,9 +662,16 @@ def write(args, out, header=None):
             sys.stdout.write(line + "\n")
         sys.stdout.flush()
         return len(lines)
-    if not args.append and os.path.exists(args.output):
-        os.remove(args.output)
-    return append(args.output, lines)
+    if getattr(args, "history", ""):
+        append(args.history, lines)
+    if args.append:
+        return append(args.output, lines)
+    tmp = "%s.tmp.%d" % (args.output, os.getpid())
+    with io.open(tmp, "w", encoding="utf-8") as fh:
+        for line in lines:
+            fh.write(line + "\n")
+    os.replace(tmp, args.output)
+    return len(lines)
 
 
 def cmd_scan(args):
@@ -821,8 +836,10 @@ def cmd_diff(args):
         for host in hosts:
             out.add("probe_changed", host, float(len(changes.get(host, []))),
                     what="; ".join(changes.get(host, []))[:200])
-        META_BY.setdefault("probe_changed", 'higher=bad decimals=0 finding=errors short=CHG '
+            out.add("probe_changed_what", host, "; ".join(changes.get(host, []))[:200])
+        META_BY.setdefault("probe_changed", 'higher=bad decimals=0 short=CHG '
                                             'label="Changed since the earlier scan"')
+        META_BY.setdefault("probe_changed_what", 'short=CHGW label="What changed"')
         args.verb = "diff"
         write(args, out, "# dcprobe diff %s -> %s" % (args.old, args.new))
     return 1 if changes else 0
@@ -873,11 +890,13 @@ def main(argv=None):
     fleet(s, "host_status.tsv")
     probing(s)
     s.add_argument("--append", action="store_true", help="add to the file rather than replace it")
-    w = sub.add_parser("watch", help="a pass every --every seconds, appended")
+    w = sub.add_parser("watch", help="a pass every --every seconds, the file rewritten each time")
     fleet(w, "host_status.tsv")
     probing(w)
     w.add_argument("--every", type=float, default=30.0, metavar="SECS")
     w.add_argument("--passes", type=int, default=0, help="stop after this many (default: until Ctrl-C)")
+    w.add_argument("--history", default="", metavar="FILE",
+                   help="every pass appended here too; the -o file holds only the latest")
     pf = sub.add_parser("preflight", help="can every host run the load?")
     fleet(pf, "preflight.tsv")
     pf.add_argument("--append", action="store_true", help="add to the file rather than replace it")
@@ -895,7 +914,7 @@ def main(argv=None):
         return 2
     _NIC["match"] = getattr(args, "nic", "")
     _MTU["mtu"] = getattr(args, "mtu", 0)
-    args.append = getattr(args, "append", False) or args.verb == "watch"
+    args.append = getattr(args, "append", False)
     return {"scan": cmd_scan, "watch": cmd_watch, "preflight": cmd_preflight, "diff": cmd_diff}[args.verb](args)
 
 
