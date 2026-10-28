@@ -3446,6 +3446,14 @@ if (python.error) {
   ok(files.commands.some((c) => c.startsWith('# dcprobe watch') && c.includes('--every 15 --history host_history.tsv')), 'watch at the interval set');
   ok(!probeFiles(hosts, { tools: ['mx', 'netmesh'] }).commands.some((c) => c.includes('--tools')), 'mx and netmesh need only python3 on the hosts');
   eq(TOOL_PORTS, { mx: 5300, netmesh: 5310, iperf: 5001 }, 'the ports each tool listens on');
+  // The layout goes with the scan, as it goes with a run.
+  const withLayout = probeFiles(hosts, { speed: () => 25, model: { text: 'dc D\r\n  row A', name: 'floor.dc' } });
+  eq(withLayout.files.map((f) => f.name), ['hosts.txt', 'model.dc'], 'the layout as model.dc, beside hosts.txt');
+  eq(withLayout.files[1].text, 'dc D\n  row A\n', 'as the viewer hashes it');
+  ok(withLayout.files[0].text.includes('\n# layout: floor.dc\n'), 'hosts.txt names it');
+  ok(withLayout.commands.includes('dcprobe scan --servers hosts.txt --model model.dc -o host_status.tsv')
+     && withLayout.commands.some((c) => c.startsWith('dcprobe preflight --servers hosts.txt --model model.dc'))
+     && withLayout.commands.some((c) => c.startsWith('# dcprobe watch --servers hosts.txt --model model.dc')), 'and every pass writes it into its results');
 
   // As a run tool's files: a script, and an archive of it and hosts.txt.
   const script = runScript(files);
@@ -3592,6 +3600,21 @@ if (python.error) {
   ok(changed.status === 1 && /^fast\n  kernel: 6\.1\.0-18-amd64 -> 6\.1\.0-21-amd64$/m.test(changed.stdout)
      && /^probe_changed\tfast\t1\tat=\S+\twhat="kernel: 6\.1\.0-18-amd64 -> 6\.1\.0-21-amd64"$/m.test(readFileSync(join(dir, 'chg.tsv'), 'utf8')),
      `diff names what changed, host by host, and as a metric  (${changed.stdout.trim().split('\n').slice(0, 3).join(' | ')})`);
+  // --model: the layout, whole, in the results, as the viewer reads it back.
+  writeFileSync(join(dir, 'model.dc'), 'dc D\r\n  rack r u=10\n\n    node fast\n');
+  writeFileSync(join(dir, 'named.txt'), '# layout: floor.dc\nlocal=127.0.0.1\n');
+  const stampedScan = dcprobe(['scan', '--servers', 'named.txt', '--model', 'model.dc', '-o', 'status.tsv']);
+  const stamped = readStamp(stampedScan.text());
+  ok(stampedScan.code === 0 && stamped.model.intact && stamped.model.name === 'floor.dc'
+     && stamped.model.sha256 === layoutSha('dc D\n  rack r u=10\n\n    node fast\n') && stamped.model.text === 'dc D\n  rack r u=10\n\n    node fast\n',
+     'dcprobe --model: the layout in the results, whole, named by hosts.txt, with the sha256 the viewer checks');
+  ok(stamped.run.tool === 'dcprobe scan' && /^\d{4}-\d\d-\d\dT[\d:]+Z$/.test(stamped.run.made), 'and how it was made');
+  const stampedRaw = new Map();
+  const stampedWarn = [];
+  parseResults(stampedScan.text(), stampedRaw, stampedWarn, 'host_status.tsv');
+  eq(stampedWarn, [], 'a stamped scan reads without a warning');
+  writeFileSync(join(dir, 'status.tsv'), text);
+
   // Read back on a floor plan: the lists worth a look.
   const floor = parseLayout(['dc D', '  rack r u=10', '    node fast role=server', '    node slow role=server', '    node local role=server',
     '    node down role=server'].join('\n'));

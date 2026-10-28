@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.44.0** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.45.0** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -2227,8 +2227,13 @@ dcprobe diff      host_status-before.tsv host_status.tsv -o changes.tsv
 ```
 
 **Save probe-hosts.tar** puts it all in one archive, as **Run it for real**
-does for a load: `hosts.txt` and `probe-hosts.sh`, executable, in a folder
-of their own. The script says so and stops if `dcprobe` is not on `PATH`;
+does for a load: `hosts.txt`, the layout as `model.dc`, and
+`probe-hosts.sh`, executable, in a folder of their own. **The layout goes
+with the results**: every command passes `--model model.dc`, which writes
+it, whole, into `host_status.tsv` as the `#~` lines a run file carries
+(see [The run carries its layout](#the-run-carries-its-layout)), so
+loading the scan brings back the floor plan its hosts were probed in —
+asking first when another is in the viewer. The script says so and stops if `dcprobe` is not on `PATH`;
 otherwise it runs preflight and then one scan (the watch and diff lines are
 there commented, to swap in). **Save probe-hosts.sh** saves the script
 alone.
@@ -2241,13 +2246,18 @@ tar -xf probe-hosts.tar && ./probe-hosts/probe-hosts.sh
 with what the host should be beside it: `r1h1=10.1.1.11 gbps=25`, and
 optionally `mtu=` and `nic=`. Host status writes it from the layout: each
 host by the layout's name, at its `addr=`, with the speed of its fastest
-NIC.
+NIC. **The hosts are the load generator's**: those its **hosts** filter
+picks (every host when it is empty), less anything taken out — the hosts a
+load would run on, so a probe looks at the machines the run will use. The
+pane, and the script's comments, say which filter picked them and how
+many there are; a filter that picks none says so instead.
 
 | Verb | What it does |
 |---|---|
 | `scan` | one pass: everything below, for every host |
 | `watch` | a pass every `--every` seconds; the file is rewritten each pass, so it always says how things are **now** and Live follows it; `--history` keeps every pass |
 | `preflight` | can every host run the load? ssh, python3 (mx and netmesh copy their agents over), the tools the hosts need (`iperf`), `--bind` matching an interface, the run's UDP ports free, the clock against this machine's, open files allowed |
+| `--model FILE` | (scan, watch, preflight) the layout, written whole into the results, named by `hosts.txt`'s `# layout:` line |
 | `diff` | what changed between two scans — kernel, OS, CPU, memory, NIC driver and firmware, NIC speed, MTU and link — host by host, and `-o` as `probe_changed` |
 
 What a scan measures, over a one-second sample (`--sample`):

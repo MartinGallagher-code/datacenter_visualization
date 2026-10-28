@@ -5,6 +5,12 @@
 
 :root {
   --bg: #0d1117;
+  /* A box over the floor plan or the editor: the hover tooltip and the
+     completions. Near-black here, white in the light look -- their text
+     is --ink, which turns dark there, so neither may hard-code its own. */
+  --tip-bg: #0b0f16f2;
+  --pop-bg: #0b0f16;
+  --pop-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
   --panel: #12171f;
   --panel-2: #171d27;
   --line: #232b36;
@@ -83,6 +89,9 @@
   --chip: #0000000d;
   --row-hover: #00000008;
   --veil: rgba(246, 248, 250, 0.9);
+  --tip-bg: #fffffff7;
+  --pop-bg: #ffffff;
+  --pop-shadow: 0 6px 18px rgba(31, 35, 40, 0.18);
   color-scheme: light;
 }
 
@@ -292,9 +301,11 @@ select.overridden, input.overridden { opacity: 0.55; border-style: dashed; }
   z-index: 5;
   max-width: 320px;
   padding: 6px 8px;
-  background: #0b0f16f2;
+  background: var(--tip-bg);
+  color: var(--ink);
   border: 1px solid var(--line);
   border-radius: 6px;
+  box-shadow: var(--pop-shadow);
   font-family: var(--mono);
   font-size: 11px;
   pointer-events: none;
@@ -708,10 +719,11 @@ body.resizing-rows { cursor: row-resize; user-select: none; }
   max-width: 380px;
   max-height: 220px;
   overflow-y: auto;
-  background: #0b0f16;
+  background: var(--pop-bg);
+  color: var(--ink);
   border: 1px solid var(--tag-line);
   border-radius: 6px;
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--pop-shadow);
   font-family: var(--mono);
   font-size: 11.5px;
 }

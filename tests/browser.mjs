@@ -1532,6 +1532,20 @@ await test('a light look, kept', async () => {
     await page.waitForTimeout(200);
     const light = await look();
     ok(light.theme === 'light' && light.bg === 'rgb(246, 248, 250)' && light.button === 'Dark', `light, and the button offers dark back  (${JSON.stringify(light)})`);
+    // The boxes over the floor plan and the editor turn light with it: their
+    // text is --ink, dark here, and was once written on a hard-coded black.
+    const boxes = await page.evaluate(() => {
+      const suggest = document.createElement('div');
+      suggest.className = 'suggest';
+      document.body.append(suggest);
+      const look = (node) => [getComputedStyle(node).backgroundColor, getComputedStyle(node).color];
+      const out = { tooltip: look(document.getElementById('tooltip')), suggest: look(suggest) };
+      suggest.remove();
+      return out;
+    });
+    const lum = (rgb) => { const [r, g, b] = rgb.match(/\d+(\.\d+)?/g).map(Number); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+    ok(['tooltip', 'suggest'].every((k) => lum(boxes[k][0]) > 200 && lum(boxes[k][1]) < 80),
+       `the tooltip and the completions: dark text on a light box  (${JSON.stringify(boxes)})`);
     await page.reload({ waitUntil: 'networkidle' });
     eq((await look()).theme, 'light', 'kept, reloaded');
     const corner = await page.evaluate(() => {
@@ -1649,19 +1663,35 @@ await test('host status from dcprobe', async () => {
   const pane = () => page.evaluate(() => (document.querySelector('#host-status') || {}).innerText || '');
   ok(/host status/i.test(await pane()) && /not probed yet/.test(await page.evaluate(() => document.querySelector('#host-status h2').textContent)),
      'a layout with hosts offers to probe them');
-  const [saved] = await Promise.all([page.waitForEvent('download'), page.locator('#host-status button.probe-save').click()]);
+  const [saved] = await Promise.all([page.waitForEvent('download'), page.locator('#host-status button.probe-save', { hasText: 'hosts.txt' }).click()]);
   const hostsTxt = readFileSync(await saved.path(), 'utf8');
   eq([saved.suggestedFilename(), hostsTxt.split('\n').filter((l) => l && !l.startsWith('#'))],
      ['hosts.txt', ['r1h1 gbps=25', 'r1h2 gbps=25', 'r1h3 gbps=25', 'r2h1 gbps=25', 'r2h2 gbps=25', 'r2h3 gbps=25']],
      'hosts.txt: every host, with the speed the layout gives its NIC');
-  ok(/dcprobe scan --servers hosts\.txt -o host_status\.tsv --mtu 1500\n/.test(await pane()), 'and the scan to run');
+  ok(/dcprobe scan --servers hosts\.txt --model model\.dc -o host_status\.tsv --mtu 1500\n/.test(await pane()), 'and the scan to run, the layout written into its results');
+  // The load generator's hosts: only those its filter picks are probed.
+  await page.fill('#load-gen input.gen-hosts', 'in:r1');
+  await page.locator('#load-gen input.gen-hosts').dispatchEvent('change');
+  await page.waitForTimeout(400);
+  const [narrowed] = await Promise.all([page.waitForEvent('download'), page.locator('#host-status button.probe-save', { hasText: 'hosts.txt' }).click()]);
+  eq(readFileSync(await narrowed.path(), 'utf8').split('\n').filter((l) => l && !l.startsWith('#')), ['r1h1 gbps=25', 'r1h2 gbps=25', 'r1h3 gbps=25'],
+     'the load generator’s host filter picks the hosts probed');
+  ok(/The load generator’s hosts: those its filter picks \(in:r1\) -- 3 of them\./.test(await pane()), 'and the pane says so');
+  await page.fill('#load-gen input.gen-hosts', 'in:nowhere');
+  await page.locator('#load-gen input.gen-hosts').dispatchEvent('change');
+  await page.waitForTimeout(400);
+  ok(/the load generator’s host filter \(in:nowhere\) picks no hosts/.test(await pane()), 'a filter that picks none says so');
+  await page.fill('#load-gen input.gen-hosts', '');
+  await page.locator('#load-gen input.gen-hosts').dispatchEvent('change');
+  await page.waitForTimeout(400);
   await page.locator('#host-status input.probe-why-slow').check();
   await page.waitForTimeout(200);
-  ok(/dcprobe scan --servers hosts\.txt -o host_status\.tsv --mtu 1500 --why-slow/.test(await pane()), 'why-slow too, when ticked');
+  ok(/dcprobe scan --servers hosts\.txt --model model\.dc -o host_status\.tsv --mtu 1500 --why-slow/.test(await pane()), 'why-slow too, when ticked');
   const [archive] = await Promise.all([page.waitForEvent('download'), page.locator('#host-status button.probe-tar').click()]);
   const listed = spawnSync('tar', ['-tf', await archive.path()], { encoding: 'utf8' });
-  eq([archive.suggestedFilename(), listed.stdout.trim().split('\n')], ['probe-hosts.tar', ['probe-hosts/', 'probe-hosts/hosts.txt', 'probe-hosts/probe-hosts.sh']],
-     'all of it as one archive: hosts.txt and the script, in a folder of their own');
+  eq([archive.suggestedFilename(), listed.stdout.trim().split('\n')],
+    ['probe-hosts.tar', ['probe-hosts/', 'probe-hosts/hosts.txt', 'probe-hosts/model.dc', 'probe-hosts/probe-hosts.sh']],
+     'all of it as one archive: hosts.txt, the layout and the script, in a folder of their own');
 
   const scan = [
     '!test\tprobe_reach\tshort=REACH', '!test\tnic_check\tfinding=verdict', '!test\thost_cpu_pct\tunit=% higher=bad agg=last',
