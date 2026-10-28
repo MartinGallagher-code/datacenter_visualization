@@ -34,6 +34,7 @@ hour ago does not stay red -- and the viewer's Live reload follows it;
 
 import argparse
 import concurrent.futures
+import hashlib
 import io
 import json
 import os
@@ -43,7 +44,7 @@ import subprocess
 import sys
 import time
 
-from . import version_notice
+from . import __version__, version_notice
 from .dcimport import append
 
 PROG = "dcprobe"
@@ -644,6 +645,55 @@ def one_pass(args, hosts, since, why_src):
     return out, down
 
 
+def as_file(text):
+    """A layout as model.dc holds it, and as the viewer hashes it: line ends
+    as \\n, and one at the end."""
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    if text.endswith("\n"):
+        text = text[:-1]
+    return text + "\n"
+
+
+def model_stamp(args, verb):
+    """The layout the scan was made against, whole, and how it was made, as
+    the `#~` lines the viewer reads back (js/stamp.js): loading the scan
+    then brings back its floor plan -- asking first when another is in the
+    viewer -- and every reader of a results file skips them as comments."""
+    path = getattr(args, "model", "")
+    if not path:
+        return []
+    if not os.path.isfile(path):
+        die("--model %s: not found" % path)
+    with io.open(path, encoding="utf-8-sig", errors="replace") as fh:
+        text = as_file(fh.read())
+    name = getattr(args, "layout_name", "") or os.path.basename(path)
+    body = text[:-1].split("\n")
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    lines = ["#~run made %s" % stamp(), "#~run viewer dcprobe %s" % __version__,
+             "#~run tool dcprobe %s" % verb, "#~run layout %s" % one_line(name)]
+    lines.append("#~model sha256=%s lines=%d name=%s" % (digest, len(body), one_line(name)))
+    lines += [("#~ " + line) if line else "#~" for line in body]
+    lines.append("#~end model")
+    return lines
+
+
+def one_line(text):
+    return re.sub(r"\s+", " ", str(text)).strip()
+
+
+def layout_named(path):
+    """The layout's name, from hosts.txt's `# layout: NAME` line, if any."""
+    try:
+        with io.open(path, encoding="utf-8-sig", errors="replace") as fh:
+            for line in fh:
+                m = re.match(r"#\s*layout:\s*(.+?)\s*$", line)
+                if m:
+                    return m.group(1)
+    except OSError:
+        pass
+    return ""
+
+
 def stamp():
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
@@ -657,6 +707,8 @@ def write(args, out, header=None):
     lines = out.lines(stamp(), with_meta=not args.no_meta)
     if header and lines:
         lines.insert(0, header)
+    if lines and getattr(args, "stamp_lines", None):
+        lines[1:1] = args.stamp_lines
     if args.output == "-":
         for line in lines:
             sys.stdout.write(line + "\n")
@@ -676,6 +728,8 @@ def write(args, out, header=None):
 
 def cmd_scan(args):
     hosts = read_hosts(args.servers)
+    args.layout_name = layout_named(args.servers)
+    args.stamp_lines = model_stamp(args, "scan")
     why_src = why_slow_source(args.why_slow_file) if args.why_slow else None
     out, down = one_pass(args, hosts, args.dmesg_since, why_src)
     write(args, out, "# dcprobe %s: %d hosts, %d did not answer" % (stamp(), len(hosts), down))
@@ -685,6 +739,8 @@ def cmd_scan(args):
 
 def cmd_watch(args):
     hosts = read_hosts(args.servers)
+    args.layout_name = layout_named(args.servers)
+    args.stamp_lines = model_stamp(args, "watch")
     why_src = why_slow_source(args.why_slow_file) if args.why_slow else None
     since = args.dmesg_since
     passes = 0
@@ -708,6 +764,8 @@ def cmd_watch(args):
 
 def cmd_preflight(args):
     hosts = read_hosts(args.servers)
+    args.layout_name = layout_named(args.servers)
+    args.stamp_lines = model_stamp(args, "preflight")
     out = Out()
 
     def check(entry):
@@ -866,6 +924,9 @@ def main(argv=None):
     def fleet(p, default_out):
         p.add_argument("--servers", default="hosts.txt", metavar="FILE",
                        help="name[=addr] [gbps=N mtu=N nic=PATTERN] a line (default hosts.txt)")
+        p.add_argument("--model", default="", metavar="FILE",
+                       help="the layout the hosts are in (model.dc): written into the results, "
+                            "so loading them brings it back")
         p.add_argument("-o", "--output", default=default_out, metavar="FILE", help="results file ('-' for stdout)")
         p.add_argument("--user", default=os.environ.get("DCPROBE_USER", ""))
         p.add_argument("--ssh", default=os.environ.get("DCPROBE_SSH", "ssh"), metavar="CMD")

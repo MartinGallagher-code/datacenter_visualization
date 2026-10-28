@@ -1299,9 +1299,23 @@ const actions = {
   // cannot have them; null with no hosts at all. Each host goes with the
   // speed of its fastest NIC, as the layout gives it, and the run's --bind
   // and MTU, so a scan judges the NIC the run will load.
+  // The hosts are the load generator's: those its host filter picks, as it
+  // picks them, less anything taken out -- the hosts a load would run on.
   probeFiles() {
-    const { hosts } = hostsFor(state.model);
-    if (!hosts.length) return null;
+    if (!hostsFor(state.model).hosts.length) return null;
+    const filter = (state.traffic.gen.hosts || '').trim();
+    let match = null;
+    if (filter) {
+      try { match = compileQuery(filter, state); } catch (err) {
+        return { why: `the load generator’s host filter does not read: ${err.message}` };
+      }
+    }
+    const picked = hostsFor(state.model, match).hosts;
+    const hosts = state.down.els.size ? picked.filter((el) => !isOut(el)) : picked;
+    const out = picked.length - hosts.length;
+    if (!hosts.length) {
+      return { why: picked.length ? 'every host the load generator picks is taken out' : `the load generator’s host filter (${filter}) picks no hosts` };
+    }
     const why = runProblem(hosts);
     if (why) return { why };
     const speed = (el) => {
@@ -1313,9 +1327,13 @@ const actions = {
       }
       return best;
     };
-    return probeFiles(hosts, {
+    const files = probeFiles(hosts, {
       speed, bind: state.runFiles.bind, mtu: state.runFiles.mtu, every: state.probe.every, whySlow: state.probe.whySlow,
+      model: { text: state.layoutText, name: state.layoutName || 'the layout' },
     });
+    files.notes.unshift(`The load generator’s hosts: ${filter ? `those its filter picks (${filter})` : 'every host, as its filter is empty'}`
+      + `${out ? `, less the ${out} taken out` : ''} -- ${hosts.length.toLocaleString()} of them.`);
+    return files;
   },
 
   // A loaded scan, read back into the lists worth a look; null with none.

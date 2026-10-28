@@ -9,6 +9,7 @@
 // Nothing here runs anything. Pure, so it is testable.
 
 import { hostToken } from './runfiles.js';
+import { asFile } from './stamp.js';
 import { overlayValue } from './results.js';
 
 /** What the probe's script and archive are saved as. */
@@ -27,7 +28,7 @@ export const TOOL_PORTS = { mx: 5300, netmesh: 5310, iperf: 5001 };
  *                 mtu; every: seconds between watch passes; whySlow;
  *                 tools: the run tools to be ready for -- mx, netmesh, iperf }
  */
-export function probeFiles(hosts, { speed = () => 0, bind = '', mtu = 0, every = 30, whySlow = false, tools = ['mx', 'netmesh', 'iperf'] } = {}) {
+export function probeFiles(hosts, { speed = () => 0, bind = '', mtu = 0, every = 30, whySlow = false, tools = ['mx', 'netmesh', 'iperf'], model = null } = {}) {
   const line = (el) => {
     const { name, addr } = hostToken(el);
     const gbps = speed(el);
@@ -35,10 +36,15 @@ export function probeFiles(hosts, { speed = () => 0, bind = '', mtu = 0, every =
   };
   const text = [
     '# dcprobe hosts -- name[=addr] and the speed the layout gives its NIC, a line',
+    // What the scan calls the layout it writes into its results (--model).
+    ...(model && model.name ? [`# layout: ${String(model.name).replace(/\s+/g, ' ')}`] : []),
     ...hosts.map(line),
     '',
   ].join('\n');
   const nic = bind ? ` --nic ${shellWord(bind)}` : '';
+  // The layout goes with the results, as it does with a run's: loading
+  // host_status.tsv brings back the floor plan the hosts were probed in.
+  const withModel = model && model.text ? ' --model model.dc' : '';
   const mtuFlag = mtu ? ` --mtu ${mtu}` : '';
   const ws = whySlow ? ' --why-slow' : '';
   const ports = tools.map((t) => TOOL_PORTS[t]).filter(Boolean);
@@ -54,15 +60,18 @@ export function probeFiles(hosts, { speed = () => 0, bind = '', mtu = 0, every =
     script: PROBE_SCRIPT,
     tar: PROBE_TAR,
     needs: [{ command: 'dcprobe', how: 'pip install datacenter-layout-viewer, or put the tools/ folder of a clone of datacenter_visualization on PATH' }],
-    files: [{ name: 'hosts.txt', text, note: `${hosts.length.toLocaleString()} host${hosts.length === 1 ? '' : 's'}` }],
+    files: [
+      { name: 'hosts.txt', text, note: `${hosts.length.toLocaleString()} host${hosts.length === 1 ? '' : 's'}` },
+      ...(model && model.text ? [{ name: 'model.dc', text: asFile(model.text), note: `the layout${model.name ? `, ${model.name}` : ''}: written into the results` }] : []),
+    ],
     commands: [
       '# can every host run the load? ssh, the tools, --bind, the ports, the clocks',
-      `dcprobe preflight --servers hosts.txt -o preflight.tsv${needs.length ? ` --tools ${needs.join(',')}` : ''}`
+      `dcprobe preflight --servers hosts.txt${withModel} -o preflight.tsv${needs.length ? ` --tools ${needs.join(',')}` : ''}`
         + `${ports.length ? ` --ports ${ports.join(',')}` : ''}${bind ? ` --bind ${shellWord(bind)}` : ''}`,
       '# one look at every host: load host_status.tsv beside the layout',
-      `dcprobe scan --servers hosts.txt -o host_status.tsv${nic}${mtuFlag}${ws}`,
+      `dcprobe scan --servers hosts.txt${withModel} -o host_status.tsv${nic}${mtuFlag}${ws}`,
       `# ... or a look every ${every} s: the file always says how things are now, and Live (reload every N s) follows it`,
-      `# dcprobe watch --servers hosts.txt -o host_status.tsv --every ${every} --history host_history.tsv${nic}${mtuFlag}${ws}`,
+      `# dcprobe watch --servers hosts.txt${withModel} -o host_status.tsv --every ${every} --history host_history.tsv${nic}${mtuFlag}${ws}`,
       '# what changed since an earlier scan: kernels, firmware, NIC speeds and MTUs',
       '# dcprobe diff host_status-before.tsv host_status.tsv -o changes.tsv',
     ],

@@ -11,6 +11,30 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.45.0 — 2026-10-28
+
+- **A host scan carries the layout it was made against.** `dcprobe
+  --model model.dc` (scan, watch and preflight) writes the layout, whole,
+  into its results as the same `#~` lines a run file carries -- with its
+  sha256 and how the scan was made, named by `hosts.txt`'s `# layout:`
+  line -- so loading `host_status.tsv` brings back the floor plan its
+  hosts were probed in, asking first when another is in the viewer. Host
+  status writes `model.dc` beside `hosts.txt`, into `probe-hosts.tar`
+  too, and `--model model.dc` into every command. `python/dcviz/dcprobe.py`,
+  `js/probe.js`, `js/app.js`.
+- **Host status probes the load generator's hosts.** It probed every host
+  in the layout; it now takes the hosts the load generator's **hosts**
+  filter picks -- every host when the filter is empty -- less anything
+  taken out, the hosts a load would run on. The pane and the script's
+  comments say which filter picked them and how many; a filter that picks
+  none, or does not read, says so instead of writing an empty
+  `hosts.txt`. `js/app.js`.
+- **Light look: the hover tooltip and the editor's completions are light
+  too.** Both kept a hard-coded near-black box while their text turned
+  dark with the theme, so in the light look they read as dark on black.
+  They take `--tip-bg`, `--pop-bg` and `--pop-shadow` now, set for each
+  look. `css/app.css`.
+
 ## 1.44.0 — 2026-10-28
 
 - **Host status saves its files as one archive.** **Save probe-hosts.tar**
