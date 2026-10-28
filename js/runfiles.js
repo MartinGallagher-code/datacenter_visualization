@@ -8,6 +8,7 @@
 // go by the layout's own names, so what comes back lands on the elements the
 // model drew it on. Pure text, so it is testable.
 
+import { asFile } from './stamp.js';
 import { VERSION } from './version.js';
 
 export const RUN_TOOLS = ['iperf', 'mx', 'netmesh'];
@@ -182,18 +183,38 @@ export function mxSizes(made, mtu = 1500) {
   return { tx: clamp(sized ? sized.bytes : mtu - UDP_IP), rx: clamp(sized && sized.reply > 0 ? sized.reply : MX_REPLY) };
 }
 
+// What each tool answers --version with, for the run file's record of what ran.
+const TOOL_COMMANDS = { mx: 'mx', iperf: 'iperf-orchestrator', netmesh: 'netmesh' };
+
 /**
- * The model's own figures beside a tool's files, and how to bring the run
- * back with them: both into one file the viewer loads, where Measured
- * against the model compares them.
+ * The model's own figures beside a tool's files, the layout they were made
+ * on as model.dc, and how to bring the run back with them: all into one
+ * file the viewer loads -- where Measured against the model compares them,
+ * and the floor plan they were made on comes with them -- stamped with when
+ * the run began and ended, where, and which version of the tool ran it.
+ * model.dc is for keeping: the script runs without it.
  */
-function withExpected(built, expected, results) {
-  if (!expected) return built;
+function withExpected(built, expected, results, model = null) {
   const tool = built.tool;
+  if (model && model.text) {
+    built.files.push({ name: 'model.dc', text: asFile(model.text), note: `the layout this load was made on${model.name ? `, ${model.name}` : ''}`, keep: true });
+  }
+  if (!expected) return built;
   built.files.push({ name: 'expected.tsv', text: expected, note: 'what the model expects each flow and host to do' });
+  const command = TOOL_COMMANDS[tool];
+  built.commands.unshift('# when the run began, for the run file', 'started=$(date -u +%Y-%m-%dT%H:%M:%SZ)');
   built.commands.push(
-    '# collect: the run and the model\'s figures in one file -- load it, and Measured against the model compares them',
-    `cat expected.tsv ${results} > ${tool}-run.tsv`,
+    '# collect: the run, the model and its figures in one file -- load it, and Measured against the model compares them',
+    [
+      '{',
+      '  cat expected.tsv',
+      '  echo "#~ran started ${started:-unknown}"',
+      '  echo "#~ran finished $(date -u +%Y-%m-%dT%H:%M:%SZ)"',
+      '  echo "#~ran host $(hostname 2>/dev/null || uname -n)"',
+      `  echo "#~ran ${command} $(${command} --version 2>&1 | head -n 1)"`,
+      `  cat ${results}`,
+      `} > ${tool}-run.tsv`,
+    ].join('\n'),
   );
   return built;
 }
@@ -203,7 +224,7 @@ function withExpected(built, expected, results) {
  * sizes in its header. A sized load keeps its sizes; a bit rate goes in full
  * frames, answered by the smallest reply mx makes.
  */
-export function buildMx(made, { seconds = 60, connections = 1, summary = '', expected = '', mtu = 1500, bind = '' } = {}) {
+export function buildMx(made, { seconds = 60, connections = 1, summary = '', expected = '', mtu = 1500, bind = '', model = null } = {}) {
   const { pairs, hosts, sized } = made;
   const { tx, rx } = mxSizes(made, mtu);
   const pps = (pair) => (pair.pps > 0 ? pair.pps : (pair.gbps * 1e9) / ((tx + WIRE_BYTES) * 8));
@@ -234,7 +255,7 @@ export function buildMx(made, { seconds = 60, connections = 1, summary = '', exp
       '# what it measured, for the viewer: load mx_results.tsv beside the layout',
       'mx export --matrix matrix.csv --peers -o mx_results.tsv',
     ],
-  }, expected, 'mx_results.tsv');
+  }, expected, 'mx_results.tsv', model);
 }
 
 const mxStreams = (connections) => Math.min(MX_STREAMS, Math.max(1, Math.round(connections)));
@@ -295,7 +316,7 @@ const iperfRate = (gbps) => (gbps >= 0.001 ? `${Number((gbps * 1000).toPrecision
  * streams at -b). Different rates are different runs, each on its own port
  * so they can go at once. A sized load's replies go back as TCP the other way.
  */
-export function buildIperf(made, { seconds = 60, connections = 1, summary = '', expected = '', mtu = 1500, bind = '' } = {}) {
+export function buildIperf(made, { seconds = 60, connections = 1, summary = '', expected = '', mtu = 1500, bind = '', model = null } = {}) {
   const { pairs, hosts, sized } = made;
   const groups = rateGroups(pairs);
   const streams = Math.max(1, Math.round(connections));
@@ -358,7 +379,7 @@ export function buildIperf(made, { seconds = 60, connections = 1, summary = '', 
       ...bindNote(bind),
     ],
     commands,
-  }, expected, 'iperf_results.tsv');
+  }, expected, 'iperf_results.tsv', model);
 }
 
 /**
@@ -366,7 +387,7 @@ export function buildIperf(made, { seconds = 60, connections = 1, summary = '', 
  * path MTU -- netmesh measures the network, it makes no load. Alone it probes
  * an idle network; run with the load after --, idle first and then under it.
  */
-export function buildNetmesh(made, { seconds = 60, connections = 1, summary = '', expected = '', bind = '' } = {}) {
+export function buildNetmesh(made, { seconds = 60, connections = 1, summary = '', expected = '', bind = '', model = null } = {}) {
   const { pairs, hosts } = made;
   const flows = Math.min(PROBE_FLOWS, Math.max(1, Math.round(connections)));
   const probed = pairs.filter((pair) => pair.gbps > 0 || pair.pps > 0);
@@ -395,7 +416,7 @@ export function buildNetmesh(made, { seconds = 60, connections = 1, summary = ''
       '# what it measured, for the viewer: load netmesh_results.tsv beside the layout',
       'dcimport netmesh_results.tsv --tidy reports/',
     ],
-  }, expected, 'netmesh_results.tsv');
+  }, expected, 'netmesh_results.tsv', model);
 }
 
 export const RUN_BUILDERS = { iperf: buildIperf, mx: buildMx, netmesh: buildNetmesh };
@@ -439,10 +460,10 @@ export function runScript(built) {
     ...built.notes.map(comment),
     '#',
     '# Files, beside this script:',
-    ...built.files.map((f) => `#   ${f.name} -- ${f.note}`),
+    ...built.files.map((f) => `#   ${f.name} -- ${f.note}${f.keep ? ' (kept with the run; not needed to run it)' : ''}`),
     '',
     'cd "$(dirname "$0")" || exit 1',
-    `for f in ${built.files.map((f) => f.name).join(' ')}; do`,
+    `for f in ${built.files.filter((f) => !f.keep).map((f) => f.name).join(' ')}; do`,
     '  [ -f "$f" ] || { echo "$f is not beside this script: save it here first" >&2; exit 1; }',
     'done',
     '',

@@ -28,7 +28,9 @@
 
 import { spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
-import { readFileSync, existsSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join, normalize, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -1414,7 +1416,7 @@ await test('the load as run files', async () => {
   const [archive] = await Promise.all([page.waitForEvent('download'), page.locator('#load-gen button.run-tar').click()]);
   const listed = spawnSync('tar', ['-tf', await archive.path()], { encoding: 'utf8' });
   ok(archive.suggestedFilename() === 'run-iperf.tar'
-     && listed.stdout.trim().split('\n').join(' ') === 'run-iperf/ run-iperf/iperf_plan.conf run-iperf/expected.tsv run-iperf/run-iperf.sh',
+     && listed.stdout.trim().split('\n').join(' ') === 'run-iperf/ run-iperf/iperf_plan.conf run-iperf/model.dc run-iperf/expected.tsv run-iperf/run-iperf.sh',
      `and all of it as one archive tar reads  (${listed.stdout.trim().split('\n').join(' ')})`);
   await page.locator('#load-gen button.run-tool-netmesh').click();
   await page.waitForTimeout(300);
@@ -1590,7 +1592,7 @@ await test('a run against the model', async () => {
   await page.waitForTimeout(400);
   await page.locator('#load-gen button.run-tool-iperf').click();
   await page.waitForTimeout(300);
-  ok(/cat expected\.tsv iperf_results\.tsv > iperf-run\.tsv/.test(await page.evaluate(() => document.querySelector('#load-gen .run-files').innerText)),
+  ok(/cat expected\.tsv\n[\s\S]*\n  cat iperf_results\.tsv\n\} > iperf-run\.tsv/.test(await page.evaluate(() => document.querySelector('#load-gen .run-files').innerText)),
      'the run files carry the model, and the step that collects the run with it');
   const [saved] = await Promise.all([page.waitForEvent('download'),
     page.locator('#load-gen button.run-save', { hasText: 'expected.tsv' }).click()]);
@@ -1639,6 +1641,72 @@ await test('a run against the model', async () => {
   await page.waitForTimeout(500);
   ok(/5 short of it/.test(await panel()) && /the load generator now/.test(await page.evaluate(() => document.querySelector('#compare select.compare-against').innerText)),
      'the load generator as it is set now is a model too');
+}, { url: '?layout=fx/tiny.dc' });
+
+// A run carries the layout it was made on: model.dc in the tar, the layout
+// whole in expected.tsv, and a run file loaded brings it back -- asking first
+// when another layout is in the viewer.
+await test('a run file brings its layout', async () => {
+  const notices = () => page.evaluate(() => document.querySelector('#notices').innerText);
+  const title = () => page.evaluate(() => document.querySelector('#title').textContent);
+  const asked = [];
+  const answer = (yes) => page.once('dialog', (d) => { asked.push(d.message()); if (yes) d.accept(); else d.dismiss(); });
+  try {
+    await page.locator('#load-gen select.gen-unit').selectOption('Gb/s');
+    await page.fill('#load-gen input.gen-value', '1');
+    await page.locator('#load-gen input.gen-value').dispatchEvent('change');
+    await page.locator('#load-gen button', { hasText: 'Run' }).click();
+    await page.waitForTimeout(400);
+    await page.locator('#load-gen button.run-tool-mx').click();
+    await page.waitForTimeout(300);
+    const [archive] = await Promise.all([page.waitForEvent('download'), page.locator('#load-gen button.run-tar').click()]);
+    const dir = mkdtempSync(join(tmpdir(), 'dcviz-stamp-'));
+    spawnSync('tar', ['-xf', await archive.path(), '-C', dir]);
+    const dc = readFileSync(join(dir, 'run-mx', 'model.dc'), 'utf8');
+    const expected = readFileSync(join(dir, 'run-mx', 'expected.tsv'), 'utf8');
+    rmSync(dir, { recursive: true, force: true });
+    eq(dc, `${TINY}\n`, 'the tar holds the layout as model.dc');
+    const sha = createHash('sha256').update(dc).digest('hex');
+    ok(new RegExp(`^#~model sha256=${sha} lines=12 name=\\S*tiny\\.dc$`, 'm').test(expected) && expected.includes('\n#~   row A\n')
+       && /^#~run tool mx$/m.test(expected) && /^#~run made \d{4}-\d\d-\d\dT[\d:]+Z$/m.test(expected) && /^#~run viewer datacenter_visualization /m.test(expected),
+       'expected.tsv carries it whole, with sha256sum’s digest and how the load was made');
+    const run = `${expected}#~ran started 2026-10-28T10:00:00Z\n#~ran finished 2026-10-28T10:01:00Z\n#~ran host jumpbox\n#~ran mx mx 1.11.1\n`;
+    const original = await title();
+
+    await drop('mx-run.tsv', run);
+    await page.waitForTimeout(500);
+    ok(!asked.length && /made on this very layout/.test(await notices()), 'over its own layout: nothing asked, and it says they match');
+    ok(/mx-run\.tsv: made \S+ by datacenter_visualization \S+ for mx; ran 2026-10-28T10:00:00Z to 2026-10-28T10:01:00Z on jumpbox; mx 1\.11\.1/.test(await notices()),
+       `and when it was made and ran, where, and with what  (${(await notices()).split('\n').find((l) => /made 2/.test(l))})`);
+
+    await openLayout(TINY.replace('dc D', 'dc E'));
+    const other = await title();
+    answer(false);
+    await drop('mx-run.tsv', run);
+    await page.waitForTimeout(500);
+    ok(/^mx-run\.tsv was made on another layout than the one in the viewer: \S*tiny\.dc, sha256 [0-9a-f]{12}…, made /.test(asked[0] || '')
+       && /Load that layout in place of this one \(\S*tiny\.dc, sha256 [0-9a-f]{12}…\)\?/.test(asked[0]), `over another: it asks first  (${asked[0]})`);
+    ok(other !== original && await title() === other && /you kept/.test(await notices()), 'Cancel keeps the layout there, and says what that means');
+    answer(true);
+    await drop('mx-run.tsv', run);
+    await page.waitForTimeout(500);
+    ok(asked.length === 2 && await title() === original && /the layout mx-run\.tsv was made on .*loaded from it/.test(await notices()), 'OK loads the run’s own');
+    ok((await cardNames()).some((n) => /model_gbps|MODEL/.test(n)), 'with its readings');
+
+    await openLayout(TINY.replace('dc D', 'dc E'));
+    await drop('mx-run.tsv', run.replace('#~ dc D', '#~ dc X'));
+    await page.waitForTimeout(500);
+    ok(asked.length === 2 && await title() === other && /no longer matches its sha256/.test(await notices()), 'a layout edited since it was written is not loaded, nor asked about');
+
+    answer(true);
+    await page.locator('#btn-restart').click();
+    await page.waitForTimeout(400);
+    await drop('mx-run.tsv', run);
+    await page.waitForTimeout(500);
+    ok(asked.length === 3 && await title() === original, 'into an empty viewer it just loads');
+  } finally {
+    page.removeAllListeners('dialog');
+  }
 }, { url: '?layout=fx/tiny.dc' });
 
 // netmesh measures round trips, not rates: its rtt_p50 against what the

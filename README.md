@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.41.1** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.42.0** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -1089,8 +1089,9 @@ mx run --matrix matrix.csv --for 60 --streams 1
 mx export --matrix matrix.csv --peers -o mx_results.tsv
 ```
 
-**Save run-mx.tar** puts all of it — the tool's files, `expected.tsv` and
-the script — in one archive, a folder of its own, the script executable:
+**Save run-mx.tar** puts all of it — the tool's files, `expected.tsv`,
+the layout as `model.dc` and the script — in one archive, a folder of its
+own, the script executable:
 
 ```sh
 tar -xf run-mx.tar && cd run-mx && ./run-mx.sh
@@ -1158,11 +1159,65 @@ layout, and compare what ran with what the model said.
   for this load — what it expects each flow to carry (`model_gbps`, and
   `model_pps` for a packet tool), what each was asked to send
   (`model_offered_gbps`), where it holds one back (`model_held`), and what
-  each host sends and takes in. The last command collects the run with it:
+  each host sends and takes in. The last command collects the run with it,
+  stamped with when the run began and ended, the host it ran from and the
+  tool's own `--version`:
 
   ```sh
-  cat expected.tsv mx_results.tsv > mx-run.tsv    # one file: the run and its model
+  {
+    cat expected.tsv
+    echo "#~ran started ${started:-unknown}"      # set as the script begins
+    echo "#~ran finished $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo "#~ran host $(hostname 2>/dev/null || uname -n)"
+    echo "#~ran mx $(mx --version 2>&1 | head -n 1)"
+    cat mx_results.tsv
+  } > mx-run.tsv                                  # one file: the run and its model
   ```
+
+#### The run carries its layout
+
+A run is only as good as knowing what it was run against, so **the layout
+goes with it**. The tar holds it as `model.dc` (kept with the run, never
+needed to run it: the script does not wait for it), and `expected.tsv` —
+so every `mx-run.tsv` made from it — carries it whole, as `#~` lines that
+every reader of a results file skips as comments, with its sha256 and how
+the load was set up:
+
+```
+#~run made 2026-10-28T14:02:11Z
+#~run viewer datacenter_visualization 1.42.0
+#~run tool mx
+#~run layout floor.dc
+#~run load the random pattern to 1 peer, 1000 pps from each host
+#~run seconds 60
+#~run connections 1
+#~run mtu 1500
+#~run bind eth1
+#~run out DC1/A/r3
+#~model sha256=9f2c… lines=212 name=floor.dc
+#~ dc DC1
+#~   row A
+…
+#~end model
+#~ran started 2026-10-28T14:03:00Z
+#~ran finished 2026-10-28T14:04:05Z
+#~ran host jumpbox
+#~ran mx mx 1.11.1
+```
+
+The sha256 is `sha256sum model.dc`'s, so a layout file on disk can be
+checked against a run without the viewer.
+
+**Load a run file and its layout comes with it.** Into an empty viewer it
+simply loads. Over the very same layout nothing changes, and the report
+says it matched. Over a different one the viewer **asks first** — the
+layout there now, and any edit not saved, would go — and **Cancel** keeps
+it and loads the readings onto it, with a warning that they may land on
+elements other than the ones they were measured on. A layout loaded in
+the same drop as the run file is your choice and stays. A carried layout
+that no longer matches its sha256, or was cut short, is not loaded, and
+the report says why. The report also gives each stamped file's line: made
+when and by which version, ran when, where, and with which tool.
 
 #### Measured against the model
 

@@ -11,6 +11,33 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.42.0 — 2026-10-28
+
+- **A run carries the layout it was made on.** Run it for real's tar
+  holds the layout as `model.dc`, and `expected.tsv` — so the
+  `mx-run.tsv`, `iperf-run.tsv` or `netmesh-run.tsv` its last step makes —
+  carries it whole as `#~` lines, with its sha256 (`sha256sum model.dc`'s)
+  and how the load was set up: when, by which version, for which tool,
+  the pattern, seconds, connections, MTU, `--bind`, and what was taken
+  out. Every reader of a results file skips `#` lines, so a stamped file
+  loads exactly as before. The script does not wait for `model.dc`: it is
+  kept with the run, not needed to run it. `js/stamp.js` (new),
+  `js/runfiles.js`, `js/app.js`.
+- **The run file says when, where and with what it ran.** The script notes
+  when it began, and its collect step adds `#~ran` lines: started,
+  finished, the host it ran from, and the tool's own `--version` (mx,
+  iperf-orchestrator or netmesh). The collect step is a `{ … } > X-run.tsv`
+  block now rather than one `cat`.
+- **Loading a run file loads its layout.** Into an empty viewer, or over a
+  stand-in built from hostnames, it simply loads; over that very layout
+  the report says it matched; over a different one the viewer asks first,
+  since the layout there and any edit not saved would go — Cancel keeps it
+  and loads the readings onto it, with a warning. A layout dropped with
+  the run file stays. A carried layout that fails its sha256 or was cut
+  short is not loaded, and the report says why. Each stamped file gets a
+  line in the report: made when and by what, ran when, where and with
+  what.
+
 ## 1.41.1 — 2026-10-27
 
 - **dcimport leaves out the seconds netmesh's agents took to start and

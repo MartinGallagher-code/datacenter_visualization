@@ -12,6 +12,7 @@
 
 // Headless test suite: node tests/run.mjs
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -55,6 +56,7 @@ import {
 import {
   bindProblem, buildIperf, buildMx, buildNetmesh, hostToken, mxSizes, rateGroups, runPairs, runProblem, runScript, runTar, runWhy, scriptName, tarball, tarName, tcpPayloadShare,
 } from '../js/runfiles.js';
+import { asFile, layoutSha, modelBlock, readStamp, runStamp, sha256 } from '../js/stamp.js';
 import {
   compareHosts, compareLatency, compareMtu, compareRuns, comparisonResults, modelPairs, modelResults, suspects,
 } from '../js/compare.js';
@@ -5206,7 +5208,7 @@ if (python.error) {
       chmodSync(join(bin, tool), 0o755);
     }
     const env = { ...process.env, PATH: `${bin}:${process.env.PATH}` };
-    const mxBuilt = buildMx(made, { seconds: 30, expected: '# model\n' });
+    const mxBuilt = buildMx(made, { seconds: 30, expected: '# model\n', model: { text: 'dc T\n', name: 'floor.dc' } });
     const runs = join(dir, 'runs');
     mkdirSync(runs);
     for (const f of mxBuilt.files) writeFileSync(join(runs, f.name), f.text);
@@ -5217,7 +5219,13 @@ if (python.error) {
     eq([ran.status, ran.stdout.trim().split('\n')], [0, [
       'mx check --matrix matrix.csv', 'mx run --matrix matrix.csv --for 30 --streams 1', 'mx export --matrix matrix.csv --peers -o mx_results.tsv',
     ]], 'a script that runs its commands, in order, wherever it is run from');
-    ok(readFileSync(join(runs, 'mx-run.tsv'), 'utf8').startsWith('# model'), 'and collects the run with the model');
+    const runFile = readFileSync(join(runs, 'mx-run.tsv'), 'utf8');
+    ok(runFile.startsWith('# model'), 'and collects the run with the model');
+    const ranStamp = readStamp(runFile);
+    ok(ranStamp && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/.test(ranStamp.ran.started) && /Z$/.test(ranStamp.ran.finished)
+       && ranStamp.ran.host && ranStamp.ran.mx === 'mx --version', `stamped with when, where and which mx  (${JSON.stringify(ranStamp && ranStamp.ran)})`);
+    rmSync(join(runs, 'model.dc'));
+    eq(spawnSync('bash', [join(runs, 'run-mx.sh')], { encoding: 'utf8', env, cwd: dir }).status, 0, 'and runs without model.dc');
     rmSync(join(runs, 'matrix.csv'));
     const missing = spawnSync('bash', [join(runs, 'run-mx.sh')], { encoding: 'utf8', env, cwd: dir });
     ok(missing.status === 1 && /matrix\.csv is not beside this script/.test(missing.stderr) && !missing.stdout,
@@ -5231,9 +5239,9 @@ if (python.error) {
       writeFileSync(join(dir, 'run-mx.tar'), runTar(mxBuilt, { mtime: Date.UTC(2026, 9, 26) }));
       const listed = spawnSync('tar', ['-tvf', join(dir, 'run-mx.tar')], { encoding: 'utf8' });
       const lines = listed.stdout.trim().split('\n');
-      eq([listed.status, lines.map((l) => l.split(/\s+/).pop())], [0, ['run-mx/', 'run-mx/matrix.csv', 'run-mx/expected.tsv', 'run-mx/run-mx.sh']],
-         'tar reads it: a folder of its own, the tool’s files and its script');
-      ok(/^-rwxr-xr-x/.test(lines[3]) && /^-rw-r--r--/.test(lines[1]), 'the script executable, the files not');
+      eq([listed.status, lines.map((l) => l.split(/\s+/).pop())], [0, ['run-mx/', 'run-mx/matrix.csv', 'run-mx/model.dc', 'run-mx/expected.tsv', 'run-mx/run-mx.sh']],
+         'tar reads it: a folder of its own, the tool’s files, the layout and its script');
+      ok(/^-rwxr-xr-x/.test(lines[4]) && /^-rw-r--r--/.test(lines[1]), 'the script executable, the files not');
       const out = join(dir, 'unpacked');
       mkdirSync(out);
       eq(spawnSync('tar', ['-xf', join(dir, 'run-mx.tar'), '-C', out]).status, 0, 'and unpacks');
@@ -5392,8 +5400,47 @@ if (python.error) {
   const made = runPairs(gen.flows, { toGbps: 1, unit: 'Gb/s', sized: null });
   const withModel = buildMx(made, { expected: text });
   ok(withModel.files.some((f) => f.name === 'expected.tsv' && f.text === text), 'a tool’s files carry the model’s figures');
-  ok(withModel.commands.includes('cat expected.tsv mx_results.tsv > mx-run.tsv'), 'and collect the run with them into one file');
+  const collect = withModel.commands.find((c) => c.endsWith('} > mx-run.tsv'));
+  ok(collect && collect.startsWith('{\n  cat expected.tsv\n') && collect.includes('\n  cat mx_results.tsv\n'), 'and collect the run with them into one file');
+  ok(['started', 'finished', 'host'].every((k) => collect.includes(`echo "#~ran ${k} `)) && collect.includes('$(mx --version 2>&1 | head -n 1)')
+     && withModel.commands[1] === 'started=$(date -u +%Y-%m-%dT%H:%M:%SZ)', 'stamped with when the run began and ended, where, and which mx ran it');
+  ok(buildIperf(made, { expected: text }).commands.some((c) => c.includes('$(iperf-orchestrator --version'))
+     && buildNetmesh(made, { expected: text }).commands.some((c) => c.includes('$(netmesh --version')), 'each tool its own version');
   ok(!buildMx(made, {}).files.some((f) => f.name === 'expected.tsv'), 'not when there is no model to carry');
+
+  // The layout itself goes with the run files, as model.dc: kept, never needed to run.
+  const layoutText = 'dc T\r\n  row A\n';
+  const kept = buildMx(made, { expected: text, model: { text: layoutText, name: 'floor.dc' } });
+  const dc = kept.files.find((f) => f.name === 'model.dc');
+  eq(dc && dc.text, 'dc T\n  row A\n', 'the layout as model.dc, line ends as \\n');
+  ok(dc.keep && /floor\.dc/.test(dc.note) && /for f in matrix\.csv expected\.tsv; do/.test(runScript(kept))
+     && /#   model\.dc -- .*not needed to run it/.test(runScript(kept)), 'kept with the run, and not a file the script waits for');
+  ok(buildNetmesh(made, { model: { text: layoutText } }).files.some((f) => f.name === 'model.dc'), 'with or without the model’s figures');
+  ok(!buildMx(made, { expected: text }).files.some((f) => f.name === 'model.dc'), 'and none when there is no layout');
+
+  // Stamps: the layout, whole, in the model's figures; how the load was set up.
+  for (const sample of ['', 'abc', 'x'.repeat(55), 'y'.repeat(64), 'é漢🙂\n'.repeat(300)]) {
+    eq(sha256(sample), createHash('sha256').update(sample, 'utf8').digest('hex'), `sha256 of ${sample.length} characters, as sha256sum has it`);
+  }
+  eq(layoutSha(layoutText), createHash('sha256').update(asFile(layoutText)).digest('hex'), 'a layout’s sha256 is model.dc’s');
+  const block = modelBlock(layoutText, { name: 'floor plan.dc' });
+  ok(block.startsWith(`#~model sha256=${layoutSha(layoutText)} lines=2 name=floor plan.dc\n#~ dc T\n#~   row A\n#~end model`), 'the layout as #~ lines');
+  const stamped = `${text}${runStamp({ made: '2026-10-28T10:00:00Z', load: 'all  to\nall', bind: '', mtu: 9000 })}\n${block}\n`
+    + '#~ran started 2026-10-28T10:01:00Z\n#~ran mx mx 1.11.1\n';
+  const read = readStamp(stamped);
+  eq([read.model.text, read.model.name, read.model.intact], ['dc T\n  row A\n', 'floor plan.dc', true], 'read back whole, named, and intact');
+  eq([read.run, read.ran], [{ made: '2026-10-28T10:00:00Z', load: 'all to all', mtu: '9000' }, { started: '2026-10-28T10:01:00Z', mx: 'mx 1.11.1' }],
+     'with how it was made and how it ran, empty settings left out');
+  eq(readStamp(stamped.replace('#~   row A', '#~   row B')).model.intact, false, 'a layout edited since is not intact');
+  const cut = readStamp(stamped.replace('#~   row A\n', ''));
+  eq([cut.model.complete, cut.model.intact], [false, false], 'nor is one cut short');
+  eq(readStamp(text), null, 'a file with no stamp has none');
+  const rawStamped = new Map();
+  const wStamped = [];
+  parseResults(stamped, rawStamped, wStamped, 'expected.tsv');
+  const samples = (overlays) => [...overlays].map(([k, o]) => `${k} ${o.samples.length}`).sort();
+  eq([wStamped, samples(rawStamped)], [[], samples(raw)], 'and a stamped file reads exactly as one without');
+  ok(!looksLikeWideTsv(stamped), 'still a results file, not a table');
 
   // Round trips: the fabric's, from the layout, and a prober's against it.
   const shared = { shared: {} };
