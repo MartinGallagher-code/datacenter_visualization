@@ -5157,6 +5157,15 @@ if (python.error) {
   const nm = buildNetmesh(made, { seconds: 90, connections: 2 });
   ok(nm.files[0].text.includes('# size=64 port=5310 pps=10 flows=2\n'), 'netmesh probes ten a second, over as many flows as connections');
   ok(nm.files[0].text.includes('\nr1h1,,10,10,10,10,10\n'), 'every pair of the load');
+  // What netmesh takes of the generator's settings, and what it does not:
+  // never the load described as if netmesh sent it.
+  const said = [...nm.notes, nm.files[0].text].join('\n');
+  ok(!/offered|requests a second|Gb\/s/.test(said), 'netmesh’s notes and mesh.csv never describe a rate netmesh does not send');
+  ok(/takes only which hosts talk to which -- 30 pairs among 6 hosts.*how long \(90 s\).*2 probe flows a pair \(flows=\)/.test(nm.notes[0]),
+     'they say what it takes of the generator: the pairs, the seconds, the connections as flows');
+  ok(/whatever the load’s rate: the rate, its unit, and the request and reply sizes go only to the mx run under it/.test(nm.notes[1])
+     && /MTU 1500 is not given to netmesh/.test(nm.notes[2]), 'and what it does not: the rate and sizes, and the MTU');
+  ok(/^# probed only: netmesh does not send the load or its rate$/m.test(nm.files[0].text), 'mesh.csv says so too');
   ok(nm.commands.some((c) => c.includes('--baseline 20 -- mx run')), 'idle first and then under the load, if you give it one');
   ok(nm.commands.filter((c) => !c.startsWith('#')).every((c) => !c.includes('--baseline')),
      'the run under the load is there to swap in, commented, so the script runs one netmesh run');

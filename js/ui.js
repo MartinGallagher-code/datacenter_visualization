@@ -2111,7 +2111,8 @@ function renderRunFiles(state, actions) {
     mtu.append(opt);
   }
   mtu.title = 'The fabric’s MTU: how much of a TCP packet is payload, which iperf’s -b paces, '
-    + 'and how big mx’s full frames are -- so the cables carry exactly what the model shows';
+    + 'and how big mx’s full frames are -- so the cables carry exactly what the model shows. '
+    + 'netmesh finds each path’s MTU itself, and this is what the model expects it to find';
   mtu.addEventListener('change', () => actions.setRunFiles({ mtu: Number(mtu.value) }));
   // The NIC the traffic rides, where ssh reaches the hosts over another.
   const bind = el('input', 'run-bind');
@@ -2121,7 +2122,8 @@ function renderRunFiles(state, actions) {
   bind.spellcheck = false;
   bind.title = 'The NIC to load, where ssh reaches the hosts over another: an interface name (eth1, mlx5) or part of '
     + 'an address (10.20.), matched against `ip -o -4 addr show` on each host. It goes into the files as --bind -- '
-    + 'iperf’s plan as bind=, mx’s and netmesh’s runs as --bind -- and is kept for next time. Empty: none';
+    + 'iperf’s plan as bind=, mx’s runs as --bind; netmesh’s own --bind takes one address and no pattern, so its run '
+    + 'goes without -- and is kept for next time. Empty: none';
   const bindWhy = el('div', 'bad run-bind-why');
   bind.addEventListener('change', () => {
     const v = bind.value.trim();

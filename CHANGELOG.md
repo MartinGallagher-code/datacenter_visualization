@@ -44,6 +44,15 @@ their shapes are not a promise.
   every host anyway. The mx run under netmesh keeps it, and the notes say
   why netmesh does not; give the hosts `addr=` on the network to probe.
   (1.40.1 put it there.) `js/runfiles.js`.
+- **netmesh's files say what it takes of the load generator, and what it
+  does not.** Its notes and `mesh.csv` opened with the load as the
+  generator describes it — "1000 pps from each host", "6 Gb/s offered" —
+  as if netmesh sent it. It sends ten 64-byte probes a second a pair,
+  whatever the rate. They now say it takes only the pairs, the seconds and
+  the connections (as `flows=`); that the rate, its unit and the packet
+  sizes go only to the mx run under it; and that the MTU is what the model
+  expects netmesh to find, not something netmesh is given. The MTU and NIC
+  boxes' tooltips say the same. `js/runfiles.js`, `js/ui.js`.
 
 ## 1.41.1 — 2026-10-27
 

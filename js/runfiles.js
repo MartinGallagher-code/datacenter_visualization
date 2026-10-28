@@ -387,23 +387,33 @@ export function buildIperf(made, { seconds = 60, connections = 1, summary = '', 
  * path MTU -- netmesh measures the network, it makes no load. Alone it probes
  * an idle network; run with the load after --, idle first and then under it.
  */
-export function buildNetmesh(made, { seconds = 60, connections = 1, summary = '', expected = '', bind = '', model = null } = {}) {
+export function buildNetmesh(made, { seconds = 60, connections = 1, summary = '', expected = '', mtu = 1500, bind = '', model = null } = {}) {
   const { pairs, hosts } = made;
   const flows = Math.min(PROBE_FLOWS, Math.max(1, Math.round(connections)));
   const probed = pairs.filter((pair) => pair.gbps > 0 || pair.pps > 0);
+  // netmesh takes the load's pairs and nothing of its rate, so its files say
+  // which of the generator's settings it uses and which it does not, rather
+  // than describing the load as if netmesh sent it.
+  const among = `${probed.length.toLocaleString()} pair${probed.length === 1 ? '' : 's'} among ${hosts.length.toLocaleString()} hosts`;
   const mesh = [
     '# netmesh mesh v1 -- rows probe, columns answer, cells are probes/sec',
     `# size=64 port=5310 pps=${PROBES} flows=${flows}`,
     `# made by datacenter_visualization ${VERSION}`,
-    ...describe(pairs, hosts, summary).map((line) => `# ${prose(line)}`),
+    `# the pairs of a load-generator load${summary ? ` -- ${prose(summary)} --` : ''} ${among}`,
+    '# probed only: netmesh does not send the load or its rate',
     grid(hosts, probed, { head: token, row: nameOf }, () => String(PROBES)),
   ].join('\n');
   return withExpected({
     tool: 'netmesh',
     files: [{ name: 'mesh.csv', text: `${mesh}\n`, note: `${probed.length.toLocaleString()} pairs` }],
     notes: [
-      ...describe(pairs, hosts, summary),
-      `netmesh makes no load: it probes the load’s ${probed.length.toLocaleString()} pairs, ${PROBES} a second each, for latency, jitter, loss and path MTU.`,
+      `netmesh makes no load. Of the load generator’s settings it takes only which hosts talk to which -- `
+        + `${among}${summary ? `, from ${summary}` : ''} -- how long (${seconds} s), and the connections, as `
+        + `${flows} probe flow${flows === 1 ? '' : 's'} a pair (flows=), each from its own port so the probes spread over the paths as the load’s connections would.`,
+      `Every pair gets ${PROBES} probes a second of 64 bytes, for latency, jitter, loss and path MTU, whatever the load’s rate: `
+        + 'the rate, its unit, and the request and reply sizes go only to the mx run under it, in the second form below.',
+      `MTU ${mtu} is not given to netmesh, which finds each path’s MTU itself: it is what the model expects every path to carry, `
+        + 'set against what netmesh finds.',
       'Run it alone for the idle network, or with the load after -- for idle first and then under it.',
       // netmesh's own --bind is one local address, handed to bind() as it
       // is -- not a pattern each host resolves, as mx's and iperf's are -- so

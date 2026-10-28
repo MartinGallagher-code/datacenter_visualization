@@ -1156,7 +1156,14 @@ layout, and compare what ran with what the model said.
 - **netmesh makes no load.** It measures the network: run alone it probes
   the idle network; `netmesh run --mesh mesh.csv --baseline 20 -- mx run …`
   probes 20 s idle and then under the load, which is the latency the
-  model's queues predict.
+  model's queues predict. Of the generator's settings it takes only **which
+  hosts talk to which** (the pattern, the hosts, the peers), **how long**,
+  and **the connections**, as probe flows a pair (`flows=`). Every pair gets
+  ten 64-byte probes a second whatever the load's rate: the rate, its unit
+  and the request and reply sizes go only to the mx run under it. Nor is
+  the MTU given to it — it finds each path's MTU itself — and the MTU box is
+  what the model expects it to find. Its notes and `mesh.csv` say exactly
+  this, rather than describing the load as if netmesh sent it.
 - Flows to or from anything taken out are left out — nothing runs there —
   and the panel says how many.
 - **`expected.tsv`** goes with every tool's files: the model's own figures
