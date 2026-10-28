@@ -1658,6 +1658,10 @@ await test('host status from dcprobe', async () => {
   await page.locator('#host-status input.probe-why-slow').check();
   await page.waitForTimeout(200);
   ok(/dcprobe scan --servers hosts\.txt -o host_status\.tsv --mtu 1500 --why-slow/.test(await pane()), 'why-slow too, when ticked');
+  const [archive] = await Promise.all([page.waitForEvent('download'), page.locator('#host-status button.probe-tar').click()]);
+  const listed = spawnSync('tar', ['-tf', await archive.path()], { encoding: 'utf8' });
+  eq([archive.suggestedFilename(), listed.stdout.trim().split('\n')], ['probe-hosts.tar', ['probe-hosts/', 'probe-hosts/hosts.txt', 'probe-hosts/probe-hosts.sh']],
+     'all of it as one archive: hosts.txt and the script, in a folder of their own');
 
   const scan = [
     '!test\tprobe_reach\tshort=REACH', '!test\tnic_check\tfinding=verdict', '!test\thost_cpu_pct\tunit=% higher=bad agg=last',

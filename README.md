@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.43.0** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.44.0** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -2224,6 +2224,17 @@ dcprobe preflight --servers hosts.txt -o preflight.tsv --tools iperf --ports 530
 dcprobe scan      --servers hosts.txt -o host_status.tsv --nic data --mtu 9000 [--why-slow]
 dcprobe watch     --servers hosts.txt -o host_status.tsv --every 30 --history host_history.tsv
 dcprobe diff      host_status-before.tsv host_status.tsv -o changes.tsv
+```
+
+**Save probe-hosts.tar** puts it all in one archive, as **Run it for real**
+does for a load: `hosts.txt` and `probe-hosts.sh`, executable, in a folder
+of their own. The script says so and stops if `dcprobe` is not on `PATH`;
+otherwise it runs preflight and then one scan (the watch and diff lines are
+there commented, to swap in). **Save probe-hosts.sh** saves the script
+alone.
+
+```sh
+tar -xf probe-hosts.tar && ./probe-hosts/probe-hosts.sh
 ```
 
 `hosts.txt` is the grammar mx and netmesh read — `name[=addr]` a line —
