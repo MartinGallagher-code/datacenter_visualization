@@ -107,6 +107,8 @@ export function modelResults(pairs, { summary = '', txBytes = 0, tool = '', payl
     ['model_offered_gbps', 'unit=Gb/s', 'higher=good', 'decimals=3', 'short=ASKED', 'label="What each flow was asked to send"'],
     ['model_pps', 'unit=pps', 'higher=good', 'decimals=0', 'short=MPPS', 'label="Requests a second the model expects each flow to carry"'],
     ['model_offered_pps', 'unit=pps', 'higher=good', 'decimals=0', 'short=APPS', 'label="Requests a second each flow was asked for"'],
+    ['model_request_gbps', 'unit=Gb/s', 'higher=good', 'decimals=3', 'short=MREQ',
+      'label="The requests alone of what the model expects each flow to carry, without the replies"'],
     ['model_payload_gbps', 'unit=Gb/s', 'higher=good', 'decimals=3', 'short=PAY',
       'label="The payload of what the model expects each flow to carry, as TCP counts it"'],
     ['model_held', 'short=HELD', 'label="Where the model holds a flow back"'],
@@ -123,12 +125,18 @@ export function modelResults(pairs, { summary = '', txBytes = 0, tool = '', payl
   const perPacket = txBytes > 0 ? packetGb(txBytes) : 0;
   const out = new Map();
   const into = new Map();
+  // With replies on, what a host sends is its requests and the replies it
+  // owes: a tool that counts its requests alone (mx_request_gbps) is set
+  // against these.
+  const replies = [...pairs.values()].some((p) => p.gbps !== null && p.requestGbps !== undefined
+    && Math.abs(p.gbps - p.requestGbps) > 1e-12);
   for (const pair of pairs.values()) {
     const tags = `peer=${pair.dst.path}\trun=model`;
     const row = (name, v) => rows.push(`${name}\t${pair.src.path}\t${num(v)}\t${tags}`);
     if (pair.gbps !== null) {
       row('model_gbps', pair.gbps);
       row('model_offered_gbps', pair.offered);
+      if (replies) row('model_request_gbps', pair.requestGbps);
       // What a TCP tool reports of it: its payload, the rest headers and framing.
       if (payloadShare > 0) row('model_payload_gbps', pair.gbps * payloadShare);
       out.set(pair.src, (out.get(pair.src) || 0) + pair.gbps);

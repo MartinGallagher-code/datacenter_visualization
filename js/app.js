@@ -6,7 +6,7 @@
 import { compileQuery, applyFilter } from './filter.js';
 import { layout } from './layout.js';
 import { looksLikeLayout, parseLayout } from './parse.js';
-import { Renderer, countDescendants } from './render.js';
+import { Renderer, countDescendants, setTheme } from './render.js';
 import {
   bindOverlay, clearOverlayCache, isStandardized, offScale, overlayValue, parseResults,
   readingText, recomputeDomain, recomputeStats,
@@ -2871,6 +2871,32 @@ function overlayNamed(name, source) {
   return null;
 }
 
+// A packet tool's agent at a core's worth is its own ceiling: mx's agent is
+// Python, one core a worker, and short of the model for want of CPU looks
+// just like short for want of a cable.
+const AGENT_PEGGED = 90;
+
+/**
+ * Of the hosts that fell short, those whose agent was pegged, as the run's
+ * own agent_cpu (mx_agent_cpu, netmesh's agent_cpu) read: a caveat, or none.
+ */
+function agentCeiling(result, measured) {
+  const all = [...state.overlays.values()].filter((o) => /agent_cpu$/i.test(o.name) && o.numeric);
+  const cpu = all.find((o) => o.source === measured.source) || all[0];
+  if (!cpu) return [];
+  const short = result.hosts.filter((h) => h.verdict === 'short').map((h) => h.el);
+  if (!short.length) return [];
+  const pegged = short.filter((el) => {
+    const r = overlayValue(cpu, el);
+    return r && r.value >= AGENT_PEGGED;
+  });
+  if (!pegged.length) return [];
+  const names = pegged.slice(0, 4).map((el) => el.name).join(', ') + (pegged.length > 4 ? ', …' : '');
+  return [`${pegged.length === short.length ? 'every one' : `${pegged.length}`} of the ${short.length} host${short.length === 1 ? '' : 's'} `
+    + `that fell short had its agent at ${AGENT_PEGGED}% of a core or more (${cpu.name}: ${names}) -- the agent, not the network, `
+    + 'set the ceiling there: more workers (mx start --workers), more --streams, or bigger packets'];
+}
+
 /** An expected.tsv's figures as the model's pairs. */
 function filePairs(anchor) {
   const pairs = new Map();
@@ -2880,13 +2906,18 @@ function filePairs(anchor) {
     for (const f of flowsOf(overlay, state.model).flows) {
       const key = `${f.src.key}\u0000${f.dst.key}`;
       let pair = pairs.get(key);
-      if (!pair) pairs.set(key, (pair = { src: f.src, dst: f.dst, gbps: null, offered: null, payload: null, pps: null, offeredPps: null, held: new Set() }));
+      if (!pair) {
+        pairs.set(key, (pair = {
+          src: f.src, dst: f.dst, gbps: null, offered: null, payload: null, requestGbps: null, pps: null, offeredPps: null, held: new Set(),
+        }));
+      }
       fn(pair, f.value);
     }
   };
   each(of('model_gbps'), (p, v) => { p.gbps = v; });
   each(of('model_offered_gbps'), (p, v) => { p.offered = v; });
   each(of('model_payload_gbps'), (p, v) => { p.payload = v; });
+  each(of('model_request_gbps'), (p, v) => { p.requestGbps = v; });
   each(of('model_pps'), (p, v) => { p.pps = v; });
   each(of('model_offered_pps'), (p, v) => { p.offeredPps = v; });
   const held = of('model_held');
@@ -2957,11 +2988,22 @@ function compareNow(measured, against, gen, tolerance) {
   const tcp = terms === 'gbps' && /^iperf_/i.test(measured.name);
   const liveShare = tcpPayloadShare(state.runFiles.mtu);
   let share = null;
+  // A packet tool's requests alone (mx_request_gbps) leave out the replies
+  // each host sends back: set against the model's requests, not its egress.
+  const requestsOnly = terms === 'gbps' && /request/i.test(measured.name);
+  let withoutReplies = false;
   for (const [key, p] of pairs) {
     let value = terms === 'gbps' ? p.gbps : p.pps;
     if (value === null) continue;
     let offered = terms === 'gbps' ? p.offered : p.offeredPps;
     if (offered === null) offered = value;
+    if (requestsOnly && p.requestGbps !== null && p.requestGbps !== undefined && Math.abs(p.requestGbps - value) > 1e-12) {
+      withoutReplies = true;
+      offered = p.requestOffered !== undefined && p.requestOffered !== null ? p.requestOffered : offered * (value > 0 ? p.requestGbps / value : 0);
+      value = p.requestGbps;
+      // A pair the replies alone travel sends no requests: not a flow of its.
+      if (value === 0 && (p.requests === false || p.pps === null)) continue;
+    }
     if (tcp) {
       share = p.payload !== null && p.payload !== undefined && p.gbps > 0 ? p.payload / p.gbps : liveShare;
       value *= share;
@@ -2970,6 +3012,10 @@ function compareNow(measured, against, gen, tolerance) {
     model.set(key, { src: p.src, dst: p.dst, value, offered, held: p.held });
   }
   const caveats = [];
+  if (withoutReplies) {
+    caveats.push(`${measured.name} counts requests only: it is set against the model’s requests, without the replies `
+      + 'each host sends back -- egress (mx_egress_gbps) is the figure with them');
+  }
   if (tcp && share !== null) {
     caveats.push(`iperf counts TCP payload: it is set against the model’s payload, ${(share * 100).toFixed(1)}% of what `
       + 'the model puts on the cables -- the rest is headers and framing');
@@ -2990,7 +3036,7 @@ function compareNow(measured, against, gen, tolerance) {
     let gt = 0;
     for (const h of hosts) if (h.model !== null && h.measured !== null) { mt += h.model; gt += h.measured; }
     result.totals = { model: mt, measured: gt, offered: 0, modelAll: [...modelOut.values()].reduce((a, b) => a + b, 0) };
-    return { result, suspects: [], unit: unitText, kind, modelName, caveats };
+    return { result, suspects: [], unit: unitText, kind, modelName, caveats, ceiling: agentCeiling(result, measured) };
   }
   const measuredMap = new Map();
   for (const f of flowsOf(measured, state.model).flows) {
@@ -3011,7 +3057,7 @@ function compareNow(measured, against, gen, tolerance) {
   const t = state.traffic;
   const opts = { split: t.split, connections: t.connections, seed: t.seed, down: state.takenOut() };
   const found = suspects(result, (flows) => routeTraffic(state.model, flows, opts).loads);
-  return { result, suspects: found, unit: unitText, kind, modelName, caveats };
+  return { result, suspects: found, unit: unitText, kind, modelName, caveats, ceiling: agentCeiling(result, measured) };
 }
 
 // A prober's packet: netmesh's are 64 bytes, and come back the same size.
@@ -3187,6 +3233,7 @@ function compareSummary(cmp) {
   for (const x of result.hosts) if (h[x.verdict] !== undefined) h[x.verdict]++;
   lines.push(`${result.hosts.length.toLocaleString()} hosts: ${h.ok} as modeled, ${h.short} short, ${h.over} over`
     + `${h.silent ? `, ${h.silent} with nothing measured` : ''}`);
+  for (const line of cmp.ceiling || []) lines.push(line);
   return lines;
 }
 
@@ -3241,6 +3288,30 @@ function saveText(name, text, type = 'text/plain') {
 $('editor-download').addEventListener('click', () => {
   const text = $('editor').hidden ? state.layoutText : $('editor-text').value;
   saveText(`${(state.model.title || 'layout').replace(/[^\w.-]+/g, '_')}.dc`, text);
+});
+
+// --------------------------------------------------------------------- theme
+// Dark, as it always was, or light: the stylesheet's colours by the root's
+// data-theme, the canvas's by setTheme. Kept from one visit to the next.
+
+const THEME_STORE = 'dcviewer.theme';
+
+function applyTheme(name) {
+  const which = setTheme(name);
+  if (which === 'light') document.documentElement.dataset.theme = 'light';
+  else delete document.documentElement.dataset.theme;
+  $('btn-theme').textContent = which === 'light' ? 'Dark' : 'Light';
+  $('btn-theme').title = `${which === 'light' ? 'Dark' : 'Light'}: the panels and the floor plan both, kept for next time`;
+  return which;
+}
+
+let theme = 'dark';
+try { theme = localStorage.getItem(THEME_STORE) === 'light' ? 'light' : 'dark'; } catch { /* stays dark */ }
+theme = applyTheme(theme);
+$('btn-theme').addEventListener('click', () => {
+  theme = applyTheme(theme === 'light' ? 'dark' : 'light');
+  try { localStorage.setItem(THEME_STORE, theme); } catch { /* not fatal */ }
+  invalidate();
 });
 
 // -------------------------------------------------------------------- panels

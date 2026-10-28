@@ -15,24 +15,48 @@ import { colorFor, contrastInk, ramp } from './palette.js';
 import { formatValue, isStandardized, overlayValue, zRangeOf, zScore } from './results.js';
 import { distanceTo, piecesOf, routeCables } from './route.js';
 
-const THEME = {
-  bg: '#0d1117',
-  // The edge marker for a reading the colour ramp could not reach.
-  offScale: '#f0f6fc',
-  containerFill: 'rgba(255,255,255,0.022)',
-  containerStroke: 'rgba(255,255,255,0.10)',
-  labelBand: 'rgba(255,255,255,0.05)',
-  leafFill: '#2b3240',
-  leafStroke: 'rgba(0,0,0,0.45)',
-  ink: '#c9d1d9',
-  inkDim: '#8b949e',
-  selected: '#f5d442',
-  picked: '#ff6bd5',
-  hover: 'rgba(255,255,255,0.55)',
-  hoverCable: '#ffffff',
-  gaugeTrack: 'rgba(0,0,0,0.55)',
-  match: '#4fa3ff',
+// The two looks. THEME is whichever is in force, filled in place by
+// setTheme, so every draw reads the current one.
+const THEMES = {
+  dark: {
+    bg: '#0d1117',
+    // The edge marker for a reading the colour ramp could not reach.
+    offScale: '#f0f6fc',
+    containerFill: 'rgba(255,255,255,0.022)',
+    containerStroke: 'rgba(255,255,255,0.10)',
+    labelBand: 'rgba(255,255,255,0.05)',
+    leafFill: '#2b3240',
+    leafStroke: 'rgba(0,0,0,0.45)',
+    ink: '#c9d1d9',
+    inkDim: '#8b949e',
+    selected: '#f5d442',
+    picked: '#ff6bd5',
+    hover: 'rgba(255,255,255,0.55)',
+    hoverCable: '#ffffff',
+    gaugeTrack: 'rgba(0,0,0,0.55)',
+    match: '#4fa3ff',
+    emptyFill: 'rgba(255,255,255,0.04)',
+  },
+  light: {
+    bg: '#f6f8fa',
+    offScale: '#1f2328',
+    containerFill: 'rgba(0,0,0,0.025)',
+    containerStroke: 'rgba(0,0,0,0.16)',
+    labelBand: 'rgba(0,0,0,0.05)',
+    leafFill: '#d0d7de',
+    leafStroke: 'rgba(0,0,0,0.30)',
+    ink: '#1f2328',
+    inkDim: '#59636e',
+    selected: '#bf8700',
+    picked: '#d6249f',
+    hover: 'rgba(0,0,0,0.55)',
+    hoverCable: '#000000',
+    gaugeTrack: 'rgba(0,0,0,0.15)',
+    match: '#0969da',
+    emptyFill: 'rgba(0,0,0,0.04)',
+  },
 };
+const THEME = { ...THEMES.dark };
 
 // Labels are drawn at px/scale world units, so they render at exactly px
 // SCREEN pixels: the ceiling is what a label can grow to, however far you
@@ -44,12 +68,29 @@ const TEXT_MAX = 30;
 // Enough to read a floor at a glance; past this the marks are the noise.
 const MAX_ENDPOINT_MARKS = 4000;
 
-const KIND_TINT = {
-  dc: 'rgba(79,163,255,0.05)',
-  room: 'rgba(79,163,255,0.04)',
-  row: 'rgba(255,255,255,0.03)',
-  rack: 'rgba(255,255,255,0.05)',
+const KIND_TINTS = {
+  dark: {
+    dc: 'rgba(79,163,255,0.05)',
+    room: 'rgba(79,163,255,0.04)',
+    row: 'rgba(255,255,255,0.03)',
+    rack: 'rgba(255,255,255,0.05)',
+  },
+  light: {
+    dc: 'rgba(9,105,218,0.05)',
+    room: 'rgba(9,105,218,0.04)',
+    row: 'rgba(0,0,0,0.03)',
+    rack: 'rgba(0,0,0,0.045)',
+  },
 };
+const KIND_TINT = { ...KIND_TINTS.dark };
+
+/** The look the canvas draws in: 'dark' or 'light'. */
+export function setTheme(name) {
+  const which = THEMES[name] ? name : 'dark';
+  Object.assign(THEME, THEMES[which]);
+  Object.assign(KIND_TINT, KIND_TINTS[which]);
+  return which;
+}
 
 export class Renderer {
   constructor(canvas, state) {
@@ -403,7 +444,7 @@ export class Renderer {
       const color = reading ? colorFor(overlay, reading) : null;
       const sx = x + sliceW * i;
 
-      ctx.fillStyle = color || base || 'rgba(255,255,255,0.04)';
+      ctx.fillStyle = color || base || THEME.emptyFill;
       ctx.fillRect(sx, y, sliceW, h);
 
       // Past the end of the ramp the colour stops changing, so -3.1σ and

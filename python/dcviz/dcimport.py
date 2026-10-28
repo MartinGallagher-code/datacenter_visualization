@@ -213,7 +213,99 @@ def detect_tidy(fieldnames):
     return None
 
 
-def read_tidy(path, out):
+# netmesh's agents start and stop host by host -- `netmesh start` and `stop`
+# reach them over ssh, --jobs at a time -- so the first and last seconds of a
+# run are not a mesh: a probe to a peer not yet up, or already gone, is sent
+# and never answered, and reads as loss on a network that lost nothing. The
+# rows imported are the ones written while every agent was running, read off
+# the reports exactly as netmesh's own summary reads them (binnacle's
+# netmesh.steady_span): the first row of the last host of the fleet's start
+# to the last row of the first host of its stop, strictly between, a host
+# further than this from the rest being not the fleet starting or stopping
+# -- one that came late, or died -- whose loss stays in.
+EDGE_GAP_MIN = 15
+DEFAULT_INTERVAL = 1.0
+
+
+def _stamp(row):
+    try:
+        return int(float(row.get("ts") or 0))
+    except ValueError:
+        return 0
+
+
+def report_interval(rows):
+    """The agents' report interval: the median step between one host's
+    consecutive row stamps."""
+    seen = {}
+    for r in rows:
+        t = _stamp(r)
+        if t and r.get("host"):
+            seen.setdefault(r["host"], set()).add(t)
+    steps = []
+    for times in seen.values():
+        ts = sorted(times)
+        steps.extend(b - a for a, b in zip(ts, ts[1:]))
+    if not steps:
+        return DEFAULT_INTERVAL
+    steps.sort()
+    m = len(steps) // 2
+    return steps[m] if len(steps) % 2 else (steps[m - 1] + steps[m]) / 2.0
+
+
+def steady_span(rows):
+    """(start, end): rows stamped strictly between were written while every
+    agent of the fleet's start and stop was running; None when there is no
+    fleet to wait for."""
+    spans = {}
+    for r in rows:
+        host, t = r.get("host"), _stamp(r)
+        if not host or not t:
+            continue
+        lo, hi = spans.get(host, (t, t))
+        spans[host] = (min(lo, t), max(hi, t))
+    if len(spans) < 2:
+        return None
+    gap = max(EDGE_GAP_MIN, 3 * report_interval(rows))
+
+    def edge(times):
+        at = times[0]
+        for t in times[1:]:
+            if abs(t - at) >= gap:
+                break
+            at = t
+        return at
+    start = edge(sorted(lo for lo, _ in spans.values()))
+    end = edge(sorted((hi for _, hi in spans.values()), reverse=True))
+    return (start, end) if start < end else None
+
+
+def window_rows(rows):
+    """(rows, note): the rows written while every agent ran, and what was
+    left out in words -- or every row and '' when there was nothing to trim,
+    or trimming would leave no probe rows."""
+    span = steady_span(rows)
+    if span:
+        lo, hi = span
+        kept = [r for r in rows if lo < _stamp(r) < hi]
+        if any((r.get("dir") or "").strip() == "tx" for r in kept):
+            stamps = [_stamp(r) for r in rows if _stamp(r)]
+            kept_ts = [_stamp(r) for r in kept]
+            parts = []
+            if min(kept_ts) > min(stamps):
+                parts.append("the first %ds, while the agents started" % (min(kept_ts) - min(stamps)))
+            if max(kept_ts) < max(stamps):
+                parts.append("the last %ds, while they stopped" % (max(stamps) - max(kept_ts)))
+            return kept, ("measured while every agent was running; left out: %s"
+                          % " and ".join(parts)) if parts else ""
+    return rows, ""
+
+
+def read_tidy(path, out, whole_run=False):
+    """Every netmesh report row under `path` into `out`, but those written
+    while agents were starting or stopping (unless `whole_run`); returns
+    what kind of reports they were and what was left out."""
+    rows = []
     for filename in csv_files(path, "reports directory"):
         with io.open(filename, "r", encoding="utf-8-sig", newline="") as fh:
             reader = csv.DictReader(fh)
@@ -226,9 +318,13 @@ def read_tidy(path, out):
                     " and iperf_orchestrator runs by its own `export-overlay`,"
                     " not imported here)"
                     % (filename, ",".join(reader.fieldnames or [])))
-            for row in reader:
-                _tidy_row(row, out)
-    return "netmesh"
+            rows.extend(reader)
+    note = ""
+    if not whole_run:
+        rows, note = window_rows(rows)
+    for row in rows:
+        _tidy_row(row, out)
+    return "netmesh", note
 
 
 def _tidy_row(row, out):
@@ -286,6 +382,10 @@ def main(argv=None):
                     help="results file to append to ('-' for stdout)")
     ap.add_argument("--tidy", metavar="PATH", required=True,
                     help="netmesh reports/ directory, or one report csv")
+    ap.add_argument("--whole-run", action="store_true",
+                    help="import every row, the seconds while the agents "
+                         "started and stopped too (by default those are left "
+                         "out: a peer not yet up, or already gone, reads as loss)")
     ap.add_argument("--reduce", action="store_true",
                     help="one sample per host per metric (median) instead of "
                          "one per measured row")
@@ -300,7 +400,8 @@ def main(argv=None):
     args = ap.parse_args(argv)
 
     out = Out()
-    source_label = "%s reports" % read_tidy(args.tidy, out)
+    kind, note = read_tidy(args.tidy, out, whole_run=args.whole_run)
+    source_label = "%s reports" % kind
 
     if args.reduce:
         out.reduce()
@@ -314,6 +415,9 @@ def main(argv=None):
         clean(target, "target")
 
     lines = out.lines(with_meta=not args.no_meta)
+    if note and lines:
+        # Said in the file too: a month later, its numbers are of this span.
+        lines.insert(0, "# dcimport %s" % note)
 
     if args.dry_run or args.output == "-":
         for line in lines:
@@ -329,6 +433,8 @@ def main(argv=None):
             "dcimport: %s %d line(s) from %s -- %d sample(s), %d test(s): %s\n"
             % (where, written, source_label, len(out.samples), len(tests),
                " ".join(tests) or "none"))
+        if note:
+            sys.stderr.write("dcimport: %s\n" % note)
 
     if not out.samples:
         sys.stderr.write("dcimport: nothing imported\n")

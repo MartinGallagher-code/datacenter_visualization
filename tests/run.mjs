@@ -3216,6 +3216,37 @@ if (python.error) {
   ok(nm.out.includes('peer=wr01r01u02'), 'netmesh keeps the peer it measured');
   ok(/^agent_cpu\t/m.test(nm.out), 'netmesh agent cpu comes from its dir=host row');
 
+  // The edges of a run are not a mesh: c comes up one 5 s report after a and b
+  // and goes down one before, and a's and b's probes to it then go unanswered
+  // -- 100% loss on a network that lost nothing. Imported, those rows are left
+  // out, as netmesh's own summary leaves them out; --whole-run keeps them.
+  const edgeDir = mkdtempSync(join(tmpdir(), 'dcimport-edges-'));
+  const head = readFileSync(join(fixtures, 'netmesh-reports/wr01r01u01.csv'), 'utf8').split('\n')[0];
+  const span = { a: [1000, 1060], b: [1000, 1060], c: [1005, 1055] };
+  for (const [host, [lo, hi]] of Object.entries(span)) {
+    const rows = [head];
+    for (let t = lo; t <= hi; t += 5) {
+      for (const peer of Object.keys(span)) {
+        if (peer === host) continue;
+        const up = t > span[peer][0] && t <= span[peer][1];
+        rows.push([t, host, 'tx', peer, 'udp', 64, 10, 50, up ? 50 : 0, up ? '0.000' : '100.000',
+          40, 60, 58, 90, 120, 5, 9000, 'confirmed', '', '', '', ''].join(','));
+      }
+      rows.push([t, host, 'host', '*', '', '', '', '', '', '', '', '', '', '', '', '', '', '', 12, '', '', ''].join(','));
+    }
+    writeFileSync(join(edgeDir, `${host}.csv`), `${rows.join('\n')}\n`);
+  }
+  const lossOf = (out) => samplesOf(out).filter((l) => l.startsWith('loss\t')).map((l) => Number(l.split('\t')[2]));
+  const edged = dcimport(['--tidy', edgeDir, '--no-meta', '--whole-run']);
+  ok(lossOf(edged.out).some((v) => v === 100), 'every row: the seconds c was not up read as 100% loss');
+  const steady = dcimport(['--tidy', edgeDir, '--no-meta']);
+  eq(steady.code, 0, 'dcimport exits 0 on a run with edges');
+  ok(lossOf(steady.out).length > 0 && lossOf(steady.out).every((v) => v === 0), 'measured while every agent ran: no loss');
+  ok(/^# dcimport measured while every agent was running; left out: the first 10s, while the agents started and the last 10s, while they stopped$/m.test(steady.out),
+     `and the file says what was left out  (${steady.out.split('\n')[0]})`);
+  ok(/left out: the first 10s/.test(steady.err), 'as does the summary');
+  rmSync(edgeDir, { recursive: true, force: true });
+
   // --reduce collapses each host's peers to one median sample per metric.
   const full = dcimport(['--tidy', join(fixtures, 'netmesh-reports'), '--no-meta']);
   const cut = dcimport(['--tidy', join(fixtures, 'netmesh-reports'), '--no-meta', '--reduce']);
@@ -5290,6 +5321,10 @@ if (python.error) {
      'a pair only replies travel has no requests a second -- not its reply bits read as requests');
   ok(ppsOf('model_gbps', 'r2/h1', 'r1/h1') > 0, 'though its bits are still on the cables');
   eq(ppsOf('model_pps', 'r2/h1', 'r1/h2'), 1000, 'and r2h1 is expected to send its own 1000 a second, not 5354');
+  ok(Math.abs(ppsOf('model_request_gbps', 'r1/h1', 'r2/h1') - 1000 * packetGb(64)) < 1e-9 && ppsOf('model_request_gbps', 'r2/h1', 'r1/h1') === 0,
+     'with replies on, each flow’s requests alone too: what mx_request_gbps is set against');
+  ok(Math.abs(ppsOf('model_gbps', 'r2/h1', 'r1/h1') - 1000 * packetGb(500)) < 1e-9, 'beside its bits with the replies');
+  ok(!/model_request_gbps/.test(text.split('\n').filter((l) => !l.startsWith('!test')).join('\n')), 'and none without replies: the requests are all of it');
   // A bit rate, sent as a tool's packets, still turns into requests a second.
   const bitPairs = modelPairs([{ gen: true, id: 4, src: h('r1h1'), dst: h('r1h2'), value: 1 }], 1);
   ok(Math.abs(/^model_pps\t\S+\t(\S+)/m.exec(modelResults(bitPairs, { txBytes: 1472 }))[1] - 1e9 / (1538 * 8)) < 1,

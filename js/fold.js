@@ -18,18 +18,18 @@ function load() {
   }
 }
 
-const folds = load();
+const folded = load();
 
 function save() {
-  try { localStorage.setItem(STORE, JSON.stringify([...folds])); } catch { /* not fatal */ }
+  try { localStorage.setItem(STORE, JSON.stringify([...folded])); } catch { /* not fatal */ }
 }
 
-export const isFolded = (key) => folds.has(key);
+export const isFolded = (key) => folded.has(key);
 
 export function setFolded(key, on) {
-  if (on === folds.has(key)) return;
-  if (on) folds.add(key);
-  else folds.delete(key);
+  if (on === folded.has(key)) return;
+  if (on) folded.add(key);
+  else folded.delete(key);
   save();
 }
 
@@ -51,19 +51,42 @@ const CONTROL = 'button, input, select, textarea, label, a, .pick, .overlay-x';
 export function makeFold(box, head, key, { onChange } = {}) {
   box.classList.add('fold');
   head.classList.add('fold-head');
+  box.dataset.foldKey = key;
   const apply = () => {
     const off = isFolded(key);
     box.classList.toggle('off', off);
-    head.title = off ? 'Show this' : 'Hide this';
+    head.title = `${off ? 'Show this' : 'Hide this'} · Alt+click: this one alone, and again: all of them`;
+    if (onChange) onChange(!off);
   };
+  shows.set(box, apply);
   head.addEventListener('click', (e) => {
     if (e.target.closest(CONTROL) && e.target.closest(CONTROL) !== head) return;
+    if (e.altKey) {
+      alone(box);
+      return;
+    }
     setFolded(key, !isFolded(key));
     apply();
-    if (onChange) onChange(!isFolded(key));
   });
   apply();
   return box;
+}
+
+// Each fold's own way of showing what it now is, by its box.
+const shows = new WeakMap();
+
+/**
+ * Alt+click: fold everything beside `box` -- the panel's other sections, or
+ * the other lists in its tile -- and open it; with that already so, open
+ * them all again.
+ */
+function alone(box) {
+  const scope = box.classList.contains('block')
+    ? [...(box.closest('.panel') || document).querySelectorAll(':scope > .block.fold')]
+    : [...box.parentElement.children].filter((b) => b.classList.contains('fold'));
+  const already = !isFolded(box.dataset.foldKey) && scope.every((b) => b === box || isFolded(b.dataset.foldKey));
+  for (const b of scope) setFolded(b.dataset.foldKey, already ? false : b !== box);
+  for (const b of scope) if (shows.has(b)) shows.get(b)();
 }
 
 /**

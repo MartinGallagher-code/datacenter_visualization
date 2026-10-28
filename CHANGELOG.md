@@ -11,6 +11,47 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.41.1 — 2026-10-27
+
+- **dcimport leaves out the seconds netmesh's agents took to start and
+  stop.** They come up and go down host by host over ssh, and a probe to
+  a peer not yet up, or already gone, went in as 100% loss on a network
+  that lost nothing. Only the rows written while every agent was running
+  are imported now, read off the reports the way netmesh's own summary
+  reads them (binnacle's fix for the same edge), and dcimport says what it
+  left out. `--whole-run` keeps every row.
+- 1.41.0 and 1.41.1 share one pull request.
+
+## 1.41.0 — 2026-10-27
+
+- **mx's requests alone are set against the model's requests.** With
+  replies on, the model's figure for what a host sends is its requests and
+  the replies it owes; `mx_request_gbps` counts the requests alone, so it
+  read short however well the run went -- a fifth of the model with 64 B
+  requests answered by 500 B. It is now set against the requests, which
+  `expected.tsv` carries as `model_request_gbps` when there are replies,
+  and the panel says so, pointing at `mx_egress_gbps` for the figure with
+  the replies.
+- **An agent at its ceiling, said so.** With the run's `mx_agent_cpu` (or
+  netmesh's `agent_cpu`) loaded, the hosts that fell short with their agent
+  at 90% of a core or more are named in amber at the top of the
+  comparison, and in the saved vs-model.tsv: the agent, not the network,
+  set their ceiling.
+- **The Inspector comes first** in the right panel, and its own parts --
+  Readings, Cable load, Findings, Measured flows -- sit a step below the
+  panel's sections in size and colour.
+- **Alt+click a title** to open that section alone, every other beside it
+  folded; Alt+click again to open them all. Lists inside a section do the
+  same among themselves.
+- **Take out at random** is a line a kind -- how many, of which, among
+  what -- rather than two.
+- **A light look**: the Light button in the top bar turns the panels and
+  the floor plan light, Dark turns them back, and the choice is kept.
+- 1.41.0 was first given to a change that kept mx's start and stop out of
+  its measurement from the run files (#76). That was fixed in mx itself
+  instead (matrix_orchestrator 1.11.1), #76 was closed unmerged, and the
+  number is this release's.
+
 ## 1.40.1 — 2026-10-27
 
 - **A pair only replies travel expected requests it never sends.** With
