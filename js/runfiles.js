@@ -415,18 +415,17 @@ export function buildNetmesh(made, { seconds = 60, connections = 1, summary = ''
       `MTU ${mtu} is not given to netmesh, which finds each path’s MTU itself: it is what the model expects every path to carry, `
         + 'set against what netmesh finds.',
       'Run it alone for the idle network, or with the load after -- for idle first and then under it.',
-      // netmesh's own --bind is one local address, handed to bind() as it
-      // is -- not a pattern each host resolves, as mx's and iperf's are -- so
-      // no one value is right for a fleet, and an interface name is refused.
-      ...(bindFlag(bind) ? [`netmesh's --bind is one local address, not a pattern, so ${bind} is not given to it: its probes go to `
-        + 'the addresses mesh.csv names, so give the hosts addr= on the network to probe. The mx run under it takes --bind as ever.'] : []),
+      ...bindNote(bind),
+      // Before binnacle's fix, netmesh took --bind as one literal address.
+      ...(bindFlag(bind) ? ['netmesh reads --bind as a NIC from the binnacle after 0.8.0; an older netmesh takes only a whole '
+        + `address and refuses ${bind} ("cannot bind ... Name or service not known") -- update it, or leave --bind off its run.`] : []),
     ],
     commands: [
       '# the idle network',
-      `netmesh run --mesh mesh.csv --for ${seconds}`,
+      `netmesh run --mesh mesh.csv --for ${seconds}${bindFlag(bind)}`,
       '# ... or 20 s idle, then under the load (the mx run, with matrix.csv beside it):',
       '# put this line in place of the one above',
-      `# netmesh run --mesh mesh.csv --baseline 20 -- ${mxRun(seconds, connections, bind)}`,
+      `# netmesh run --mesh mesh.csv --baseline 20${bindFlag(bind)} -- ${mxRun(seconds, connections, bind)}`,
       '# what it measured, for the viewer: load netmesh_results.tsv beside the layout',
       'dcimport netmesh_results.tsv --tidy reports/',
     ],

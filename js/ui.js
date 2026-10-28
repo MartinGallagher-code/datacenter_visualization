@@ -2122,8 +2122,7 @@ function renderRunFiles(state, actions) {
   bind.spellcheck = false;
   bind.title = 'The NIC to load, where ssh reaches the hosts over another: an interface name (eth1, mlx5) or part of '
     + 'an address (10.20.), matched against `ip -o -4 addr show` on each host. It goes into the files as --bind -- '
-    + 'iperf’s plan as bind=, mx’s runs as --bind; netmesh’s own --bind takes one address and no pattern, so its run '
-    + 'goes without -- and is kept for next time. Empty: none';
+    + 'iperf’s plan as bind=, mx’s and netmesh’s runs as --bind -- and is kept for next time. Empty: none';
   const bindWhy = el('div', 'bad run-bind-why');
   bind.addEventListener('change', () => {
     const v = bind.value.trim();

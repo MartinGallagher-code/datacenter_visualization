@@ -37,13 +37,14 @@ their shapes are not a promise.
   short is not loaded, and the report says why. Each stamped file gets a
   line in the report: made when and by what, ran when, where and with
   what.
-- **netmesh's runs no longer carry `--bind`.** netmesh's own `--bind` is
-  one local address, given to `bind()` as it is — not an interface name or
-  part of an address that each host resolves, as mx's and iperf's are — so
-  `netmesh run … --bind eth1` was refused, and no one address could suit
-  every host anyway. The mx run under netmesh keeps it, and the notes say
-  why netmesh does not; give the hosts `addr=` on the network to probe.
-  (1.40.1 put it there.) `js/runfiles.js`.
+- **netmesh's `--bind` needs the binnacle after 0.8.0, and the notes say
+  so.** Older netmesh took `--bind` as one literal address, given to
+  `bind()` as it was, so `netmesh run … --bind data` was refused with
+  `cannot bind data:5310 -- Name or service not known`, where mx and iperf
+  read the same `data` as a NIC. binnacle now reads it the same way, and
+  points each host's probes at its peers' matching addresses
+  (MartinGallagher-code/binnacle#70); the netmesh notes name the version
+  and what an older one does. `js/runfiles.js`.
 - **netmesh's files say what it takes of the load generator, and what it
   does not.** Its notes and `mesh.csv` opened with the load as the
   generator describes it — "1000 pps from each host", "6 Gb/s offered" —
@@ -51,8 +52,8 @@ their shapes are not a promise.
   whatever the rate. They now say it takes only the pairs, the seconds and
   the connections (as `flows=`); that the rate, its unit and the packet
   sizes go only to the mx run under it; and that the MTU is what the model
-  expects netmesh to find, not something netmesh is given. The MTU and NIC
-  boxes' tooltips say the same. `js/runfiles.js`, `js/ui.js`.
+  expects netmesh to find, not something netmesh is given. The MTU box's
+  tooltip says the same. `js/runfiles.js`, `js/ui.js`.
 
 ## 1.41.1 — 2026-10-27
 

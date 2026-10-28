@@ -1456,8 +1456,7 @@ await test('--bind goes into the run files and is kept', async () => {
     eq(await page.inputValue('#load-gen input.run-bind'), 'mlx5', 'and it is there next time');
     await page.locator('#load-gen button.run-tool-netmesh').click();
     await page.waitForTimeout(300);
-    ok(/netmesh run --mesh mesh\.csv --for 60\n/.test(await files()) && /-- mx run .* --bind mlx5/.test(await files())
-       && /netmesh's --bind is one local address/.test(await files()), 'netmesh itself does not take it -- one address, no pattern -- the mx run under it does');
+    ok(/netmesh run --mesh mesh\.csv --for 60 --bind mlx5/.test(await files()), 'netmesh runs on it too');
     await page.fill('#load-gen input.run-bind', '');
     await page.locator('#load-gen input.run-bind').dispatchEvent('change');
     await page.waitForTimeout(300);
