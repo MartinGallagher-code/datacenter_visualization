@@ -11,6 +11,80 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.43.0 — 2026-10-28
+
+1.42.0 shares a pull request with this, so it is not published on its own.
+
+- **`dcprobe`: how every host is doing, as results the viewer paints.**
+  A new tool beside `dcadd` and `dcimport` (`tools/dcprobe`, and `dcprobe`
+  on `PATH` from the package). One shell script goes to each host over
+  ssh — nothing installed, nothing left behind — and reads `/proc` and
+  `/sys` twice a second apart. `scan` makes one pass; `watch` a pass every
+  N seconds, rewriting its file so it always says how things are now
+  (`--history` keeps every pass); `preflight` checks a host can run the
+  load (ssh, python3, iperf, `--bind`, the run's ports, the clock, open
+  files); `diff` says what changed between two scans. It measures load,
+  CPU (busy, iowait, steal), memory, swap, the fullest disk, the kernel's
+  backlog drops, each physical NIC (link, speed, MTU, rates, drops at the
+  NIC and in its rings, errors) against the layout's speed and the run's
+  MTU, kernel errors since the last pass, the busiest processes, and what
+  the host is. `--why-slow` pipes binnacle's why-slow to each host too. A
+  host that does not answer is a sample with ssh's reason, never a gap.
+  `python/dcviz/dcprobe.py` (new), `tools/dcprobe` (new),
+  `pyproject.toml`.
+- **Host status, in the right panel.** It writes dcprobe's `hosts.txt` —
+  each host by the layout's name, at its `addr=`, with its NIC's speed —
+  and the commands, with the run's `--bind` and MTU; and reads a loaded
+  scan back: who did not answer, who is not ready, whose NIC is not as the
+  layout says, what why-slow found, kernel errors, and who is busy,
+  swapping or full, each host a chip a click from the floor plan. Drops,
+  errors and verdicts reach Findings by their own `finding=`.
+  `js/probe.js` (new), `js/ui.js`, `js/app.js`, `index.html`.
+
+## 1.42.0 — 2026-10-28
+
+- **A run carries the layout it was made on.** Run it for real's tar
+  holds the layout as `model.dc`, and `expected.tsv` — so the
+  `mx-run.tsv`, `iperf-run.tsv` or `netmesh-run.tsv` its last step makes —
+  carries it whole as `#~` lines, with its sha256 (`sha256sum model.dc`'s)
+  and how the load was set up: when, by which version, for which tool,
+  the pattern, seconds, connections, MTU, `--bind`, and what was taken
+  out. Every reader of a results file skips `#` lines, so a stamped file
+  loads exactly as before. The script does not wait for `model.dc`: it is
+  kept with the run, not needed to run it. `js/stamp.js` (new),
+  `js/runfiles.js`, `js/app.js`.
+- **The run file says when, where and with what it ran.** The script notes
+  when it began, and its collect step adds `#~ran` lines: started,
+  finished, the host it ran from, and the tool's own `--version` (mx,
+  iperf-orchestrator or netmesh). The collect step is a `{ … } > X-run.tsv`
+  block now rather than one `cat`.
+- **Loading a run file loads its layout.** Into an empty viewer, or over a
+  stand-in built from hostnames, it simply loads; over that very layout
+  the report says it matched; over a different one the viewer asks first,
+  since the layout there and any edit not saved would go — Cancel keeps it
+  and loads the readings onto it, with a warning. A layout dropped with
+  the run file stays. A carried layout that fails its sha256 or was cut
+  short is not loaded, and the report says why. Each stamped file gets a
+  line in the report: made when and by what, ran when, where and with
+  what.
+- **netmesh's `--bind` needs the binnacle after 0.8.0, and the notes say
+  so.** Older netmesh took `--bind` as one literal address, given to
+  `bind()` as it was, so `netmesh run … --bind data` was refused with
+  `cannot bind data:5310 -- Name or service not known`, where mx and iperf
+  read the same `data` as a NIC. binnacle now reads it the same way, and
+  points each host's probes at its peers' matching addresses
+  (MartinGallagher-code/binnacle#70); the netmesh notes name the version
+  and what an older one does. `js/runfiles.js`.
+- **netmesh's files say what it takes of the load generator, and what it
+  does not.** Its notes and `mesh.csv` opened with the load as the
+  generator describes it — "1000 pps from each host", "6 Gb/s offered" —
+  as if netmesh sent it. It sends ten 64-byte probes a second a pair,
+  whatever the rate. They now say it takes only the pairs, the seconds and
+  the connections (as `flows=`); that the rate, its unit and the packet
+  sizes go only to the mx run under it; and that the MTU is what the model
+  expects netmesh to find, not something netmesh is given. The MTU box's
+  tooltip says the same. `js/runfiles.js`, `js/ui.js`.
+
 ## 1.41.1 — 2026-10-27
 
 - **dcimport leaves out the seconds netmesh's agents took to start and

@@ -57,6 +57,7 @@ Issues = "https://github.com/MartinGallagher-code/datacenter_visualization/issue
 dcviz = "dcviz.cli:main"
 dcadd = "dcviz.dcadd:main"
 dcimport = "dcviz.dcimport:main"
+dcprobe = "dcviz.dcprobe:main"
 
 # One version for the whole project, read rather than restated. The other
 # half of the pair is VERSION in js/version.js; tests/run.mjs fails if they

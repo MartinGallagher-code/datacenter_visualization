@@ -12,7 +12,7 @@ import {
   readingText, recomputeDomain, recomputeStats,
 } from './results.js';
 import {
-  cableTip, fillWarnings, formatPps, formatTime, renderBuild, renderCableLoad, renderCompare, renderFindings, renderInspector, renderLive, renderLoadGen,
+  cableTip, fillWarnings, formatPps, formatTime, renderBuild, renderCableLoad, renderCompare, renderFindings, renderHostStatus, renderInspector, renderLive, renderLoadGen,
   hostTip, renderNets, renderNotices, renderOverlays, renderTree, renderWarnings, switchTip,
 } from './ui.js';
 import {
@@ -23,12 +23,14 @@ import { layoutFromHosts, matchesPattern, recordsSince, tailRecords } from './ts
 import { routesBetween } from './paths.js';
 import {
   adaptiveWeights, betweenPicks, busyable, busyOf, randomTakeouts, TAKEOUT_KINDS, explainResults, pathLatency, bitRate, cableKeys, CONNECTION_LIMITS, contend, countersOf, estimateFlows, flowsOf, flowsOver, GEN_LIMITS,
-  findingsOf, generateFlows, hostCapacity, hostsOf, pairedFlows, TARGETED, loadable, loadUnit, mergeResults, packetGb, readsAsLoad, REPLY_IDS, routeEstimate,
+  findingsOf, generateFlows, hostCapacity, hostsFor, hostsOf, pairedFlows, TARGETED, loadable, loadUnit, mergeResults, packetGb, readsAsLoad, REPLY_IDS, routeEstimate,
   routeTraffic, switchLoads, testFlows, trafficKind, viewOf, formatGbps,
 } from './traffic.js';
+import { layoutSha, modelBlock, readStamp, runStamp } from './stamp.js';
 import { VERSION } from './version.js';
 import { makeFold, setFolded } from './fold.js';
-import { bindProblem, mxSizes, RUN_BUILDERS, RUN_LABELS, runPairs, runWhy, tcpPayloadShare } from './runfiles.js';
+import { bindProblem, mxSizes, RUN_BUILDERS, RUN_LABELS, runPairs, runProblem, runWhy, tcpPayloadShare } from './runfiles.js';
+import { PROBE_TESTS, probeFiles, probeSummary } from './probe.js';
 import {
   compareHosts, compareLatency, compareMtu, compareRuns, comparisonResults, DEFAULT_TOLERANCE, LATENCY_UNITS, LOSSY,
   modelPairs, modelResults, suspects,
@@ -152,6 +154,7 @@ const state = {
   // The load generator's run files: which tool's are open, and for how long
   // the commands run it.
   runFiles: { tool: '', seconds: 60, mtu: 1500, bind: storedBind() },
+  probe: { whySlow: false, every: 30 },   // Host status: how dcprobe is to be run
   // Whether anything has been done since the page loaded -- a file dropped
   // or opened, a box typed in, a setting changed, a button pressed -- so a
   // reload would lose it.
@@ -890,6 +893,7 @@ function refreshPanels() {
   renderLoadGen(state, $('load-gen'), actions, { unit: genUnit() });
   renderCableLoad(state, $('cable-load'), actions);
   renderFindings(state, $('findings'), actions);
+  renderHostStatus(state, $('host-status'), actions);
   renderCompare(state, $('compare'), actions);
   renderInspector(state, $('inspector'), actions);
   $('overlay-hint').textContent = state.activeOverlays.length > 1
@@ -1286,6 +1290,40 @@ const actions = {
   // The run files: which tool's are open ('' for none), the run's length,
   // the MTU and the NIC it rides. The NIC is a fleet's, not a run's, so it
   // is kept for next time.
+  setProbe(patch) {
+    state.probe = { ...state.probe, ...patch };
+    refreshPanels();
+  },
+
+  // dcprobe's hosts.txt and commands for the layout's hosts, or why they
+  // cannot have them; null with no hosts at all. Each host goes with the
+  // speed of its fastest NIC, as the layout gives it, and the run's --bind
+  // and MTU, so a scan judges the NIC the run will load.
+  probeFiles() {
+    const { hosts } = hostsFor(state.model);
+    if (!hosts.length) return null;
+    const why = runProblem(hosts);
+    if (why) return { why };
+    const speed = (el) => {
+      let best = 0;
+      for (const link of el.links) {
+        const net = state.model.nets.get(link.net);
+        if (net && net.traffic === false) continue;
+        best = Math.max(best, link.gbps || 0);
+      }
+      return best;
+    };
+    return probeFiles(hosts, {
+      speed, bind: state.runFiles.bind, mtu: state.runFiles.mtu, every: state.probe.every, whySlow: state.probe.whySlow,
+    });
+  },
+
+  // A loaded scan, read back into the lists worth a look; null with none.
+  probeSummary() {
+    if (![...state.overlays.values()].some((o) => PROBE_TESTS.has(o.name))) return null;
+    return probeSummary(new Map([...state.overlays.values()].map((o) => [o.name, o])), state.model);
+  },
+
   setRunFiles(patch) {
     state.runFiles = { ...state.runFiles, ...patch };
     if ('bind' in patch) {
@@ -1999,7 +2037,7 @@ async function boot() {
       state.warnings.push(`could not load results: ${err.message}`);
     }
   }
-  if (texts.length) loadResultsText(texts);
+  if (texts.length) loadResultsText(texts, { replace: adoptRunModel(texts, { layoutArrived: !!layoutUrl }) });
   else { refresh(); showWarnings(); }
 
   // `&build=1` asks for the floor plan to be read out of the names, which is
@@ -2118,6 +2156,81 @@ function uniqueLabels(items) {
   return [...new Set(clashed)];
 }
 
+/**
+ * A run file the load generator made carries the layout it was made on, and
+ * says so: load that layout with the readings, so they land on the floor
+ * plan they were measured against. Nothing to ask when the viewer is empty,
+ * holds only a stand-in built from hostnames, or already holds that very
+ * layout; when it holds another, ask first -- the layout in the viewer, and
+ * any edit not yet saved, would go. A layout that arrived in the same load
+ * is the user's choice and stays. True when a layout was loaded.
+ */
+function adoptRunModel(results, { layoutArrived = false } = {}) {
+  const made = [];
+  for (const r of results) {
+    const stamp = readStamp(r.text);
+    if (!stamp) continue;
+    made.push({ name: r.name, stamp });
+    const said = runSaid(stamp);
+    if (said) note('note', `${r.name}: ${said}`);
+  }
+  const usable = [];
+  for (const m of made) {
+    const model = m.stamp.model;
+    if (!model) continue;
+    if (model.intact) usable.push(m);
+    else {
+      note('warn', `${m.name}: the layout it carries ${model.complete ? 'no longer matches its sha256 -- edited since it was written' : 'is cut short'}, `
+        + 'so it was not loaded');
+    }
+  }
+  if (!usable.length) return false;
+  const shas = [...new Set(usable.map((m) => m.stamp.model.sha256))];
+  if (shas.length > 1) {
+    note('warn', `these results were made on ${shas.length} different layouts (${usable.map((m) => m.name).join(', ')}), `
+      + 'so none of them was loaded in place of the one here');
+    return false;
+  }
+  const { name, stamp: { model, run } } = usable[0];
+  const label = model.name || 'model.dc';
+  const which = `${label}, sha256 ${model.sha256.slice(0, 12)}…`;
+  const here = state.layoutText.trim() ? layoutSha(state.layoutText) : '';
+  if (here === model.sha256) {
+    note('note', `${name}: made on this very layout (${which})`);
+    return false;
+  }
+  if (layoutArrived) {
+    note('warn', `${name}: made on another layout (${which}) than ${state.layoutName || 'the one loaded with it'}, which stays: `
+      + 'you loaded it with them');
+    return false;
+  }
+  const ask = state.model.all.length > 0 && !state.autoLayout;
+  // Both named by their sha256, since an edited layout keeps its file's name.
+  const current = `${state.layoutName || 'from the editor'}, sha256 ${here.slice(0, 12)}…`;
+  if (ask && !window.confirm(`${name} was made on another layout than the one in the viewer: ${which}`
+    + `${run.made ? `, made ${run.made}` : ''}.\n\nLoad that layout in place of this one (${current})? `
+    + 'This one goes, with any edit not saved -- Cancel keeps it, and the results load onto it.')) {
+    note('warn', `${name}: made on another layout (${which}); you kept ${state.layoutName || 'the one in the viewer'}, `
+      + 'so its readings may land on elements that are not the ones they were measured on');
+    return false;
+  }
+  loadLayoutText(model.text, { name: label });
+  push(layoutNotice(label, state.model.all.length, state.model.warnings));
+  note('note', `${label}: the layout ${name} was made on (sha256 ${model.sha256.slice(0, 12)}…), loaded from it`);
+  return true;
+}
+
+/** A run file's stamp in a line: what made it and when, and when and where it ran. */
+function runSaid(stamp) {
+  const { run, ran } = stamp;
+  const parts = [];
+  if (run.made || run.viewer) parts.push(`made ${run.made || ''}${run.viewer ? ` by ${run.viewer}` : ''}${run.tool ? ` for ${run.tool}` : ''}`.replace(/\s+/g, ' ').trim());
+  if (ran.started || ran.finished) parts.push(`ran ${ran.started || '?'} to ${ran.finished || '?'}${ran.host ? ` on ${ran.host}` : ''}`);
+  const tools = Object.entries(ran).filter(([k]) => !['started', 'finished', 'host'].includes(k)).map(([, v]) => v).filter(Boolean);
+  if (tools.length) parts.push(tools.join(', '));
+  return parts.join('; ');
+}
+
 async function ingestFiles(items) {
   state.notices = [];               // the report covers this load, not the last
   const layouts = [];
@@ -2160,7 +2273,8 @@ async function ingestFiles(items) {
     push(layoutNotice(last.name, state.model.all.length, state.model.warnings));
   }
 
-  if (results.length) loadResultsText(results, { replace: layouts.length > 0 });
+  const adopted = results.length ? adoptRunModel(results, { layoutArrived: layouts.length > 0 }) : false;
+  if (results.length) loadResultsText(results, { replace: layouts.length > 0 || adopted });
   else if (layouts.length) showWarnings();
   else if (!state.notices.length) note('warn', 'nothing was loaded: no files arrived');
 
@@ -3265,8 +3379,32 @@ function buildRunFiles(tool, view) {
     rtt: tool === 'netmesh' ? roundTrips(pairs, loadOf(view)) : null,
     mtu: tool === 'netmesh' ? mtu : 0,
   }) : '';
-  const options = { seconds: state.runFiles.seconds, connections: state.traffic.connections, summary, expected, mtu, bind: state.runFiles.bind };
+  // What the run was made from, for the run file: the layout itself and how
+  // the load was set up, so a run loaded months later says what it was.
+  const model = { text: state.layoutText, name: state.layoutName };
+  const stamped = expected ? `${expected}${runStamp(runSetup(tool, summary, mtu))}\n${modelBlock(model.text, model)}\n` : '';
+  const options = {
+    seconds: state.runFiles.seconds, connections: state.traffic.connections, summary, expected: stamped, mtu, bind: state.runFiles.bind, model,
+  };
   return { built: RUN_BUILDERS[tool](made, options), dropped: made.dropped };
+}
+
+/** How a load was set up, as the run file's `#~run` lines record it. */
+function runSetup(tool, summary, mtu) {
+  const paths = [...state.down.els].map((key) => (state.model.byKey.get(key) || { path: key }).path).sort();
+  return {
+    made: new Date().toISOString().replace(/\.\d+Z$/, 'Z'),
+    viewer: `datacenter_visualization ${VERSION}`,
+    tool: RUN_LABELS[tool],
+    layout: state.layoutName || '(the editor)',
+    load: summary,
+    seconds: state.runFiles.seconds,
+    connections: state.traffic.connections,
+    mtu,
+    bind: state.runFiles.bind,
+    out: paths.join(' '),
+    out_cables: state.takenOut().links.map((l) => `${l.net}:${l.a.path}-${l.b.path}`).sort().join(' '),
+  };
 }
 
 /** The generated load's flows as the model has them, by pair, nothing taken out among them. */

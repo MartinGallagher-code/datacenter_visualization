@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.41.1** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.43.0** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -1089,8 +1089,9 @@ mx run --matrix matrix.csv --for 60 --streams 1
 mx export --matrix matrix.csv --peers -o mx_results.tsv
 ```
 
-**Save run-mx.tar** puts all of it — the tool's files, `expected.tsv` and
-the script — in one archive, a folder of its own, the script executable:
+**Save run-mx.tar** puts all of it — the tool's files, `expected.tsv`,
+the layout as `model.dc` and the script — in one archive, a folder of its
+own, the script executable:
 
 ```sh
 tar -xf run-mx.tar && cd run-mx && ./run-mx.sh
@@ -1110,14 +1111,17 @@ into the files by the layout's own names**: load `mx_results.tsv`,
 `iperf_results.tsv` or `netmesh_results.tsv` (made by `dcimport`) beside the
 layout, and compare what ran with what the model said.
 
-- **The NIC to load** goes in the box beside the MTU, as the tools' own
-  `--bind` takes it: an interface name (`eth1`, `mlx5`) or part of an
+- **The NIC to load** goes in the box beside the MTU, as mx's and iperf's
+  `--bind` take it: an interface name (`eth1`, `mlx5`) or part of an
   address (`10.20.`), matched against `ip -o -4 addr show` on each host,
   for a fleet reached over a management NIC whose traffic should ride
   another. It goes into the files — iperf's plans as `bind=`, which every
   command run against the plan reads; mx's and netmesh's runs as
   `--bind`, the mx run under netmesh too — and is kept for next time, so
-  the files need no editing. Empty, there is none. A pattern a shell would
+  the files need no editing. netmesh reads it as a NIC from the binnacle
+  after 0.8.0, which also points each host's probes at its peers' matching
+  addresses; an older netmesh took only a whole address and refused a
+  name (`cannot bind data:5310 -- Name or service not known`). Empty, there is none. A pattern a shell would
   expand (`eth[12]`) goes quoted; one with a space, a quote or shell syntax
   in it is refused, and the box says why.
 - **A host the tools cannot reach by its name** gets an `addr=` — the
@@ -1151,18 +1155,79 @@ layout, and compare what ran with what the model said.
 - **netmesh makes no load.** It measures the network: run alone it probes
   the idle network; `netmesh run --mesh mesh.csv --baseline 20 -- mx run …`
   probes 20 s idle and then under the load, which is the latency the
-  model's queues predict.
+  model's queues predict. Of the generator's settings it takes only **which
+  hosts talk to which** (the pattern, the hosts, the peers), **how long**,
+  and **the connections**, as probe flows a pair (`flows=`). Every pair gets
+  ten 64-byte probes a second whatever the load's rate: the rate, its unit
+  and the request and reply sizes go only to the mx run under it. Nor is
+  the MTU given to it — it finds each path's MTU itself — and the MTU box is
+  what the model expects it to find. Its notes and `mesh.csv` say exactly
+  this, rather than describing the load as if netmesh sent it.
 - Flows to or from anything taken out are left out — nothing runs there —
   and the panel says how many.
 - **`expected.tsv`** goes with every tool's files: the model's own figures
   for this load — what it expects each flow to carry (`model_gbps`, and
   `model_pps` for a packet tool), what each was asked to send
   (`model_offered_gbps`), where it holds one back (`model_held`), and what
-  each host sends and takes in. The last command collects the run with it:
+  each host sends and takes in. The last command collects the run with it,
+  stamped with when the run began and ended, the host it ran from and the
+  tool's own `--version`:
 
   ```sh
-  cat expected.tsv mx_results.tsv > mx-run.tsv    # one file: the run and its model
+  {
+    cat expected.tsv
+    echo "#~ran started ${started:-unknown}"      # set as the script begins
+    echo "#~ran finished $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo "#~ran host $(hostname 2>/dev/null || uname -n)"
+    echo "#~ran mx $(mx --version 2>&1 | head -n 1)"
+    cat mx_results.tsv
+  } > mx-run.tsv                                  # one file: the run and its model
   ```
+
+#### The run carries its layout
+
+A run is only as good as knowing what it was run against, so **the layout
+goes with it**. The tar holds it as `model.dc` (kept with the run, never
+needed to run it: the script does not wait for it), and `expected.tsv` —
+so every `mx-run.tsv` made from it — carries it whole, as `#~` lines that
+every reader of a results file skips as comments, with its sha256 and how
+the load was set up:
+
+```
+#~run made 2026-10-28T14:02:11Z
+#~run viewer datacenter_visualization 1.42.0
+#~run tool mx
+#~run layout floor.dc
+#~run load the random pattern to 1 peer, 1000 pps from each host
+#~run seconds 60
+#~run connections 1
+#~run mtu 1500
+#~run bind eth1
+#~run out DC1/A/r3
+#~model sha256=9f2c… lines=212 name=floor.dc
+#~ dc DC1
+#~   row A
+…
+#~end model
+#~ran started 2026-10-28T14:03:00Z
+#~ran finished 2026-10-28T14:04:05Z
+#~ran host jumpbox
+#~ran mx mx 1.11.1
+```
+
+The sha256 is `sha256sum model.dc`'s, so a layout file on disk can be
+checked against a run without the viewer.
+
+**Load a run file and its layout comes with it.** Into an empty viewer it
+simply loads. Over the very same layout nothing changes, and the report
+says it matched. Over a different one the viewer **asks first** — the
+layout there now, and any edit not saved, would go — and **Cancel** keeps
+it and loads the readings onto it, with a warning that they may land on
+elements other than the ones they were measured on. A layout loaded in
+the same drop as the run file is your choice and stays. A carried layout
+that no longer matches its sha256, or was cut short, is not loaded, and
+the report says why. The report also gives each stamped file's line: made
+when and by which version, ran when, where, and with which tool.
 
 #### Measured against the model
 
@@ -2144,6 +2209,67 @@ twelve, so a flat fleet is a floor plan rather than one very long line.
   measured".
 - `&build=1` in the URL does the same thing on load, which is what makes a
   link to a folder of tables a dashboard somebody else can open.
+
+### `dcprobe` — how every host is doing
+
+`dcprobe` reaches every host over ssh and writes how each is doing as
+results the viewer paints. One shell script goes to each host; nothing is
+installed there and nothing is left behind. `tools/dcprobe` runs it from a
+clone; `pip install` puts it on `PATH`. **Host status**, in the right
+panel, writes its `hosts.txt` and commands for the layout's hosts, and
+reads a loaded scan back into the hosts worth a look.
+
+```sh
+dcprobe preflight --servers hosts.txt -o preflight.tsv --tools iperf --ports 5300,5310,5001 --bind data
+dcprobe scan      --servers hosts.txt -o host_status.tsv --nic data --mtu 9000 [--why-slow]
+dcprobe watch     --servers hosts.txt -o host_status.tsv --every 30 --history host_history.tsv
+dcprobe diff      host_status-before.tsv host_status.tsv -o changes.tsv
+```
+
+`hosts.txt` is the grammar mx and netmesh read — `name[=addr]` a line —
+with what the host should be beside it: `r1h1=10.1.1.11 gbps=25`, and
+optionally `mtu=` and `nic=`. Host status writes it from the layout: each
+host by the layout's name, at its `addr=`, with the speed of its fastest
+NIC.
+
+| Verb | What it does |
+|---|---|
+| `scan` | one pass: everything below, for every host |
+| `watch` | a pass every `--every` seconds; the file is rewritten each pass, so it always says how things are **now** and Live follows it; `--history` keeps every pass |
+| `preflight` | can every host run the load? ssh, python3 (mx and netmesh copy their agents over), the tools the hosts need (`iperf`), `--bind` matching an interface, the run's UDP ports free, the clock against this machine's, open files allowed |
+| `diff` | what changed between two scans — kernel, OS, CPU, memory, NIC driver and firmware, NIC speed, MTU and link — host by host, and `-o` as `probe_changed` |
+
+What a scan measures, over a one-second sample (`--sample`):
+
+| Metric | What it is |
+|---|---|
+| `probe_reach`, `probe_why` | answered the probe, PASS or FAIL, and ssh's reason when not — a host that does not answer is a sample, never a gap |
+| `host_load1`, `host_load_per_core` | load, and load a core |
+| `host_cpu_pct`, `host_iowait_pct`, `host_steal_pct` | CPU busy, waiting on I/O, stolen by the hypervisor |
+| `host_mem_pct`, `host_swap_pct`, `host_disk_pct` | memory in use (from MemAvailable), swap in use, the fullest real disk |
+| `host_softnet_drop_ps`, `host_softnet_squeeze_ps` | the kernel's receive backlog: packets dropped, and passes out of budget, a second |
+| `nic_link`, `nic_speed_gbps`, `nic_mtu` | each physical NIC (no `lo`, veth or bridges) |
+| `nic_rx_gbps`, `nic_tx_gbps` | what it moved |
+| `nic_rx_drop_ps`, `nic_tx_drop_ps`, `nic_err_ps`, `nic_ring_drop_ps` | what it dropped and errored, and its ring and buffer drops (`ethtool -S`), a second |
+| `nic_check`, `nic_why` | the NIC as the layout says: FAIL when none is up or none is at the layout's `gbps=`, WARN for one slower or at another MTU than `--mtu` |
+| `host_kernel_errors`, `host_kernel_last` | kernel errors logged in the last hour (`--dmesg-since`; watch: since the last pass), and the last of them |
+| `host_top` | the busiest processes |
+| `inv_kernel`, `inv_os`, `inv_cpu`, `inv_cores`, `inv_mem_gb`, `inv_nic_driver`, `inv_nic_fw` | what the host is |
+| `whyslow_verdict`, `whyslow_top` | with `--why-slow`: [binnacle's why-slow](https://github.com/MartinGallagher-code/binnacle), piped to each host over the same ssh, its worst finding as PASS, WARN or FAIL and its first serious one |
+
+**Pass `--nic` the run's `--bind`** (Host status does): only the NICs it
+matches are judged, so the run's NIC is held to the layout's speed and the
+run's MTU, and a port nobody cabled is not a WARN. Without it, a NIC that
+is down is listed but not held against the host.
+
+**Drops, errors and verdicts go to [Findings](#findings-what-went-wrong-and-whether-the-load-explains-it)**
+on their own (`finding=` on their `!test` lines). **Host status** lists, from
+a loaded scan, who did not answer, who is not ready to run, whose NIC is not
+as the layout says, what why-slow found, kernel errors, and who is busy
+(CPU 90%+, load a core 1.5+, iowait 20%+), nearly out of memory (90%+),
+swapping (25%+ of swap) or nearly full (a disk at 90%+) — each host a chip
+with what it said, a click away. Folded, its title says how many answered
+and how many need a look.
 
 ### Live: reload on a timer
 

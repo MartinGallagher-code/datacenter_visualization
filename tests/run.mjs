@@ -12,6 +12,7 @@
 
 // Headless test suite: node tests/run.mjs
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -55,6 +56,8 @@ import {
 import {
   bindProblem, buildIperf, buildMx, buildNetmesh, hostToken, mxSizes, rateGroups, runPairs, runProblem, runScript, runTar, runWhy, scriptName, tarball, tarName, tcpPayloadShare,
 } from '../js/runfiles.js';
+import { asFile, layoutSha, modelBlock, readStamp, runStamp, sha256 } from '../js/stamp.js';
+import { probeFiles, probeSummary, TOOL_PORTS } from '../js/probe.js';
 import {
   compareHosts, compareLatency, compareMtu, compareRuns, comparisonResults, modelPairs, modelResults, suspects,
 } from '../js/compare.js';
@@ -3427,6 +3430,159 @@ if (python.error) {
   ok(rackLoad.value > 0, 'and a rack sums the hosts beneath it');
 }
 
+// ------------------------------------------------------- dcprobe's hosts.txt
+{
+  const m = parseLayout([
+    'dc D', '  rack r u=10', '    node a role=server addr=10.0.0.1', '    node b role=server',
+    '    node t role=tor +switch', 'net nic gbps=25', 'net mgmt gbps=1', 'link nic role=server role=tor', 'link mgmt role=server role=tor',
+  ].join('\n'));
+  const hosts = m.all.filter((el) => el.name === 'a' || el.name === 'b');
+  const files = probeFiles(hosts, { speed: () => 25, bind: 'data', mtu: 9000, every: 15, whySlow: true });
+  eq(files.files[0].text.split('\n').slice(1), ['a=10.0.0.1 gbps=25', 'b gbps=25', ''], 'hosts.txt: each host by the layout’s name, at its addr=, with its NIC’s speed');
+  ok(files.commands.includes('dcprobe preflight --servers hosts.txt -o preflight.tsv --tools iperf --ports 5300,5310,5001 --bind data'),
+     'preflight: iperf2 on every host, the run tools’ ports free, the --bind there');
+  ok(files.commands.includes('dcprobe scan --servers hosts.txt -o host_status.tsv --nic data --mtu 9000 --why-slow'),
+     'scan: the NIC the run will load, judged against its MTU, with why-slow when asked');
+  ok(files.commands.some((c) => c.startsWith('# dcprobe watch') && c.includes('--every 15 --history host_history.tsv')), 'watch at the interval set');
+  ok(!probeFiles(hosts, { tools: ['mx', 'netmesh'] }).commands.some((c) => c.includes('--tools')), 'mx and netmesh need only python3 on the hosts');
+  eq(TOOL_PORTS, { mx: 5300, netmesh: 5310, iperf: 5001 }, 'the ports each tool listens on');
+}
+
+// ------------------------------------------------------------------ dcprobe
+// dcprobe reaches every host over ssh. Here a stand-in ssh runs the probe on
+// this machine -- real /proc, real /sys -- and answers for two made-up hosts
+// from canned output, so the numbers the verdicts turn on are known.
+if (python.error) {
+  skip('dcprobe', 'no python3');
+} else {
+  const dir = mkdtempSync(join(tmpdir(), 'dcprobe-'));
+  const canned = (s) => [
+    '@@meta', 'uptime 7200.5', 'loadavg 6.00 3.00 1.00 2/300 999', 'nproc 4', 'hostname r1h2',
+    '@@stat1', 'cpu  1000 0 500 8000 100 0 0 0 0 0',
+    '@@netdev1', 'Inter-|   Receive', ' face |bytes',
+    '  eth1: 1000 10 0 5 0 0 0 0 2000 20 0 0 0 0 0 0',
+    '@@softnet1', '00000100 00000002 00000003', '00000100 00000000 00000000',
+    '@@ethtool1 eth1', '     rx_out_of_buffer: 10', '     rx_discards_phy: 0',
+    '@@stat2', 'cpu  1600 0 700 8100 200 0 0 0 0 0',
+    '@@netdev2', '  eth1: 1250001000 1010 1 25 0 0 0 0 2000 20 0 3 0 0 0 0',
+    '@@softnet2', '00000200 0000000c 00000003', '00000100 00000000 00000000',
+    '@@ethtool2 eth1', '     rx_out_of_buffer: 70', '     rx_discards_phy: 0',
+    '@@meminfo', 'MemTotal: 16000000 kB', 'MemAvailable: 4000000 kB', 'SwapTotal: 1000 kB', 'SwapFree: 500 kB',
+    '@@df', 'Filesystem 1024-blocks Used Available Capacity Mounted on',
+    '/dev/sda1 100 97 3 97% /', 'tmpfs 100 100 0 100% /run', '/dev/sdb1 100 40 60 40% /data',
+    '@@nics', `eth0|up|1000|1500|igb|1.2||`, `eth1|up|${s.speed}|${s.mtu}|mlx5_core|28.39.1002|10.20.0.12/24`, 'eth2|down|-1|1500|mlx5_core|28.39.1002|',
+    '@@inventory', 'kernel 6.1.0-18-amd64', 'os Debian GNU/Linux 12 (bookworm)', 'cpu  AMD EPYC 7543 32-Core Processor',
+    '@@top', 'mx 180.0 2.1', 'python3 12.5 0.4',
+    '@@dmesg', '[ 3000.000000] mlx5_core 0000:41:00.0: link down', '[ 7000.100000] mlx5_core 0000:41:00.0 eth1: Link up',
+    '[ 7100.200000] NETDEV WATCHDOG: eth1 (mlx5_core): transmit queue 3 timed out', '',
+  ].join('\n');
+  writeFileSync(join(dir, '10.0.0.1.out'), canned({ speed: 25000, mtu: 9000 }));   // reached at its addr=
+  writeFileSync(join(dir, 'slow.out'), canned({ speed: 10000, mtu: 1500 }));
+  writeFileSync(join(dir, 'ssh'), [
+    '#!/bin/sh',
+    'while [ $# -gt 0 ]; do case "$1" in -o) shift 2;; *) break;; esac; done',
+    'host=${1#*@}; shift',
+    '[ "$host" = down ] && { echo "ssh: connect to host down port 22: No route to host" >&2; exit 255; }',
+    'case "$*" in *python3*) exec sh -c "$*";; esac',
+    '[ -f "$(dirname "$0")/$host.out" ] && { cat >/dev/null; cat "$(dirname "$0")/$host.out"; exit 0; }',
+    'exec sh -c "$*"', ''].join('\n'));
+  chmodSync(join(dir, 'ssh'), 0o755);
+  // why-slow's --json, as a stand-in: one critical finding.
+  writeFileSync(join(dir, 'why_slow.py'), 'import json\nprint(json.dumps({"findings": [{"severity": "INFO", "title": "fine"}, '
+    + '{"severity": "CRITICAL", "title": "memory exhausted", "detail": "MemAvailable 412 MB of 62.7 GB"}]}))\n');
+  writeFileSync(join(dir, 'hosts.txt'), '# the layout\nfast=10.0.0.1 gbps=25 nic=eth1\nslow gbps=25 nic=10.20.\nlocal=127.0.0.1\ndown\n');
+  const dcprobe = (args) => {
+    const run = spawnSync('python3', [join(root, 'tools/dcprobe'), ...args, '--ssh', join(dir, 'ssh')],
+                          { encoding: 'utf8', cwd: dir });
+    return { err: run.stderr || '', code: run.status, text: () => readFileSync(join(dir, 'status.tsv'), 'utf8') };
+  };
+  const scan = dcprobe(['scan', '--servers', 'hosts.txt', '-o', 'status.tsv', '--why-slow', '--why-slow-file', 'why_slow.py',
+    '--mtu', '9000', '--dmesg-since', '3600']);
+  const text = scan.text();
+  const value = (test, host, extra = '') => {
+    const m = new RegExp(`^${test}\\t${host}\\t("[^"]*"|\\S+)\\tat=\\S+${extra}`, 'm').exec(text);
+    return m ? m[1].replace(/^"|"$/g, '') : undefined;
+  };
+  eq(scan.code, 1, 'dcprobe scan exits 1 when a host does not answer');
+  eq([value('probe_reach', 'down'), value('probe_why', 'down')], ['FAIL', 'ssh: connect to host down port 22: No route to host'],
+     'a host that does not answer is a sample, with ssh’s reason -- never a gap');
+  eq(['fast', 'slow', 'local'].map((h) => value('probe_reach', h)), ['PASS', 'PASS', 'PASS'], 'the rest answered');
+  ok(Math.abs(Number(value('host_cpu_pct', 'fast')) - 80) < 1e-6 && Math.abs(Number(value('host_iowait_pct', 'fast')) - 10) < 1e-6,
+     'CPU busy over the sample, iowait apart: 800 of 1000 jiffies busy, 100 waiting');
+  eq([value('host_load1', 'fast'), value('host_load_per_core', 'fast')], ['6', '1.5'], 'load, and load a core');
+  eq([value('host_mem_pct', 'fast'), value('host_swap_pct', 'fast'), value('inv_mem_gb', 'fast')], ['75', '50', '15'],
+     'memory from MemAvailable, swap, and the box’s memory');
+  ok(/^host_disk_pct\tfast\t97\tat=\S+\tmount=\/$/m.test(text), 'the fullest disk, tmpfs and /run aside');
+  eq([value('host_softnet_drop_ps', 'fast'), value('host_softnet_squeeze_ps', 'fast')], ['10', '0'], 'the kernel’s backlog drops over the sample');
+  ok(value('nic_rx_gbps', 'fast', '\\tnic=eth1') === '10' && value('nic_rx_drop_ps', 'fast', '\\tnic=eth1') === '20'
+     && value('nic_tx_drop_ps', 'fast', '\\tnic=eth1') === '3' && value('nic_err_ps', 'fast', '\\tnic=eth1') === '1'
+     && value('nic_ring_drop_ps', 'fast', '\\tnic=eth1') === '60', 'each NIC: what it moved, dropped and errored, and its ring drops, a second');
+  ok(!/\tnic=eth0/.test(text.split('\n').filter((l) => /\t(fast|slow)\t/.test(l)).join('\n')), 'nic= judges only the NICs it names');
+  eq(value('nic_check', 'fast'), 'PASS', 'at the layout’s 25G and the run’s MTU: as the layout says');
+  ok(/^nic_check\tslow\tFAIL\tat=\S+\twhy="eth1 at 10G, the layout says 25G; eth1 MTU 1500, the run's is 9000"$/m.test(text),
+     'a NIC slower than the layout, at another MTU: FAIL, and why');
+  eq([value('inv_kernel', 'fast'), value('inv_os', 'fast'), value('inv_cpu', 'fast'), value('inv_cores', 'fast'),
+    value('inv_nic_fw', 'fast', '\\tnic=eth1')],
+  ['6.1.0-18-amd64', 'Debian GNU/Linux 12 (bookworm)', 'AMD EPYC 7543 32-Core Processor', '4', '28.39.1002'], 'what the host is');
+  eq(value('host_top', 'fast'), 'mx 180.0% · python3 12.5%', 'its busiest processes');
+  eq([value('host_kernel_errors', 'fast'), value('host_kernel_last', 'fast')], ['2', 'NETDEV WATCHDOG: eth1 (mlx5_core): transmit queue 3 timed out'],
+     'kernel errors in the last hour, by their stamp against the uptime, and the last of them');
+  eq([value('whyslow_verdict', 'fast'), value('whyslow_top', 'fast')], ['FAIL', 'memory exhausted: MemAvailable 412 MB of 62.7 GB'],
+     'why-slow’s worst finding is the verdict, its first serious one kept');
+  ok(Number(value('host_uptime_h', 'local')) > 0 && value('inv_kernel', 'local'), 'and this machine, probed for real');
+
+  // The viewer reads every line of it, and the Findings list knows what each reports.
+  const raw = new Map();
+  const warnings = [];
+  parseResults(text, raw, warnings, 'status.tsv');
+  eq(warnings, [], 'a file the viewer reads without a warning');
+  const byName = new Map([...raw.values()].map((o) => [o.name, o]));
+  eq(['nic_rx_drop_ps', 'host_kernel_errors', 'nic_check', 'whyslow_verdict', 'host_cpu_pct'].map((n) => byName.get(n).meta.finding || ''),
+     ['drops', 'errors', 'verdict', 'verdict', ''], 'drops, errors and verdicts say so for Findings; a gauge does not');
+  eq(byName.get('host_cpu_pct').meta.agg, 'last', 'a watch file reads as now');
+
+  // preflight: what would stop a run, host by host.
+  writeFileSync(join(dir, 'pre.txt'), 'local=127.0.0.1\ndown\n');
+  const pre = dcprobe(['preflight', '--servers', 'pre.txt', '-o', 'status.tsv', '--tools', 'sh,no-such-tool', '--ports', '1']);
+  const preText = pre.text();
+  ok(pre.code === 1 && /^preflight\tlocal\tFAIL\tat=\S+\twhy="no no-such-tool"$/m.test(preText)
+     && /^preflight\tdown\tFAIL\tat=\S+\twhy="ssh: connect to host down port 22: No route to host"$/m.test(preText),
+     `preflight: a missing tool, a host that does not answer  (${preText.split('\n').filter((l) => l.startsWith('preflight')).join(' | ')})`);
+  ok(/^pre_skew_ms\tlocal\t[\d.]+\tat=\S+\tssh_ms=\d+$/m.test(preText) && /^pre_nofile\tlocal\t\d+/m.test(preText), 'the clock, and open files allowed');
+  const preRaw = new Map();
+  const preWarn = [];
+  parseResults(preText, preRaw, preWarn, 'preflight.tsv');
+  eq(preWarn, [], 'read without a warning too');
+
+  // diff: what changed between two scans.
+  writeFileSync(join(dir, 'later.tsv'), text.replace(/6\.1\.0-18-amd64/g, '6.1.0-21-amd64'));
+  const diff = spawnSync('python3', [join(root, 'tools/dcprobe'), 'diff', join(dir, 'status.tsv'), join(dir, 'later.tsv')], { encoding: 'utf8' });
+  ok(diff.status === 0 || diff.status === 1, 'diff runs');
+  writeFileSync(join(dir, 'status.tsv'), text);
+  const changed = spawnSync('python3', [join(root, 'tools/dcprobe'), 'diff', join(dir, 'status.tsv'), join(dir, 'later.tsv'), '-o', join(dir, 'chg.tsv')], { encoding: 'utf8' });
+  ok(changed.status === 1 && /^fast\n  kernel: 6\.1\.0-18-amd64 -> 6\.1\.0-21-amd64$/m.test(changed.stdout)
+     && /^probe_changed\tfast\t1\tat=\S+\twhat="kernel: 6\.1\.0-18-amd64 -> 6\.1\.0-21-amd64"$/m.test(readFileSync(join(dir, 'chg.tsv'), 'utf8')),
+     `diff names what changed, host by host, and as a metric  (${changed.stdout.trim().split('\n').slice(0, 3).join(' | ')})`);
+  // Read back on a floor plan: the lists worth a look.
+  const floor = parseLayout(['dc D', '  rack r u=10', '    node fast role=server', '    node slow role=server', '    node local role=server',
+    '    node down role=server'].join('\n'));
+  const scanRaw = new Map();
+  parseResults(text, scanRaw, [], 'host_status.tsv');
+  const bound = new Map([...scanRaw.values()].map((o) => [o.name, bindOverlay(o, floor)]));
+  const summary = probeSummary(bound, floor);
+  eq([summary.probed, summary.answered], [4, 3], 'four probed, three answered');
+  const group = (key) => (summary.groups.find((g) => g.key === key) || { hosts: [] }).hosts.map((h) => `${h.el.name}: ${h.text}`);
+  eq(group('unreachable'), ['down: FAIL -- ssh: connect to host down port 22: No route to host'], 'who did not answer, and why');
+  eq(group('nic'), ["slow: FAIL -- eth1 at 10G, the layout says 25G; eth1 MTU 1500, the run's is 9000"], 'whose NIC is not as the layout says, and how');
+  eq(group('whyslow').map((t) => t.split(' -- ')[0]), ['fast: FAIL', 'slow: FAIL', 'local: FAIL'], 'why-slow’s failures, on every host it ran on');
+  ok(group('disk').some((t) => /^fast: 97% -- /.test(t) || t === 'fast: 97%'), 'a disk nearly full');
+  ok(group('kernel').some((t) => t.startsWith('fast: 2 -- NETDEV WATCHDOG')), 'kernel errors, with the last');
+  eq(summary.groups[0].severity, 'critical', 'the serious lists first');
+  eq(probeSummary(new Map(), floor), null, 'no scan, no summary');
+
+  rmSync(dir, { recursive: true, force: true });
+}
+
 // ---------------------------------------------------------------- mx export
 // matrix_orchestrator writes this format itself (`mx export`), so there is no
 // importer to test -- what has to hold is that its output parses, binds and
@@ -5155,6 +5311,15 @@ if (python.error) {
   const nm = buildNetmesh(made, { seconds: 90, connections: 2 });
   ok(nm.files[0].text.includes('# size=64 port=5310 pps=10 flows=2\n'), 'netmesh probes ten a second, over as many flows as connections');
   ok(nm.files[0].text.includes('\nr1h1,,10,10,10,10,10\n'), 'every pair of the load');
+  // What netmesh takes of the generator's settings, and what it does not:
+  // never the load described as if netmesh sent it.
+  const said = [...nm.notes, nm.files[0].text].join('\n');
+  ok(!/offered|requests a second|Gb\/s/.test(said), 'netmesh’s notes and mesh.csv never describe a rate netmesh does not send');
+  ok(/takes only which hosts talk to which -- 30 pairs among 6 hosts.*how long \(90 s\).*2 probe flows a pair \(flows=\)/.test(nm.notes[0]),
+     'they say what it takes of the generator: the pairs, the seconds, the connections as flows');
+  ok(/whatever the load’s rate: the rate, its unit, and the request and reply sizes go only to the mx run under it/.test(nm.notes[1])
+     && /MTU 1500 is not given to netmesh/.test(nm.notes[2]), 'and what it does not: the rate and sizes, and the MTU');
+  ok(/^# probed only: netmesh does not send the load or its rate$/m.test(nm.files[0].text), 'mesh.csv says so too');
   ok(nm.commands.some((c) => c.includes('--baseline 20 -- mx run')), 'idle first and then under the load, if you give it one');
   ok(nm.commands.filter((c) => !c.startsWith('#')).every((c) => !c.includes('--baseline')),
      'the run under the load is there to swap in, commented, so the script runs one netmesh run');
@@ -5177,6 +5342,7 @@ if (python.error) {
   ok(nmB.commands.includes('netmesh run --mesh mesh.csv --for 90 --bind eth1'), 'netmesh: --bind on the run');
   ok(nmB.commands.some((c) => c.includes('--baseline 20 --bind eth1 -- mx run') && c.endsWith('--streams 2 --bind eth1')),
      'and on the mx run under it');
+  ok(nmB.notes.some((n) => /an older netmesh takes only a whole address and refuses eth1/.test(n)), 'and the notes say which netmesh reads it as a NIC');
   ok(buildMx(made, { bind: 'eth[12]' }).commands.some((c) => c.endsWith("--bind 'eth[12]'")), 'a pattern the shell would expand goes quoted');
   ok(!buildMx(made, { bind: 'eth 1' }).commands.some((c) => c.includes('--bind eth')), 'and one that cannot be a pattern goes nowhere');
 
@@ -5206,7 +5372,7 @@ if (python.error) {
       chmodSync(join(bin, tool), 0o755);
     }
     const env = { ...process.env, PATH: `${bin}:${process.env.PATH}` };
-    const mxBuilt = buildMx(made, { seconds: 30, expected: '# model\n' });
+    const mxBuilt = buildMx(made, { seconds: 30, expected: '# model\n', model: { text: 'dc T\n', name: 'floor.dc' } });
     const runs = join(dir, 'runs');
     mkdirSync(runs);
     for (const f of mxBuilt.files) writeFileSync(join(runs, f.name), f.text);
@@ -5217,7 +5383,13 @@ if (python.error) {
     eq([ran.status, ran.stdout.trim().split('\n')], [0, [
       'mx check --matrix matrix.csv', 'mx run --matrix matrix.csv --for 30 --streams 1', 'mx export --matrix matrix.csv --peers -o mx_results.tsv',
     ]], 'a script that runs its commands, in order, wherever it is run from');
-    ok(readFileSync(join(runs, 'mx-run.tsv'), 'utf8').startsWith('# model'), 'and collects the run with the model');
+    const runFile = readFileSync(join(runs, 'mx-run.tsv'), 'utf8');
+    ok(runFile.startsWith('# model'), 'and collects the run with the model');
+    const ranStamp = readStamp(runFile);
+    ok(ranStamp && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/.test(ranStamp.ran.started) && /Z$/.test(ranStamp.ran.finished)
+       && ranStamp.ran.host && ranStamp.ran.mx === 'mx --version', `stamped with when, where and which mx  (${JSON.stringify(ranStamp && ranStamp.ran)})`);
+    rmSync(join(runs, 'model.dc'));
+    eq(spawnSync('bash', [join(runs, 'run-mx.sh')], { encoding: 'utf8', env, cwd: dir }).status, 0, 'and runs without model.dc');
     rmSync(join(runs, 'matrix.csv'));
     const missing = spawnSync('bash', [join(runs, 'run-mx.sh')], { encoding: 'utf8', env, cwd: dir });
     ok(missing.status === 1 && /matrix\.csv is not beside this script/.test(missing.stderr) && !missing.stdout,
@@ -5231,9 +5403,9 @@ if (python.error) {
       writeFileSync(join(dir, 'run-mx.tar'), runTar(mxBuilt, { mtime: Date.UTC(2026, 9, 26) }));
       const listed = spawnSync('tar', ['-tvf', join(dir, 'run-mx.tar')], { encoding: 'utf8' });
       const lines = listed.stdout.trim().split('\n');
-      eq([listed.status, lines.map((l) => l.split(/\s+/).pop())], [0, ['run-mx/', 'run-mx/matrix.csv', 'run-mx/expected.tsv', 'run-mx/run-mx.sh']],
-         'tar reads it: a folder of its own, the tool’s files and its script');
-      ok(/^-rwxr-xr-x/.test(lines[3]) && /^-rw-r--r--/.test(lines[1]), 'the script executable, the files not');
+      eq([listed.status, lines.map((l) => l.split(/\s+/).pop())], [0, ['run-mx/', 'run-mx/matrix.csv', 'run-mx/model.dc', 'run-mx/expected.tsv', 'run-mx/run-mx.sh']],
+         'tar reads it: a folder of its own, the tool’s files, the layout and its script');
+      ok(/^-rwxr-xr-x/.test(lines[4]) && /^-rw-r--r--/.test(lines[1]), 'the script executable, the files not');
       const out = join(dir, 'unpacked');
       mkdirSync(out);
       eq(spawnSync('tar', ['-xf', join(dir, 'run-mx.tar'), '-C', out]).status, 0, 'and unpacks');
@@ -5392,8 +5564,47 @@ if (python.error) {
   const made = runPairs(gen.flows, { toGbps: 1, unit: 'Gb/s', sized: null });
   const withModel = buildMx(made, { expected: text });
   ok(withModel.files.some((f) => f.name === 'expected.tsv' && f.text === text), 'a tool’s files carry the model’s figures');
-  ok(withModel.commands.includes('cat expected.tsv mx_results.tsv > mx-run.tsv'), 'and collect the run with them into one file');
+  const collect = withModel.commands.find((c) => c.endsWith('} > mx-run.tsv'));
+  ok(collect && collect.startsWith('{\n  cat expected.tsv\n') && collect.includes('\n  cat mx_results.tsv\n'), 'and collect the run with them into one file');
+  ok(['started', 'finished', 'host'].every((k) => collect.includes(`echo "#~ran ${k} `)) && collect.includes('$(mx --version 2>&1 | head -n 1)')
+     && withModel.commands[1] === 'started=$(date -u +%Y-%m-%dT%H:%M:%SZ)', 'stamped with when the run began and ended, where, and which mx ran it');
+  ok(buildIperf(made, { expected: text }).commands.some((c) => c.includes('$(iperf-orchestrator --version'))
+     && buildNetmesh(made, { expected: text }).commands.some((c) => c.includes('$(netmesh --version')), 'each tool its own version');
   ok(!buildMx(made, {}).files.some((f) => f.name === 'expected.tsv'), 'not when there is no model to carry');
+
+  // The layout itself goes with the run files, as model.dc: kept, never needed to run.
+  const layoutText = 'dc T\r\n  row A\n';
+  const kept = buildMx(made, { expected: text, model: { text: layoutText, name: 'floor.dc' } });
+  const dc = kept.files.find((f) => f.name === 'model.dc');
+  eq(dc && dc.text, 'dc T\n  row A\n', 'the layout as model.dc, line ends as \\n');
+  ok(dc.keep && /floor\.dc/.test(dc.note) && /for f in matrix\.csv expected\.tsv; do/.test(runScript(kept))
+     && /#   model\.dc -- .*not needed to run it/.test(runScript(kept)), 'kept with the run, and not a file the script waits for');
+  ok(buildNetmesh(made, { model: { text: layoutText } }).files.some((f) => f.name === 'model.dc'), 'with or without the model’s figures');
+  ok(!buildMx(made, { expected: text }).files.some((f) => f.name === 'model.dc'), 'and none when there is no layout');
+
+  // Stamps: the layout, whole, in the model's figures; how the load was set up.
+  for (const sample of ['', 'abc', 'x'.repeat(55), 'y'.repeat(64), 'é漢🙂\n'.repeat(300)]) {
+    eq(sha256(sample), createHash('sha256').update(sample, 'utf8').digest('hex'), `sha256 of ${sample.length} characters, as sha256sum has it`);
+  }
+  eq(layoutSha(layoutText), createHash('sha256').update(asFile(layoutText)).digest('hex'), 'a layout’s sha256 is model.dc’s');
+  const block = modelBlock(layoutText, { name: 'floor plan.dc' });
+  ok(block.startsWith(`#~model sha256=${layoutSha(layoutText)} lines=2 name=floor plan.dc\n#~ dc T\n#~   row A\n#~end model`), 'the layout as #~ lines');
+  const stamped = `${text}${runStamp({ made: '2026-10-28T10:00:00Z', load: 'all  to\nall', bind: '', mtu: 9000 })}\n${block}\n`
+    + '#~ran started 2026-10-28T10:01:00Z\n#~ran mx mx 1.11.1\n';
+  const read = readStamp(stamped);
+  eq([read.model.text, read.model.name, read.model.intact], ['dc T\n  row A\n', 'floor plan.dc', true], 'read back whole, named, and intact');
+  eq([read.run, read.ran], [{ made: '2026-10-28T10:00:00Z', load: 'all to all', mtu: '9000' }, { started: '2026-10-28T10:01:00Z', mx: 'mx 1.11.1' }],
+     'with how it was made and how it ran, empty settings left out');
+  eq(readStamp(stamped.replace('#~   row A', '#~   row B')).model.intact, false, 'a layout edited since is not intact');
+  const cut = readStamp(stamped.replace('#~   row A\n', ''));
+  eq([cut.model.complete, cut.model.intact], [false, false], 'nor is one cut short');
+  eq(readStamp(text), null, 'a file with no stamp has none');
+  const rawStamped = new Map();
+  const wStamped = [];
+  parseResults(stamped, rawStamped, wStamped, 'expected.tsv');
+  const samples = (overlays) => [...overlays].map(([k, o]) => `${k} ${o.samples.length}`).sort();
+  eq([wStamped, samples(rawStamped)], [[], samples(raw)], 'and a stamped file reads exactly as one without');
+  ok(!looksLikeWideTsv(stamped), 'still a results file, not a table');
 
   // Round trips: the fabric's, from the layout, and a prober's against it.
   const shared = { shared: {} };

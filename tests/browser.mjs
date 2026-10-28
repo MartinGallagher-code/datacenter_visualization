@@ -28,7 +28,9 @@
 
 import { spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
-import { readFileSync, existsSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join, normalize, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -1414,7 +1416,7 @@ await test('the load as run files', async () => {
   const [archive] = await Promise.all([page.waitForEvent('download'), page.locator('#load-gen button.run-tar').click()]);
   const listed = spawnSync('tar', ['-tf', await archive.path()], { encoding: 'utf8' });
   ok(archive.suggestedFilename() === 'run-iperf.tar'
-     && listed.stdout.trim().split('\n').join(' ') === 'run-iperf/ run-iperf/iperf_plan.conf run-iperf/expected.tsv run-iperf/run-iperf.sh',
+     && listed.stdout.trim().split('\n').join(' ') === 'run-iperf/ run-iperf/iperf_plan.conf run-iperf/model.dc run-iperf/expected.tsv run-iperf/run-iperf.sh',
      `and all of it as one archive tar reads  (${listed.stdout.trim().split('\n').join(' ')})`);
   await page.locator('#load-gen button.run-tool-netmesh').click();
   await page.waitForTimeout(300);
@@ -1475,7 +1477,7 @@ await test('every titled part folds, and stays folded', async () => {
     await page.waitForTimeout(400);
     const heads = await page.evaluate(() => [...document.querySelectorAll('#right > .block')].filter((b) => b.offsetParent !== null)
       .map((b) => [...b.querySelector(':scope > h2').childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join('').trim()));
-    eq(heads, ['Inspector', 'Overlays', 'Networks', 'Load generator', 'Cable load'],
+    eq(heads, ['Inspector', 'Overlays', 'Networks', 'Load generator', 'Cable load', 'Host status'],
        'the inspector first; the load generator and cable load sections of their own; nothing empty shown');
     await page.locator('#cable-load > h2').click();
     await page.waitForTimeout(200);
@@ -1506,10 +1508,10 @@ await test('every titled part folds, and stays folded', async () => {
       .filter((b) => b.offsetParent !== null).map((b) => b.classList.contains('off')));
     await page.locator('#right > .block[data-section="overlays"] > h2').click({ modifiers: ['Alt'] });
     await page.waitForTimeout(200);
-    eq(await folded(), [true, false, true, true, true], 'Alt+click on a title: that section alone open, every other folded');
+    eq(await folded(), [true, false, true, true, true, true], 'Alt+click on a title: that section alone open, every other folded');
     await page.locator('#right > .block[data-section="overlays"] > h2').click({ modifiers: ['Alt'] });
     await page.waitForTimeout(200);
-    eq(await folded(), [false, false, false, false, false], 'and again: all of them open');
+    eq(await folded(), [false, false, false, false, false, false], 'and again: all of them open');
   } finally {
     // Put everything back for the tests after this one.
     await page.evaluate(() => localStorage.removeItem('dcviewer.folds'));
@@ -1590,7 +1592,7 @@ await test('a run against the model', async () => {
   await page.waitForTimeout(400);
   await page.locator('#load-gen button.run-tool-iperf').click();
   await page.waitForTimeout(300);
-  ok(/cat expected\.tsv iperf_results\.tsv > iperf-run\.tsv/.test(await page.evaluate(() => document.querySelector('#load-gen .run-files').innerText)),
+  ok(/cat expected\.tsv\n[\s\S]*\n  cat iperf_results\.tsv\n\} > iperf-run\.tsv/.test(await page.evaluate(() => document.querySelector('#load-gen .run-files').innerText)),
      'the run files carry the model, and the step that collects the run with it');
   const [saved] = await Promise.all([page.waitForEvent('download'),
     page.locator('#load-gen button.run-save', { hasText: 'expected.tsv' }).click()]);
@@ -1639,6 +1641,114 @@ await test('a run against the model', async () => {
   await page.waitForTimeout(500);
   ok(/5 short of it/.test(await panel()) && /the load generator now/.test(await page.evaluate(() => document.querySelector('#compare select.compare-against').innerText)),
      'the load generator as it is set now is a model too');
+}, { url: '?layout=fx/tiny.dc' });
+
+// Host status: dcprobe's hosts.txt and commands for the layout's hosts, and a
+// loaded scan read back into the hosts worth a look.
+await test('host status from dcprobe', async () => {
+  const pane = () => page.evaluate(() => (document.querySelector('#host-status') || {}).innerText || '');
+  ok(/host status/i.test(await pane()) && /not probed yet/.test(await page.evaluate(() => document.querySelector('#host-status h2').textContent)),
+     'a layout with hosts offers to probe them');
+  const [saved] = await Promise.all([page.waitForEvent('download'), page.locator('#host-status button.probe-save').click()]);
+  const hostsTxt = readFileSync(await saved.path(), 'utf8');
+  eq([saved.suggestedFilename(), hostsTxt.split('\n').filter((l) => l && !l.startsWith('#'))],
+     ['hosts.txt', ['r1h1 gbps=25', 'r1h2 gbps=25', 'r1h3 gbps=25', 'r2h1 gbps=25', 'r2h2 gbps=25', 'r2h3 gbps=25']],
+     'hosts.txt: every host, with the speed the layout gives its NIC');
+  ok(/dcprobe scan --servers hosts\.txt -o host_status\.tsv --mtu 1500\n/.test(await pane()), 'and the scan to run');
+  await page.locator('#host-status input.probe-why-slow').check();
+  await page.waitForTimeout(200);
+  ok(/dcprobe scan --servers hosts\.txt -o host_status\.tsv --mtu 1500 --why-slow/.test(await pane()), 'why-slow too, when ticked');
+
+  const scan = [
+    '!test\tprobe_reach\tshort=REACH', '!test\tnic_check\tfinding=verdict', '!test\thost_cpu_pct\tunit=% higher=bad agg=last',
+    ...['r1h1', 'r1h2', 'r1h3', 'r2h1', 'r2h2'].map((h) => `probe_reach\t${h}\tPASS\tat=2026-10-28T10:00:00Z`),
+    'probe_reach\tr2h3\tFAIL\tat=2026-10-28T10:00:00Z', 'probe_why\tr2h3\t"ssh: connect to host r2h3 port 22: No route to host"',
+    'nic_check\tr1h1\tPASS', 'nic_check\tr1h2\tFAIL', 'nic_why\tr1h2\t"eth1 at 10G, the layout says 25G"',
+    ...['r1h1', 'r1h2', 'r1h3', 'r2h1', 'r2h2'].map((h, i) => `host_cpu_pct\t${h}\t${i === 0 ? 96 : 12}`),
+  ].join('\n');
+  await drop('host_status.tsv', `${scan}\n`);
+  await page.waitForTimeout(600);
+  const text = await pane();
+  ok(/5 of 6 hosts answered the probe; 3 worth a look\./.test(text), `how many answered, and how many need a look  (${text.split('\n').slice(1, 3).join(' | ')})`);
+  ok(/did not answer: 1 host/.test(text) && /NIC not as the layout says: 1 host/.test(text) && /CPU busy \(90% or more\): 1 host/.test(text),
+     'who did not answer, whose NIC is off the layout, who is busy');
+  const chip = page.locator('#host-status .finding-hosts .pick', { hasText: 'r1/h2' });
+  ok(/eth1 at 10G, the layout says 25G/.test(await chip.getAttribute('title')), 'each host with what it said');
+  await chip.click();
+  await page.waitForTimeout(300);
+  ok(/r1h2|r1\/h2/.test(await page.evaluate(() => document.querySelector('#inspector').innerText)), 'and a click goes to it');
+  ok(/5 of 6 answered · 3 to look at/.test(await page.evaluate(() => document.querySelector('#host-status h2').textContent)),
+     'folded, it still says how things stand');
+}, { url: '?layout=fx/tiny.dc' });
+
+// A run carries the layout it was made on: model.dc in the tar, the layout
+// whole in expected.tsv, and a run file loaded brings it back -- asking first
+// when another layout is in the viewer.
+await test('a run file brings its layout', async () => {
+  // The report, opened if it is shut: it opens itself only for a warning.
+  const notices = async () => {
+    if (await page.evaluate(() => document.querySelector('#notices').hidden)) await page.locator('#notices-btn').click();
+    return page.evaluate(() => document.querySelector('#notices').innerText);
+  };
+  const title = () => page.evaluate(() => document.querySelector('#title').textContent);
+  const asked = [];
+  const answer = (yes) => page.once('dialog', (d) => { asked.push(d.message()); if (yes) d.accept(); else d.dismiss(); });
+  try {
+    await page.locator('#load-gen select.gen-unit').selectOption('Gb/s');
+    await page.fill('#load-gen input.gen-value', '1');
+    await page.locator('#load-gen input.gen-value').dispatchEvent('change');
+    await page.locator('#load-gen button', { hasText: 'Run' }).click();
+    await page.waitForTimeout(400);
+    await page.locator('#load-gen button.run-tool-mx').click();
+    await page.waitForTimeout(300);
+    const [archive] = await Promise.all([page.waitForEvent('download'), page.locator('#load-gen button.run-tar').click()]);
+    const dir = mkdtempSync(join(tmpdir(), 'dcviz-stamp-'));
+    spawnSync('tar', ['-xf', await archive.path(), '-C', dir]);
+    const dc = readFileSync(join(dir, 'run-mx', 'model.dc'), 'utf8');
+    const expected = readFileSync(join(dir, 'run-mx', 'expected.tsv'), 'utf8');
+    rmSync(dir, { recursive: true, force: true });
+    eq(dc, `${TINY}\n`, 'the tar holds the layout as model.dc');
+    const sha = createHash('sha256').update(dc).digest('hex');
+    ok(new RegExp(`^#~model sha256=${sha} lines=12 name=\\S*tiny\\.dc$`, 'm').test(expected) && expected.includes('\n#~   row A\n')
+       && /^#~run tool mx$/m.test(expected) && /^#~run made \d{4}-\d\d-\d\dT[\d:]+Z$/m.test(expected) && /^#~run viewer datacenter_visualization /m.test(expected),
+       'expected.tsv carries it whole, with sha256sum’s digest and how the load was made');
+    const run = `${expected}#~ran started 2026-10-28T10:00:00Z\n#~ran finished 2026-10-28T10:01:00Z\n#~ran host jumpbox\n#~ran mx mx 1.11.1\n`;
+    const original = await title();
+
+    await drop('mx-run.tsv', run);
+    await page.waitForTimeout(500);
+    ok(!asked.length && /made on this very layout/.test(await notices()), 'over its own layout: nothing asked, and it says they match');
+    ok(/mx-run\.tsv: made \S+ by datacenter_visualization \S+ for mx; ran 2026-10-28T10:00:00Z to 2026-10-28T10:01:00Z on jumpbox; mx 1\.11\.1/.test(await notices()),
+       `and when it was made and ran, where, and with what  (${(await notices()).split('\n').find((l) => /made 2/.test(l))})`);
+
+    await openLayout(TINY.replace('dc D', 'dc E'));
+    const other = await title();
+    answer(false);
+    await drop('mx-run.tsv', run);
+    await page.waitForTimeout(500);
+    ok(/^mx-run\.tsv was made on another layout than the one in the viewer: \S*tiny\.dc, sha256 [0-9a-f]{12}…, made /.test(asked[0] || '')
+       && /Load that layout in place of this one \(\S*tiny\.dc, sha256 [0-9a-f]{12}…\)\?/.test(asked[0]), `over another: it asks first  (${asked[0]})`);
+    ok(other !== original && await title() === other && /you kept/.test(await notices()), 'Cancel keeps the layout there, and says what that means');
+    answer(true);
+    await drop('mx-run.tsv', run);
+    await page.waitForTimeout(500);
+    ok(asked.length === 2 && await title() === original && /the layout mx-run\.tsv was made on .*loaded from it/.test(await notices()), 'OK loads the run’s own');
+    ok((await cardNames()).some((n) => /model/i.test(n)), `with its readings  (${await cardNames()})`);
+
+    await openLayout(TINY.replace('dc D', 'dc E'));
+    await drop('mx-run.tsv', run.replace('#~ dc D', '#~ dc X'));
+    await page.waitForTimeout(500);
+    ok(asked.length === 2 && await title() === other && /no longer matches its sha256/.test(await notices()), 'a layout edited since it was written is not loaded, nor asked about');
+
+    answer(true);
+    await page.locator('#btn-restart').click();
+    await page.waitForTimeout(400);
+    await drop('mx-run.tsv', run);
+    await page.waitForTimeout(500);
+    ok(asked.length === 3 && await title() === original, 'into an empty viewer it just loads');
+  } finally {
+    page.removeAllListeners('dialog');
+  }
 }, { url: '?layout=fx/tiny.dc' });
 
 // netmesh measures round trips, not rates: its rtt_p50 against what the
