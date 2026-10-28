@@ -1111,14 +1111,18 @@ into the files by the layout's own names**: load `mx_results.tsv`,
 `iperf_results.tsv` or `netmesh_results.tsv` (made by `dcimport`) beside the
 layout, and compare what ran with what the model said.
 
-- **The NIC to load** goes in the box beside the MTU, as the tools' own
-  `--bind` takes it: an interface name (`eth1`, `mlx5`) or part of an
+- **The NIC to load** goes in the box beside the MTU, as mx's and iperf's
+  `--bind` take it: an interface name (`eth1`, `mlx5`) or part of an
   address (`10.20.`), matched against `ip -o -4 addr show` on each host,
   for a fleet reached over a management NIC whose traffic should ride
   another. It goes into the files — iperf's plans as `bind=`, which every
-  command run against the plan reads; mx's and netmesh's runs as
-  `--bind`, the mx run under netmesh too — and is kept for next time, so
-  the files need no editing. Empty, there is none. A pattern a shell would
+  command run against the plan reads; mx's runs as `--bind`, the mx run
+  under netmesh too — and is kept for next time, so the files need no
+  editing. **netmesh itself does not get it**: its `--bind` is one local
+  address handed to `bind()` as it is, not a pattern each host resolves,
+  so `eth1` is refused and no one address suits a fleet. Its probes go to
+  the addresses `mesh.csv` names, so to probe another network give the
+  hosts `addr=` on it. Empty, there is none. A pattern a shell would
   expand (`eth[12]`) goes quoted; one with a space, a quote or shell syntax
   in it is refused, and the box says why.
 - **A host the tools cannot reach by its name** gets an `addr=` — the

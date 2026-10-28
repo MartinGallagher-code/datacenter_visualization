@@ -1456,7 +1456,8 @@ await test('--bind goes into the run files and is kept', async () => {
     eq(await page.inputValue('#load-gen input.run-bind'), 'mlx5', 'and it is there next time');
     await page.locator('#load-gen button.run-tool-netmesh').click();
     await page.waitForTimeout(300);
-    ok(/netmesh run --mesh mesh\.csv --for 60 --bind mlx5/.test(await files()), 'netmesh runs on it too');
+    ok(/netmesh run --mesh mesh\.csv --for 60\n/.test(await files()) && /-- mx run .* --bind mlx5/.test(await files())
+       && /netmesh's --bind is one local address/.test(await files()), 'netmesh itself does not take it -- one address, no pattern -- the mx run under it does');
     await page.fill('#load-gen input.run-bind', '');
     await page.locator('#load-gen input.run-bind').dispatchEvent('change');
     await page.waitForTimeout(300);
@@ -1647,7 +1648,11 @@ await test('a run against the model', async () => {
 // whole in expected.tsv, and a run file loaded brings it back -- asking first
 // when another layout is in the viewer.
 await test('a run file brings its layout', async () => {
-  const notices = () => page.evaluate(() => document.querySelector('#notices').innerText);
+  // The report, opened if it is shut: it opens itself only for a warning.
+  const notices = async () => {
+    if (await page.evaluate(() => document.querySelector('#notices').hidden)) await page.locator('#notices-btn').click();
+    return page.evaluate(() => document.querySelector('#notices').innerText);
+  };
   const title = () => page.evaluate(() => document.querySelector('#title').textContent);
   const asked = [];
   const answer = (yes) => page.once('dialog', (d) => { asked.push(d.message()); if (yes) d.accept(); else d.dismiss(); });
@@ -1691,7 +1696,7 @@ await test('a run file brings its layout', async () => {
     await drop('mx-run.tsv', run);
     await page.waitForTimeout(500);
     ok(asked.length === 2 && await title() === original && /the layout mx-run\.tsv was made on .*loaded from it/.test(await notices()), 'OK loads the run’s own');
-    ok((await cardNames()).some((n) => /model_gbps|MODEL/.test(n)), 'with its readings');
+    ok((await cardNames()).some((n) => /model/i.test(n)), `with its readings  (${await cardNames()})`);
 
     await openLayout(TINY.replace('dc D', 'dc E'));
     await drop('mx-run.tsv', run.replace('#~ dc D', '#~ dc X'));

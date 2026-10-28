@@ -5176,9 +5176,12 @@ if (python.error) {
   ok(buildMx(made, { seconds: 90, connections: 2, bind: 'eth1' }).commands
     .includes('mx run --matrix matrix.csv --for 90 --streams 2 --bind eth1'), 'mx: --bind on the run');
   const nmB = buildNetmesh(made, { seconds: 90, connections: 2, bind: 'eth1' });
-  ok(nmB.commands.includes('netmesh run --mesh mesh.csv --for 90 --bind eth1'), 'netmesh: --bind on the run');
-  ok(nmB.commands.some((c) => c.includes('--baseline 20 --bind eth1 -- mx run') && c.endsWith('--streams 2 --bind eth1')),
-     'and on the mx run under it');
+  // netmesh's --bind is one literal address, given to bind(): eth1 is refused, and no one address suits a fleet.
+  ok(nmB.commands.includes('netmesh run --mesh mesh.csv --for 90') && !nmB.commands.some((c) => /netmesh run [^-]*(--\w+ \S+ )*--bind/.test(c)),
+     'netmesh: no --bind on netmesh itself, which takes one address and no pattern');
+  ok(nmB.commands.some((c) => c.includes('--baseline 20 -- mx run') && c.endsWith('--streams 2 --bind eth1')),
+     'but on the mx run under it');
+  ok(nmB.notes.some((n) => /netmesh's --bind is one local address, not a pattern, so eth1 is not given to it/.test(n)), 'and the notes say why');
   ok(buildMx(made, { bind: 'eth[12]' }).commands.some((c) => c.endsWith("--bind 'eth[12]'")), 'a pattern the shell would expand goes quoted');
   ok(!buildMx(made, { bind: 'eth 1' }).commands.some((c) => c.includes('--bind eth')), 'and one that cannot be a pattern goes nowhere');
 

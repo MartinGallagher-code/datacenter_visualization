@@ -37,6 +37,13 @@ their shapes are not a promise.
   short is not loaded, and the report says why. Each stamped file gets a
   line in the report: made when and by what, ran when, where and with
   what.
+- **netmesh's runs no longer carry `--bind`.** netmesh's own `--bind` is
+  one local address, given to `bind()` as it is — not an interface name or
+  part of an address that each host resolves, as mx's and iperf's are — so
+  `netmesh run … --bind eth1` was refused, and no one address could suit
+  every host anyway. The mx run under netmesh keeps it, and the notes say
+  why netmesh does not; give the hosts `addr=` on the network to probe.
+  (1.40.1 put it there.) `js/runfiles.js`.
 
 ## 1.41.1 — 2026-10-27
 

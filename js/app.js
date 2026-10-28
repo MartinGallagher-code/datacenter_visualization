@@ -3366,7 +3366,7 @@ function runSetup(tool, summary, mtu) {
     mtu,
     bind: state.runFiles.bind,
     out: paths.join(' '),
-    out_cables: actions.takenOut().links.map((l) => `${l.net}:${l.a.path}-${l.b.path}`).sort().join(' '),
+    out_cables: state.takenOut().links.map((l) => `${l.net}:${l.a.path}-${l.b.path}`).sort().join(' '),
   };
 }
 
