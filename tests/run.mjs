@@ -3429,6 +3429,124 @@ if (python.error) {
   ok(rackLoad.value > 0, 'and a rack sums the hosts beneath it');
 }
 
+// ------------------------------------------------------------------ dcprobe
+// dcprobe reaches every host over ssh. Here a stand-in ssh runs the probe on
+// this machine -- real /proc, real /sys -- and answers for two made-up hosts
+// from canned output, so the numbers the verdicts turn on are known.
+if (python.error) {
+  skip('dcprobe', 'no python3');
+} else {
+  const dir = mkdtempSync(join(tmpdir(), 'dcprobe-'));
+  const canned = (s) => [
+    '@@meta', 'uptime 7200.5', 'loadavg 6.00 3.00 1.00 2/300 999', 'nproc 4', 'hostname r1h2',
+    '@@stat1', 'cpu  1000 0 500 8000 100 0 0 0 0 0',
+    '@@netdev1', 'Inter-|   Receive', ' face |bytes',
+    '  eth1: 1000 10 0 5 0 0 0 0 2000 20 0 0 0 0 0 0',
+    '@@softnet1', '00000100 00000002 00000003', '00000100 00000000 00000000',
+    '@@ethtool1 eth1', '     rx_out_of_buffer: 10', '     rx_discards_phy: 0',
+    '@@stat2', 'cpu  1600 0 700 8100 200 0 0 0 0 0',
+    '@@netdev2', '  eth1: 1250001000 1010 1 25 0 0 0 0 2000 20 0 3 0 0 0 0',
+    '@@softnet2', '00000200 0000000c 00000003', '00000100 00000000 00000000',
+    '@@ethtool2 eth1', '     rx_out_of_buffer: 70', '     rx_discards_phy: 0',
+    '@@meminfo', 'MemTotal: 16000000 kB', 'MemAvailable: 4000000 kB', 'SwapTotal: 1000 kB', 'SwapFree: 500 kB',
+    '@@df', 'Filesystem 1024-blocks Used Available Capacity Mounted on',
+    '/dev/sda1 100 97 3 97% /', 'tmpfs 100 100 0 100% /run', '/dev/sdb1 100 40 60 40% /data',
+    '@@nics', `eth0|up|1000|1500|igb|1.2||`, `eth1|up|${s.speed}|${s.mtu}|mlx5_core|28.39.1002|10.20.0.12/24`, 'eth2|down|-1|1500|mlx5_core|28.39.1002|',
+    '@@inventory', 'kernel 6.1.0-18-amd64', 'os Debian GNU/Linux 12 (bookworm)', 'cpu  AMD EPYC 7543 32-Core Processor',
+    '@@top', 'mx 180.0 2.1', 'python3 12.5 0.4',
+    '@@dmesg', '[ 3000.000000] mlx5_core 0000:41:00.0: link down', '[ 7000.100000] mlx5_core 0000:41:00.0 eth1: Link up',
+    '[ 7100.200000] NETDEV WATCHDOG: eth1 (mlx5_core): transmit queue 3 timed out', '',
+  ].join('\n');
+  writeFileSync(join(dir, '10.0.0.1.out'), canned({ speed: 25000, mtu: 9000 }));   // reached at its addr=
+  writeFileSync(join(dir, 'slow.out'), canned({ speed: 10000, mtu: 1500 }));
+  writeFileSync(join(dir, 'ssh'), [
+    '#!/bin/sh',
+    'while [ $# -gt 0 ]; do case "$1" in -o) shift 2;; *) break;; esac; done',
+    'host=${1#*@}; shift',
+    '[ "$host" = down ] && { echo "ssh: connect to host down port 22: No route to host" >&2; exit 255; }',
+    'case "$*" in *python3*) exec sh -c "$*";; esac',
+    '[ -f "$(dirname "$0")/$host.out" ] && { cat >/dev/null; cat "$(dirname "$0")/$host.out"; exit 0; }',
+    'exec sh -c "$*"', ''].join('\n'));
+  chmodSync(join(dir, 'ssh'), 0o755);
+  // why-slow's --json, as a stand-in: one critical finding.
+  writeFileSync(join(dir, 'why_slow.py'), 'import json\nprint(json.dumps({"findings": [{"severity": "INFO", "title": "fine"}, '
+    + '{"severity": "CRITICAL", "title": "memory exhausted", "detail": "MemAvailable 412 MB of 62.7 GB"}]}))\n');
+  writeFileSync(join(dir, 'hosts.txt'), '# the layout\nfast=10.0.0.1 gbps=25 nic=eth1\nslow gbps=25 nic=10.20.\nlocal=127.0.0.1\ndown\n');
+  const dcprobe = (args) => {
+    const run = spawnSync('python3', [join(root, 'tools/dcprobe'), ...args, '--ssh', join(dir, 'ssh')],
+                          { encoding: 'utf8', cwd: dir });
+    return { err: run.stderr || '', code: run.status, text: () => readFileSync(join(dir, 'status.tsv'), 'utf8') };
+  };
+  const scan = dcprobe(['scan', '--servers', 'hosts.txt', '-o', 'status.tsv', '--why-slow', '--why-slow-file', 'why_slow.py',
+    '--mtu', '9000', '--dmesg-since', '3600']);
+  const text = scan.text();
+  const value = (test, host, extra = '') => {
+    const m = new RegExp(`^${test}\\t${host}\\t("[^"]*"|\\S+)\\tat=\\S+${extra}`, 'm').exec(text);
+    return m ? m[1].replace(/^"|"$/g, '') : undefined;
+  };
+  eq(scan.code, 1, 'dcprobe scan exits 1 when a host does not answer');
+  eq([value('probe_reach', 'down'), value('probe_why', 'down')], ['FAIL', 'ssh: connect to host down port 22: No route to host'],
+     'a host that does not answer is a sample, with ssh’s reason -- never a gap');
+  eq(['fast', 'slow', 'local'].map((h) => value('probe_reach', h)), ['PASS', 'PASS', 'PASS'], 'the rest answered');
+  ok(Math.abs(Number(value('host_cpu_pct', 'fast')) - 80) < 1e-6 && Math.abs(Number(value('host_iowait_pct', 'fast')) - 10) < 1e-6,
+     'CPU busy over the sample, iowait apart: 800 of 1000 jiffies busy, 100 waiting');
+  eq([value('host_load1', 'fast'), value('host_load_per_core', 'fast')], ['6', '1.5'], 'load, and load a core');
+  eq([value('host_mem_pct', 'fast'), value('host_swap_pct', 'fast'), value('inv_mem_gb', 'fast')], ['75', '50', '15'],
+     'memory from MemAvailable, swap, and the box’s memory');
+  ok(/^host_disk_pct\tfast\t97\tat=\S+\tmount=\/$/m.test(text), 'the fullest disk, tmpfs and /run aside');
+  eq([value('host_softnet_drop_ps', 'fast'), value('host_softnet_squeeze_ps', 'fast')], ['10', '0'], 'the kernel’s backlog drops over the sample');
+  ok(value('nic_rx_gbps', 'fast', '\\tnic=eth1') === '10' && value('nic_rx_drop_ps', 'fast', '\\tnic=eth1') === '20'
+     && value('nic_tx_drop_ps', 'fast', '\\tnic=eth1') === '3' && value('nic_err_ps', 'fast', '\\tnic=eth1') === '1'
+     && value('nic_ring_drop_ps', 'fast', '\\tnic=eth1') === '60', 'each NIC: what it moved, dropped and errored, and its ring drops, a second');
+  ok(!/\tnic=eth0/.test(text.split('\n').filter((l) => /\t(fast|slow)\t/.test(l)).join('\n')), 'nic= judges only the NICs it names');
+  eq(value('nic_check', 'fast'), 'PASS', 'at the layout’s 25G and the run’s MTU: as the layout says');
+  ok(/^nic_check\tslow\tFAIL\tat=\S+\twhy="eth1 at 10G, the layout says 25G; eth1 MTU 1500, the run's is 9000"$/m.test(text),
+     'a NIC slower than the layout, at another MTU: FAIL, and why');
+  eq([value('inv_kernel', 'fast'), value('inv_os', 'fast'), value('inv_cpu', 'fast'), value('inv_cores', 'fast'),
+    value('inv_nic_fw', 'fast', '\\tnic=eth1')],
+  ['6.1.0-18-amd64', 'Debian GNU/Linux 12 (bookworm)', 'AMD EPYC 7543 32-Core Processor', '4', '28.39.1002'], 'what the host is');
+  eq(value('host_top', 'fast'), 'mx 180.0% · python3 12.5%', 'its busiest processes');
+  eq([value('host_kernel_errors', 'fast'), value('host_kernel_last', 'fast')], ['2', 'NETDEV WATCHDOG: eth1 (mlx5_core): transmit queue 3 timed out'],
+     'kernel errors in the last hour, by their stamp against the uptime, and the last of them');
+  eq([value('whyslow_verdict', 'fast'), value('whyslow_top', 'fast')], ['FAIL', 'memory exhausted: MemAvailable 412 MB of 62.7 GB'],
+     'why-slow’s worst finding is the verdict, its first serious one kept');
+  ok(Number(value('host_uptime_h', 'local')) > 0 && value('inv_kernel', 'local'), 'and this machine, probed for real');
+
+  // The viewer reads every line of it, and the Findings list knows what each reports.
+  const raw = new Map();
+  const warnings = [];
+  parseResults(text, raw, warnings, 'status.tsv');
+  eq(warnings, [], 'a file the viewer reads without a warning');
+  const byName = new Map([...raw.values()].map((o) => [o.name, o]));
+  eq(['nic_rx_drop_ps', 'host_kernel_errors', 'nic_check', 'whyslow_verdict', 'host_cpu_pct'].map((n) => byName.get(n).meta.finding || ''),
+     ['drops', 'errors', 'verdict', 'verdict', ''], 'drops, errors and verdicts say so for Findings; a gauge does not');
+  eq(byName.get('host_cpu_pct').meta.agg, 'last', 'a watch file reads as now');
+
+  // preflight: what would stop a run, host by host.
+  writeFileSync(join(dir, 'pre.txt'), 'local=127.0.0.1\ndown\n');
+  const pre = dcprobe(['preflight', '--servers', 'pre.txt', '-o', 'status.tsv', '--tools', 'sh,no-such-tool', '--ports', '1']);
+  const preText = pre.text();
+  ok(pre.code === 1 && /^preflight\tlocal\tFAIL\tat=\S+\twhy="no no-such-tool"$/m.test(preText)
+     && /^preflight\tdown\tFAIL\tat=\S+\twhy="ssh: connect to host down port 22: No route to host"$/m.test(preText),
+     `preflight: a missing tool, a host that does not answer  (${preText.split('\n').filter((l) => l.startsWith('preflight')).join(' | ')})`);
+  ok(/^pre_skew_ms\tlocal\t[\d.]+\tat=\S+\tssh_ms=\d+$/m.test(preText) && /^pre_nofile\tlocal\t\d+/m.test(preText), 'the clock, and open files allowed');
+  const preRaw = new Map();
+  const preWarn = [];
+  parseResults(preText, preRaw, preWarn, 'preflight.tsv');
+  eq(preWarn, [], 'read without a warning too');
+
+  // diff: what changed between two scans.
+  writeFileSync(join(dir, 'later.tsv'), text.replace(/6\.1\.0-18-amd64/g, '6.1.0-21-amd64'));
+  const diff = spawnSync('python3', [join(root, 'tools/dcprobe'), 'diff', join(dir, 'status.tsv'), join(dir, 'later.tsv')], { encoding: 'utf8' });
+  ok(diff.status === 0 || diff.status === 1, 'diff runs');
+  writeFileSync(join(dir, 'status.tsv'), text);
+  const changed = spawnSync('python3', [join(root, 'tools/dcprobe'), 'diff', join(dir, 'status.tsv'), join(dir, 'later.tsv'), '-o', join(dir, 'chg.tsv')], { encoding: 'utf8' });
+  ok(changed.status === 1 && /^fast\n  kernel: 6\.1\.0-18-amd64 -> 6\.1\.0-21-amd64$/m.test(changed.stdout)
+     && /^probe_changed\tfast\t1\tat=\S+\twhat="kernel: 6\.1\.0-18-amd64 -> 6\.1\.0-21-amd64"$/m.test(readFileSync(join(dir, 'chg.tsv'), 'utf8')),
+     `diff names what changed, host by host, and as a metric  (${changed.stdout.trim().split('\n').slice(0, 3).join(' | ')})`);
+  rmSync(dir, { recursive: true, force: true });
+}
+
 // ---------------------------------------------------------------- mx export
 // matrix_orchestrator writes this format itself (`mx export`), so there is no
 // importer to test -- what has to hold is that its output parses, binds and
