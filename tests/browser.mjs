@@ -1435,7 +1435,7 @@ await test('--bind goes into the run files and is kept', async () => {
     await page.waitForTimeout(400);
     await page.locator('#load-gen button.run-tool-mx').click();
     await page.waitForTimeout(300);
-    ok(/mx run --matrix matrix\.csv --for 60 --streams 1\n/.test(await files()) && /add --user, --bind/.test(await files()),
+    ok(/mx run --matrix matrix\.csv --for 60 --streams 1( --workers \d+)?\n/.test(await files()) && /add --user, --bind/.test(await files()),
        'none at first: the run as ever, and where a --bind would go');
     await page.fill('#load-gen input.run-bind', 'eth 1');
     await page.locator('#load-gen input.run-bind').dispatchEvent('change');
@@ -1444,7 +1444,7 @@ await test('--bind goes into the run files and is kept', async () => {
     await page.fill('#load-gen input.run-bind', 'mlx5');
     await page.locator('#load-gen input.run-bind').dispatchEvent('change');
     await page.waitForTimeout(300);
-    ok(/mx run --matrix matrix\.csv --for 60 --streams 1 --bind mlx5/.test(await files()) && !/no spaces/.test(await files()),
+    ok(/mx run --matrix matrix\.csv --for 60 --streams 1( --workers \d+)? --bind mlx5/.test(await files()) && !/no spaces/.test(await files()),
        'mx runs on it');
     await page.locator('#load-gen button.run-tool-iperf').click();
     await page.waitForTimeout(300);

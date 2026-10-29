@@ -11,6 +11,20 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.47.0 — 2026-10-29
+
+- **mx's run files size its worker processes to the load.** A pair's
+  connections went in as `--streams`, but each host's work is done by mx
+  `--workers` -- processes of about 200k packets a second of request and
+  reply each -- which the files never set, so mx ran `auto`, one a core
+  up to 8, and a full-frame load of tens of Gb/s outran it. The files now
+  size them as `mx hints` does: twice the busiest host's requests a second
+  (out, or in, which it answers) over 200k, plus one, and never fewer than
+  the processes a flow. Past 8 the run line says `--workers N` -- the mx
+  run under netmesh too -- and the notes say how many each host needs and
+  the cores that takes. iperf (`-P` is threads in each iperf) and netmesh
+  (a trickle of probes) need nothing more. `js/runfiles.js`.
+
 ## 1.46.0 — 2026-10-29
 
 - **Processes a flow, in the load generator.** The same setting as Cable

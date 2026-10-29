@@ -54,7 +54,7 @@ import {
   droppedLayoutsNotice, layoutNotice, prefixed, resultsFileNotice,
 } from '../js/report.js';
 import {
-  bindProblem, buildIperf, buildMx, buildNetmesh, hostToken, mxSizes, rateGroups, runPairs, runProblem, runScript, runTar, runWhy, scriptName, tarball, tarName, tcpPayloadShare,
+  bindProblem, buildIperf, buildMx, buildNetmesh, hostToken, mxSizes, mxWorkers, rateGroups, runPairs, runProblem, runScript, runTar, runWhy, scriptName, tarball, tarName, tcpPayloadShare,
 } from '../js/runfiles.js';
 import { asFile, layoutSha, modelBlock, readStamp, runStamp, sha256 } from '../js/stamp.js';
 import { PROBE_SCRIPT, PROBE_TAR, probeFiles, probeSummary, TOOL_PORTS } from '../js/probe.js';
@@ -5324,7 +5324,23 @@ if (python.error) {
   eq(lines[lines.length - 1], `r2h3,${[pps, pps, pps, pps, pps].join(',')}`, 'each cell 2 Gb/s in requests a second, the diagonal left empty');
   ok(lines.filter((l) => l.startsWith('#')).every((l) => !/=/.test(l) || /^# tx_size=/.test(l)),
      'and no comment says key=value but the config, which mx would read as config');
-  ok(mx.commands.includes('mx run --matrix matrix.csv --for 90 --streams 2'), 'run for as long as asked, a socket a connection');
+  ok(mx.commands.includes('mx run --matrix matrix.csv --for 90 --streams 2 --workers 9'),
+     'run for as long as asked, a socket a connection, and the workers this load needs');
+  // Workers, as mx hints sizes them: each host sends 5 x 162,549 requests a
+  // second, so 2 x 812,744 / 200k + 1 = 9 -- past auto's 8, so said.
+  ok(mx.notes.some((n) => /Each host needs about 9 mx worker processes .* the busiest host handles 812,744 requests a second .* so the run says --workers 9: auto stops at 8\. Each host needs 9 cores for them\./.test(n)),
+     `and the notes say why  (${mx.notes.find((n) => /worker/.test(n))})`);
+  const light = runPairs(all.flows, { toGbps: 0.1, unit: 'Gb/s', sized: null });
+  const lightMx = buildMx(light, { seconds: 90, connections: 2 });
+  ok(lightMx.commands.includes('mx run --matrix matrix.csv --for 90 --streams 2')
+     && lightMx.notes.some((n) => /which --workers auto gives a host of 2 cores or more/.test(n)),
+     'a light load: auto is enough, and the notes say how many cores it takes');
+  eq(mxWorkers(light, { connections: 12 }).workers, 12, 'never fewer workers than the processes a flow');
+  eq(mxWorkers(light, { connections: 12 }).flag, true, 'and more than auto runs, said');
+  // Incast: the one receiving answers every request, so it is the busiest.
+  const into = runPairs([{ src: h('r1h1'), dst: h('r2h1'), value: 1 }, { src: h('r1h2'), dst: h('r2h1'), value: 1 },
+    { src: h('r1h3'), dst: h('r2h1'), value: 1 }], { toGbps: 1, unit: 'Gb/s', sized: null });
+  eq(Math.round(mxWorkers(into).peak), Math.round(3e9 / ((1472 + 66) * 8)), 'the busiest host is the one answering every request');
   ok(mx.commands.includes('mx export --matrix matrix.csv --peers -o mx_results.tsv'), 'and exported for the viewer');
   const mxSized = buildMx(sized, {});
   ok(mxSized.files[0].text.includes('# tx_size=434 rx_size=934 port=5300') && mxSized.files[0].text.includes(',1000'),
@@ -5404,11 +5420,11 @@ if (python.error) {
   ok(ipB.notes.some((n) => /NIC matching mlx5/.test(n)), 'and the notes say which NIC the traffic rides');
   ok(!plan.includes('bind='), 'no bind= without one');
   ok(buildMx(made, { seconds: 90, connections: 2, bind: 'eth1' }).commands
-    .includes('mx run --matrix matrix.csv --for 90 --streams 2 --bind eth1'), 'mx: --bind on the run');
+    .includes('mx run --matrix matrix.csv --for 90 --streams 2 --workers 9 --bind eth1'), 'mx: --bind on the run');
   const nmB = buildNetmesh(made, { seconds: 90, connections: 2, bind: 'eth1' });
   ok(nmB.commands.includes('netmesh run --mesh mesh.csv --for 90 --bind eth1'), 'netmesh: --bind on the run');
-  ok(nmB.commands.some((c) => c.includes('--baseline 20 --bind eth1 -- mx run') && c.endsWith('--streams 2 --bind eth1')),
-     'and on the mx run under it');
+  ok(nmB.commands.some((c) => c.includes('--baseline 20 --bind eth1 -- mx run') && c.endsWith('--streams 2 --workers 9 --bind eth1')),
+     'and on the mx run under it, with the workers its load needs');
   ok(nmB.notes.some((n) => /an older netmesh takes only a whole address and refuses eth1/.test(n)), 'and the notes say which netmesh reads it as a NIC');
   ok(buildMx(made, { bind: 'eth[12]' }).commands.some((c) => c.endsWith("--bind 'eth[12]'")), 'a pattern the shell would expand goes quoted');
   ok(!buildMx(made, { bind: 'eth 1' }).commands.some((c) => c.includes('--bind eth')), 'and one that cannot be a pattern goes nowhere');
@@ -5448,7 +5464,7 @@ if (python.error) {
     // From somewhere else: it runs where it was saved.
     const ran = spawnSync('bash', [join(runs, 'run-mx.sh')], { encoding: 'utf8', env, cwd: dir });
     eq([ran.status, ran.stdout.trim().split('\n')], [0, [
-      'mx check --matrix matrix.csv', 'mx run --matrix matrix.csv --for 30 --streams 1', 'mx export --matrix matrix.csv --peers -o mx_results.tsv',
+      'mx check --matrix matrix.csv', 'mx run --matrix matrix.csv --for 30 --streams 1 --workers 9', 'mx export --matrix matrix.csv --peers -o mx_results.tsv',
     ]], 'a script that runs its commands, in order, wherever it is run from');
     const runFile = readFileSync(join(runs, 'mx-run.tsv'), 'utf8');
     ok(runFile.startsWith('# model'), 'and collects the run with the model');

@@ -224,11 +224,50 @@ function withExpected(built, expected, results, model = null) {
  * sizes in its header. A sized load keeps its sizes; a bit rate goes in full
  * frames, answered by the smallest reply mx makes.
  */
+// What one mx worker process sustains, in packets a second of request and
+// reply (mx's WORKER_PPS), and how many `--workers auto` stops at (its
+// MAX_AUTO_WORKERS): past that, the run has to say how many.
+const MX_WORKER_PPS = 200000;
+const MX_AUTO_WORKERS = 8;
+
+/**
+ * The worker processes each host needs for this load, as mx's own `mx
+ * hints` sizes them: twice the busiest host's requests a second -- out, or
+ * in, which it answers -- over what one worker sustains, plus one; and
+ * never fewer than the processes a flow, so each pair's streams have a
+ * process each. `flag` is whether the run must say it: `auto` runs one a
+ * core but no more than eight.
+ */
+export function mxWorkers(made, { mtu = 1500, connections = 1 } = {}) {
+  const { tx } = mxSizes(made, mtu);
+  const pps = (pair) => (pair.pps > 0 ? pair.pps : (pair.gbps * 1e9) / ((tx + WIRE_BYTES) * 8));
+  const out = new Map();
+  const into = new Map();
+  for (const pair of made.pairs) {
+    const v = pps(pair);
+    if (!(v > 0)) continue;
+    out.set(pair.src, (out.get(pair.src) || 0) + v);
+    into.set(pair.dst, (into.get(pair.dst) || 0) + v);
+  }
+  let peak = 0;
+  for (const m of [out, into]) for (const v of m.values()) peak = Math.max(peak, v);
+  const workers = Math.max(Math.floor((peak * 2) / MX_WORKER_PPS) + 1, mxStreams(connections));
+  return { workers, peak, flag: workers > MX_AUTO_WORKERS };
+}
+
+const workersNote = (w, streams) => (w.workers <= 1 ? []
+  : [`Each host needs about ${w.workers} mx worker processes -- one sustains ~200k packets a second of request and reply, `
+    + `and the busiest host handles ${Math.round(w.peak).toLocaleString()} requests a second`
+    + `${w.workers === streams && streams > 1 ? `; and one each for a pair’s ${streams} streams` : ''} -- `
+    + (w.flag ? `so the run says --workers ${w.workers}: auto stops at ${MX_AUTO_WORKERS}. Each host needs ${w.workers} cores for them.`
+      : `which --workers auto gives a host of ${w.workers} cores or more (one a core, up to ${MX_AUTO_WORKERS}).`)]);
+
 export function buildMx(made, { seconds = 60, connections = 1, summary = '', expected = '', mtu = 1500, bind = '', model = null } = {}) {
   const { pairs, hosts, sized } = made;
   const { tx, rx } = mxSizes(made, mtu);
   const pps = (pair) => (pair.pps > 0 ? pair.pps : (pair.gbps * 1e9) / ((tx + WIRE_BYTES) * 8));
   const streams = mxStreams(connections);
+  const workers = mxWorkers(made, { mtu, connections });
   const matrix = [
     '# mx matrix v1 -- rows send, columns receive, cells are packets/sec',
     `# tx_size=${tx} rx_size=${rx} port=5300`,
@@ -245,13 +284,14 @@ export function buildMx(made, { seconds = 60, connections = 1, summary = '', exp
       sized ? `Requests of ${tx} bytes, each answered by ${rx} bytes back, as the generator sized them.`
         : `A bit rate, sent as ${tx}-byte requests (full ${mtu}-byte frames), each answered by mx’s smallest reply, ${rx} bytes.`,
       `Each pair’s rate is split over ${streams} socket${streams === 1 ? '' : 's'} (--streams), as the model’s connections.`,
+      ...workersNote(workers, streams),
       ...bindNote(bind),
     ],
     commands: [
       '# what each host will send and take in, before anything starts',
       'mx check --matrix matrix.csv',
       `# the run: add --user${bind ? '' : ', --bind'} ... as you would to any mx run`,
-      mxRun(seconds, connections, bind),
+      mxRun(seconds, connections, bind, workers),
       '# what it measured, for the viewer: load mx_results.tsv beside the layout',
       'mx export --matrix matrix.csv --peers -o mx_results.tsv',
     ],
@@ -259,7 +299,8 @@ export function buildMx(made, { seconds = 60, connections = 1, summary = '', exp
 }
 
 const mxStreams = (connections) => Math.min(MX_STREAMS, Math.max(1, Math.round(connections)));
-const mxRun = (seconds, connections, bind = '') => `mx run --matrix matrix.csv --for ${seconds} --streams ${mxStreams(connections)}${bindFlag(bind)}`;
+const mxRun = (seconds, connections, bind = '', workers = null) => `mx run --matrix matrix.csv --for ${seconds} --streams ${mxStreams(connections)}`
+  + `${workers && workers.flag ? ` --workers ${workers.workers}` : ''}${bindFlag(bind)}`;
 
 /**
  * The pairs in groups of one rate each, since iperf's -b is one rate for a
@@ -425,7 +466,7 @@ export function buildNetmesh(made, { seconds = 60, connections = 1, summary = ''
       `netmesh run --mesh mesh.csv --for ${seconds}${bindFlag(bind)}`,
       '# ... or 20 s idle, then under the load (the mx run, with matrix.csv beside it):',
       '# put this line in place of the one above',
-      `# netmesh run --mesh mesh.csv --baseline 20${bindFlag(bind)} -- ${mxRun(seconds, connections, bind)}`,
+      `# netmesh run --mesh mesh.csv --baseline 20${bindFlag(bind)} -- ${mxRun(seconds, connections, bind, mxWorkers(made, { mtu, connections }))}`,
       '# what it measured, for the viewer: load netmesh_results.tsv beside the layout',
       'dcimport netmesh_results.tsv --tidy reports/',
     ],

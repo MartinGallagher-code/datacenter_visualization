@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.46.0** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.47.0** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -1160,6 +1160,21 @@ layout, and compare what ran with what the model said.
   each on its own port so they run at once in separate terminals, and their
   exports go into one `iperf_results.tsv`. iperf sends TCP, so a sized load's
   replies go back as TCP the other way at their own bit rate.
+- **mx's workers are sized to the load.** A pair's connections are mx's
+  `--streams` — its rate split over that many sockets — but what does the
+  work on each host is `--workers`, separate processes that each sustain
+  about 200k packets a second of request and reply. `--workers auto`
+  runs one a core and stops at 8, which a full-frame load at tens of Gb/s
+  outruns: 50 Gb/s of 1472-byte requests is 4 million a second. So the
+  files size them as `mx hints` does — twice the busiest host's requests
+  a second (out, or in, which it answers) over 200k, plus one, and never
+  fewer than the processes a flow — and the notes say how many each host
+  needs. Past 8 the run line says `--workers N`, the mx run under netmesh
+  too; at 8 or fewer `auto` already gives it on a host with that many
+  cores, and the notes say so. iperf needs nothing of the kind: `-P` is
+  threads within each iperf, each its own core; nor does netmesh, whose
+  probes are a trickle for one process however many ports they spread
+  over.
 - **netmesh makes no load.** It measures the network: run alone it probes
   the idle network; `netmesh run --mesh mesh.csv --baseline 20 -- mx run …`
   probes 20 s idle and then under the load, which is the latency the
