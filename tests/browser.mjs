@@ -1657,6 +1657,59 @@ await test('a run against the model', async () => {
      'the load generator as it is set now is a model too');
 }, { url: '?layout=fx/tiny.dc' });
 
+// Processes a flow, in the load generator: stream= caps each, so 50 Gb/s
+// from each host over five peers is 10 a flow, held to 8.5 by one process.
+await test('processes a flow in the load generator', async () => {
+  await openLayout([
+    'dc D', '  row A', '    rack r[1..2] u=10', '      node h[1..3] role=server name={rack}{id} stream=8.5',
+    '      node t role=tor +switch name={rack}tor', '  row S', '    rack SP u=4', '      node spine role=spine +switch',
+    'net nic gbps=100', 'net up gbps=400', 'link nic scope=rack role=server role=tor', 'link up role=tor role=spine',
+  ].join('\n'));
+  const gen = () => page.evaluate(() => document.querySelector('#load-gen').innerText);
+  await page.locator('#load-gen select.gen-unit').selectOption('Gb/s');
+  await page.fill('#load-gen input.gen-value', '50');
+  await page.locator('#load-gen input.gen-value').dispatchEvent('change');
+  await page.locator('#load-gen button', { hasText: 'Run' }).click();
+  await page.waitForTimeout(500);
+  eq(await page.inputValue('#load-gen input.gen-procs'), '1', 'one process a flow, to begin with');
+  ok(/stream=8\.5G holds 30 of 30 flows below what they were asked: 1 process a flow carries 8\.5Gb\/s at most\. 2 would carry every one in full\./.test(await gen()),
+     `stream= holding the load back, and how many processes would not  (${(await gen()).split('\n').find((l) => /stream=/.test(l))})`);
+  await page.locator('#load-gen button.gen-procs-use').click();
+  await page.waitForTimeout(500);
+  ok(await page.inputValue('#load-gen input.gen-procs') === '2' && !/holds \d+ of/.test(await gen()), 'Use 2: every flow in full, and nothing said');
+  await page.fill('#load-gen input.gen-procs', '1');
+  await page.locator('#load-gen input.gen-procs').dispatchEvent('change');
+  await page.waitForTimeout(300);
+  await page.locator('#load-gen button', { hasText: 'Stop' }).click();
+}, { url: '?layout=fx/tiny.dc' });
+
+// Collapse all, at the top of each side panel: every section folded, and
+// again, every one open.
+await test('collapse all', async () => {
+  try {
+    const folded = (side) => page.evaluate((s) => [...document.querySelectorAll(`#${s} > .block.fold`)]
+      .filter((b) => b.offsetParent !== null).map((b) => b.classList.contains('off')), side);
+    for (const side of ['left', 'right']) {
+      const button = page.locator(`#${side} button.fold-all`);
+      eq(await button.textContent(), 'Collapse all', `${side}: Collapse all, to begin with`);
+      await button.click();
+      await page.waitForTimeout(200);
+      ok((await folded(side)).every(Boolean) && (await folded(side)).length > 1, `${side}: every section folded to its title`);
+      eq(await button.textContent(), 'Open all', `${side}: and the button offers to open them`);
+      await button.click();
+      await page.waitForTimeout(200);
+      ok((await folded(side)).every((f) => !f), `${side}: again, every one open`);
+    }
+    // Folding the sections by hand turns it into Open all as well.
+    const heads = page.locator('#right > .block.fold:visible > h2');
+    for (let i = 0; i < await heads.count(); i++) await heads.nth(i).click({ position: { x: 30, y: 6 } });
+    await page.waitForTimeout(300);
+    eq(await page.locator('#right button.fold-all').textContent(), 'Open all', 'and folding every one by hand says the same');
+  } finally {
+    await page.evaluate(() => localStorage.removeItem('dcviewer.folds'));
+  }
+}, { url: '?layout=fx/tiny.dc' });
+
 // Host status: dcprobe's hosts.txt and commands for the layout's hosts, and a
 // loaded scan read back into the hosts worth a look.
 await test('host status from dcprobe', async () => {

@@ -2036,6 +2036,35 @@ export function renderLoadGen(state, host, actions, { unit } = {}) {
   who.append(hosts, count);
   box.append(who);
 
+  // Processes a flow: how many connections each flow between two hosts runs
+  // as -- the same setting as Cable load's connections a flow. A server's
+  // stream= caps each one, so a flow carries at most this many times it.
+  const procs = el('div', 'gen-row');
+  const procInput = el('input', 'gen-procs');
+  procInput.type = 'number';
+  procInput.min = '1';
+  procInput.max = String(CONNECTION_LIMITS.max);
+  procInput.value = String(state.traffic.connections);
+  procInput.title = 'How many processes (connections) each flow between two hosts runs as: iperf -P, mx --streams, '
+    + 'netmesh flows=. A server’s stream= caps each one -- one core’s worth -- so a flow carries at most this many '
+    + 'times it. The same setting as Cable load’s connections a flow';
+  procInput.addEventListener('change', () => actions.setConnections(procInput.value));
+  procs.append(el('span', null, 'processes'), procInput, el('span', null, 'a flow'));
+  box.append(procs);
+  const capped = g.on ? actions.genProcesses() : null;
+  if (capped && capped.held) {
+    const why = el('div', 'bad gen-procs-why');
+    why.append(el('span', null, `stream=${formatGbps(capped.stream)} holds ${capped.held.toLocaleString()} of ${capped.flows.toLocaleString()} `
+      + `flow${capped.flows === 1 ? '' : 's'} below what ${capped.held === 1 ? 'it was' : 'they were'} asked: `
+      + `${capped.conns} process${capped.conns === 1 ? '' : 'es'} a flow carr${capped.conns === 1 ? 'ies' : 'y'} ${formatGbps(capped.stream * capped.conns)}b/s at most. `
+      + `${capped.need} would carry every one in full. `));
+    const use = el('button', 'gen-procs-use', `Use ${capped.need}`);
+    use.title = `Run each flow as ${capped.need} processes`;
+    use.addEventListener('click', () => actions.setConnections(capped.need));
+    why.append(use);
+    box.append(why);
+  }
+
   if (TARGETED.has(g.pattern)) {
     const target = state.picked[0] || state.selected || null;
     const which = target ? `${shortPath(target)} (${state.picked[0] ? 'the first pick' : 'the selection'})` : '';

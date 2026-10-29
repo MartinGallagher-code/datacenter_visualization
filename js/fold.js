@@ -31,7 +31,13 @@ export function setFolded(key, on) {
   if (on) folded.add(key);
   else folded.delete(key);
   save();
+  for (const fn of watchers) fn();
 }
+
+// Told after anything folds or opens, by hand or all at once: what keeps a
+// Collapse all button saying what it will do.
+const watchers = [];
+export const onFoldChange = (fn) => { watchers.push(fn); };
 
 /**
  * A title's key: its words, without the counts and figures that change from
@@ -108,6 +114,27 @@ export function foldRuns(root, prefix, titles = '.load-title') {
     while (i + 1 < kids.length && !kids[i + 1].matches(titles) && !kids[i + 1].matches('.fold-stop')) box.append(kids[++i]);
     makeFold(box, head, head.dataset.fold || foldKey(prefix, head.textContent));
   }
+}
+
+/** A panel's sections: the folds directly in it, shown or not. */
+const sectionsOf = (panel) => [...panel.querySelectorAll(':scope > .block.fold')];
+
+/** Whether every section shown in `panel` is folded. */
+export function panelFolded(panel) {
+  const shown = sectionsOf(panel).filter((b) => !b.hidden && b.offsetParent !== null);
+  return shown.length > 0 && shown.every((b) => isFolded(b.dataset.foldKey));
+}
+
+/**
+ * Collapse all: fold every section of a side panel to its title -- or, when
+ * every one already is, open them all. The parts inside a section keep
+ * what they were, so opening a section again shows it as it was left.
+ */
+export function foldPanel(panel) {
+  const open = panelFolded(panel);
+  const blocks = sectionsOf(panel);
+  for (const b of blocks) setFolded(b.dataset.foldKey, !open);
+  for (const b of blocks) if (shows.has(b)) shows.get(b)();
 }
 
 /** What a folded pane says beside its title, once its body knows. */
