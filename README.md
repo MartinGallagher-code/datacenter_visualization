@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.50.0** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.51.0** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -1103,13 +1103,28 @@ off.
   the cables carry them all, shared out together, and the panel says what
   each sends ("A: 3 of 3 hosts send · 6 flows · 60G").
 
-  **No host is in two areas.** Two areas whose filters take a host —
-  including an area with no filter, which takes every host — are refused,
-  naming the areas and a host they share, and nothing runs until each has
-  hosts of its own. An incast's or outcast's target is the first pick (or
-  the selection) inside its area and in no other, so no area reaches into
-  another's hosts. Connections a flow and cores per server are the whole
-  run's.
+  **No host is in two areas — unless you say so.** Two areas whose filters
+  take a host — including an area with no filter, which takes every host
+  — are refused, naming the areas and a host they share, and nothing runs
+  until each has hosts of its own. An incast's or outcast's target is the
+  first pick (or the selection) inside its area and in no other, so no
+  area reaches into another's hosts. Connections a flow and cores per
+  server are the whole run's.
+
+  **areas may share hosts** lets them: two things running on some hosts
+  at once — a storage load on every server while one rack also takes an
+  incast. A host in two areas runs both, and the model shares its CPU and
+  NICs between them as it does any two flows; the row says how many hosts
+  are shared. What the tools need for it is ports of their own and stopping
+  only their own, so with hosts shared each area's run listens a hundred
+  ports on from the one before (mx 5300, 5400, …; netmesh 5310, 5410, …;
+  iperf 5001, 5101, …), the notes list them to open, and the Host status
+  pane's preflight checks them all. mx's workers share a port by
+  `SO_REUSEPORT`, so two mx runs on one port would quietly take each
+  other's packets. Stopping by pid is the other half: **mx 1.11.2** and
+  netmesh from the binnacle after 0.8.0 stop only their own agents, where
+  older ones also kill every other agent on the host when they stop.
+  iperf-orchestrator already stops its servers by port.
 
   The run files make each area a run of its own, all started at once, so
   no run reads, writes or cleans up after another — the tools' own

@@ -1884,6 +1884,23 @@ export function renderLoadGen(state, host, actions, { unit } = {}) {
     tabs.append(name, drop);
   }
   box.append(tabs);
+  if (areaInfo.areas.length > 1) {
+    const share = el('label', 'gen-areas-share');
+    const tick = el('input');
+    tick.type = 'checkbox';
+    tick.checked = !!areaInfo.share;
+    tick.addEventListener('change', () => actions.setAreasShare(tick.checked));
+    share.append(tick, el('span', null, ' areas may share hosts'));
+    share.title = 'Two loads on one host at once -- a host in two areas runs both, sharing its CPU and NICs, as the model shows. '
+      + 'Off, a host two areas take is refused. On, each area’s run listens on ports of its own (5300, 5400, … for mx), '
+      + 'and needs tools that stop only their own agents: mx 1.11.2 or later, netmesh from the binnacle after 0.8.0';
+    const row = el('div', 'gen-row');
+    row.append(share);
+    if (areaInfo.share && areaInfo.shared) {
+      row.append(el('span', 'muted', `${areaInfo.shared.toLocaleString()} host${areaInfo.shared === 1 ? '' : 's'} in more than one area`));
+    }
+    box.append(row);
+  }
   if (areaInfo.why) box.append(el('div', 'bad gen-areas-why', areaInfo.why));
 
 

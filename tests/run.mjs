@@ -5600,6 +5600,16 @@ if (python.error) {
      && nmArea.commands.includes('dcimport netmesh_results-A.tsv --tidy reports-A/')
      && nmArea.commands.some((c) => /^# netmesh run --mesh mesh-A\.csv --baseline 20 --remote-dir \/var\/tmp\/netmesh-A --reports reports-A -- mx run --matrix matrix-A\.csv .* --remote-dir \/var\/tmp\/mx-A --reports reports-mx-A$/.test(c)),
      'netmesh: its mesh, remote directory and reports, and the mx under it apart from both');
+  // Areas sharing hosts: each run on ports of its own, and the notes say
+  // which, and which versions stop only their own agents.
+  ok(buildMx(areaB, { area: 'B', portOffset: 100 }).files[0].text.includes('# tx_size=1472 rx_size=32 port=5400\n')
+     && buildNetmesh(areaB, { area: 'B', portOffset: 100 }).files[0].text.includes('# size=64 port=5410 ')
+     && buildIperf(areaB, { area: 'B', portOffset: 100 }).files[0].text.includes('# port=5101 '),
+     'an area’s ports, a hundred on for each area before it');
+  const sharing = mergeAreas([{ area: 'A', built: buildMx(areaA, { area: 'A' }) }, { area: 'B', built: buildMx(areaB, { area: 'B', portOffset: 100 }) }], { shared: 3 });
+  ok(/^2 areas, each a load of its own, run at the same time: A, B\./.test(sharing.notes[0])
+     && /The areas share 3 hosts, so each area's run has ports of its own \(A 5300, B 5400\): open them all\. .*mx 1\.11\.2 or later/.test(sharing.notes[1]),
+     `the notes say the hosts are shared, the ports, and the versions  (${sharing.notes[1]})`);
   ok(nmB.notes.some((n) => /an older netmesh takes only a whole address and refuses eth1/.test(n)), 'and the notes say which netmesh reads it as a NIC');
   ok(buildMx(made, { bind: 'eth[12]' }).commands.some((c) => c.endsWith("--bind 'eth[12]'")), 'a pattern the shell would expand goes quoted');
   ok(!buildMx(made, { bind: 'eth 1' }).commands.some((c) => c.includes('--bind eth')), 'and one that cannot be a pattern goes nowhere');

@@ -45,6 +45,11 @@ const MX_REPLY = 32;            // mx answers every request; the least it can an
 const MX_STREAMS = 256;
 const IPERF_GROUPS = 8;         // concurrent runs, one per rate, before rates are binned
 const IPERF_PORT = 5001;
+// Each tool's port, and how far apart areas sharing hosts keep theirs: two
+// runs on one host need a port each, and mx's workers share theirs by
+// SO_REUSEPORT, so two mx runs on one port would take each other's packets.
+export const RUN_PORTS = { mx: 5300, netmesh: 5310, iperf: IPERF_PORT };
+export const AREA_PORT_STEP = 100;
 const PROBES = 10;              // netmesh probes a second on each pair: its own default
 const PROBE_FLOWS = 64;
 // What every tool takes as a host or an address: no commas (the grids are
@@ -248,6 +253,13 @@ function assemble(phases) {
   ].filter((line) => line !== undefined);
 }
 
+// The port each run of a built area listens on, read back out of its files.
+function portsOf(tool, built) {
+  const ports = new Set();
+  for (const f of built.files) for (const m of String(f.text).matchAll(/^# (?:tx_size=\S+ rx_size=\S+ |size=\S+ )?port=(\d+)/gm)) ports.add(m[1]);
+  return [...ports].join('/') || `${RUN_PORTS[tool]}`;
+}
+
 /**
  * Several areas' runs of one tool as one: each area a load of its own, on
  * hosts of its own, with files, run ids, remote directories and reports of
@@ -257,7 +269,7 @@ function assemble(phases) {
  *
  * @param parts  [{ area, built }] -- each built for its area (`area` set)
  */
-export function mergeAreas(parts, { summary = '' } = {}) {
+export function mergeAreas(parts, { summary = '', shared = 0 } = {}) {
   const tool = parts[0].built.tool;
   const files = [];
   const seen = new Set();
@@ -286,8 +298,13 @@ export function mergeAreas(parts, { summary = '' } = {}) {
     areas: parts.map((x) => x.area),
     files,
     notes: [
-      `${parts.length} areas, each a load of its own on hosts of its own, run at the same time: ${names}${summary ? ` -- ${summary}` : ''}. `
+      `${parts.length} areas, each a load of its own${shared ? '' : ' on hosts of its own'}, run at the same time: ${names}${summary ? ` -- ${summary}` : ''}. `
         + 'Each has its own files, run ids, remote directory and reports, so no run cleans up or reads another’s.',
+      ...(shared ? [`The areas share ${shared.toLocaleString()} host${shared === 1 ? '' : 's'}, so each area's run has ports of its own `
+        + `(${parts.map((x) => `${x.area} ${portsOf(tool, x.built)}`).join(', ')}): open them all. `
+        + 'Two runs on one host each stop only their own: mx 1.11.2 or later, and netmesh from the binnacle after 0.8.0, stop an agent '
+        + 'by its pid; an older one also kills the other run’s agents on the hosts they share when it stops. '
+        + 'iperf-orchestrator stops its servers by port. They also share those hosts’ CPU and NICs, as the model shows.'] : []),
       ...parts.flatMap((x) => x.built.notes.map((n) => `${x.area}: ${n}`)),
     ],
     commands,
@@ -404,7 +421,7 @@ const coresNote = (made, connections, cores, coresOf, what) => {
     + 'and the kernel spreads them.'];
 };
 
-export function buildMx(made, { seconds = 60, connections = 1, cores = 0, coresOf = null, summary = '', expected = '', mtu = 1500, bind = '', model = null, area = '' } = {}) {
+export function buildMx(made, { seconds = 60, connections = 1, cores = 0, coresOf = null, summary = '', expected = '', mtu = 1500, bind = '', model = null, area = '', portOffset = 0 } = {}) {
   const { pairs, hosts, sized } = made;
   const { tx, rx } = mxSizes(made, mtu);
   const pps = (pair) => (pair.pps > 0 ? pair.pps : (pair.gbps * 1e9) / ((tx + WIRE_BYTES) * 8));
@@ -412,7 +429,7 @@ export function buildMx(made, { seconds = 60, connections = 1, cores = 0, coresO
   const workers = mxWorkers(made, { mtu, connections, cores, coresOf });
   const matrix = [
     '# mx matrix v1 -- rows send, columns receive, cells are packets/sec',
-    `# tx_size=${tx} rx_size=${rx} port=5300`,
+    `# tx_size=${tx} rx_size=${rx} port=${RUN_PORTS.mx + portOffset}`,
     `# every request of ${tx} bytes is answered with a reply of ${rx} bytes`,
     `# made by datacenter_visualization ${VERSION}`,
     ...describe(pairs, hosts, summary).map((line) => `# ${prose(line)}`),
@@ -506,7 +523,7 @@ const iperfRate = (gbps) => (gbps >= 0.001 ? `${Number((gbps * 1000).toPrecision
  * streams at -b). Different rates are different runs, each on its own port
  * so they can go at once. A sized load's replies go back as TCP the other way.
  */
-export function buildIperf(made, { seconds = 60, connections = 1, cores = 0, coresOf = null, summary = '', expected = '', mtu = 1500, bind = '', model = null, area = '' } = {}) {
+export function buildIperf(made, { seconds = 60, connections = 1, cores = 0, coresOf = null, summary = '', expected = '', mtu = 1500, bind = '', model = null, area = '', portOffset = 0 } = {}) {
   const { pairs, hosts, sized } = made;
   const groups = rateGroups(pairs);
   const streams = Math.max(1, Math.round(connections));
@@ -525,7 +542,7 @@ export function buildIperf(made, { seconds = 60, connections = 1, cores = 0, cor
     text: [
       '# iperf-orchestrator plan v1 -- one file drives every command',
       '# mode=parallel',
-      `# port=${IPERF_PORT + k} duration=${seconds} streams=${streams}`,
+      `# port=${IPERF_PORT + portOffset + k} duration=${seconds} streams=${streams}`,
       `# bandwidth=${iperfRate((group.gbps * payload) / streams)}${iperfLength((group.gbps * payload) / streams)}`,
       // A plan setting, so every command run against the plan takes it.
       ...(bindFlag(bind) ? [`# bind=${bind}`] : []),
@@ -584,7 +601,7 @@ export function buildIperf(made, { seconds = 60, connections = 1, cores = 0, cor
  * path MTU -- netmesh measures the network, it makes no load. Alone it probes
  * an idle network; run with the load after --, idle first and then under it.
  */
-export function buildNetmesh(made, { seconds = 60, connections = 1, cores = 0, coresOf = null, summary = '', expected = '', mtu = 1500, bind = '', model = null, area = '' } = {}) {
+export function buildNetmesh(made, { seconds = 60, connections = 1, cores = 0, coresOf = null, summary = '', expected = '', mtu = 1500, bind = '', model = null, area = '', portOffset = 0 } = {}) {
   const { pairs, hosts } = made;
   const flows = Math.min(PROBE_FLOWS, Math.max(1, Math.round(connections)));
   const probed = pairs.filter((pair) => pair.gbps > 0 || pair.pps > 0);
@@ -594,7 +611,7 @@ export function buildNetmesh(made, { seconds = 60, connections = 1, cores = 0, c
   const among = `${probed.length.toLocaleString()} pair${probed.length === 1 ? '' : 's'} among ${hosts.length.toLocaleString()} hosts`;
   const mesh = [
     '# netmesh mesh v1 -- rows probe, columns answer, cells are probes/sec',
-    `# size=64 port=5310 pps=${PROBES} flows=${flows}`,
+    `# size=64 port=${RUN_PORTS.netmesh + portOffset} pps=${PROBES} flows=${flows}`,
     `# made by datacenter_visualization ${VERSION}`,
     `# the pairs of a load-generator load${summary ? ` -- ${prose(summary)} --` : ''} ${among}`,
     '# probed only: netmesh does not send the load or its rate',

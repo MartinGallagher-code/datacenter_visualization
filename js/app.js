@@ -29,7 +29,7 @@ import {
 import { layoutSha, modelBlock, readStamp, runStamp } from './stamp.js';
 import { VERSION } from './version.js';
 import { foldPanel, makeFold, onFoldChange, panelFolded, setFolded } from './fold.js';
-import { bindProblem, hostToken, mergeAreas, mxSizes, RUN_BUILDERS, RUN_LABELS, runPairs, runProblem, runWhy, tcpPayloadShare } from './runfiles.js';
+import { AREA_PORT_STEP, bindProblem, hostToken, mergeAreas, mxSizes, RUN_BUILDERS, RUN_PORTS, RUN_LABELS, runPairs, runProblem, runWhy, tcpPayloadShare } from './runfiles.js';
 import { PROBE_TESTS, probeFiles, probeSummary } from './probe.js';
 import {
   compareHosts, compareLatency, compareMtu, compareRuns, comparisonResults, DEFAULT_TOLERANCE, LATENCY_UNITS, LOSSY,
@@ -100,6 +100,9 @@ const state = {
     // `cores` the most cores the generated load may use on each server (0:
     // what their cores= say, or no limit), each carrying one at its stream=.
     key: null, counters: null, split: 'hashed', connections: 1, cores: 0, seed: 1, spread: 'gravity', view: 'model',
+    // Whether the generator's areas may share hosts: two loads on one host
+    // at once. Off, a host two areas take is refused.
+    areasShare: false,
     // With two or more picks: count only the metric's flows between them,
     // and a test flow from the first pick to the second.
     betweenOnly: false,
@@ -537,7 +540,7 @@ function modelSource(withDown) {
   // areas, the first inside the area and in no other.
   const targets = areas.map((a, i) => (TARGETED.has(a.pattern) ? areaTarget(scope, i) : null));
   const target = targets[t.areas.indexOf(gen)] || null;
-  const genKey = gen ? JSON.stringify([scope && scope.why, ...areas.map((a, i) => [a.name, a.pattern, a.value, genUnit(a), a.per, a.peers,
+  const genKey = gen ? JSON.stringify([scope && scope.why, t.areasShare, ...areas.map((a, i) => [a.name, a.pattern, a.value, genUnit(a), a.per, a.peers,
     a.reach, a.hosts, a.seed, targets[i] && targets[i].key, a.from, a.bytes, a.reply, a.hot, a.shift, a.within && splitKey(a)])]) : '';
   // A metric the generator reads: re-read when its file is, so by object.
   const froms = areas.map((a) => (a.from ? genSource(a) : null));
@@ -901,7 +904,7 @@ function areaHosts(filter) {
  */
 let scopeCache = null;
 function areaScope(areas) {
-  const key = JSON.stringify([...areas.map((a) => [a.name, a.hosts]), overlayStamp()]);
+  const key = JSON.stringify([...areas.map((a) => [a.name, a.hosts]), state.traffic.areasShare, overlayStamp()]);
   if (scopeCache && scopeCache.key === key && scopeCache.layout === state.model) return scopeCache.value;
   const value = scopeOf(areas);
   scopeCache = { key, layout: state.model, value };
@@ -909,9 +912,11 @@ function areaScope(areas) {
 }
 function scopeOf(areas) {
   const tags = areaTags(areas);
+  const share = state.traffic.areasShare;
   const sets = [];
   const owner = new Map();
   let why = '';
+  let shared = 0;
   areas.forEach((a, i) => {
     const got = areaHosts(a.hosts);
     sets.push(got.set);
@@ -919,16 +924,22 @@ function scopeOf(areas) {
     if (got.why) { why = `area ${tags[i]}: its hosts filter does not read: ${got.why}`; return; }
     for (const el of got.hosts) {
       const j = owner.get(el);
+      if (j !== undefined && share) {
+        // Allowed: counted once however many areas share it.
+        if (j >= 0) shared++;
+        owner.set(el, -1);
+        continue;
+      }
       if (j !== undefined) {
         const blank = [j, i].filter((k) => !(areas[k].hosts || '').trim()).map((k) => tags[k]);
-        why = `areas ${tags[j]} and ${tags[i]} share hosts (${el.name || el.id} is in both): give each area hosts of its own`
+        why = `areas ${tags[j]} and ${tags[i]} share hosts (${el.name || el.id} is in both): give each area hosts of its own, or let areas share hosts`
           + (blank.length ? ` -- ${blank.join(' and ')} ${blank.length === 1 ? 'has' : 'have'} no hosts filter, so ${blank.length === 1 ? 'takes' : 'take'} every host` : '');
         return;
       }
       owner.set(el, i);
     }
   });
-  return { sets, why };
+  return { sets, why, share, shared };
 }
 
 /**
@@ -941,7 +952,9 @@ function areaTarget(scope, i) {
   if (!scope) return candidates[0] || null;
   return candidates.find((c) => {
     const devices = devicesOf(c);
-    return devices.some((el) => scope.sets[i].has(el)) && !devices.some((el) => scope.sets.some((set, j) => j !== i && set.has(el)));
+    // Sharing hosts, any inside the area will do; apart, only one in no other.
+    return devices.some((el) => scope.sets[i].has(el))
+      && (scope.share || !devices.some((el) => scope.sets.some((set, j) => j !== i && set.has(el))));
   }) || null;
 }
 
@@ -1421,15 +1434,21 @@ const actions = {
     refreshPanels();
     invalidate();
   },
-  // The areas and why they cannot run together, for the panel.
+  // The areas and why they cannot run together, for the panel; and whether
+  // they may share hosts.
   areaState() {
     const t = state.traffic;
     const tags = areaTags(t.areas);
     const scope = t.areas.length > 1 ? areaScope(t.areas) : null;
     return {
       areas: t.areas.map((a, i) => ({ name: a.name, tag: tags[i], hosts: areaHosts(a.hosts).hosts.length, shown: a === t.gen })),
-      why: scope ? scope.why : '',
+      why: scope ? scope.why : '', share: t.areasShare, shared: scope ? scope.shared : 0,
     };
+  },
+  setAreasShare(on) {
+    state.traffic.areasShare = !!on;
+    refreshPanels();
+    invalidate();
   },
 
   // Random take-outs: their settings, a draw (again, with `fresh`, under a
@@ -1605,9 +1624,13 @@ const actions = {
       }
       return best;
     };
+    // Areas sharing hosts each listen on ports of their own: preflight checks them all.
+    const scope = areas.length > 1 ? areaScope(areas) : null;
+    const ports = scope && scope.share && scope.shared
+      ? areas.flatMap((x, k) => Object.values(RUN_PORTS).map((port) => port + AREA_PORT_STEP * k)) : null;
     const files = probeFiles(hosts, {
       speed, bind: state.runFiles.bind, mtu: state.runFiles.mtu, every: state.probe.every, whySlow: state.probe.whySlow,
-      model: { text: state.layoutText, name: state.layoutName || 'the layout' },
+      model: { text: state.layoutText, name: state.layoutName || 'the layout' }, ports,
     });
     files.notes.unshift(`The load generator’s hosts: ${filter ? `those its filter picks (${filter})` : 'every host, as its filter is empty'}`
       + `${out ? `, less the ${out} taken out` : ''} -- ${hosts.length.toLocaleString()} of them.`);
@@ -3745,17 +3768,20 @@ function buildRunFiles(tool, view) {
   if (run.areas && run.areas.length > 1) {
     const parts = [];
     let dropped = 0;
-    for (const area of run.areas) {
+    // Areas on the same hosts each listen on ports of their own.
+    const scope = areaScope(state.traffic.areas);
+    const shared = scope.share ? scope.shared : 0;
+    for (const [k, area] of run.areas.entries()) {
       if (!area.flows) continue;
       const made = runPairs(area.made, area.rate, out);
       dropped += made.dropped;
       const why = runWhy(tool, made);
       if (why) return { why: `area ${area.tag}: ${why}`, dropped };
-      parts.push({ area: area.tag, built: buildRun(tool, view, area, made) });
+      parts.push({ area: area.tag, built: buildRun(tool, view, area, made, shared ? AREA_PORT_STEP * k : 0) });
     }
     if (!parts.length) return { why: 'no area has anything to send', dropped };
     if (parts.length === 1) return { built: parts[0].built, dropped };
-    return { built: mergeAreas(parts), dropped };
+    return { built: mergeAreas(parts, { shared }), dropped };
   }
   const made = runPairs(run.made, run.rate, out);
   const why = runWhy(tool, made);
@@ -3764,7 +3790,7 @@ function buildRunFiles(tool, view) {
 }
 
 /** One run's files: the whole load's, or one area's (its `tag` set). */
-function buildRun(tool, view, run, made) {
+function buildRun(tool, view, run, made, portOffset = 0) {
   const g = state.traffic.areas.find((a) => a.name === run.name) || state.traffic.gen;
   const tag = run.tag || '';
   const peers = run.pattern === 'random' || run.pattern === 'hotspot' ? ` to ${g.peers} peer${g.peers === 1 ? '' : 's'}` : '';
@@ -3786,7 +3812,7 @@ function buildRun(tool, view, run, made) {
     seconds: state.runFiles.seconds, connections: state.traffic.connections, summary, expected: stamped, mtu, bind: state.runFiles.bind, model,
     // The cores each host has for the run: the cores per server set, or its cores=.
     cores: state.traffic.cores, coresOf: (el) => hostLimits(el, null, state.traffic.cores).cores,
-    area: tag,
+    area: tag, portOffset,
   };
   return RUN_BUILDERS[tool](made, options);
 }

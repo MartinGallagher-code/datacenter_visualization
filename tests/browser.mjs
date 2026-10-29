@@ -1774,16 +1774,31 @@ await test('load areas in the load generator', async () => {
   await page.waitForTimeout(300);
   eq(await page.evaluate(() => [...document.querySelectorAll('#load-gen button.gen-area')].map((b) => `${b.textContent}${b.classList.contains('active') ? '*' : ''}`)),
      ['A', 'B*'], 'a second area, shown');
-  ok(/areas A and B share hosts \(r1h1 is in both\): give each area hosts of its own -- B has no hosts filter, so takes every host/.test(await gen()),
+  ok(/areas A and B share hosts \(r1h1 is in both\): give each area hosts of its own, or let areas share hosts -- B has no hosts filter, so takes every host/.test(await gen()),
      'with no hosts of its own it takes every host, and that is refused, saying why');
   await page.locator('#load-gen button', { hasText: 'Run' }).click();
   await page.waitForTimeout(500);
   ok(/A: areas A and B share hosts/.test(await gen()) && !/hosts send/.test(await gen()), 'and nothing runs while they overlap');
+  // Allowed to share: B runs on every host, A's too, each with ports of its own.
+  await page.locator('#load-gen label.gen-areas-share input').check();
+  await page.waitForTimeout(500);
+  ok(!/share hosts \(/.test(await gen()) && /3 hosts in more than one area/.test(await gen())
+     && /A: 3 of 3 hosts send · 6 flows/.test(await gen()) && /B: 6 of 6 hosts send · 30 flows/.test(await gen()),
+     `areas may share hosts: both run, and it says how many they share  (${(await gen()).split('\n').filter((l) => /^[AB]:|more than one/.test(l)).join(' | ')})`);
+  await page.locator('#load-gen button.run-tool-mx').click();
+  await page.waitForTimeout(400);
+  const sharedFiles = await page.evaluate(() => (document.querySelector('#load-gen .run-files') || {}).innerText || '');
+  ok(/The areas share 3 hosts, so each area's run has ports of its own \(A 5300, B 5400\): open them all\./.test(sharedFiles)
+     && /mx 1\.11\.2 or later/.test(sharedFiles), 'each area its own port, said, with the versions that stop only their own');
+  await page.locator('#load-gen button.run-tool-mx').click();
+  await page.locator('#load-gen label.gen-areas-share input').uncheck();
+  await page.waitForTimeout(300);
+  ok(/areas A and B share hosts/.test(await gen()), 'and refused again with it off');
   await hostsTo('in:r2');
   await page.fill('#load-gen input.gen-value', '40');
   await page.locator('#load-gen input.gen-value').dispatchEvent('change');
   await page.waitForTimeout(500);
-  ok(!/share hosts/.test(await gen()), 'hosts of its own: no longer refused');
+  ok(!/share hosts \(/.test(await gen()), 'hosts of its own: no longer refused');
   ok(/A: 3 of 3 hosts send · 6 flows · 60G/.test(await gen()) && /B: 3 of 3 hosts send · 6 flows · 120G/.test(await gen()),
      `each area its own load: 20 and 40 from each host  (${(await gen()).split('\n').filter((l) => /^[AB]:/.test(l)).join(' | ')})`);
   await page.locator('#load-gen button.gen-area').first().click();
@@ -1829,7 +1844,7 @@ await test('an area for each group of a split', async () => {
      `the first's hosts its group's, by path  (${await page.inputValue('#load-gen input.gen-hosts')})`);
   await page.locator('#load-gen button', { hasText: 'Run' }).click();
   await page.waitForTimeout(500);
-  ok(/g1: 3 of 3 hosts send · 6 flows/.test(await gen()) && /g2: 3 of 3 hosts send · 6 flows/.test(await gen()) && !/share hosts/.test(await gen()),
+  ok(/g1: 3 of 3 hosts send · 6 flows/.test(await gen()) && /g2: 3 of 3 hosts send · 6 flows/.test(await gen()) && !/share hosts \(/.test(await gen()),
      'each its own load, sharing no host');
   await page.locator('#load-gen button', { hasText: 'Stop' }).click();
 }, { url: '?layout=fx/tiny.dc' });

@@ -11,6 +11,29 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.51.0 — 2026-10-29
+
+- **Areas may share hosts.** With **areas may share hosts** ticked, a host
+  can be in two areas and runs both loads -- two things running on some
+  hosts at once -- and the model shares its CPU and NICs between them; the
+  row counts the hosts shared. Off, as before, a host two areas take is
+  refused (the refusal now says the box is there). A target need only be
+  inside its own area.
+  - **Ports of their own.** Areas sharing hosts each listen a hundred
+    ports on from the one before -- mx 5300, 5400; netmesh 5310, 5410;
+    iperf 5001, 5101 -- in their matrix, mesh and plan files; the notes
+    list them to open, and the Host status preflight checks them all. mx's
+    workers share a port by `SO_REUSEPORT`, so two mx runs on one port
+    would take each other's packets.
+  - **Stopping only their own.** mx and netmesh stopped an agent by its
+    pid and then killed every agent on the host matching their name, the
+    other area's included. Fixed in mx 1.11.2 and in binnacle's netmesh
+    (after 0.8.0); the notes say which versions are needed.
+    iperf-orchestrator already stops its servers by port.
+  `js/app.js` (`areasShare`, `setAreasShare`), `js/runfiles.js`
+  (`RUN_PORTS`, `AREA_PORT_STEP`, `portOffset`), `js/probe.js` (`ports`),
+  `js/ui.js`.
+
 ## 1.50.0 — 2026-10-29
 
 - **Load areas: several loads at once, on hosts of their own.** The Load

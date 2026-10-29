@@ -26,9 +26,10 @@ export const TOOL_PORTS = { mx: 5300, netmesh: 5310, iperf: 5001 };
  * @param opts   { speed: (el) => the layout's Gb/s for its NIC, or 0;
  *                 bind: the run's --bind, which is also the NIC to judge;
  *                 mtu; every: seconds between watch passes; whySlow;
- *                 tools: the run tools to be ready for -- mx, netmesh, iperf }
+ *                 tools: the run tools to be ready for -- mx, netmesh, iperf;
+ *                 ports: the ports to find free, in place of the tools' own }
  */
-export function probeFiles(hosts, { speed = () => 0, bind = '', mtu = 0, every = 30, whySlow = false, tools = ['mx', 'netmesh', 'iperf'], model = null } = {}) {
+export function probeFiles(hosts, { speed = () => 0, bind = '', mtu = 0, every = 30, whySlow = false, tools = ['mx', 'netmesh', 'iperf'], model = null, ports: own = null } = {}) {
   const line = (el) => {
     const { name, addr } = hostToken(el);
     const gbps = speed(el);
@@ -47,7 +48,8 @@ export function probeFiles(hosts, { speed = () => 0, bind = '', mtu = 0, every =
   const withModel = model && model.text ? ' --model model.dc' : '';
   const mtuFlag = mtu ? ` --mtu ${mtu}` : '';
   const ws = whySlow ? ' --why-slow' : '';
-  const ports = tools.map((t) => TOOL_PORTS[t]).filter(Boolean);
+  // The tools' own ports, or every one the runs will listen on (`own`).
+  const ports = own || tools.map((t) => TOOL_PORTS[t]).filter(Boolean);
   // mx and netmesh copy their agents to each host and need only python3
   // there, which preflight always checks; iperf needs iperf2 on every host.
   const needs = tools.includes('iperf') ? ['iperf'] : [];
