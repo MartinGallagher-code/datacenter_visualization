@@ -1925,7 +1925,7 @@ export const TARGETED = new Set(['incast', 'outcast', 'hotspot']);
 export const GEN_UNITS = ['%', 'Gb/s', 'Mb/s', 'pps'];
 // Clear of a metric's ids (0, 1, 2, ...) and a test flow's (1000000 on), so
 // every generated flow hashes onto a path of its own.
-const GEN_IDS = 2000000;
+export const GEN_IDS = 2000000;
 // How long a chain of moves pairing a host again may be.
 const AUGMENT_DEPTH = 200;
 // How much a generated load may cost to route: flows, and destinations times
@@ -1985,22 +1985,27 @@ export const SPLIT_LIMIT = 1000;
  * counted in `left`. Groups keep the layout's order, and none is empty.
  *
  * @param hosts  the hosts to split, in the layout's order
+ * Each group has a `rule` too: a filter that takes its hosts and no others
+ * (of those split), so a group can be an area's hosts.
+ *
  * @param ctx    { picks: elements, compile: (rule) => (el) => bool }
- * @returns { groups: [{ name, hosts }], left, why }
+ * @returns { groups: [{ name, hosts, rule }], left, why }
  */
 export function splitHosts(model, hosts, spec = {}, ctx = {}) {
   const by = HOST_SPLITS.includes(spec.by) ? spec.by : 'none';
-  const out = (groups, extra = {}) => ({ groups: groups.filter((g) => g.hosts.length), left: 0, why: '', ...extra });
+  // A group no rule says more briefly is its hosts by path.
+  const listed = (g) => (g.rule ? g : { ...g, rule: `path=[${g.hosts.map((el) => el.path).join(',')}]` });
+  const out = (groups, extra = {}) => ({ groups: groups.filter((g) => g.hosts.length).map(listed), left: 0, why: '', ...extra });
   if (by === 'none' || !hosts.length) return out([{ name: 'all', hosts: [...hosts] }]);
   const n = Math.max(1, Math.min(SPLIT_LIMIT, Math.floor(Number(spec.n) || 0) || 2));
-  const keyed = (keyOf, nameOf) => {
+  const keyed = (keyOf, nameOf, ruleOf) => {
     const groups = new Map();
     let left = 0;
     for (const el of hosts) {
       const k = keyOf(el);
       if (k === null || k === undefined) { left++; continue; }
       let g = groups.get(k);
-      if (!g) groups.set(k, (g = { name: nameOf(k), hosts: [] }));
+      if (!g) groups.set(k, (g = { name: nameOf(k), hosts: [], rule: ruleOf(k) }));
       g.hosts.push(el);
     }
     if (groups.size > SPLIT_LIMIT) return out([], { why: `${groups.size.toLocaleString()} groups: more than ${SPLIT_LIMIT.toLocaleString()} is too many` });
@@ -2011,7 +2016,7 @@ export function splitHosts(model, hosts, spec = {}, ctx = {}) {
     const owner = new Map();
     const groups = [];
     for (const set of sets) {
-      const g = { name: set.name, hosts: [] };
+      const g = { name: set.name, hosts: [], rule: set.rule };
       for (const el of hosts) {
         if (!set.has(el)) continue;
         const was = owner.get(el);
@@ -2030,19 +2035,21 @@ export function splitHosts(model, hosts, spec = {}, ctx = {}) {
     return keyed((el) => {
       for (let p = el.parent; p; p = p.parent) if (p.kind === kind) return p;
       return null;
-    }, (p) => p.name || p.id);
+    }, (p) => p.name || p.id, (p) => `in:/${p.path}`);
   }
   if (by === 'attr') {
     const key = String(spec.key || '').trim();
     if (!key) return out([], { why: 'name the attribute to split by: model, plane, ...' });
-    return keyed((el) => (el.attrs && el.attrs[key] !== undefined && el.attrs[key] !== '' ? String(el.attrs[key]) : null), (v) => `${key}=${v}`);
+    const quote = (v) => (/^[\w.:/@%+,-]+$/.test(v) ? v : `"${v.replace(/"/g, '')}"`);
+    return keyed((el) => (el.attrs && el.attrs[key] !== undefined && el.attrs[key] !== '' ? String(el.attrs[key]) : null),
+      (v) => `${key}=${v}`, (v) => `${key}=${quote(v)}`);
   }
   if (by === 'picks') {
     const picks = ctx.picks || [];
     if (picks.length < 1) return out([], { why: 'pick the groups: Ctrl-click each rack, row or server' });
     return disjoint(picks.map((p) => {
       const set = new Set(devicesOf(p));
-      return { name: p.name || p.id, has: (el) => set.has(el) };
+      return { name: p.name || p.id, has: (el) => set.has(el), rule: `in:/${p.path}` };
     }));
   }
   if (by === 'rules') {
@@ -2052,7 +2059,7 @@ export function splitHosts(model, hosts, spec = {}, ctx = {}) {
     for (const rule of rules) {
       let match;
       try { match = ctx.compile(rule); } catch (err) { return out([], { why: `${rule}: ${err.message}` }); }
-      sets.push({ name: rule, has: match });
+      sets.push({ name: rule, has: match, rule: `(${rule})` });
     }
     return disjoint(sets);
   }

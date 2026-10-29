@@ -54,7 +54,7 @@ import {
   droppedLayoutsNotice, layoutNotice, prefixed, resultsFileNotice,
 } from '../js/report.js';
 import {
-  bindProblem, buildIperf, buildMx, buildNetmesh, hostConnections, hostToken, mxSizes, mxWorkers, rateGroups, runPairs, runProblem, runScript, runTar, runWhy, scriptName, tarball, tarName, tcpPayloadShare,
+  bindProblem, buildIperf, buildMx, buildNetmesh, hostConnections, hostToken, mergeAreas, mxSizes, mxWorkers, rateGroups, runPairs, runProblem, runScript, runTar, runWhy, scriptName, tagged, tarball, tarName, tcpPayloadShare,
 } from '../js/runfiles.js';
 import { asFile, layoutSha, modelBlock, readStamp, runStamp, sha256 } from '../js/stamp.js';
 import { PROBE_SCRIPT, PROBE_TAR, probeFiles, probeSummary, TOOL_PORTS } from '../js/probe.js';
@@ -5466,7 +5466,7 @@ if (python.error) {
   ok(buildIperf(made, { connections: 2 }).notes.some((n) => /^The busiest host holds 20 connections .*work\.$/.test(n)), 'with no cores said, just the count');
   const nm4 = buildNetmesh(made, { connections: 2, cores: 4, coresOf: () => 4 });
   ok(nm4.notes.some((n) => /netmesh is one light agent process a host, whatever the cores: cores per server \(4\) goes to the mx run under it, as --workers\./.test(n))
-     && nm4.commands.some((c) => /-- mx run .* --workers 4$/.test(c)), 'netmesh: the cores go to the mx run under it');
+     && nm4.commands.some((c) => /-- mx run .* --workers 4 --reports reports-mx$/.test(c)), 'netmesh: the cores go to the mx run under it');
   // Incast: the one receiving answers every request, so it is the busiest.
   const into = runPairs([{ src: h('r1h1'), dst: h('r2h1'), value: 1 }, { src: h('r1h2'), dst: h('r2h1'), value: 1 },
     { src: h('r1h3'), dst: h('r2h1'), value: 1 }], { toGbps: 1, unit: 'Gb/s', sized: null });
@@ -5509,6 +5509,12 @@ if (python.error) {
   const exports = ip2.commands.filter((c) => c.includes('export-overlay'));
   ok(exports.length === 2 && !exports[0].includes('--overlay-append') && exports[1].includes('--overlay-append'),
      'both into one results file');
+  // Runs at once each keep a remote directory of their own: a run ends by
+  // removing its --remote-dir, and a host can be in both rates' runs.
+  ok(ip2.files[0].text.includes('# remote_dir=/tmp/iperf_orchestrator-dcviz-1\n') && ip2.files[1].text.includes('# remote_dir=/tmp/iperf_orchestrator-dcviz-2\n'),
+     'two rates at once: a remote directory each');
+  ok(!ip.files[0].text.includes('remote_dir='), 'one run alone keeps the default');
+  ok(ip2.notes.some((n) => /a run ends by removing its remote directory/.test(n)), 'and the notes say why');
   const many = rateGroups(made.pairs.map((p, i) => ({ ...p, gbps: 1 + i })));
   ok(many.length <= 8 && many.reduce((n, g) => n + g.pairs.length, 0) === 30, 'thirty rates are binned into eight runs at most, every pair in one');
   // An address the tools reach a host at, and the map back to its name.
@@ -5553,8 +5559,47 @@ if (python.error) {
     .includes('mx run --matrix matrix.csv --for 90 --streams 2 --workers 9 --bind eth1'), 'mx: --bind on the run');
   const nmB = buildNetmesh(made, { seconds: 90, connections: 2, bind: 'eth1' });
   ok(nmB.commands.includes('netmesh run --mesh mesh.csv --for 90 --bind eth1'), 'netmesh: --bind on the run');
-  ok(nmB.commands.some((c) => c.includes('--baseline 20 --bind eth1 -- mx run') && c.endsWith('--streams 2 --workers 9 --bind eth1')),
-     'and on the mx run under it, with the workers its load needs');
+  ok(nmB.commands.some((c) => c.includes('--baseline 20 --bind eth1 -- mx run') && c.endsWith('--streams 2 --workers 9 --bind eth1 --reports reports-mx')),
+     'and on the mx run under it, with the workers its load needs, and reports of its own: both tools write reports/<host>.csv');
+
+  // Areas: each a run of its own, on hosts of its own -- its own files, run
+  // ids, remote directories and reports -- and several merged into one
+  // script that checks each, starts them all at once and collects each.
+  eq([tagged('matrix.csv', 'A'), tagged('reports', 'B'), tagged('/var/tmp/mx', 'A'), tagged('mx-run.tsv', ''), tagged('hosts.map', 'g1')],
+     ['matrix-A.csv', 'reports-B', '/var/tmp/mx-A', 'mx-run.tsv', 'hosts-g1.map'], 'a file of an area’s own');
+  const rack = (r) => runPairs(all.flows.filter((f) => f.src.name.startsWith(r) && f.dst.name.startsWith(r)), { toGbps: 1, unit: 'Gb/s', sized: null });
+  const [areaA, areaB] = [rack('r1'), rack('r2')];
+  const tiny = { text: 'dc D\n', name: 'tiny.dc' };
+  const mxAreaA = buildMx(areaA, { seconds: 90, connections: 2, area: 'A', expected: 'e\n', model: tiny });
+  const mxAreaB = buildMx(areaB, { seconds: 90, connections: 2, area: 'B', expected: 'e\n', model: tiny });
+  eq(mxAreaA.files.map((f) => f.name), ['matrix-A.csv', 'model.dc', 'expected-A.tsv'], 'an area’s matrix and expected.tsv, named for it');
+  ok(mxAreaA.commands.includes('mx run --matrix matrix-A.csv --for 90 --streams 2 --remote-dir /var/tmp/mx-A --reports reports-A')
+     && mxAreaA.commands.includes('mx export --matrix matrix-A.csv --reports reports-A --peers -o mx_results-A.tsv')
+     && mxAreaA.commands.some((c) => c.includes('cat expected-A.tsv') && c.endsWith('} > mx-run-A.tsv')),
+     'its run keeps to its own remote directory and reports, and its run file is its own');
+  const merged = mergeAreas([{ area: 'A', built: mxAreaA }, { area: 'B', built: mxAreaB }]);
+  eq(merged.files.map((f) => f.name), ['matrix-A.csv', 'model.dc', 'expected-A.tsv', 'matrix-B.csv', 'expected-B.tsv'], 'the layout once');
+  const step = (re) => merged.commands.findIndex((c) => re.test(c));
+  ok(merged.commands.filter((c) => c.startsWith('started=')).length === 1 && step(/^started=/) < step(/^mx check --matrix matrix-A/)
+     && step(/^mx check --matrix matrix-B/) < step(/^mx run --matrix matrix-A.* > mx-run-A\.log 2>&1 &$/)
+     && step(/^mx run --matrix matrix-A/) < step(/^mx run --matrix matrix-B.* > mx-run-B\.log 2>&1 &$/)
+     && step(/^mx run --matrix matrix-B/) < step(/^wait$/) && step(/^wait$/) < step(/^mx export --matrix matrix-A/)
+     && step(/> mx-run-A\.tsv$/) < step(/> mx-run-B\.tsv$/),
+     `when they began, each area's checks, every run at once, then each export and run file  (${merged.commands.filter((c) => !c.startsWith('#')).map((c) => c.split(' ').slice(0, 3).join(' ')).join(' | ')})`);
+  ok(/^2 areas, each a load of its own on hosts of its own, run at the same time: A, B\./.test(merged.notes[0])
+     && merged.notes.some((n) => n.startsWith('A: ')) && merged.notes.some((n) => n.startsWith('B: ')), 'the notes say so, and each area’s own');
+  ok(spawnSync('bash', ['-n'], { input: runScript(merged) }).status === 0, 'and the script is one bash reads');
+  const ipArea = buildIperf(areaA, { seconds: 90, area: 'A' });
+  eq(ipArea.files.map((f) => f.name), ['iperf_plan-A.conf'], 'iperf: an area’s plan');
+  ok(ipArea.files[0].text.includes('# remote_dir=/tmp/iperf_orchestrator-dcviz-A\n')
+     && ipArea.commands.includes('iperf-orchestrator run --plan iperf_plan-A.conf --servers iperf_plan-A.conf --run-id dcviz-A --for 90')
+     && ipArea.commands.some((c) => c.includes('--run-id dcviz-A') && c.includes('--overlay-run dcviz-A --overlay-out iperf_results-A.tsv')),
+     'its run id, remote directory and results its own');
+  const nmArea = buildNetmesh(areaA, { seconds: 90, area: 'A' });
+  ok(nmArea.files[0].name === 'mesh-A.csv' && nmArea.commands.includes('netmesh run --mesh mesh-A.csv --for 90 --remote-dir /var/tmp/netmesh-A --reports reports-A')
+     && nmArea.commands.includes('dcimport netmesh_results-A.tsv --tidy reports-A/')
+     && nmArea.commands.some((c) => /^# netmesh run --mesh mesh-A\.csv --baseline 20 --remote-dir \/var\/tmp\/netmesh-A --reports reports-A -- mx run --matrix matrix-A\.csv .* --remote-dir \/var\/tmp\/mx-A --reports reports-mx-A$/.test(c)),
+     'netmesh: its mesh, remote directory and reports, and the mx under it apart from both');
   ok(nmB.notes.some((n) => /an older netmesh takes only a whole address and refuses eth1/.test(n)), 'and the notes say which netmesh reads it as a NIC');
   ok(buildMx(made, { bind: 'eth[12]' }).commands.some((c) => c.endsWith("--bind 'eth[12]'")), 'a pattern the shell would expand goes quoted');
   ok(!buildMx(made, { bind: 'eth 1' }).commands.some((c) => c.includes('--bind eth')), 'and one that cannot be a pattern goes nowhere');

@@ -1750,6 +1750,90 @@ await test('split the hosts in the load generator', async () => {
   await page.locator('#load-gen button', { hasText: 'Stop' }).click();
 }, { url: '?layout=fx/tiny.dc' });
 
+// Load areas: several loads at once, each with settings of its own on hosts
+// of its own -- refused while two take a host -- and each a run of its own,
+// all started together.
+await test('load areas in the load generator', async () => {
+  await openLayout([
+    'dc D', '  row A', '    rack r[1..2] u=10', '      node h[1..3] role=server name={rack}{id}',
+    '      node t role=tor +switch name={rack}tor', '  row S', '    rack SP u=4', '      node spine role=spine +switch',
+    'net nic gbps=100', 'net up gbps=400', 'link nic scope=rack role=server role=tor', 'link up role=tor role=spine',
+  ].join('\n'));
+  const gen = () => page.evaluate(() => document.querySelector('#load-gen').innerText);
+  const files = () => page.evaluate(() => (document.querySelector('#load-gen .run-files') || {}).innerText || '');
+  const hostsTo = async (text) => {
+    await page.fill('#load-gen input.gen-hosts', text);
+    await page.locator('#load-gen input.gen-hosts').dispatchEvent('change');
+    await page.waitForTimeout(300);
+  };
+  await page.locator('#load-gen select.gen-unit').selectOption('Gb/s');
+  await page.fill('#load-gen input.gen-value', '20');
+  await page.locator('#load-gen input.gen-value').dispatchEvent('change');
+  await hostsTo('in:r1');
+  await page.locator('#load-gen button.gen-area-add').click();
+  await page.waitForTimeout(300);
+  eq(await page.evaluate(() => [...document.querySelectorAll('#load-gen button.gen-area')].map((b) => `${b.textContent}${b.classList.contains('active') ? '*' : ''}`)),
+     ['A', 'B*'], 'a second area, shown');
+  ok(/areas A and B share hosts \(r1h1 is in both\): give each area hosts of its own -- B has no hosts filter, so takes every host/.test(await gen()),
+     'with no hosts of its own it takes every host, and that is refused, saying why');
+  await page.locator('#load-gen button', { hasText: 'Run' }).click();
+  await page.waitForTimeout(500);
+  ok(/A: areas A and B share hosts/.test(await gen()) && !/hosts send/.test(await gen()), 'and nothing runs while they overlap');
+  await hostsTo('in:r2');
+  await page.fill('#load-gen input.gen-value', '40');
+  await page.locator('#load-gen input.gen-value').dispatchEvent('change');
+  await page.waitForTimeout(500);
+  ok(!/share hosts/.test(await gen()), 'hosts of its own: no longer refused');
+  ok(/A: 3 of 3 hosts send · 6 flows · 60G/.test(await gen()) && /B: 3 of 3 hosts send · 6 flows · 120G/.test(await gen()),
+     `each area its own load: 20 and 40 from each host  (${(await gen()).split('\n').filter((l) => /^[AB]:/.test(l)).join(' | ')})`);
+  await page.locator('#load-gen button.gen-area').first().click();
+  await page.waitForTimeout(300);
+  eq(await page.inputValue('#load-gen input.gen-value'), '20', 'A shown again, with its own amount');
+  await page.locator('#load-gen button.run-tool-mx').click();
+  await page.waitForTimeout(400);
+  const text = await files();
+  ok(/matrix-A\.csv/.test(text) && /matrix-B\.csv/.test(text) && /expected-A\.tsv/.test(text) && /expected-B\.tsv/.test(text),
+     'a matrix and an expected.tsv an area');
+  ok(/mx run --matrix matrix-A\.csv .*--remote-dir \/var\/tmp\/mx-A --reports reports-A > mx-run-A\.log 2>&1 &/.test(text)
+     && /mx run --matrix matrix-B\.csv .*--remote-dir \/var\/tmp\/mx-B --reports reports-B > mx-run-B\.log 2>&1 &/.test(text) && /\nwait\n/.test(text),
+     'both runs at once, each with its own remote directory and reports');
+  ok(/mx export --matrix matrix-A\.csv --reports reports-A --peers -o mx_results-A\.tsv/.test(text) && /> mx-run-B\.tsv/.test(text),
+     'each exported, and collected into a run file of its own');
+  const [archive] = await Promise.all([page.waitForEvent('download'), page.locator('#load-gen button.run-tar').click()]);
+  const listed = spawnSync('tar', ['-tf', await archive.path()], { encoding: 'utf8' }).stdout.trim().split('\n');
+  ok(['run-mx/matrix-A.csv', 'run-mx/matrix-B.csv', 'run-mx/expected-A.tsv', 'run-mx/expected-B.tsv', 'run-mx/model.dc', 'run-mx/run-mx.sh']
+    .every((f) => listed.includes(f)), `all of it in one archive  (${listed.join(' ')})`);
+  await page.locator('#load-gen button.gen-area-remove').click();
+  await page.waitForTimeout(400);
+  ok((await page.evaluate(() => document.querySelectorAll('#load-gen button.gen-area').length)) === 1 && !/^[AB]:/m.test(await gen()),
+     'removed, and one load again');
+  await page.locator('#load-gen button', { hasText: 'Stop' }).click();
+}, { url: '?layout=fx/tiny.dc' });
+
+// An area each: a split's groups become areas, each with the split area's
+// settings and its group's hosts.
+await test('an area for each group of a split', async () => {
+  await openLayout([
+    'dc D', '  row A', '    rack r[1..3] u=10', '      node h[1..2] role=server name={rack}{id}',
+    '      node t role=tor +switch name={rack}tor', '  row S', '    rack SP u=4', '      node spine role=spine +switch',
+    'net nic gbps=100', 'net up gbps=400', 'link nic scope=rack role=server role=tor', 'link up role=tor role=spine',
+  ].join('\n'));
+  const gen = () => page.evaluate(() => document.querySelector('#load-gen').innerText);
+  await page.locator('#load-gen select.gen-split').selectOption('interleave');
+  await page.waitForTimeout(300);
+  await page.locator('#load-gen button.gen-split-areas').click();
+  await page.waitForTimeout(300);
+  eq(await page.evaluate(() => [...document.querySelectorAll('#load-gen button.gen-area')].map((b) => b.textContent)), ['g1', 'g2'],
+     'two areas, named for their groups');
+  ok(/^path=\[D\/A\/r1\/h1,D\/A\/r2\/h1,D\/A\/r3\/h1\]$/.test(await page.inputValue('#load-gen input.gen-hosts')),
+     `the first's hosts its group's, by path  (${await page.inputValue('#load-gen input.gen-hosts')})`);
+  await page.locator('#load-gen button', { hasText: 'Run' }).click();
+  await page.waitForTimeout(500);
+  ok(/g1: 3 of 3 hosts send · 6 flows/.test(await gen()) && /g2: 3 of 3 hosts send · 6 flows/.test(await gen()) && !/share hosts/.test(await gen()),
+     'each its own load, sharing no host');
+  await page.locator('#load-gen button', { hasText: 'Stop' }).click();
+}, { url: '?layout=fx/tiny.dc' });
+
 // Collapse all, at the top of each side panel: every section folded, and
 // again, every one open.
 await test('collapse all', async () => {

@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.49.0** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.50.0** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -1091,6 +1091,42 @@ off.
     discovery read. Taken-out hosts are left out. Each list goes as it is to
     `--servers`, or into binnacle's `muster add` to be handed out a batch at
     a time.
+  - **An area each** — every group an area of its own (below), with this
+    area's settings and the group's hosts as its filter: a container's
+    `in:/D/A/r1`, a pick's, a rule's, an attribute's `plane=2`, or the hosts
+    themselves by path, `path=[D/A/r1/h1,D/A/r2/h1]`.
+- **area** — several loads at once, each with settings of its own on hosts
+  of its own: an all-to-all at 20 Gb/s in one pod while another runs an
+  incast of 64-byte packets. **+ area** adds one like the area shown, with
+  no hosts yet; the tabs show each, a name box names it (its files are
+  named for it), and **Remove** takes it away. **Run** runs every area;
+  the cables carry them all, shared out together, and the panel says what
+  each sends ("A: 3 of 3 hosts send · 6 flows · 60G").
+
+  **No host is in two areas.** Two areas whose filters take a host —
+  including an area with no filter, which takes every host — are refused,
+  naming the areas and a host they share, and nothing runs until each has
+  hosts of its own. An incast's or outcast's target is the first pick (or
+  the selection) inside its area and in no other, so no area reaches into
+  another's hosts. Connections a flow and cores per server are the whole
+  run's.
+
+  The run files make each area a run of its own, all started at once, so
+  no run reads, writes or cleans up after another — the tools' own
+  options for runs side by side, nothing new on the hosts:
+
+  | Tool | Each area's own |
+  |---|---|
+  | mx | `matrix-A.csv`, `--remote-dir /var/tmp/mx-A`, `--reports reports-A`, `mx_results-A.tsv` |
+  | iperf-orchestrator | `iperf_plan-A.conf` (`remote_dir=` in it), `--run-id dcviz-A`, `iperf_results-A.tsv` |
+  | netmesh | `mesh-A.csv`, `--remote-dir /var/tmp/netmesh-A`, `--reports reports-A`, `netmesh_results-A.tsv` |
+
+  Each area has its own `expected-A.tsv`, and its run file, `mx-run-A.tsv`,
+  carries the layout and says which area it was (`#~run area A`): load
+  them together and they land side by side. The script checks every area,
+  starts every area's run in the background, each to its own log
+  (`mx-run-A.log`), waits for them all, and then exports and collects
+  each.
 
 - **Take out at random** — servers, racks and switches, each by a
   number or **% of the** ones there are, and each among all of its kind or
@@ -1215,8 +1251,12 @@ layout, and compare what ran with what the model said.
   same — all-to-all, random peers, a ring at one amount — is one plan. Pairs
   at different rates make a plan per rate (up to eight; more are binned),
   each on its own port so they run at once in separate terminals, and their
-  exports go into one `iperf_results.tsv`. iperf sends TCP, so a sized load's
-  replies go back as TCP the other way at their own bit rate.
+  exports go into one `iperf_results.tsv`. Runs at once each keep a remote
+  directory of their own (`remote_dir=/tmp/iperf_orchestrator-dcviz-2` in
+  the plan): iperf-orchestrator ends a run by removing its `--remote-dir` on
+  every host, and a host in two rates' runs would otherwise lose the files
+  of the one still running. iperf sends TCP, so a sized load's replies go
+  back as TCP the other way at their own bit rate.
 - **mx's workers are sized to the load, or to the cores.** A pair's
   connections are mx's `--streams` — its rate split over that many
   sockets — but what does the work on each host is `--workers`, separate

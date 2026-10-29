@@ -1856,6 +1856,36 @@ export function renderLoadGen(state, host, actions, { unit } = {}) {
     });
     return input;
   };
+  // Areas: several loads at once, each with settings of its own on hosts of
+  // its own. The tabs say which is shown; every area runs when it runs.
+  const areaInfo = actions.areaState();
+  const tabs = el('div', 'gen-row gen-areas');
+  tabs.append(el('span', null, 'area'));
+  areaInfo.areas.forEach((a, i) => {
+    const tab = el('button', `gen-area${a.shown ? ' active' : ''}`, a.name);
+    tab.title = `${a.name}: ${a.hosts.toLocaleString()} host${a.hosts === 1 ? '' : 's'}`;
+    tab.addEventListener('click', () => actions.showArea(i));
+    tabs.append(tab);
+  });
+  const more = el('button', 'gen-area-add', '+ area');
+  more.title = 'Another load, run at the same time on hosts of its own: give it a hosts filter no other area’s takes. '
+    + 'Each area goes to the load tools as a run of its own -- its own files, run id, remote directory and reports';
+  more.addEventListener('click', () => actions.addArea());
+  tabs.append(more);
+  if (areaInfo.areas.length > 1) {
+    const name = el('input', 'gen-area-name');
+    name.type = 'text';
+    name.value = g.name;
+    name.title = 'This area’s name: its files are named for it (matrix-A.csv, reports-A)';
+    name.addEventListener('change', () => actions.renameArea(name.value));
+    const drop = el('button', 'gen-area-remove', 'Remove');
+    drop.title = `Remove area ${g.name}`;
+    drop.addEventListener('click', () => actions.removeArea(areaInfo.areas.findIndex((a) => a.shown)));
+    tabs.append(name, drop);
+  }
+  box.append(tabs);
+  if (areaInfo.why) box.append(el('div', 'bad gen-areas-why', areaInfo.why));
+
 
   const shape = el('div', 'gen-row');
   const pattern = choose(PATTERNS, PATTERN_LABELS, g.pattern, (v) => actions.setGen({ pattern: v }));
@@ -2131,6 +2161,11 @@ export function renderLoadGen(state, host, actions, { unit } = {}) {
       use.append(within);
       const lists = sp.groups.length >= 2 ? actions.splitLists() : null;
       if (lists) {
+        const each = el('button', 'gen-split-areas', 'An area each');
+        each.title = `Make each group an area of its own (${lists.groups.length}): this area’s settings, the group’s hosts. `
+          + 'Each then runs a load of its own, at the same time, and the areas can be set apart';
+        each.addEventListener('click', () => actions.areasFromSplit());
+        use.append(each);
         const save = el('button', 'gen-split-save', 'Save host lists');
         save.title = `hosts-lists.tar: a hosts file a group (${lists.files.length - 1}), and all of them in hosts-grouped.txt, `
           + 'a [group] header each, as model_network reads one; each host as the load tools take it, taken-out hosts left out';
@@ -2219,6 +2254,14 @@ export function renderLoadGen(state, host, actions, { unit } = {}) {
   if (run) {
     const lines = el('div', 'cable-summary');
     if (run.why) lines.append(el('div', 'bad', run.why));
+    // Each area's own, with several.
+    if (run.areas && run.areas.length > 1) {
+      for (const a of run.areas) {
+        lines.append(el('div', a.flows ? 'muted gen-area-run' : 'bad gen-area-run', a.flows
+          ? `${a.tag}: ${a.senders} of ${a.hosts} hosts send · ${a.flows} flows · ${formatLoad(shown.model, a.offered)}`
+          : `${a.tag}: ${a.why || 'nothing to send'}`));
+      }
+    }
     else {
       lines.append(el('div', null, `${run.senders} of ${run.hosts} hosts send · ${run.flows} flows · `
         + `${formatLoad(shown.model, run.offered)}`));

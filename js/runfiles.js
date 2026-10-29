@@ -196,27 +196,102 @@ const TOOL_COMMANDS = { mx: 'mx', iperf: 'iperf-orchestrator', netmesh: 'netmesh
  */
 function withExpected(built, expected, results, model = null) {
   const tool = built.tool;
+  const tag = built.area || '';
   if (model && model.text) {
     built.files.push({ name: 'model.dc', text: asFile(model.text), note: `the layout this load was made on${model.name ? `, ${model.name}` : ''}`, keep: true });
   }
-  if (!expected) return built;
-  built.files.push({ name: 'expected.tsv', text: expected, note: 'what the model expects each flow and host to do' });
-  const command = TOOL_COMMANDS[tool];
-  built.commands.unshift('# when the run began, for the run file', 'started=$(date -u +%Y-%m-%dT%H:%M:%SZ)');
-  built.commands.push(
-    '# collect: the run, the model and its figures in one file -- load it, and Measured against the model compares them',
-    [
-      '{',
-      '  cat expected.tsv',
-      '  echo "#~ran started ${started:-unknown}"',
-      '  echo "#~ran finished $(date -u +%Y-%m-%dT%H:%M:%SZ)"',
-      '  echo "#~ran host $(hostname 2>/dev/null || uname -n)"',
-      `  echo "#~ran ${command} $(${command} --version 2>&1 | head -n 1)"`,
-      `  cat ${results}`,
-      `} > ${tool}-run.tsv`,
-    ].join('\n'),
-  );
+  if (expected) {
+    const file = tagged('expected.tsv', tag);
+    built.files.push({ name: file, text: expected, note: `what the model expects each flow and host to do${tag ? ` in area ${tag}` : ''}` });
+    const command = TOOL_COMMANDS[tool];
+    built.phases.start = ['# when the run began, for the run file', 'started=$(date -u +%Y-%m-%dT%H:%M:%SZ)'];
+    built.phases.collect = [
+      `# collect: the run, the model and its figures in one file${tag ? `, area ${tag}'s` : ''} -- load it, and Measured against the model compares them`,
+      [
+        '{',
+        `  cat ${file}`,
+        '  echo "#~ran started ${started:-unknown}"',
+        '  echo "#~ran finished $(date -u +%Y-%m-%dT%H:%M:%SZ)"',
+        '  echo "#~ran host $(hostname 2>/dev/null || uname -n)"',
+        `  echo "#~ran ${command} $(${command} --version 2>&1 | head -n 1)"`,
+        `  cat ${results}`,
+        `} > ${tagged(`${tool}-run.tsv`, tag)}`,
+      ].join('\n'),
+    ];
+  }
+  built.commands = assemble(built.phases);
   return built;
+}
+
+/**
+ * A file of an area's own: matrix.csv as matrix-A.csv, reports as
+ * reports-A -- so areas run at once never write over each other.
+ */
+export const tagged = (name, tag) => (tag ? String(name).replace(/(\.[a-z]+)?$/, (ext) => `-${tag}${ext}`) : name);
+
+/**
+ * A run's commands from its phases: when it began, the checks, the runs --
+ * one as it is, several at once in the background, each to its own log --
+ * what can stand in for them, the exports, and the collecting.
+ */
+function assemble(phases) {
+  const runs = phases.run || [];
+  return [
+    ...(phases.start || []),
+    ...(phases.check || []),
+    ...(runs.length > 1
+      ? [phases.runsComment, ...runs.map((r) => `${r.cmd} > ${r.log} 2>&1 &`), 'wait']
+      : [phases.runComment, ...runs.map((r) => r.cmd)]),
+    ...(phases.instead || []),
+    ...(phases.export || []),
+    ...(phases.collect || []),
+  ].filter((line) => line !== undefined);
+}
+
+/**
+ * Several areas' runs of one tool as one: each area a load of its own, on
+ * hosts of its own, with files, run ids, remote directories and reports of
+ * its own, so they run at the same time and never meet. Their checks, then
+ * every run of every area at once in the background, then each one's
+ * export and its own run file. The layout's model.dc goes once.
+ *
+ * @param parts  [{ area, built }] -- each built for its area (`area` set)
+ */
+export function mergeAreas(parts, { summary = '' } = {}) {
+  const tool = parts[0].built.tool;
+  const files = [];
+  const seen = new Set();
+  for (const { built } of parts) {
+    for (const f of built.files) {
+      if (seen.has(f.name)) continue;
+      seen.add(f.name);
+      files.push(f);
+    }
+  }
+  const names = parts.map((x) => x.area).join(', ');
+  const runs = parts.flatMap((x) => x.built.phases.run || []);
+  const commands = [
+    ...(parts.some((x) => x.built.phases.start) ? ['# when the runs began, for the run files', 'started=$(date -u +%Y-%m-%dT%H:%M:%SZ)'] : []),
+    `# ${parts.length} areas, each a load of its own on hosts of its own: ${names}`,
+    ...parts.flatMap((x) => (x.built.phases.check && x.built.phases.check.length ? [`# area ${x.area}`, ...x.built.phases.check] : [])),
+    `# the runs: every area's at once, each in the background, its output in its own log`,
+    ...runs.map((r) => `${r.cmd} > ${r.log} 2>&1 &`),
+    'wait',
+    ...parts.flatMap((x) => (x.built.phases.instead && x.built.phases.instead.length ? x.built.phases.instead : [])),
+    ...parts.flatMap((x) => x.built.phases.export || []),
+    ...parts.flatMap((x) => x.built.phases.collect || []),
+  ];
+  return {
+    tool,
+    areas: parts.map((x) => x.area),
+    files,
+    notes: [
+      `${parts.length} areas, each a load of its own on hosts of its own, run at the same time: ${names}${summary ? ` -- ${summary}` : ''}. `
+        + 'Each has its own files, run ids, remote directory and reports, so no run cleans up or reads another’s.',
+      ...parts.flatMap((x) => x.built.notes.map((n) => `${x.area}: ${n}`)),
+    ],
+    commands,
+  };
 }
 
 /**
@@ -329,7 +404,7 @@ const coresNote = (made, connections, cores, coresOf, what) => {
     + 'and the kernel spreads them.'];
 };
 
-export function buildMx(made, { seconds = 60, connections = 1, cores = 0, coresOf = null, summary = '', expected = '', mtu = 1500, bind = '', model = null } = {}) {
+export function buildMx(made, { seconds = 60, connections = 1, cores = 0, coresOf = null, summary = '', expected = '', mtu = 1500, bind = '', model = null, area = '' } = {}) {
   const { pairs, hosts, sized } = made;
   const { tx, rx } = mxSizes(made, mtu);
   const pps = (pair) => (pair.pps > 0 ? pair.pps : (pair.gbps * 1e9) / ((tx + WIRE_BYTES) * 8));
@@ -343,9 +418,12 @@ export function buildMx(made, { seconds = 60, connections = 1, cores = 0, coresO
     ...describe(pairs, hosts, summary).map((line) => `# ${prose(line)}`),
     grid(hosts, pairs, { head: token, row: nameOf }, (pair) => (pps(pair) > 0 ? cell(pps(pair)) : '')),
   ].join('\n');
+  const file = tagged('matrix.csv', area);
+  const results = tagged('mx_results.tsv', area);
   return withExpected({
     tool: 'mx',
-    files: [{ name: 'matrix.csv', text: `${matrix}\n`, note: `${hosts.length.toLocaleString()} hosts` }],
+    area,
+    files: [{ name: file, text: `${matrix}\n`, note: `${hosts.length.toLocaleString()} hosts` }],
     notes: [
       ...describe(pairs, hosts, summary),
       sized ? `Requests of ${tx} bytes, each answered by ${rx} bytes back, as the generator sized them.`
@@ -354,20 +432,24 @@ export function buildMx(made, { seconds = 60, connections = 1, cores = 0, coresO
       ...workersNote(workers, streams),
       ...bindNote(bind),
     ],
-    commands: [
-      '# what each host will send and take in, before anything starts',
-      'mx check --matrix matrix.csv',
-      `# the run: add --user${bind ? '' : ', --bind'} ... as you would to any mx run`,
-      mxRun(seconds, connections, bind, workers),
-      '# what it measured, for the viewer: load mx_results.tsv beside the layout',
-      'mx export --matrix matrix.csv --peers -o mx_results.tsv',
-    ],
-  }, expected, 'mx_results.tsv', model);
+    phases: {
+      check: ['# what each host will send and take in, before anything starts', `mx check --matrix ${file}`],
+      runComment: `# the run: add --user${bind ? '' : ', --bind'} ... as you would to any mx run`,
+      run: [{ cmd: mxRun(seconds, connections, bind, workers, area), log: tagged('mx-run.log', area) }],
+      export: [`# what it measured, for the viewer: load ${results} beside the layout`,
+        `mx export --matrix ${file}${area ? ` --reports ${tagged('reports', area)}` : ''} --peers -o ${results}`],
+    },
+  }, expected, results, model);
 }
 
 const mxStreams = (connections) => Math.min(MX_STREAMS, Math.max(1, Math.round(connections)));
-const mxRun = (seconds, connections, bind = '', workers = null) => `mx run --matrix matrix.csv --for ${seconds} --streams ${mxStreams(connections)}`
-  + `${workers && workers.flag ? ` --workers ${workers.workers}` : ''}${bindFlag(bind)}`;
+// An area's mx run keeps to its own: its matrix, its remote directory on
+// each host, its reports here. `reports` names them anyway: under netmesh,
+// whose reports are reports/<host>.csv as mx's are.
+const mxRun = (seconds, connections, bind = '', workers = null, area = '', reports = '') => `mx run --matrix ${tagged('matrix.csv', area)} --for ${seconds} --streams ${mxStreams(connections)}`
+  + `${workers && workers.flag ? ` --workers ${workers.workers}` : ''}${bindFlag(bind)}`
+  + `${area ? ` --remote-dir ${tagged('/var/tmp/mx', area)}` : ''}`
+  + `${reports || area ? ` --reports ${reports || tagged('reports', area)}` : ''}`;
 
 /**
  * The pairs in groups of one rate each, since iperf's -b is one rate for a
@@ -424,7 +506,7 @@ const iperfRate = (gbps) => (gbps >= 0.001 ? `${Number((gbps * 1000).toPrecision
  * streams at -b). Different rates are different runs, each on its own port
  * so they can go at once. A sized load's replies go back as TCP the other way.
  */
-export function buildIperf(made, { seconds = 60, connections = 1, cores = 0, coresOf = null, summary = '', expected = '', mtu = 1500, bind = '', model = null } = {}) {
+export function buildIperf(made, { seconds = 60, connections = 1, cores = 0, coresOf = null, summary = '', expected = '', mtu = 1500, bind = '', model = null, area = '' } = {}) {
   const { pairs, hosts, sized } = made;
   const groups = rateGroups(pairs);
   const streams = Math.max(1, Math.round(connections));
@@ -432,7 +514,12 @@ export function buildIperf(made, { seconds = 60, connections = 1, cores = 0, cor
   // so headers and framing bring the cable to exactly the model's figure.
   const payload = tcpPayloadShare(mtu);
   const renamed = hosts.filter((el) => addrOf(el) !== nameOf(el));
-  const plans = groups.map((group, k) => (groups.length === 1 ? 'iperf_plan.conf' : `iperf_plan-${k + 1}.conf`));
+  const plans = groups.map((group, k) => `iperf_plan${area ? `-${area}` : ''}${groups.length === 1 ? '' : `-${k + 1}`}.conf`);
+  // Each run's id, and -- when runs go at once -- its own remote directory:
+  // iperf-orchestrator's run ends by removing its --remote-dir on every
+  // host, so two runs sharing one would take each other's files.
+  const id = (k) => `dcviz${area ? `-${area}` : ''}${groups.length === 1 ? '' : `-${k + 1}`}`;
+  const apart = groups.length > 1 || !!area;
   const files = groups.map((group, k) => ({
     name: plans[k],
     text: [
@@ -442,38 +529,37 @@ export function buildIperf(made, { seconds = 60, connections = 1, cores = 0, cor
       `# bandwidth=${iperfRate((group.gbps * payload) / streams)}${iperfLength((group.gbps * payload) / streams)}`,
       // A plan setting, so every command run against the plan takes it.
       ...(bindFlag(bind) ? [`# bind=${bind}`] : []),
-      `# made by datacenter_visualization ${VERSION}: rate ${k + 1} of ${groups.length}, `
+      ...(apart ? [`# remote_dir=/tmp/iperf_orchestrator-${id(k)}`] : []),
+      `# made by datacenter_visualization ${VERSION}: ${area ? `area ${area}, ` : ''}rate ${k + 1} of ${groups.length}, `
         + `${group.pairs.length} pairs at ${prose(gbText(group.gbps))} each on the wire, MTU ${mtu}`,
       grid(hosts.filter((el) => group.hosts.has(el)), group.pairs, { head: addrOf, row: addrOf }, () => 'x'),
       '',
     ].join('\n'),
     note: `${group.pairs.length.toLocaleString()} pairs at ${gbText(group.gbps)}`,
   }));
+  const hostsMap = tagged('hosts.map', area);
   if (renamed.length) {
     files.push({
-      name: 'hosts.map',
+      name: hostsMap,
       text: `${renamed.map((el) => `${addrOf(el)} ${nameOf(el)}`).join('\n')}\n`,
       note: 'addresses to the layout’s names',
     });
   }
-  const map = renamed.length ? ' --overlay-map hosts.map' : '';
-  const id = (k) => (groups.length === 1 ? 'dcviz' : `dcviz-${k + 1}`);
-  const commands = [];
+  const map = renamed.length ? ` --overlay-map ${hostsMap}` : '';
+  const results = tagged('iperf_results.tsv', area);
   const run = (plan, k) => `iperf-orchestrator run --plan ${plan} --servers ${plan} --run-id ${id(k)} --for ${seconds}`;
-  if (groups.length > 1) {
+  const phases = {
     // All at once, in the background, each one's output in its own log.
-    commands.push(`# ${groups.length} runs, one per rate, all at once: each one's output goes to its own log`);
-    plans.forEach((plan, k) => commands.push(`${run(plan, k)} > iperf-run-${k + 1}.log 2>&1 &`));
-    commands.push('wait');
-  } else {
-    commands.push(`# the run: add --keep-going${bind ? '' : ', --bind'} ... as you would to any run`);
-    plans.forEach((plan, k) => commands.push(run(plan, k)));
-  }
-  commands.push('# what it measured, for the viewer: load iperf_results.tsv beside the layout');
-  plans.forEach((plan, k) => commands.push(`iperf-orchestrator export-overlay --plan ${plan} --servers ${plan} --run-id ${id(k)}${map} `
-    + `--overlay-run dcviz --overlay-out iperf_results.tsv${k ? ' --overlay-append' : ''}`));
+    runsComment: `# ${groups.length} runs, one per rate, all at once: each one's output goes to its own log`,
+    runComment: `# the run: add --keep-going${bind ? '' : ', --bind'} ... as you would to any run`,
+    run: plans.map((plan, k) => ({ cmd: run(plan, k), log: `iperf-run${id(k).slice(5)}.log` })),
+    export: [`# what it measured, for the viewer: load ${results} beside the layout`,
+      ...plans.map((plan, k) => `iperf-orchestrator export-overlay --plan ${plan} --servers ${plan} --run-id ${id(k)}${map} `
+        + `--overlay-run dcviz${area ? `-${area}` : ''} --overlay-out ${results}${k ? ' --overlay-append' : ''}`)],
+  };
   return withExpected({
     tool: 'iperf',
+    area,
     files,
     notes: [
       ...describe(pairs, hosts, summary),
@@ -484,11 +570,13 @@ export function buildIperf(made, { seconds = 60, connections = 1, cores = 0, cor
       ...coresNote(made, streams, cores, coresOf, 'iperf'),
       `iperf paces payload: -b is ${(payload * 100).toFixed(1)}% of the model’s rate, so with TCP/IP headers and Ethernet framing `
         + `(MTU ${mtu}) the cables carry exactly what the model shows.`,
-      ...(renamed.length ? ['hosts.map turns the addresses it tests back into the layout’s names.'] : []),
+      ...(renamed.length ? [`${hostsMap} turns the addresses it tests back into the layout’s names.`] : []),
+      ...(apart ? ['Each run has a --remote-dir of its own (remote_dir= in its plan): a run ends by removing its remote directory, '
+        + 'and runs at once sharing one would take each other’s files.'] : []),
       ...bindNote(bind),
     ],
-    commands,
-  }, expected, 'iperf_results.tsv', model);
+    phases,
+  }, expected, results, model);
 }
 
 /**
@@ -496,7 +584,7 @@ export function buildIperf(made, { seconds = 60, connections = 1, cores = 0, cor
  * path MTU -- netmesh measures the network, it makes no load. Alone it probes
  * an idle network; run with the load after --, idle first and then under it.
  */
-export function buildNetmesh(made, { seconds = 60, connections = 1, cores = 0, coresOf = null, summary = '', expected = '', mtu = 1500, bind = '', model = null } = {}) {
+export function buildNetmesh(made, { seconds = 60, connections = 1, cores = 0, coresOf = null, summary = '', expected = '', mtu = 1500, bind = '', model = null, area = '' } = {}) {
   const { pairs, hosts } = made;
   const flows = Math.min(PROBE_FLOWS, Math.max(1, Math.round(connections)));
   const probed = pairs.filter((pair) => pair.gbps > 0 || pair.pps > 0);
@@ -512,9 +600,15 @@ export function buildNetmesh(made, { seconds = 60, connections = 1, cores = 0, c
     '# probed only: netmesh does not send the load or its rate',
     grid(hosts, probed, { head: token, row: nameOf }, () => String(PROBES)),
   ].join('\n');
+  const file = tagged('mesh.csv', area);
+  const reports = tagged('reports', area);
+  const results = tagged('netmesh_results.tsv', area);
+  // An area's netmesh keeps to its own remote directory and reports.
+  const own = area ? ` --remote-dir ${tagged('/var/tmp/netmesh', area)} --reports ${reports}` : '';
   return withExpected({
     tool: 'netmesh',
-    files: [{ name: 'mesh.csv', text: `${mesh}\n`, note: `${probed.length.toLocaleString()} pairs` }],
+    area,
+    files: [{ name: file, text: `${mesh}\n`, note: `${probed.length.toLocaleString()} pairs` }],
     notes: [
       `netmesh makes no load. Of the load generator’s settings it takes only which hosts talk to which -- `
         + `${among}${summary ? `, from ${summary}` : ''} -- how long (${seconds} s), and the connections, as `
@@ -531,16 +625,18 @@ export function buildNetmesh(made, { seconds = 60, connections = 1, cores = 0, c
       ...(bindFlag(bind) ? ['netmesh reads --bind as a NIC from the binnacle after 0.8.0; an older netmesh takes only a whole '
         + `address and refuses ${bind} ("cannot bind ... Name or service not known") -- update it, or leave --bind off its run.`] : []),
     ],
-    commands: [
-      '# the idle network',
-      `netmesh run --mesh mesh.csv --for ${seconds}${bindFlag(bind)}`,
-      '# ... or 20 s idle, then under the load (the mx run, with matrix.csv beside it):',
-      '# put this line in place of the one above',
-      `# netmesh run --mesh mesh.csv --baseline 20${bindFlag(bind)} -- ${mxRun(seconds, connections, bind, mxWorkers(made, { mtu, connections, cores, coresOf }))}`,
-      '# what it measured, for the viewer: load netmesh_results.tsv beside the layout',
-      'dcimport netmesh_results.tsv --tidy reports/',
-    ],
-  }, expected, 'netmesh_results.tsv', model);
+    phases: {
+      runComment: '# the idle network',
+      run: [{ cmd: `netmesh run --mesh ${file} --for ${seconds}${bindFlag(bind)}${own}`, log: tagged('netmesh-run.log', area) }],
+      instead: [
+        `# ... or 20 s idle, then under the load (the mx run, with ${tagged('matrix.csv', area)} beside it):`,
+        '# put this line in place of the one above',
+        // mx's reports apart from netmesh's: both are <host>.csv.
+        `# netmesh run --mesh ${file} --baseline 20${bindFlag(bind)}${own} -- ${mxRun(seconds, connections, bind, mxWorkers(made, { mtu, connections, cores, coresOf }), area, tagged('reports-mx', area))}`,
+      ],
+      export: [`# what it measured, for the viewer: load ${results} beside the layout`, `dcimport ${results} --tidy ${reports}/`],
+    },
+  }, expected, results, model);
 }
 
 export const RUN_BUILDERS = { iperf: buildIperf, mx: buildMx, netmesh: buildNetmesh };

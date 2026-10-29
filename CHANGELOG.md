@@ -11,6 +11,41 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.50.0 — 2026-10-29
+
+- **Load areas: several loads at once, on hosts of their own.** The Load
+  generator's **area** tabs hold loads with settings of their own -- one
+  pod all-to-all at 20 Gb/s while another takes an incast of 64-byte
+  packets -- and **Run** runs them all, shared out together on the cables,
+  the panel saying what each sends. **+ area** adds one, **Remove** takes it
+  away, a name box names it, and a split's **An area each** makes an area of
+  every group, its hosts the group's (`in:/…`, a rule, `plane=2`, or
+  `path=[…]`).
+  - **Safely**: no host is in two areas. Filters that share a host -- an
+    area with none takes every host -- are refused, naming the areas and a
+    host, and nothing runs until each has hosts of its own. A target (incast,
+    outcast, hotspot) is the first pick inside its own area and no other.
+  - **A run each, all at once**: each area's files, run ids, remote
+    directories and reports are its own, by the tools' own options --
+    mx `matrix-A.csv --remote-dir /var/tmp/mx-A --reports reports-A`,
+    iperf-orchestrator `iperf_plan-A.conf` with `remote_dir=` and
+    `--run-id dcviz-A`, netmesh `mesh-A.csv --remote-dir /var/tmp/netmesh-A
+    --reports reports-A` -- and its own `expected-A.tsv` and run file,
+    stamped `#~run area A`. The script checks every area, starts every run
+    in the background, each to its own log, waits, then exports and
+    collects each. The Host status pane probes every area's hosts.
+  `js/app.js` (areas, `areaScope`, `generateArea`, `buildRun`),
+  `js/runfiles.js` (`tagged`, `mergeAreas`, run phases), `js/traffic.js`
+  (each split group's `rule`), `js/ui.js`, `css/app.css`.
+- **iperf runs at once no longer share a remote directory.** A load at
+  several rates is a plan a rate, run at the same time; iperf-orchestrator
+  ends each run by removing its `--remote-dir` on every host, so a host in
+  two of them could lose the files of the one still running. Each plan now
+  says `remote_dir=/tmp/iperf_orchestrator-dcviz-N`.
+- **netmesh's "under the load" line keeps mx's reports apart.** netmesh and
+  mx both collect `reports/<host>.csv`, so the mx run under netmesh wrote
+  into netmesh's reports; it now says `--reports reports-mx`.
+
 ## 1.49.0 — 2026-10-29
 
 - **Split the hosts.** The Load generator splits its hosts into groups that

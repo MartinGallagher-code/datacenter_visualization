@@ -21,7 +21,7 @@ convenience, never a requirement, and it adds no runtime dependency.
 # One half of the project's version. The other is VERSION in js/version.js;
 # see the note there for why there are two and what keeps them equal.
 # pyproject.toml reads this attribute rather than restating it.
-__version__ = "1.49.0"
+__version__ = "1.50.0"
 
 
 def version_notice(prog):
