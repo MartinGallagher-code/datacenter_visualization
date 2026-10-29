@@ -820,10 +820,21 @@ function genSized(g = state.traffic.gen) {
   return !metric || metricUnit(metric, trafficKind(metric)).toGbps !== null;
 }
 
+/**
+ * What a filter can read besides the layout: the results loaded, ticked or
+ * not, and how many elements each covers -- so a filter such as temp_c>70
+ * is read again when they change.
+ */
+function overlayStamp() {
+  let stamp = '';
+  for (const o of state.overlays.values()) stamp += `${o.key}:${o.enabled ? 1 : 0}:${o.direct ? o.direct.size : 0}|`;
+  return stamp;
+}
+
 /** What decides a split of the generator's hosts, as a cache key. */
 function splitKey(g) {
   return JSON.stringify([g.hosts, g.split, g.splitN, g.splitKind, g.splitRules, g.splitKey, g.splitSeed,
-    g.split === 'picks' ? state.picked.map((p) => p.key) : null]);
+    g.split === 'picks' ? state.picked.map((p) => p.key) : null, overlayStamp()]);
 }
 
 /**
@@ -868,12 +879,13 @@ const areaHostCache = new WeakMap();
 function areaHosts(filter) {
   let byFilter = areaHostCache.get(state.model);
   if (!byFilter) areaHostCache.set(state.model, (byFilter = new Map()));
-  const key = (filter || '').trim();
+  const text = (filter || '').trim();
+  const key = `${text}\u0000${overlayStamp()}`;
   let got = byFilter.get(key);
   if (!got) {
     let match = null;
     let why = '';
-    try { if (key) match = compileQuery(key, state); } catch (err) { why = err.message; }
+    try { if (text) match = compileQuery(text, state); } catch (err) { why = err.message; }
     const hosts = why ? [] : hostsFor(state.model, match).hosts;
     got = { hosts, set: new Set(hosts), why };
     if (byFilter.size > 64) byFilter.clear();
@@ -882,8 +894,20 @@ function areaHosts(filter) {
   return got;
 }
 
-/** Each area's hosts, and why the areas cannot run: a filter, or a host two of them take. */
+/**
+ * Each area's hosts, and why the areas cannot run: a filter, or a host two
+ * of them take. Once per layout and set of filters and names, since the
+ * cables ask for it at every redraw.
+ */
+let scopeCache = null;
 function areaScope(areas) {
+  const key = JSON.stringify([...areas.map((a) => [a.name, a.hosts]), overlayStamp()]);
+  if (scopeCache && scopeCache.key === key && scopeCache.layout === state.model) return scopeCache.value;
+  const value = scopeOf(areas);
+  scopeCache = { key, layout: state.model, value };
+  return value;
+}
+function scopeOf(areas) {
   const tags = areaTags(areas);
   const sets = [];
   const owner = new Map();
