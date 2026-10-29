@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.48.0** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.49.0** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -1058,6 +1058,39 @@ off.
   rack takes its servers, never its ToRs. A layout that tags nothing
   `+switch` cannot tell a server from a switch, so the box says so and
   every device with cables counts.
+- **split** — the hosts as groups that share none, and what they are for:
+  peers only within each, and host lists to save. Splitting them:
+
+  | Split | Groups |
+  |---|---|
+  | **each** rack (row, pod, …) | a container each |
+  | **each pick** | each Ctrl-click pick: a rack, a row, a server |
+  | **each rule** | a filter each, one a line or `;` apart: `in:A01 ; in:A02 ; rack=R[05..08]` |
+  | **into blocks** of N | N runs of neighbours, in the layout's order |
+  | **groups of** N | runs of N neighbours, the last what is left |
+  | **interleaved** N | dealt a host at a time, so every group spans every rack |
+  | **at random** N | dealt at random; **Reshuffle** deals again |
+  | **by attribute** | a group for each value of one: `model`, `plane`, … |
+
+  No host is ever in two groups: picks or rules that overlap — a server
+  inside a picked rack, two rules that both hold `r1h1` — are refused,
+  naming where, rather than one of them quietly winning, and nothing runs
+  until they are fixed. Hosts no pick or rule holds are counted, and send
+  nothing. The row says what the split comes to ("3 groups: g1 2 · g2 2 ·
+  g3 2").
+  - **peers only within each group** — each group a load of its own, its
+    hosts sending to each other in the pattern (all, random peers, shift,
+    ring) as if it were the whole floor: the disjoint sets of a test that
+    runs several at once. *Within its own rack* is the same thing with the
+    racks for groups; this is any groups. **to hosts**, outside its own
+    rack, still holds inside a group.
+  - **Save host lists** — `hosts-lists.tar`: a `hosts-<group>.txt` a group,
+    a host a line as the load tools take one (`name`, or `name=addr`), and
+    all of them in `hosts-grouped.txt` with a `[group]` header each — the
+    grouped `hosts.txt` model_network's autopilot, iperf2 mesh and topology
+    discovery read. Taken-out hosts are left out. Each list goes as it is to
+    `--servers`, or into binnacle's `muster add` to be handed out a batch at
+    a time.
 
 - **Take out at random** — servers, racks and switches, each by a
   number or **% of the** ones there are, and each among all of its kind or

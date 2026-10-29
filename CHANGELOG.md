@@ -11,6 +11,28 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.49.0 — 2026-10-29
+
+- **Split the hosts.** The Load generator splits its hosts into groups that
+  share none: each rack (row, pod, …), each pick, each filter rule, into N
+  blocks, groups of N, N interleaved (every group spans every rack), N at
+  random (with **Reshuffle**), or by an attribute's values. Picks or rules
+  that overlap are refused, saying which and where, never resolved by one
+  of them winning; hosts in no group are counted and send nothing.
+  - **Peers only within each group**: every group a load of its own, its
+    hosts sending in the pattern (all, random, shift, ring) only to each
+    other -- *within its own rack*, for any groups. A pattern with a target
+    says it has no peers to keep inside.
+  - **Save host lists**: `hosts-lists.tar`, a hosts file a group and one
+    `hosts-grouped.txt` with `[group]` headers -- model_network's grouped
+    `hosts.txt` -- taken-out hosts left out. No tool in the suite split a
+    host list; binnacle's `muster` hands out a pool's hosts a batch at a
+    time and takes these lists as they are.
+  `js/traffic.js` (`splitHosts`, `splitFiles`, `HOST_SPLITS`, and
+  `generateFlows`' `opts.groups`), `js/app.js`, `js/ui.js`, `css/app.css`.
+- `tests/browser.mjs` runs only the tests whose names hold `BROWSER_ONLY`,
+  when it is set.
+
 ## 1.48.0 — 2026-10-29
 
 - **Cores per server, apart from connections a flow.** The Load generator's

@@ -15,10 +15,10 @@ import {
   capacityWidth, changeColor, countDescendants, FINDING_COLORS, LOAD_COLORS, loadColor, linkSummary, spliceSummary,
 } from './render.js';
 import {
-  biggestChanges, burstRisk, busiest, busyable, cablesOf, counterparts, counterpartLevels, EXPLAIN_PATTERNS, takeoutCandidates, TAKEOUT_KINDS, formatGbps, hostLimits, CORE_LIMIT, GEN_UNITS, hostsFor, loadable, loadUnit, PATTERNS, reachKinds, TARGETED,
+  biggestChanges, burstRisk, busiest, busyable, cablesOf, counterparts, counterpartLevels, EXPLAIN_PATTERNS, takeoutCandidates, TAKEOUT_KINDS, formatGbps, hostLimits, CORE_LIMIT, GEN_UNITS, HOST_SPLITS, HOST_SPLIT_LABELS, SPLIT_LIMIT, hostsFor, loadable, loadUnit, PATTERNS, reachKinds, TARGETED,
   CONNECTION_LIMITS, IMIX_BYTES, PACKET_PICKS, PER_CONNECTION, readsAsLoad, SPLITS, SPREADS, TEST_UNITS, trafficKind, utilOf,
 } from './traffic.js';
-import { bindProblem, MTUS, RUN_LABELS, RUN_TOOLS, runScript, runTar, scriptName, tarName } from './runfiles.js';
+import { bindProblem, MTUS, RUN_LABELS, RUN_TOOLS, runScript, runTar, scriptName, tarball, tarName } from './runfiles.js';
 import { foldAll, foldRuns, makeFold, pane, setNote } from './fold.js';
 
 const el = (tag, cls, text) => {
@@ -2043,6 +2043,104 @@ export function renderLoadGen(state, host, actions, { unit } = {}) {
   hosts.addEventListener('change', () => actions.setGen({ hosts: hosts.value.trim() }));
   who.append(hosts, count);
   box.append(who);
+
+  // Split: the hosts as groups that share none -- each rack, each pick, each
+  // rule, so many in runs, dealt in turn or at random, by an attribute --
+  // to keep peers inside each, and to save as host lists.
+  const splitRow = el('div', 'gen-row gen-split-row');
+  const splitBy = choose(HOST_SPLITS, HOST_SPLIT_LABELS, HOST_SPLITS.includes(g.split) ? g.split : 'none',
+    (v) => actions.setGen({ split: v }));
+  splitBy.className = 'gen-split';
+  splitBy.title = 'Split the hosts into groups that share none:\n'
+    + '  each rack (row, …) -- a group a container\n'
+    + '  each pick -- Ctrl-click racks, rows or servers, a group each\n'
+    + '  each rule -- a filter a group, one a line or ; apart: in:A01 ; in:A02\n'
+    + '  into blocks -- so many runs of neighbours, in the layout’s order\n'
+    + '  groups of -- runs of so many neighbours\n'
+    + '  interleaved -- so many groups dealt a host at a time, so each spans every rack\n'
+    + '  at random -- so many groups dealt at random\n'
+    + '  by attribute -- a group for each value of one: model, plane, …\n'
+    + 'A host two picks or rules both hold is refused, not given to one of them.';
+  splitRow.append(el('span', null, 'split'), splitBy);
+  const splitNumber = (cls, value, title, key) => {
+    const input = el('input', cls);
+    input.type = 'number';
+    input.min = '1';
+    input.max = String(SPLIT_LIMIT);
+    input.value = String(value);
+    input.title = title;
+    input.addEventListener('change', () => actions.setGen({ [key]: Math.max(1, Math.min(SPLIT_LIMIT, Math.round(Number(input.value) || 1))) }));
+    return input;
+  };
+  if (g.split === 'container') {
+    const kinds = reachOf(state.model);
+    const kind = choose(kinds.length ? kinds : ['rack'], Object.fromEntries((kinds.length ? kinds : ['rack']).map((k) => [k, k])),
+      g.splitKind, (v) => actions.setGen({ splitKind: v }));
+    kind.className = 'gen-split-kind';
+    splitRow.append(kind);
+  } else if (['blocks', 'interleave', 'random'].includes(g.split)) {
+    splitRow.append(splitNumber('gen-split-n', g.splitN, 'How many groups', 'splitN'), el('span', null, 'groups'));
+    if (g.split === 'random') {
+      const again = el('button', 'gen-split-reshuffle', 'Reshuffle');
+      again.title = 'Deal the hosts out again, under a new seed';
+      again.addEventListener('click', () => actions.setGen({ splitSeed: ((g.splitSeed || 0) + 1) >>> 0 || 1 }));
+      splitRow.append(again);
+    }
+  } else if (g.split === 'size') {
+    splitRow.append(splitNumber('gen-split-n', g.splitN, 'How many hosts in each group: the last has what is left', 'splitN'), el('span', null, 'hosts'));
+  } else if (g.split === 'attr') {
+    const key = el('input', 'gen-split-key');
+    key.type = 'text';
+    key.value = g.splitKey;
+    key.placeholder = 'model';
+    key.title = 'The attribute whose values are the groups: model, plane, pod, …';
+    key.addEventListener('change', () => actions.setGen({ splitKey: key.value.trim() }));
+    splitRow.append(key);
+  }
+  box.append(splitRow);
+  if (g.split === 'rules') {
+    const rules = el('textarea', 'gen-split-rules');
+    rules.rows = 3;
+    rules.value = g.splitRules;
+    rules.placeholder = 'in:A01\nin:A02\nrack=R[05..08]';
+    rules.title = 'A filter a group, one a line or ; apart -- the host filter’s language. A host two rules both '
+      + 'hold is refused; one no rule holds is left out of every group.';
+    rules.addEventListener('change', () => actions.setGen({ splitRules: rules.value }));
+    box.append(rules);
+  }
+  if (g.split !== 'none') {
+    const sp = actions.genSplit();
+    const said = el('div', sp.why ? 'bad gen-split-why' : 'muted gen-split-why');
+    if (sp.why) said.textContent = sp.why;
+    else {
+      const shown = sp.groups.slice(0, 8).map((x) => `${x.name} ${x.hosts.length.toLocaleString()}`).join(' · ');
+      said.textContent = `${sp.groups.length.toLocaleString()} group${sp.groups.length === 1 ? '' : 's'}: ${shown}`
+        + `${sp.groups.length > 8 ? ' · …' : ''}${sp.left ? ` -- ${sp.left.toLocaleString()} host${sp.left === 1 ? '' : 's'} in none` : ''}`;
+    }
+    box.append(said);
+    if (!sp.why && sp.groups.length) {
+      const use = el('div', 'gen-row');
+      const within = el('label', 'gen-within');
+      const tick = el('input');
+      tick.type = 'checkbox';
+      tick.checked = !!g.within;
+      tick.addEventListener('change', () => actions.setGen({ within: tick.checked }));
+      within.append(tick, el('span', null, ' peers only within each group'));
+      within.title = 'Each group a load of its own: every host sends in the pattern -- all, random peers, shift, '
+        + 'ring -- to hosts of its own group only, as if the group were the whole floor';
+      use.append(within);
+      const lists = sp.groups.length >= 2 ? actions.splitLists() : null;
+      if (lists) {
+        const save = el('button', 'gen-split-save', 'Save host lists');
+        save.title = `hosts-lists.tar: a hosts file a group (${lists.files.length - 1}), and all of them in hosts-grouped.txt, `
+          + 'a [group] header each, as model_network reads one; each host as the load tools take it, taken-out hosts left out';
+        save.addEventListener('click', () => actions.saveText('hosts-lists.tar',
+          tarball(lists.files.map((f) => ({ name: `hosts-lists/${f.name}`, text: f.text, mode: 0o644 })), { dir: 'hosts-lists' }), 'application/x-tar'));
+        use.append(save);
+      }
+      box.append(use);
+    }
+  }
 
   // Connections a flow: how many each flow between two hosts runs as -- the
   // same setting as Cable load's. A server's stream= caps each one, so a flow

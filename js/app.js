@@ -24,12 +24,12 @@ import { routesBetween } from './paths.js';
 import {
   adaptiveWeights, betweenPicks, busyable, busyOf, randomTakeouts, TAKEOUT_KINDS, explainResults, pathLatency, bitRate, cableKeys, CONNECTION_LIMITS, CORE_LIMIT, contend, countersOf, estimateFlows, flowsOf, flowsOver, GEN_LIMITS,
   findingsOf, generateFlows, hostCapacity, hostLimits, hostsFor, hostsOf, pairedFlows, TARGETED, loadable, loadUnit, mergeResults, packetGb, readsAsLoad, REPLY_IDS, routeEstimate,
-  routeTraffic, switchLoads, testFlows, trafficKind, viewOf, formatGbps,
+  routeTraffic, splitFiles, splitHosts, switchLoads, testFlows, trafficKind, viewOf, formatGbps,
 } from './traffic.js';
 import { layoutSha, modelBlock, readStamp, runStamp } from './stamp.js';
 import { VERSION } from './version.js';
 import { foldPanel, makeFold, onFoldChange, panelFolded, setFolded } from './fold.js';
-import { bindProblem, mxSizes, RUN_BUILDERS, RUN_LABELS, runPairs, runProblem, runWhy, tcpPayloadShare } from './runfiles.js';
+import { bindProblem, hostToken, mxSizes, RUN_BUILDERS, RUN_LABELS, runPairs, runProblem, runWhy, tcpPayloadShare } from './runfiles.js';
 import { PROBE_TESTS, probeFiles, probeSummary } from './probe.js';
 import {
   compareHosts, compareLatency, compareMtu, compareRuns, comparisonResults, DEFAULT_TOLERANCE, LATENCY_UNITS, LOSSY,
@@ -115,7 +115,10 @@ const state = {
     // Gb/s; hosts is a filter, empty for every device not tagged +switch.
     // `from` names a per-host metric the servers send what they read, at
     // `value` % of it, in place of an amount of its own.
-    gen: { on: false, pattern: 'all', value: 50, unit: null, per: 'host', bytes: 0, reply: 0, hot: 20, shift: 0, peers: 1, reach: 'any', hosts: '', seed: 1, from: null },
+    gen: { on: false, pattern: 'all', value: 50, unit: null, per: 'host', bytes: 0, reply: 0, hot: 20, shift: 0, peers: 1, reach: 'any', hosts: '', seed: 1, from: null,
+      // The hosts split into groups that share none (splitHosts): how, and
+      // with what -- and `within`, whether peers are chosen only inside each.
+      split: 'none', splitN: 2, splitKind: 'rack', splitRules: '', splitKey: '', splitSeed: 1, within: false },
     // A full cable shares out what it carries, as TCP does, and holds back
     // the flows crossing it; off, the cables show what the flows offer.
     contention: true,
@@ -521,7 +524,7 @@ function modelSource(withDown) {
   // Incast sends to the first pick, or failing that the selection.
   const target = gen && TARGETED.has(gen.pattern) ? state.picked[0] || state.selected || null : null;
   const genKey = gen ? JSON.stringify([gen.pattern, gen.value, genUnit(), gen.per, gen.peers, gen.reach, gen.hosts, gen.seed,
-    target && target.key, gen.from, gen.bytes, gen.reply, gen.hot, gen.shift]) : '';
+    target && target.key, gen.from, gen.bytes, gen.reply, gen.hot, gen.shift, gen.within && splitKey(gen)]) : '';
   // A metric the generator reads: re-read when its file is, so by object.
   const from = gen && gen.from ? genSource() : null;
   const duplexKey = metric && kind === 'hosts' ? duplexOf(metric) : null;
@@ -627,10 +630,14 @@ function modelSource(withDown) {
     // Requests and replies of a size: made in pps, then each request sized
     // into bits and answered by its reply, the other way.
     const sized = genSized();
-    const g = gen.from && !from
-      ? { flows: [], hosts: 0, senders: 0, offered: 0, noCapacity: 0, noReading: 0, why: 'the metric it reads is not loaded and ticked' }
+    // Peers only within each group of a split: the groups, or why not.
+    const split = gen.within && gen.split !== 'none' ? genSplit() : null;
+    const none = (why) => ({ flows: [], hosts: 0, senders: 0, offered: 0, noCapacity: 0, noReading: 0, why });
+    const g = gen.from && !from ? none('the metric it reads is not loaded and ticked')
+      : split && split.why ? none(`the split: ${split.why}`)
       : generateFlows(state.model, { ...gen, unit: genUnit() }, {
         match, target, base: sized ? { toGbps: null, unit: 'pps' } : unit, amounts,
+        groups: split ? split.groups.map((x) => x.hosts) : null,
       });
     genFlows = g.flows;
     let genPackets = null;
@@ -780,6 +787,42 @@ function genSized() {
  * none chosen, or it is not loaded and ticked. Read once per metric object,
  * so the caches above can tell it has not changed by identity.
  */
+/** What decides a split of the generator's hosts, as a cache key. */
+function splitKey(g) {
+  return JSON.stringify([g.hosts, g.split, g.splitN, g.splitKind, g.splitRules, g.splitKey, g.splitSeed,
+    g.split === 'picks' ? state.picked.map((p) => p.key) : null]);
+}
+
+/**
+ * The load generator's hosts -- those its filter picks -- split as it says
+ * (splitHosts): { hosts, groups, left, why }. Taken-out hosts stay in, as
+ * they do in the load: the run files drop them, and so do the lists saved.
+ */
+let splitCache = null;
+function genSplit() {
+  const g = state.traffic.gen;
+  const key = splitKey(g);
+  if (splitCache && splitCache.key === key && splitCache.layout === state.model) return splitCache.value;
+  let value;
+  let match = null;
+  const filter = (g.hosts || '').trim();
+  try {
+    if (filter) match = compileQuery(filter, state);
+  } catch (err) {
+    value = { hosts: [], groups: [], left: 0, why: `the host filter does not read: ${err.message}` };
+  }
+  if (!value) {
+    const hosts = hostsFor(state.model, match).hosts;
+    value = {
+      hosts,
+      ...splitHosts(state.model, hosts, { by: g.split, n: g.splitN, kind: g.splitKind, rules: g.splitRules, key: g.splitKey, seed: g.splitSeed },
+        { picks: state.picked, compile: (rule) => compileQuery(rule, state) }),
+    };
+  }
+  splitCache = { key, layout: state.model, value };
+  return value;
+}
+
 function busySource() {
   const overlay = state.traffic.busyFrom ? state.overlays.get(state.traffic.busyFrom) : null;
   if (!overlay || !overlay.enabled || !busyable(overlay)) return null;
@@ -1488,6 +1531,20 @@ const actions = {
     state.traffic.cores = Math.max(0, Math.min(CORE_LIMIT, Math.round(Number(n) || 0)));
     refreshPanels();
     invalidate();
+  },
+
+  // The generator's hosts split into groups, and those groups as host lists
+  // to save: a file a group and one grouped file, taken-out hosts left out.
+  genSplit() {
+    return genSplit();
+  },
+  splitLists() {
+    const sp = genSplit();
+    if (sp.why || sp.groups.length < 2) return null;
+    const groups = sp.groups.map((g) => ({ name: g.name, hosts: state.down.els.size ? g.hosts.filter((el) => !isOut(el)) : g.hosts }))
+      .filter((g) => g.hosts.length);
+    const line = (el) => { const { name, addr } = hostToken(el); return addr === name ? name : `${name}=${addr}`; };
+    return { files: splitFiles(groups, line), groups };
   },
 
   // Whether servers with findings are marked on the floor plan.

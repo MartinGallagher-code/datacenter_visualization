@@ -223,8 +223,12 @@ page.on('console', (m) => { if (m.type() === 'error') noise.push(`${current}: co
 const LAYOUT = readFileSync(join(root, 'examples/small.dc'), 'utf8');
 const RESULTS = readFileSync(join(root, 'examples/small-results.tsv'), 'utf8');
 
-/** A fresh page per test: state leaking between them would hide exactly the bugs here. */
+/**
+ * A fresh page per test: state leaking between them would hide exactly the
+ * bugs here. BROWSER_ONLY=text runs only the tests whose names hold it.
+ */
 async function test(name, fn, { url = '' } = {}) {
+  if (process.env.BROWSER_ONLY && !name.includes(process.env.BROWSER_ONLY)) return;
   current = name;
   await page.goto(base + url, { waitUntil: 'networkidle' });
   try {
@@ -1696,6 +1700,53 @@ await test('connections a flow and cores per server in the load generator', asyn
   await page.fill('#load-gen input.gen-procs', '1');
   await page.locator('#load-gen input.gen-procs').dispatchEvent('change');
   await page.waitForTimeout(300);
+  await page.locator('#load-gen button', { hasText: 'Stop' }).click();
+}, { url: '?layout=fx/tiny.dc' });
+
+// Split: the generator's hosts as groups that share none -- each rack, dealt
+// in turn, each rule -- with peers only within each, and saved as host lists.
+await test('split the hosts in the load generator', async () => {
+  await openLayout([
+    'dc D', '  row A', '    rack r[1..2] u=10', '      node h[1..3] role=server name={rack}{id}',
+    '      node t role=tor +switch name={rack}tor', '  row S', '    rack SP u=4', '      node spine role=spine +switch',
+    'net nic gbps=100', 'net up gbps=400', 'link nic scope=rack role=server role=tor', 'link up role=tor role=spine',
+  ].join('\n'));
+  const gen = () => page.evaluate(() => document.querySelector('#load-gen').innerText);
+  const said = () => page.evaluate(() => (document.querySelector('#load-gen .gen-split-why') || {}).textContent || '');
+  await page.locator('#load-gen select.gen-split').selectOption('container');
+  await page.waitForTimeout(300);
+  eq(await said(), '2 groups: r1 3 · r2 3', 'each rack, a group each');
+  await page.locator('#load-gen label.gen-within input').check();
+  await page.locator('#load-gen button', { hasText: 'Run' }).click();
+  await page.waitForTimeout(500);
+  ok(/6 of 6 hosts send · 12 flows/.test(await gen()), `all to all within each rack: 12 flows, not 30  (${(await gen()).split('\n').find((l) => /flows/.test(l))})`);
+  await page.locator('#load-gen select.gen-split').selectOption('interleave');
+  await page.waitForTimeout(300);
+  await page.fill('#load-gen input.gen-split-n', '3');
+  await page.locator('#load-gen input.gen-split-n').dispatchEvent('change');
+  await page.waitForTimeout(500);
+  eq(await said(), '3 groups: g1 2 · g2 2 · g3 2', 'dealt in turn into three');
+  ok(/6 of 6 hosts send · 6 flows/.test(await gen()), 'three pairs, each one way and back');
+  const [lists] = await Promise.all([page.waitForEvent('download'), page.locator('#load-gen button.gen-split-save').click()]);
+  const listed = spawnSync('tar', ['-tf', await lists.path()], { encoding: 'utf8' });
+  ok(lists.suggestedFilename() === 'hosts-lists.tar'
+     && listed.stdout.trim().split('\n').join(' ') === 'hosts-lists/ hosts-lists/hosts-grouped.txt hosts-lists/hosts-g1.txt hosts-lists/hosts-g2.txt hosts-lists/hosts-g3.txt',
+     `the lists, a file a group and one grouped  (${listed.stdout.trim().split('\n').join(' ')})`);
+  const grouped = spawnSync('tar', ['-xOf', await lists.path(), 'hosts-lists/hosts-grouped.txt'], { encoding: 'utf8' }).stdout;
+  eq(grouped, '[g1]\nr1h1\nr2h1\n[g2]\nr1h2\nr2h2\n[g3]\nr1h3\nr2h3\n', 'grouped as model_network reads a hosts.txt');
+  await page.locator('#load-gen select.gen-split').selectOption('rules');
+  await page.waitForTimeout(300);
+  await page.fill('#load-gen textarea.gen-split-rules', 'in:r1\nr1h2');
+  await page.locator('#load-gen textarea.gen-split-rules').dispatchEvent('change');
+  await page.waitForTimeout(500);
+  ok(/in:r1 and r1h2 share hosts \(r1h2 is in both\)/.test(await said()) && /the split: in:r1 and r1h2 share hosts/.test(await gen()),
+     'rules that overlap are refused, and nothing runs on them');
+  await page.fill('#load-gen textarea.gen-split-rules', 'in:r1 ; r2h[1..2]');
+  await page.locator('#load-gen textarea.gen-split-rules').dispatchEvent('change');
+  await page.waitForTimeout(500);
+  eq(await said(), '2 groups: in:r1 3 · r2h[1..2] 2 -- 1 host in none', 'a rule a group, and the host neither holds');
+  ok(/5 of 6 hosts send · 8 flows/.test(await gen()), `and the host in none sends nothing  (${(await gen()).split('\n').find((l) => /flows/.test(l))})`);
+  await page.locator('#load-gen select.gen-split').selectOption('none');
   await page.locator('#load-gen button', { hasText: 'Stop' }).click();
 }, { url: '?layout=fx/tiny.dc' });
 

@@ -37,7 +37,7 @@ import {
 import {
   betweenPicks, biggestChanges, bitRate, burstRisk, busiest, cableKeys, cablesOf, compareLoads, countersOf, devicesOf,
   adaptiveWeights, BUFFER_ALPHA, CONNECTION_LIMITS, EXPLAIN, explainResults, sendersOver, FRAMING_BYTES, IMIX_BYTES, PACKET_PICKS, contend, pathLatency, switchBuffer, switchLatency, switchPps, CONTEND_LIMITS, estimateFlows, findingKind, findingsOf, flowsOf, flowsOver, formatGbps, GEN_LIMITS,
-  generateFlows, hostCapacity, hostLimits, busyable, busyOf, layersOf, EXPLAIN_PATTERNS, pairedFlows, randomTakeouts, takeoutCandidates,
+  generateFlows, hostCapacity, hostLimits, HOST_SPLITS, splitFiles, splitHosts, busyable, busyOf, layersOf, EXPLAIN_PATTERNS, pairedFlows, randomTakeouts, takeoutCandidates,
   counterparts, counterpartLevels,
   hostsFor, hostsOf, loadable, loadUnit, mergeResults, packetGb, reachKinds, readsAsLoad, routeEstimate, routeTraffic,
   switchCapacity, switchLoads, testFlows, trafficKind, utilOf, viewOf as cableView,
@@ -2514,6 +2514,74 @@ link fabric role=server tor
   eq(r.contention.flows[0].value, 20, 'two cores per server for the run: 20');
   r = contend(coresM, [fc(ca, cc, 80), fc(cc, ca, 80, 2)], { toGbps: 1, connections: 8, split: 'even' });
   eq(r.contention.flows.map((x) => x.value), [20, 20], 'sending and receiving share the cores, as they share cpugbps=');
+
+  // Host splits: one list of hosts as several that share none, each way
+  // splitHosts knows; picks and rules that overlap are refused, never given
+  // to one of them.
+  {
+  const m = parseLayout(['dc D', '  row A', '    rack r[1..3] u=10', '      node h[1..4] role=server name={rack}{id} plane={id}',
+    '      node t role=tor +switch name={rack}tor', '  row S', '    rack SP u=4', '      node spine role=spine +switch',
+    'net nic gbps=100', 'net up gbps=400', 'link nic scope=rack role=server role=tor', 'link up role=tor role=spine'].join('\n'));
+  const hosts = hostsFor(m).hosts;
+  const ctx = { compile: (rule) => compileQuery(rule, {}), picks: [] };
+  const show = (sp) => sp.why || `${sp.groups.map((g) => `${g.name}[${g.hosts.map((h) => h.name).join(',')}]`).join(' ')}${sp.left ? ` left ${sp.left}` : ''}`;
+  const split = (spec, c = ctx) => show(splitHosts(m, hosts, spec, c));
+  eq(HOST_SPLITS, ['none', 'container', 'picks', 'rules', 'blocks', 'size', 'interleave', 'random', 'attr'], 'the ways a list splits');
+  eq(split({ by: 'none' }), `all[${hosts.map((h) => h.name).join(',')}]`, 'no split is one group of them all');
+  eq(split({ by: 'container', kind: 'rack' }), 'r1[r1h1,r1h2,r1h3,r1h4] r2[r2h1,r2h2,r2h3,r2h4] r3[r3h1,r3h2,r3h3,r3h4]', 'each rack its own');
+  eq(split({ by: 'blocks', n: 5 }), 'g1[r1h1,r1h2,r1h3] g2[r1h4,r2h1,r2h2] g3[r2h3,r2h4] g4[r3h1,r3h2] g5[r3h3,r3h4]',
+     'into five runs of neighbours, as even as they go, the first a host longer');
+  eq(split({ by: 'size', n: 5 }), 'g1[r1h1,r1h2,r1h3,r1h4,r2h1] g2[r2h2,r2h3,r2h4,r3h1,r3h2] g3[r3h3,r3h4]', 'runs of five, the last what is left');
+  eq(split({ by: 'interleave', n: 4 }), 'g1[r1h1,r2h1,r3h1] g2[r1h2,r2h2,r3h2] g3[r1h3,r2h3,r3h3] g4[r1h4,r2h4,r3h4]',
+     'dealt a host at a time: every group spans every rack');
+  const dealt = splitHosts(m, hosts, { by: 'random', n: 3, seed: 1 }, ctx);
+  eq(dealt.groups.map((g) => g.hosts.length), [4, 4, 4], 'at random: three even groups');
+  eq(new Set(dealt.groups.flatMap((g) => g.hosts)).size, 12, 'every host in exactly one');
+  ok(split({ by: 'random', n: 3, seed: 1 }) === show(dealt) && split({ by: 'random', n: 3, seed: 2 }) !== show(dealt),
+     'the same seed deals the same, another seed deals again');
+  ok(dealt.groups.every((g) => g.hosts.every((h, i) => !i || hosts.indexOf(g.hosts[i - 1]) < hosts.indexOf(h))), 'each in the layout’s order');
+  eq(split({ by: 'attr', key: 'plane' }), 'plane=h1[r1h1,r2h1,r3h1] plane=h2[r1h2,r2h2,r3h2] plane=h3[r1h3,r2h3,r3h3] plane=h4[r1h4,r2h4,r3h4]',
+     'a group for each value of an attribute');
+  ok(/name the attribute/.test(split({ by: 'attr' })), 'and says so with none named');
+  eq(split({ by: 'rules', rules: 'in:r1 ; in:r2' }), 'in:r1[r1h1,r1h2,r1h3,r1h4] in:r2[r2h1,r2h2,r2h3,r2h4] left 4',
+     'each rule its own, and the hosts no rule holds left out');
+  eq(split({ by: 'rules', rules: 'in:r1\nr1h1' }), 'in:r1 and r1h1 share hosts (r1h1 is in both): each host belongs to one group',
+     'rules that overlap are refused, saying where');
+  const pick = (name) => m.all.find((el) => el.name === name);
+  eq(split({ by: 'picks' }, { ...ctx, picks: [pick('r1'), pick('r2h1')] }), 'r1[r1h1,r1h2,r1h3,r1h4] r2h1[r2h1] left 7', 'each pick its own: a rack, a server');
+  eq(split({ by: 'picks' }, { ...ctx, picks: [pick('r1'), pick('r1h2')] }), 'r1 and r1h2 share hosts (r1h2 is in both): each host belongs to one group',
+     'a server inside a picked rack is refused, not given to either');
+  ok(/pick the groups/.test(split({ by: 'picks' })), 'and with nothing picked, says how');
+  eq(splitHosts(m, hosts, { by: 'blocks', n: 50 }, ctx).groups.length, 12, 'never more groups than hosts, and none empty');
+
+  // Peers only within each group: every flow stays inside one.
+  const groups = splitHosts(m, hosts, { by: 'interleave', n: 3 }, ctx).groups.map((g) => g.hosts);
+  const groupOf = new Map(groups.flatMap((g, i) => g.map((el) => [el, i])));
+  let made = generateFlows(m, { pattern: 'all', value: 10, unit: 'Gb/s' }, { groups });
+  eq([made.flows.length, made.flows.every((f) => groupOf.get(f.src) === groupOf.get(f.dst))], [3 * 4 * 3, true],
+     'all to all within each of three groups of four: 36 flows, none between groups');
+  eq(new Set(made.flows.map((f) => f.id)).size, made.flows.length, 'each flow its own id');
+  made = generateFlows(m, { pattern: 'random', peers: 2, value: 10, unit: 'Gb/s', seed: 3 }, { groups });
+  ok(made.flows.length === 24 && made.flows.every((f) => groupOf.get(f.src) === groupOf.get(f.dst)), 'random peers chosen within each group');
+  made = generateFlows(m, { pattern: 'ring', value: 10, unit: 'Gb/s' }, { groups });
+  ok(made.flows.length === 12 && made.flows.every((f) => groupOf.get(f.src) === groupOf.get(f.dst)), 'a ring round each group');
+  made = generateFlows(m, { pattern: 'all', value: 10, unit: 'Gb/s', reach: 'rack' }, { groups });
+  // Interleaved, each group of four holds two of one rack: 12 pairs less those 2.
+  ok(made.flows.length === 3 * 10 && made.flows.every((f) => f.src.parent !== f.dst.parent && groupOf.get(f.src) === groupOf.get(f.dst)),
+     `and outside its own rack still holds inside a group  (${made.flows.length})`);
+  ok(/peers within each group: all, random, shift or ring/.test(generateFlows(m, { pattern: 'incast', value: 10, unit: 'Gb/s' }, { groups, target: pick('r1h1') }).why),
+     'a pattern with one target has no peers to keep inside');
+
+  // As files: a hosts list a group, and all of them grouped, [group] headers
+  // as model_network's hosts.txt has them.
+  const files = splitFiles(splitHosts(m, hosts, { by: 'attr', key: 'plane' }, ctx).groups, (el) => el.name);
+  eq(files.map((f) => f.name), ['hosts-grouped.txt', 'hosts-plane-h1.txt', 'hosts-plane-h2.txt', 'hosts-plane-h3.txt', 'hosts-plane-h4.txt'],
+     'a file a group, named for it, and one grouped file');
+  eq(files[1].text, 'r1h1\nr2h1\nr3h1\n', 'a host a line');
+  ok(files[0].text.startsWith('[plane=h1]\nr1h1\nr2h1\nr3h1\n[plane=h2]\n'), 'the grouped file, a [group] header each');
+  eq(splitFiles([{ name: 'in:r1', hosts: [hosts[0]] }, { name: 'in:r1', hosts: [hosts[1]] }], (el) => el.name).map((f) => f.name),
+     ['hosts-grouped.txt', 'hosts-in_r1.txt', 'hosts-in_r1-2.txt'], 'names that would clash kept apart');
+  }
 
   // A per-server CPU metric, read as each server's busy share.
   const cpuRaw = parseResults('!test cpu_util unit=%\ncpu_util\tb\t35\ncpu_util\tc\t100\n!test cpu_frac\ncpu_frac\tb\t0.35\n'

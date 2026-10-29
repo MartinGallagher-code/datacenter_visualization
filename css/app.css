@@ -891,6 +891,11 @@ body.resizing-rows { cursor: row-resize; user-select: none; }
 .list-more button { font-size: 11px; padding: 2px 8px; }
 .gen-row .gen-count { font-size: 10.5px; white-space: nowrap; }
 .gen-row .gen-count.bad { color: #f85149; }
+.gen-row .gen-split { flex: 1; min-width: 0; }
+.gen-row input.gen-split-key { width: 90px; padding: 1px 4px; font-family: var(--mono); }
+.gen-split-rules { width: 100%; box-sizing: border-box; font-family: var(--mono); font-size: 11px; margin: 2px 0 4px; }
+.gen-split-why { font-size: 10.5px; margin: 0 0 4px; }
+.gen-within { display: inline-flex; align-items: center; gap: 2px; }
 
 /* --------------------------------------------------------------- findings */
 
