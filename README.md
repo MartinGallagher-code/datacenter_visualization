@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.45.0** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.45.1** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -2259,6 +2259,13 @@ many there are; a filter that picks none says so instead.
 | `preflight` | can every host run the load? ssh, python3 (mx and netmesh copy their agents over), the tools the hosts need (`iperf`), `--bind` matching an interface, the run's UDP ports free, the clock against this machine's, open files allowed |
 | `--model FILE` | (scan, watch, preflight) the layout, written whole into the results, named by `hosts.txt`'s `# layout:` line |
 | `diff` | what changed between two scans — kernel, OS, CPU, memory, NIC driver and firmware, NIC speed, MTU and link — host by host, and `-o` as `probe_changed` |
+
+**Hosts are probed in parallel, 256 at once** (`--jobs`): a scan of 1,000
+hosts is four waves of about two seconds each — the ssh connection and the
+one-second sample. Each host at once is an ssh child holding a few open
+files here, so `dcprobe` raises its own open-file limit to fit, as far as
+the system lets it; where `ulimit -n` will not stretch that far it probes
+as many at once as fit, says so, and still probes every host.
 
 What a scan measures, over a one-second sample (`--sample`):
 

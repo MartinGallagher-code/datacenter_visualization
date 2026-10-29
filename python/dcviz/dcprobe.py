@@ -279,6 +279,38 @@ def read_hosts(path):
     return hosts
 
 
+# Hosts probed at once. Each is one ssh child holding three pipes here, so
+# 256 at once is some 800 open files -- past the 1024 many shells allow
+# once ssh's own are counted -- and room_for() raises this process's soft
+# limit to fit, or probes fewer at once when it cannot.
+JOBS = 256
+FILES_PER_JOB = 4
+
+
+def room_for(jobs):
+    """As many of `jobs` as this process's open-file limit lets run at once,
+    raising the soft limit toward the hard one first."""
+    try:
+        import resource
+    except ImportError:
+        return jobs
+    want = jobs * FILES_PER_JOB + 64
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    if soft != resource.RLIM_INFINITY and soft < want:
+        target = want if hard == resource.RLIM_INFINITY else min(want, hard)
+        try:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (target, hard))
+            soft = target
+        except (ValueError, OSError):
+            pass
+    if soft == resource.RLIM_INFINITY or soft >= want:
+        return jobs
+    fit = max(1, (soft - 64) // FILES_PER_JOB)
+    sys.stderr.write("%s: open files are limited to %d here, so %d hosts at once rather than %d "
+                     "(raise ulimit -n to probe more)\n" % (PROG, soft, fit, jobs))
+    return fit
+
+
 def ssh_run(args, addr, remote, body, timeout):
     """Run `remote` on addr with `body` on its stdin. Returns (rc, stdout,
     stderr); a host that does not answer is rc 124 or 255, never an
@@ -728,6 +760,8 @@ def write(args, out, header=None):
 
 def cmd_scan(args):
     hosts = read_hosts(args.servers)
+    # No more at once than there are hosts, and no more than open files allow.
+    args.jobs = room_for(min(max(1, args.jobs), len(hosts)))
     args.layout_name = layout_named(args.servers)
     args.stamp_lines = model_stamp(args, "scan")
     why_src = why_slow_source(args.why_slow_file) if args.why_slow else None
@@ -739,6 +773,8 @@ def cmd_scan(args):
 
 def cmd_watch(args):
     hosts = read_hosts(args.servers)
+    # No more at once than there are hosts, and no more than open files allow.
+    args.jobs = room_for(min(max(1, args.jobs), len(hosts)))
     args.layout_name = layout_named(args.servers)
     args.stamp_lines = model_stamp(args, "watch")
     why_src = why_slow_source(args.why_slow_file) if args.why_slow else None
@@ -764,6 +800,8 @@ def cmd_watch(args):
 
 def cmd_preflight(args):
     hosts = read_hosts(args.servers)
+    # No more at once than there are hosts, and no more than open files allow.
+    args.jobs = room_for(min(max(1, args.jobs), len(hosts)))
     args.layout_name = layout_named(args.servers)
     args.stamp_lines = model_stamp(args, "preflight")
     out = Out()
@@ -930,7 +968,7 @@ def main(argv=None):
         p.add_argument("-o", "--output", default=default_out, metavar="FILE", help="results file ('-' for stdout)")
         p.add_argument("--user", default=os.environ.get("DCPROBE_USER", ""))
         p.add_argument("--ssh", default=os.environ.get("DCPROBE_SSH", "ssh"), metavar="CMD")
-        p.add_argument("--jobs", type=int, default=32, help="hosts probed at once (default 32)")
+        p.add_argument("--jobs", type=int, default=JOBS, help="hosts probed at once (default %d)" % JOBS)
         p.add_argument("--timeout", type=int, default=20, help="seconds a host has to answer (default 20)")
         p.add_argument("--no-meta", action="store_true", help="no !test lines")
         p.add_argument("--quiet", action="store_true")
