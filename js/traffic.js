@@ -65,6 +65,8 @@ export const SINGLE_PATH = new Set(['hashed', 'polarized']);
 export const PER_CONNECTION = new Set(['hashed', 'polarized', 'adaptive']);
 // How many connections a flow can be routed as, each hashed on its own.
 export const CONNECTION_LIMITS = { max: 64 };
+// The most cores a run may be given on each server, as cores= takes them.
+export const CORE_LIMIT = 100000;
 // The units a test flow can be given when no metric sets one.
 export const TEST_UNITS = ['Gb/s', 'Mb/s', 'pps'];
 export const SPREADS = ['gravity', 'even', 'peers'];
@@ -1227,7 +1229,7 @@ export function contend(model, flows, opts = {}) {
     const ends = [[flow.src, 'out'], [flow.dst, 'in']].filter(([el]) => !f.forwards(el));
     for (const [el, side] of ends) if (switchCapacity(el)) part(i, [hostBitSlot(el, side), 1], 1);
     for (const [el, side] of ends) {
-      const lim = hostLimits(el, opts.busy);
+      const lim = hostLimits(el, opts.busy, opts.cores);
       if (lim.cpu) part(i, [cpuSlot(el), 1], side === 'in' ? lim.rxcost : 1);
     }
     if (!(flow.pps > 0)) return;
@@ -1241,7 +1243,7 @@ export function contend(model, flows, opts = {}) {
     // A packet slot is in packets a second, whatever the load's unit.
     if (o.pps) { cap[k] = switchPps(o.el) || Infinity; return; }
     if (toGbps === null || toGbps === undefined) return;
-    const gbps = o.link ? o.link.gbps : o.cpu ? hostLimits(o.el, opts.busy).cpu : switchCapacity(o.el);
+    const gbps = o.link ? o.link.gbps : o.cpu ? hostLimits(o.el, opts.busy, opts.cores).cpu : switchCapacity(o.el);
     if (gbps) cap[k] = gbps / toGbps;
   });
   const n = routed.length;
@@ -1496,21 +1498,32 @@ export function switchCapacity(el) {
 /**
  * A server's own limits, beyond its NICs: `stream` the most one connection
  * carries, in Gb/s -- one core's worth on a kernel stack -- `cpu` what it
- * can send and receive together, its cpugbps= less the share `busy` with
- * other work (`idle` the whole of it), and `rxcost` how many times more
- * receiving costs it than sending (1 unless it says).
+ * can send and receive together, less the share `busy` with other work, and
+ * `rxcost` how many times more receiving costs it than sending (1 unless it
+ * says). What it can do together is its cpugbps= (`idle`), or its `cores`
+ * each carrying one stream= (`coreGbps`), whichever is less; `byCores` says
+ * the cores are what it comes to.
  *
- * @param busy  Map(el -> share) read from a metric, over each busy=
+ * @param busy   Map(el -> share) read from a metric, over each busy=
+ * @param cores  the most cores a run may use on each server (the load
+ *               generator's cores per server), over its cores=; 0 for no cap
  */
-export function hostLimits(el, busy = null) {
+export function hostLimits(el, busy = null, cores = 0) {
   const num = (key, least) => {
     const n = Number(el.attrs && el.attrs[key]);
     return el.attrs && el.attrs[key] !== undefined && Number.isFinite(n) && n >= least ? n : null;
   };
   const idle = num('cpugbps', 1e-9);
+  const stream = num('stream', 1e-9);
+  const own = num('cores', 1);
+  const cap = cores >= 1 ? Math.floor(cores) : null;
+  const n = own && cap ? Math.min(Math.floor(own), cap) : own ? Math.floor(own) : cap;
+  const coreGbps = n && stream ? n * stream : null;
+  const whole = coreGbps && (!idle || coreGbps < idle) ? coreGbps : idle;
   const share = busy && busy.has(el) ? busy.get(el) : el.attrs && el.attrs.busy !== undefined ? readShare(el.attrs.busy) : null;
   return {
-    stream: num('stream', 1e-9), cpu: idle && share ? idle * (1 - share) : idle, idle, busy: share || 0,
+    stream, cpu: whole && share ? whole * (1 - share) : whole, idle: whole, cpugbps: idle, busy: share || 0,
+    cores: n, coreGbps, byCores: !!coreGbps && whole === coreGbps,
     busyFrom: !!(busy && busy.has(el)), rxcost: num('rxcost', 0.1) || 1,
   };
 }

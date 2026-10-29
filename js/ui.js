@@ -15,7 +15,7 @@ import {
   capacityWidth, changeColor, countDescendants, FINDING_COLORS, LOAD_COLORS, loadColor, linkSummary, spliceSummary,
 } from './render.js';
 import {
-  biggestChanges, burstRisk, busiest, busyable, cablesOf, counterparts, counterpartLevels, EXPLAIN_PATTERNS, takeoutCandidates, TAKEOUT_KINDS, formatGbps, hostLimits, GEN_UNITS, hostsFor, loadable, loadUnit, PATTERNS, reachKinds, TARGETED,
+  biggestChanges, burstRisk, busiest, busyable, cablesOf, counterparts, counterpartLevels, EXPLAIN_PATTERNS, takeoutCandidates, TAKEOUT_KINDS, formatGbps, hostLimits, CORE_LIMIT, GEN_UNITS, hostsFor, loadable, loadUnit, PATTERNS, reachKinds, TARGETED,
   CONNECTION_LIMITS, IMIX_BYTES, PACKET_PICKS, PER_CONNECTION, readsAsLoad, SPLITS, SPREADS, TEST_UNITS, trafficKind, utilOf,
 } from './traffic.js';
 import { bindProblem, MTUS, RUN_LABELS, RUN_TOOLS, runScript, runTar, scriptName, tarName } from './runfiles.js';
@@ -750,7 +750,7 @@ function viewLabel(view, name) {
 }
 
 /**
- * Whether any element has a stream= or a cpugbps=: what decides whether the
+ * Whether any element has a stream=, a cpugbps= or cores=: what decides whether the
  * connections box and the busy choice are worth showing. Once per layout.
  */
 const limitsSeen = new WeakMap();
@@ -761,7 +761,8 @@ function serverLimits(model) {
     for (const x of model.all) {
       if (!x.attrs) continue;
       if (x.attrs.stream !== undefined) seen.stream = true;
-      if (x.attrs.cpugbps !== undefined) seen.cpu = true;
+      // cores= is a CPU ceiling too, once there is a stream= to multiply.
+      if (x.attrs.cpugbps !== undefined || x.attrs.cores !== undefined) seen.cpu = true;
     }
     limitsSeen.set(model, seen);
   }
@@ -1108,24 +1109,31 @@ export function hostTip(state, node, view) {
     lines.push(`its NICs: ${pct((Math.max(sent[0], got[0]) * view.toGbps) / own)} of the ${formatGbps(own)} they can move each way`
       + (full ? ` — full, holding back ${full.out + full.in} flow${full.out + full.in === 1 ? '' : 's'} itself` : ''));
   }
-  // Its own limits beyond its NICs: one connection's ceiling, and its CPU.
-  const lim = hostLimits(node, view.model && view.model.opts ? view.model.opts.busy : null);
+  // Its own limits beyond its NICs: one connection's ceiling, and its CPU --
+  // its cpugbps=, or its cores each carrying one stream=, whichever is less.
+  const opts = view.model && view.model.opts ? view.model.opts : {};
+  const lim = hostLimits(node, opts.busy || null, opts.cores || 0);
   if (lim.stream && !forwardsHere(state, node)) {
     const k = c && c.hosts && c.hosts.streams ? c.hosts.streams.get(node) : 0;
     lines.push(`one connection carries at most ${formatGbps(lim.stream)}b/s (stream=)`
       + (k ? ` — holding back ${k} flow${k === 1 ? '' : 's'} itself` : ''));
   }
+  const coreText = lim.cores ? `${lim.cores} core${lim.cores === 1 ? '' : 's'}${opts.cores && lim.cores === Math.floor(opts.cores) ? ' (the load generator’s cores per server)' : ' (cores=)'}` : '';
   if (lim.cpu && !forwardsHere(state, node)) {
     const cpu = c && c.hosts && c.hosts.cpu ? c.hosts.cpu.get(node) : null;
     const k = c && c.hosts && c.hosts.cpuFull ? c.hosts.cpuFull.get(node) : 0;
     const rx = lim.rxcost !== 1 ? `, receiving costing ${trimNum(lim.rxcost)}×` : '';
     const busy = lim.busy ? ` (of its ${formatGbps(lim.idle)}: ${pct(lim.busy)} busy elsewhere, ${lim.busyFrom ? 'as measured' : 'busy='})` : '';
+    const whose = lim.byCores ? `its ${coreText} at its stream=` : 'it';
+    const from = lim.byCores ? `${coreText} × stream=${lim.cpugbps ? `, under its cpugbps=${trimNum(lim.cpugbps)}` : ''}` : 'cpugbps=';
     lines.push(cpu && view.toGbps !== null
-      ? `its CPU: ${pct((cpu[0] * view.toGbps) / lim.cpu)} of the ${formatGbps(lim.cpu)} it can send and receive together${busy}${rx}`
+      ? `its CPU: ${pct((cpu[0] * view.toGbps) / lim.cpu)} of the ${formatGbps(lim.cpu)} ${whose} can send and receive together${busy}${rx}`
         + (k ? ` — full, holding back ${k} flow${k === 1 ? '' : 's'} itself` : '')
-      : `its CPU can send and receive ${formatGbps(lim.cpu)} together${busy}${rx} (cpugbps=)`);
+      : `its CPU can send and receive ${formatGbps(lim.cpu)} together${busy}${rx} (${from})`);
   } else if (lim.busy && !forwardsHere(state, node)) {
-    lines.push(`${pct(lim.busy)} busy elsewhere — no cpugbps= to take it from, so it holds nothing back`);
+    lines.push(`${pct(lim.busy)} busy elsewhere — no cpugbps= or cores= with a stream= to take it from, so it holds nothing back`);
+  } else if (lim.cores && !forwardsHere(state, node)) {
+    lines.push(`${coreText} — with no stream= to say what one carries, they hold nothing back`);
   }
   if (each.length > 1) {
     for (const e of each) {
@@ -2036,33 +2044,65 @@ export function renderLoadGen(state, host, actions, { unit } = {}) {
   who.append(hosts, count);
   box.append(who);
 
-  // Processes a flow: how many connections each flow between two hosts runs
-  // as -- the same setting as Cable load's connections a flow. A server's
-  // stream= caps each one, so a flow carries at most this many times it.
+  // Connections a flow: how many each flow between two hosts runs as -- the
+  // same setting as Cable load's. A server's stream= caps each one, so a flow
+  // carries at most this many times it.
   const procs = el('div', 'gen-row');
   const procInput = el('input', 'gen-procs');
   procInput.type = 'number';
   procInput.min = '1';
   procInput.max = String(CONNECTION_LIMITS.max);
   procInput.value = String(state.traffic.connections);
-  procInput.title = 'How many processes (connections) each flow between two hosts runs as: iperf -P, mx --streams, '
-    + 'netmesh flows=. A server’s stream= caps each one -- one core’s worth -- so a flow carries at most this many '
-    + 'times it. The same setting as Cable load’s connections a flow';
+  procInput.title = 'How many connections each flow between two hosts runs as: iperf -P, mx --streams, netmesh flows=. '
+    + 'A server’s stream= caps each one -- one core’s worth -- so a flow carries at most this many times it. Each '
+    + 'server holds this many for every peer it sends to and every one sending to it. The same setting as Cable load’s '
+    + 'connections a flow';
   procInput.addEventListener('change', () => actions.setConnections(procInput.value));
-  procs.append(el('span', null, 'processes'), procInput, el('span', null, 'a flow'));
+  procs.append(el('span', null, 'connections'), procInput, el('span', null, 'a flow'));
   box.append(procs);
   const capped = g.on ? actions.genProcesses() : null;
   if (capped && capped.held) {
     const why = el('div', 'bad gen-procs-why');
     why.append(el('span', null, `stream=${formatGbps(capped.stream)} holds ${capped.held.toLocaleString()} of ${capped.flows.toLocaleString()} `
       + `flow${capped.flows === 1 ? '' : 's'} below what ${capped.held === 1 ? 'it was' : 'they were'} asked: `
-      + `${capped.conns} process${capped.conns === 1 ? '' : 'es'} a flow carr${capped.conns === 1 ? 'ies' : 'y'} ${formatGbps(capped.stream * capped.conns)}b/s at most. `
+      + `${capped.conns} connection${capped.conns === 1 ? '' : 's'} a flow carr${capped.conns === 1 ? 'ies' : 'y'} ${formatGbps(capped.stream * capped.conns)}b/s at most. `
       + `${capped.need} would carry every one in full. `));
     const use = el('button', 'gen-procs-use', `Use ${capped.need}`);
-    use.title = `Run each flow as ${capped.need} processes`;
+    use.title = `Run each flow as ${capped.need} connections`;
     use.addEventListener('click', () => actions.setConnections(capped.need));
     why.append(use);
     box.append(why);
+  }
+
+  // Cores per server: how many cores the run may use on each, one carrying
+  // one connection at its stream= -- the CPU ceiling, and mx's --workers.
+  const cores = el('div', 'gen-row');
+  const coreInput = el('input', 'gen-cores');
+  coreInput.type = 'number';
+  coreInput.min = '0';
+  coreInput.max = String(CORE_LIMIT);
+  coreInput.placeholder = 'all';
+  coreInput.value = state.traffic.cores ? String(state.traffic.cores) : '';
+  coreInput.title = 'How many cores the run may use on each server: blank for what each server’s cores= says, or no limit. '
+    + 'Each core carries one connection at the server’s stream=, so a server sends and receives at most cores × stream= '
+    + 'together (receiving at its rxcost=), under its cpugbps=. The run files give it to mx as --workers, one process a core';
+  coreInput.addEventListener('change', () => actions.setCores(coreInput.value));
+  cores.append(el('span', null, 'cores'), coreInput, el('span', null, 'per server'));
+  box.append(cores);
+  const c = capped && capped.cores;
+  if (c && c.held) {
+    const why = el('div', 'bad gen-cores-why');
+    why.append(el('span', null, `${c.held.toLocaleString()} of ${c.servers.toLocaleString()} server${c.servers === 1 ? '' : 's'} `
+      + `${c.held === 1 ? 'has' : 'have'} too few cores for ${c.held === 1 ? 'its' : 'their'} load: ${c.have} carr${c.have === 1 ? 'ies' : 'y'} `
+      + `${c.have} connection${c.have === 1 ? '' : 's'} at stream=. The busiest needs ${c.need}. `));
+    const use = el('button', 'gen-cores-use', `Use ${c.need}`);
+    use.title = `Give the run ${c.need} cores on each server`;
+    use.addEventListener('click', () => actions.setCores(c.need));
+    why.append(use);
+    box.append(why);
+  } else if (c && c.need) {
+    box.append(el('div', 'muted gen-cores-why', `The busiest server needs ${c.need} core${c.need === 1 ? '' : 's'} at its stream= `
+      + `for what it sends and takes in${c.set ? `, of the ${c.set} set` : ''}.`));
   }
 
   if (TARGETED.has(g.pattern)) {

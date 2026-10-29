@@ -22,7 +22,7 @@ import { attachHints, renderReference } from './hints.js';
 import { layoutFromHosts, matchesPattern, recordsSince, tailRecords } from './tsv.js';
 import { routesBetween } from './paths.js';
 import {
-  adaptiveWeights, betweenPicks, busyable, busyOf, randomTakeouts, TAKEOUT_KINDS, explainResults, pathLatency, bitRate, cableKeys, CONNECTION_LIMITS, contend, countersOf, estimateFlows, flowsOf, flowsOver, GEN_LIMITS,
+  adaptiveWeights, betweenPicks, busyable, busyOf, randomTakeouts, TAKEOUT_KINDS, explainResults, pathLatency, bitRate, cableKeys, CONNECTION_LIMITS, CORE_LIMIT, contend, countersOf, estimateFlows, flowsOf, flowsOver, GEN_LIMITS,
   findingsOf, generateFlows, hostCapacity, hostLimits, hostsFor, hostsOf, pairedFlows, TARGETED, loadable, loadUnit, mergeResults, packetGb, readsAsLoad, REPLY_IDS, routeEstimate,
   routeTraffic, switchLoads, testFlows, trafficKind, viewOf, formatGbps,
 } from './traffic.js';
@@ -96,8 +96,10 @@ const state = {
   traffic: {
     // `split` is how the switches share a flow out: hashed per connection,
     // as real ECMP does, unless the fabric is known to do otherwise; and
-    // `connections` how many each flow between two hosts is made of.
-    key: null, counters: null, split: 'hashed', connections: 1, seed: 1, spread: 'gravity', view: 'model',
+    // `connections` how many each flow between two hosts is made of; and
+    // `cores` the most cores the generated load may use on each server (0:
+    // what their cores= say, or no limit), each carrying one at its stream=.
+    key: null, counters: null, split: 'hashed', connections: 1, cores: 0, seed: 1, spread: 'gravity', view: 'model',
     // With two or more picks: count only the metric's flows between them,
     // and a test flow from the first pick to the second.
     betweenOnly: false,
@@ -526,6 +528,8 @@ function modelSource(withDown) {
   const packets = metric ? packetsOf(metric) : null;
   const packetKey = packets ? `${packets.bytes}\u0001${packets.reply}` : '';
   const busy = busySource();
+  // The load generator's cores per server holds for the run it makes.
+  const cores = gen ? t.cores : 0;
   const pairingKey = JSON.stringify([t.explainLayers, t.explainSeed]);
   const slot = withDown ? 'model' : 'base';
   const c = state.trafficCache[slot];
@@ -533,7 +537,7 @@ function modelSource(withDown) {
       && c.split === t.split && c.connections === t.connections && c.seed === t.seed && c.spread === t.spread && c.down === downKey
       && c.picks === pickKey && c.test === testKey && c.between === between && c.gen === genKey
       && sameSource(c.from, from) && c.contention === t.contention && c.duplex === duplexKey
-      && c.packets === packetKey && c.busy === busy && c.pairing === pairingKey) {
+      && c.packets === packetKey && c.busy === busy && c.cores === cores && c.pairing === pairingKey) {
     return c.value;
   }
   // Nothing taken out: the model and its baseline are one routing.
@@ -546,7 +550,7 @@ function modelSource(withDown) {
   // top of one; with no metric, the generator's unit is the one, and a test
   // flow's own when it is all there is.
   const unit = metric ? metricUnit(metric, kind) : gen ? testUnit(genBase(genUnit())) : testUnit(test.unit);
-  const opts = { split: t.split, connections: t.connections, seed: t.seed, spread: t.spread, down: out, busy };
+  const opts = { split: t.split, connections: t.connections, seed: t.seed, spread: t.spread, down: out, busy, cores };
   const only = between ? betweenPicks(picks) : null;
   let count = 0;
   let total = 0;
@@ -728,7 +732,7 @@ function modelSource(withDown) {
   state.trafficCache[slot] = {
     overlay: metric, layout: state.model, agg: metric && metric.agg, split: t.split, connections: t.connections, seed: t.seed, spread: t.spread,
     down: downKey, picks: pickKey, test: testKey, between, gen: genKey, from, contention: t.contention, duplex: duplexKey,
-    packets: packetKey, busy, pairing: pairingKey, value,
+    packets: packetKey, busy, cores, pairing: pairingKey, value,
   };
   return value;
 }
@@ -1360,7 +1364,7 @@ const actions = {
     if (run.why) return { why: run.why };
     // Built once a load and setting: a floor's matrix is megabytes, and the
     // panel redraws far more often than any of these change.
-    const key = [tool, state.runFiles.seconds, state.runFiles.mtu, state.runFiles.bind, state.traffic.connections,
+    const key = [tool, state.runFiles.seconds, state.runFiles.mtu, state.runFiles.bind, state.traffic.connections, state.traffic.cores,
       [...state.down.els].sort().join('\u0001')].join('\u0002');
     let cached = RUN_FILES_CACHE.get(run);
     if (!cached) RUN_FILES_CACHE.set(run, (cached = new Map()));
@@ -1411,43 +1415,77 @@ const actions = {
     invalidate();
   },
 
-  // How many connections each flow between two hosts is made of, each
-  // hashed on its own.
   // What the servers' stream= does to the generated load: how many flows it
-  // holds below what they were asked for at the processes a flow set now,
-  // and how many processes a flow would carry every one of them in full.
-  // Null with no generated bit rate, or no stream= on its hosts.
+  // holds below what they were asked for at the connections a flow set now,
+  // and how many connections a flow would carry every one of them in full.
+  // And their cores, each carrying one connection at its stream=: what the
+  // busiest server needs for what it sends and takes in, receiving at its
+  // rxcost=, and how many servers have fewer -- their cores=, or the cores
+  // per server set here. Null with no generated bit rate, or no stream= on
+  // its hosts.
   genProcesses() {
     const view = state.cableView ? state.cableView() : null;
     const m = view && view.model;
-    console.log('GP', !!m, m && m.kind, m && m.toGbps, m && m.flows && m.flows.length, m && m.flows && m.flows[0] && JSON.stringify(m.flows[0].src.attrs));
-    console.log('GP', !!m, m && m.kind, m && m.toGbps, m && m.flows && m.flows.length, m && m.flows && m.flows[0] && JSON.stringify([m.flows[0].value, m.flows[0].src.attrs]));
     if (!m || m.kind !== 'gen' || !m.toGbps) return null;
     const conns = state.traffic.connections;
+    const busy = m.opts ? m.opts.busy : null;
     let flows = 0;
     let held = 0;
     let need = 1;
     let least = Infinity;
+    const load = new Map();   // host -> [out, in], in Gb/s, as asked
     for (const f of m.flows) {
-      let cap = null;
-      for (const el of [f.src, f.dst]) {
-        const per = hostLimits(el).stream;
-        if (per && (cap === null || per < cap)) cap = per;
-      }
       // What it asked for: once shared out, `value` is what it carries.
       const asked = f.wanted !== undefined ? f.wanted : f.value;
-      if (!cap || !(asked > 0)) continue;
-      flows++;
+      if (!(asked > 0)) continue;
       const gbps = asked * m.toGbps;
+      let cap = null;
+      for (const [el, side] of [[f.src, 0], [f.dst, 1]]) {
+        const per = hostLimits(el).stream;
+        if (!per) continue;
+        if (cap === null || per < cap) cap = per;
+        const at = load.get(el) || [0, 0];
+        at[side] += gbps;
+        load.set(el, at);
+      }
+      if (!cap) continue;
+      flows++;
       if (gbps > cap * conns * (1 + 1e-9)) held++;
       need = Math.max(need, Math.ceil(gbps / cap - 1e-9));
       least = Math.min(least, cap);
     }
-    return flows ? { flows, held, need, stream: least, conns } : null;
+    if (!flows) return null;
+    // Cores: how many each server's load wants, one a stream= of it.
+    let coresNeed = 0;
+    let coresHeld = 0;
+    let coresHave = Infinity;
+    for (const [el, [out, into]] of load) {
+      const lim = hostLimits(el, busy, state.traffic.cores);
+      const per = lim.stream * (1 - lim.busy);
+      if (!(per > 0)) continue;
+      const want = Math.ceil((out + into * lim.rxcost) / per - 1e-9);
+      coresNeed = Math.max(coresNeed, want);
+      if (lim.cores && want > lim.cores) {
+        coresHeld++;
+        coresHave = Math.min(coresHave, lim.cores);
+      }
+    }
+    return {
+      flows, held, need, stream: least, conns,
+      cores: { need: coresNeed, held: coresHeld, have: coresHeld ? coresHave : 0, servers: load.size, set: state.traffic.cores },
+    };
   },
 
   setConnections(n) {
     state.traffic.connections = Math.max(1, Math.min(CONNECTION_LIMITS.max, Math.round(Number(n) || 1)));
+    refreshPanels();
+    invalidate();
+  },
+
+  // The most cores the generated load may use on each server, 0 for what
+  // their cores= say: each carries one connection at its stream=.
+  setCores(n) {
+    state.traffic.cores = Math.max(0, Math.min(CORE_LIMIT, Math.round(Number(n) || 0)));
     refreshPanels();
     invalidate();
   },
@@ -3437,6 +3475,8 @@ function buildRunFiles(tool, view) {
   const stamped = expected ? `${expected}${runStamp(runSetup(tool, summary, mtu))}\n${modelBlock(model.text, model)}\n` : '';
   const options = {
     seconds: state.runFiles.seconds, connections: state.traffic.connections, summary, expected: stamped, mtu, bind: state.runFiles.bind, model,
+    // The cores each host has for the run: the cores per server set, or its cores=.
+    cores: state.traffic.cores, coresOf: (el) => hostLimits(el, null, state.traffic.cores).cores,
   };
   return { built: RUN_BUILDERS[tool](made, options), dropped: made.dropped };
 }
@@ -3452,6 +3492,7 @@ function runSetup(tool, summary, mtu) {
     load: summary,
     seconds: state.runFiles.seconds,
     connections: state.traffic.connections,
+    cores: state.traffic.cores || '',
     mtu,
     bind: state.runFiles.bind,
     out: paths.join(' '),

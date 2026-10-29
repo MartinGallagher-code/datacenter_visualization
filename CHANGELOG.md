@@ -11,6 +11,37 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.48.0 — 2026-10-29
+
+- **Cores per server, apart from connections a flow.** The Load generator's
+  "processes a flow" was never processes: it is how many connections each
+  flow between two hosts runs as, counted per pair, and it is now called
+  **connections a flow**, as in the routing box. How many cores a server
+  gives the run is a setting of its own:
+  - **`cores=`** on a server (or its model line): each core carries one
+    connection at its `stream=`, so it sends and receives at most cores ×
+    `stream=` together, receiving at its `rxcost=` -- whichever of that and
+    its `cpugbps=` is less, less `busy=`. A whole number, 1 to 100000; not
+    inherited. In the completions and the Syntax panel.
+  - **cores per server** in the Load generator: the most the run may use
+    on each, capping `cores=` (blank: what `cores=` says, or no limit).
+    Under it the generator says how many cores the busiest server needs
+    for what it sends and takes in, and when servers have fewer, how many,
+    with a **Use N** button. Hovering a server says when its cores are what
+    its CPU comes to.
+  - **Run files:** mx runs `--workers N`, one process a core -- the cores
+    per server outright, or the load's estimate capped at the fewest
+    `cores=` among the run's hosts, with the notes saying which. iperf and
+    netmesh have no cores setting, so their notes say what the cores mean
+    to them: the busiest host's connections against its cores (fewer
+    leaves cores idle), and netmesh's single agent. The run stamp records
+    `cores`.
+  `js/traffic.js` (`hostLimits`, `contend`'s `opts.cores`, `CORE_LIMIT`),
+  `js/parse.js`, `js/app.js` (`setCores`, `genProcesses`), `js/ui.js`,
+  `js/runfiles.js` (`mxWorkers`, `hostConnections`), `js/hints.js`.
+- Two debugging `console.log` lines left in `genProcesses` by 1.46.0 are
+  gone.
+
 ## 1.47.0 — 2026-10-29
 
 - **mx's run files size its worker processes to the load.** A pair's

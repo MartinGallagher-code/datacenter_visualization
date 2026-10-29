@@ -234,11 +234,14 @@ const MX_AUTO_WORKERS = 8;
  * The worker processes each host needs for this load, as mx's own `mx
  * hints` sizes them: twice the busiest host's requests a second -- out, or
  * in, which it answers -- over what one worker sustains, plus one; and
- * never fewer than the processes a flow, so each pair's streams have a
- * process each. `flag` is whether the run must say it: `auto` runs one a
- * core but no more than eight.
+ * never fewer than the connections a flow, so each pair's streams have a
+ * process each (`want`). A worker is a process, and one a core, so the
+ * cores each host has for the run hold it: `cores`, the load generator's
+ * cores per server, says how many to run outright (`set`); a host's own
+ * cores= (`coresOf`) caps the estimate (`capped`). `flag` is whether the run
+ * must say it: `auto` runs one a core but no more than eight.
  */
-export function mxWorkers(made, { mtu = 1500, connections = 1 } = {}) {
+export function mxWorkers(made, { mtu = 1500, connections = 1, cores = 0, coresOf = null } = {}) {
   const { tx } = mxSizes(made, mtu);
   const pps = (pair) => (pair.pps > 0 ? pair.pps : (pair.gbps * 1e9) / ((tx + WIRE_BYTES) * 8));
   const out = new Map();
@@ -251,23 +254,87 @@ export function mxWorkers(made, { mtu = 1500, connections = 1 } = {}) {
   }
   let peak = 0;
   for (const m of [out, into]) for (const v of m.values()) peak = Math.max(peak, v);
-  const workers = Math.max(Math.floor((peak * 2) / MX_WORKER_PPS) + 1, mxStreams(connections));
-  return { workers, peak, flag: workers > MX_AUTO_WORKERS };
+  const want = Math.max(Math.floor((peak * 2) / MX_WORKER_PPS) + 1, mxStreams(connections));
+  // The fewest cores any host in the run has for it.
+  let have = 0;
+  for (const el of made.hosts) {
+    const n = coresOf ? coresOf(el) : null;
+    if (n >= 1 && (!have || n < have)) have = n;
+  }
+  if (!have && cores >= 1) have = Math.floor(cores);
+  const set = cores >= 1;
+  const capped = !set && have > 0 && want > have;
+  const workers = set ? have : capped ? have : want;
+  return { workers, want, peak, have, set, capped, flag: set || workers > MX_AUTO_WORKERS };
 }
 
-const workersNote = (w, streams) => (w.workers <= 1 ? []
-  : [`Each host needs about ${w.workers} mx worker processes -- one sustains ~200k packets a second of request and reply, `
-    + `and the busiest host handles ${Math.round(w.peak).toLocaleString()} requests a second`
+/**
+ * The connections the busiest host holds: a pair's connections for every
+ * peer it sends to and every one that sends to it -- what its cores share.
+ */
+export function hostConnections(made, connections = 1) {
+  const n = new Map();
+  for (const pair of made.pairs) {
+    if (!(pair.gbps > 0 || pair.pps > 0)) continue;
+    for (const el of [pair.src, pair.dst]) n.set(el, (n.get(el) || 0) + 1);
+  }
+  let most = 0;
+  for (const v of n.values()) most = Math.max(most, v);
+  return most * Math.max(1, Math.round(connections));
+}
+
+const workersNote = (w, streams) => {
+  const rate = `one sustains ~200k packets a second of request and reply, and the busiest host handles `
+    + `${Math.round(w.peak).toLocaleString()} requests a second`;
+  if (w.set) {
+    return [`Each host runs ${w.workers} mx worker process${w.workers === 1 ? '' : 'es'}, one a core, `
+      + `as cores per server says (--workers ${w.workers}).`
+      + (w.want > w.workers ? ` The load wants about ${w.want} -- ${rate} -- so ${w.workers} may not keep up.` : '')];
+  }
+  if (w.capped) {
+    return [`The load wants about ${w.want} mx worker processes a host -- ${rate} -- but the layout gives its hosts `
+      + `${w.have} core${w.have === 1 ? '' : 's'} (cores=), and a worker is a core, so the run `
+      + (w.flag ? `says --workers ${w.workers}.` : `leaves --workers auto, which gives ${w.workers} on a host of ${w.workers} cores.`)
+      + ' Set cores per server to run another number.'];
+  }
+  if (w.workers <= 1) return [];
+  return [`Each host needs about ${w.workers} mx worker processes -- ${rate}`
     + `${w.workers === streams && streams > 1 ? `; and one each for a pair’s ${streams} streams` : ''} -- `
     + (w.flag ? `so the run says --workers ${w.workers}: auto stops at ${MX_AUTO_WORKERS}. Each host needs ${w.workers} cores for them.`
-      : `which --workers auto gives a host of ${w.workers} cores or more (one a core, up to ${MX_AUTO_WORKERS}).`)]);
+      : `which --workers auto gives a host of ${w.workers} cores or more (one a core, up to ${MX_AUTO_WORKERS}).`)];
+};
 
-export function buildMx(made, { seconds = 60, connections = 1, summary = '', expected = '', mtu = 1500, bind = '', model = null } = {}) {
+/**
+ * What the cores mean to a tool with no say over them -- iperf's threads,
+ * which the kernel spreads: the busiest host's connections against the
+ * cores it has for the run, where it has a number.
+ */
+const coresNote = (made, connections, cores, coresOf, what) => {
+  const conns = hostConnections(made, connections);
+  if (!conns) return [];
+  let have = 0;
+  for (const el of made.hosts) {
+    const n = coresOf ? coresOf(el) : null;
+    if (n >= 1 && (!have || n < have)) have = n;
+  }
+  if (!have && cores >= 1) have = Math.floor(cores);
+  const each = `The busiest host holds ${conns.toLocaleString()} connection${conns === 1 ? '' : 's'}`
+    + ` (${Math.max(1, Math.round(connections))} a pair, sending and receiving), each mostly one core’s work`;
+  if (!have) return [`${each}.`];
+  if (conns < have) {
+    return [`${each}: so at most ${conns} of its ${have} cores carry them. Raise connections a flow to use more; `
+      + `${what} has no cores setting of its own.`];
+  }
+  return [`${each}, over the ${have} cores it has for the run: ${what} has no cores setting of its own, `
+    + 'and the kernel spreads them.'];
+};
+
+export function buildMx(made, { seconds = 60, connections = 1, cores = 0, coresOf = null, summary = '', expected = '', mtu = 1500, bind = '', model = null } = {}) {
   const { pairs, hosts, sized } = made;
   const { tx, rx } = mxSizes(made, mtu);
   const pps = (pair) => (pair.pps > 0 ? pair.pps : (pair.gbps * 1e9) / ((tx + WIRE_BYTES) * 8));
   const streams = mxStreams(connections);
-  const workers = mxWorkers(made, { mtu, connections });
+  const workers = mxWorkers(made, { mtu, connections, cores, coresOf });
   const matrix = [
     '# mx matrix v1 -- rows send, columns receive, cells are packets/sec',
     `# tx_size=${tx} rx_size=${rx} port=5300`,
@@ -357,7 +424,7 @@ const iperfRate = (gbps) => (gbps >= 0.001 ? `${Number((gbps * 1000).toPrecision
  * streams at -b). Different rates are different runs, each on its own port
  * so they can go at once. A sized load's replies go back as TCP the other way.
  */
-export function buildIperf(made, { seconds = 60, connections = 1, summary = '', expected = '', mtu = 1500, bind = '', model = null } = {}) {
+export function buildIperf(made, { seconds = 60, connections = 1, cores = 0, coresOf = null, summary = '', expected = '', mtu = 1500, bind = '', model = null } = {}) {
   const { pairs, hosts, sized } = made;
   const groups = rateGroups(pairs);
   const streams = Math.max(1, Math.round(connections));
@@ -414,6 +481,7 @@ export function buildIperf(made, { seconds = 60, connections = 1, summary = '', 
       groups.length === 1 ? `Every pair at ${gbText(groups[0].gbps)}: iperf’s -b is one rate a run.`
         : `${groups.length} rates, so ${groups.length} plans, each on its own port: iperf’s -b is one rate a run.`,
       `${streams} stream${streams === 1 ? '' : 's'} a pair (-P), as the model’s connections; -b is each stream’s share of the payload.`,
+      ...coresNote(made, streams, cores, coresOf, 'iperf'),
       `iperf paces payload: -b is ${(payload * 100).toFixed(1)}% of the model’s rate, so with TCP/IP headers and Ethernet framing `
         + `(MTU ${mtu}) the cables carry exactly what the model shows.`,
       ...(renamed.length ? ['hosts.map turns the addresses it tests back into the layout’s names.'] : []),
@@ -428,7 +496,7 @@ export function buildIperf(made, { seconds = 60, connections = 1, summary = '', 
  * path MTU -- netmesh measures the network, it makes no load. Alone it probes
  * an idle network; run with the load after --, idle first and then under it.
  */
-export function buildNetmesh(made, { seconds = 60, connections = 1, summary = '', expected = '', mtu = 1500, bind = '', model = null } = {}) {
+export function buildNetmesh(made, { seconds = 60, connections = 1, cores = 0, coresOf = null, summary = '', expected = '', mtu = 1500, bind = '', model = null } = {}) {
   const { pairs, hosts } = made;
   const flows = Math.min(PROBE_FLOWS, Math.max(1, Math.round(connections)));
   const probed = pairs.filter((pair) => pair.gbps > 0 || pair.pps > 0);
@@ -456,6 +524,8 @@ export function buildNetmesh(made, { seconds = 60, connections = 1, summary = ''
       `MTU ${mtu} is not given to netmesh, which finds each path’s MTU itself: it is what the model expects every path to carry, `
         + 'set against what netmesh finds.',
       'Run it alone for the idle network, or with the load after -- for idle first and then under it.',
+      ...(cores >= 1 ? [`netmesh is one light agent process a host, whatever the cores: cores per server (${Math.floor(cores)}) `
+        + 'goes to the mx run under it, as --workers.'] : []),
       ...bindNote(bind),
       // Before binnacle's fix, netmesh took --bind as one literal address.
       ...(bindFlag(bind) ? ['netmesh reads --bind as a NIC from the binnacle after 0.8.0; an older netmesh takes only a whole '
@@ -466,7 +536,7 @@ export function buildNetmesh(made, { seconds = 60, connections = 1, summary = ''
       `netmesh run --mesh mesh.csv --for ${seconds}${bindFlag(bind)}`,
       '# ... or 20 s idle, then under the load (the mx run, with matrix.csv beside it):',
       '# put this line in place of the one above',
-      `# netmesh run --mesh mesh.csv --baseline 20${bindFlag(bind)} -- ${mxRun(seconds, connections, bind, mxWorkers(made, { mtu, connections }))}`,
+      `# netmesh run --mesh mesh.csv --baseline 20${bindFlag(bind)} -- ${mxRun(seconds, connections, bind, mxWorkers(made, { mtu, connections, cores, coresOf }))}`,
       '# what it measured, for the viewer: load netmesh_results.tsv beside the layout',
       'dcimport netmesh_results.tsv --tidy reports/',
     ],

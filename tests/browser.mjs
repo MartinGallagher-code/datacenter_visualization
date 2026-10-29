@@ -1657,9 +1657,11 @@ await test('a run against the model', async () => {
      'the load generator as it is set now is a model too');
 }, { url: '?layout=fx/tiny.dc' });
 
-// Processes a flow, in the load generator: stream= caps each, so 50 Gb/s
-// from each host over five peers is 10 a flow, held to 8.5 by one process.
-await test('processes a flow in the load generator', async () => {
+// Connections a flow, in the load generator: stream= caps each, so 50 Gb/s
+// from each host over five peers is 10 a flow, held to 8.5 by one. And cores
+// per server: each carries one connection at stream=, so sending 50 and
+// taking in 50 needs twelve of them.
+await test('connections a flow and cores per server in the load generator', async () => {
   await openLayout([
     'dc D', '  row A', '    rack r[1..2] u=10', '      node h[1..3] role=server name={rack}{id} stream=8.5',
     '      node t role=tor +switch name={rack}tor', '  row S', '    rack SP u=4', '      node spine role=spine +switch',
@@ -1671,12 +1673,26 @@ await test('processes a flow in the load generator', async () => {
   await page.locator('#load-gen input.gen-value').dispatchEvent('change');
   await page.locator('#load-gen button', { hasText: 'Run' }).click();
   await page.waitForTimeout(500);
-  eq(await page.inputValue('#load-gen input.gen-procs'), '1', 'one process a flow, to begin with');
-  ok(/stream=8\.5G holds 30 of 30 flows below what they were asked: 1 process a flow carries 8\.5Gb\/s at most\. 2 would carry every one in full\./.test(await gen()),
+  eq(await page.inputValue('#load-gen input.gen-procs'), '1', 'one connection a flow, to begin with');
+  ok(/connections\s*a flow/.test(await gen()) && !/processes/.test(await gen()), 'called connections, which is what they are');
+  ok(/stream=8\.5G holds 30 of 30 flows below what they were asked: 1 connection a flow carries 8\.5Gb\/s at most\. 2 would carry every one in full\./.test(await gen()),
      `stream= holding the load back, and how many processes would not  (${(await gen()).split('\n').find((l) => /stream=/.test(l))})`);
   await page.locator('#load-gen button.gen-procs-use').click();
   await page.waitForTimeout(500);
   ok(await page.inputValue('#load-gen input.gen-procs') === '2' && !/holds \d+ of/.test(await gen()), 'Use 2: every flow in full, and nothing said');
+  eq(await page.inputValue('#load-gen input.gen-cores'), '', 'cores per server: blank, all a server has, to begin with');
+  ok(/The busiest server needs 12 cores at its stream= for what it sends and takes in\./.test(await gen()),
+     `and how many cores the load needs  (${(await gen()).split('\n').find((l) => /cores/.test(l))})`);
+  await page.fill('#load-gen input.gen-cores', '4');
+  await page.locator('#load-gen input.gen-cores').dispatchEvent('change');
+  await page.waitForTimeout(500);
+  ok(/6 of 6 servers have too few cores for their load: 4 carry 4 connections at stream=\. The busiest needs 12\./.test(await gen()),
+     `four cores hold every server back  (${(await gen()).split('\n').find((l) => /cores/.test(l))})`);
+  await page.locator('#load-gen button.gen-cores-use').click();
+  await page.waitForTimeout(500);
+  ok(await page.inputValue('#load-gen input.gen-cores') === '12' && !/too few cores/.test(await gen()), 'Use 12: enough, and nothing said');
+  await page.fill('#load-gen input.gen-cores', '');
+  await page.locator('#load-gen input.gen-cores').dispatchEvent('change');
   await page.fill('#load-gen input.gen-procs', '1');
   await page.locator('#load-gen input.gen-procs').dispatchEvent('change');
   await page.waitForTimeout(300);

@@ -54,7 +54,7 @@ import {
   droppedLayoutsNotice, layoutNotice, prefixed, resultsFileNotice,
 } from '../js/report.js';
 import {
-  bindProblem, buildIperf, buildMx, buildNetmesh, hostToken, mxSizes, mxWorkers, rateGroups, runPairs, runProblem, runScript, runTar, runWhy, scriptName, tarball, tarName, tcpPayloadShare,
+  bindProblem, buildIperf, buildMx, buildNetmesh, hostConnections, hostToken, mxSizes, mxWorkers, rateGroups, runPairs, runProblem, runScript, runTar, runWhy, scriptName, tarball, tarName, tcpPayloadShare,
 } from '../js/runfiles.js';
 import { asFile, layoutSha, modelBlock, readStamp, runStamp, sha256 } from '../js/stamp.js';
 import { PROBE_SCRIPT, PROBE_TAR, probeFiles, probeSummary, TOOL_PORTS } from '../js/probe.js';
@@ -2479,6 +2479,41 @@ link fabric role=server tor
   r = contend(busyM, [f(bb, bc, 80), f(bc, bb, 80, 2)], { toGbps: 1, busy: new Map([[bb, 0.5]]) });
   eq(r.contention.flows.map((x) => x.value), [20, 20], 'a measured share, given, wins over busy=: half of 120 is 20 each');
   ok(hostLimits(bb, new Map([[bb, 0.5]])).busyFrom, 'and says it was measured');
+
+  // cores=: the cores a server gives the network, each carrying one
+  // connection at its stream=. Cores times stream= is a CPU ceiling beside
+  // cpugbps=, the lower of the two holding; and a run's cores per server
+  // (hostLimits' third argument, contend's opts.cores) caps it again.
+  const coresM = parseLayout(`
+net fabric gbps=400
+node tor +switch
+model box16 stream=10 cores=16
+node a role=server stream=10 cores=4
+node b role=server stream=10 cores=8 cpugbps=50
+node c role=server
+node d role=server stream=10 cores=4 busy=50%
+node e role=server model=box16
+link fabric role=server tor
+`);
+  eq(coresM.warnings, [], 'cores= is an element key, on a model line too');
+  ok(/cores=0 is outside 1\.\.100000/.test(parseLayout('node x cores=0').warnings.join('\n')), 'cores= is checked against its range');
+  ok(/cores=2\.5 is not a whole number/.test(parseLayout('node x cores=2.5').warnings.join('\n')), 'and is a whole number');
+  const [ca, cb, cc, cd, ce] = ['a', 'b', 'c', 'd', 'e'].map((n) => coresM.resolve(n));
+  const cl = (el, busy = null, cap = 0) => { const x = hostLimits(el, busy, cap); return [x.cores, x.coreGbps, x.cpu, x.byCores]; };
+  eq([cl(ca), cl(cb), cl(cc), cl(cd), cl(ce)],
+     [[4, 40, 40, true], [8, 80, 50, false], [null, null, null, false], [4, 40, 20, true], [16, 160, 160, true]],
+     'four cores at stream=10 send and receive 40; cpugbps=50 under eight; none with no cores=; busy= comes off them; and from a model');
+  eq([cl(ca, null, 2), cl(cb, null, 2), cl(cc, null, 6), cl(ce, null, 64)],
+     [[2, 20, 20, true], [2, 20, 20, true], [6, null, null, false], [16, 160, 160, true]],
+     'cores per server caps them, never raises them, and with no stream= sets no ceiling');
+  const fc = (src, dst, value, id = 1) => ({ id, src, dst, value });
+  r = contend(coresM, [fc(ca, cc, 80)], { toGbps: 1, connections: 8, split: 'even' });
+  eq([r.contention.flows[0].value, r.contention.hosts.cpuFull.get(ca)], [40, 1],
+     'eight connections would carry 80, but four cores carry four of them: 40, held at the server’s CPU');
+  r = contend(coresM, [fc(ca, cc, 80)], { toGbps: 1, connections: 8, split: 'even', cores: 2 });
+  eq(r.contention.flows[0].value, 20, 'two cores per server for the run: 20');
+  r = contend(coresM, [fc(ca, cc, 80), fc(cc, ca, 80, 2)], { toGbps: 1, connections: 8, split: 'even' });
+  eq(r.contention.flows.map((x) => x.value), [20, 20], 'sending and receiving share the cores, as they share cpugbps=');
 
   // A per-server CPU metric, read as each server's busy share.
   const cpuRaw = parseResults('!test cpu_util unit=%\ncpu_util\tb\t35\ncpu_util\tc\t100\n!test cpu_frac\ncpu_frac\tb\t0.35\n'
@@ -5337,6 +5372,33 @@ if (python.error) {
      'a light load: auto is enough, and the notes say how many cores it takes');
   eq(mxWorkers(light, { connections: 12 }).workers, 12, 'never fewer workers than the processes a flow');
   eq(mxWorkers(light, { connections: 12 }).flag, true, 'and more than auto runs, said');
+  // The cores each host has for the run: a worker is a process, one a core.
+  const set4 = mxWorkers(made, { connections: 2, cores: 4, coresOf: () => 4 });
+  eq([set4.workers, set4.want, set4.set, set4.flag], [4, 9, true, true], 'cores per server says how many workers, outright');
+  const mx4 = buildMx(made, { seconds: 90, connections: 2, cores: 4, coresOf: () => 4 });
+  ok(mx4.commands.includes('mx run --matrix matrix.csv --for 90 --streams 2 --workers 4'), 'and the run says so, under auto’s 8 too');
+  ok(mx4.notes.some((n) => /Each host runs 4 mx worker processes, one a core, as cores per server says \(--workers 4\)\. The load wants about 9 .* so 4 may not keep up\./.test(n)),
+     `with what the load would want  (${mx4.notes.find((n) => /worker/.test(n))})`);
+  const capped6 = mxWorkers(made, { connections: 2, coresOf: () => 6 });
+  eq([capped6.workers, capped6.capped, capped6.flag], [6, true, false], 'a host’s cores= caps the estimate; six is auto’s to give');
+  const mx6 = buildMx(made, { seconds: 90, connections: 2, coresOf: () => 6 });
+  ok(mx6.commands.includes('mx run --matrix matrix.csv --for 90 --streams 2')
+     && mx6.notes.some((n) => /wants about 9 .* gives its hosts 6 cores \(cores=\), and a worker is a core, so the run leaves --workers auto/.test(n)),
+     `and the notes say what it wanted  (${mx6.notes.find((n) => /worker/.test(n))})`);
+  ok(buildMx(made, { connections: 2, coresOf: (el) => (el.name === 'r1h1' ? 3 : 12) }).commands.some((c) => / --workers /.test(c)) === false
+     && mxWorkers(made, { connections: 2, coresOf: (el) => (el.name === 'r1h1' ? 3 : 12) }).workers === 3,
+     'the host with fewest cores sets it: mx runs the same number everywhere');
+  // Six hosts all to all: five peers out and five in, two connections each.
+  eq(hostConnections(made, 2), 20, 'the busiest host holds a pair’s connections for every peer, each way');
+  const ip32 = buildIperf(made, { connections: 2, cores: 32, coresOf: () => 32 });
+  ok(ip32.notes.some((n) => /The busiest host holds 20 connections \(2 a pair, sending and receiving\), each mostly one core’s work: so at most 20 of its 32 cores carry them\. Raise connections a flow to use more; iperf has no cores setting of its own\./.test(n)),
+     `iperf: fewer connections than cores leaves cores idle  (${ip32.notes.find((n) => /busiest host holds/.test(n))})`);
+  ok(buildIperf(made, { connections: 2, cores: 8, coresOf: () => 8 }).notes.some((n) => /over the 8 cores it has for the run: iperf has no cores setting of its own, and the kernel spreads them\./.test(n)),
+     'and more than enough is the kernel’s to spread');
+  ok(buildIperf(made, { connections: 2 }).notes.some((n) => /^The busiest host holds 20 connections .*work\.$/.test(n)), 'with no cores said, just the count');
+  const nm4 = buildNetmesh(made, { connections: 2, cores: 4, coresOf: () => 4 });
+  ok(nm4.notes.some((n) => /netmesh is one light agent process a host, whatever the cores: cores per server \(4\) goes to the mx run under it, as --workers\./.test(n))
+     && nm4.commands.some((c) => /-- mx run .* --workers 4$/.test(c)), 'netmesh: the cores go to the mx run under it');
   // Incast: the one receiving answers every request, so it is the busiest.
   const into = runPairs([{ src: h('r1h1'), dst: h('r2h1'), value: 1 }, { src: h('r1h2'), dst: h('r2h1'), value: 1 },
     { src: h('r1h3'), dst: h('r2h1'), value: 1 }], { toGbps: 1, unit: 'Gb/s', sized: null });

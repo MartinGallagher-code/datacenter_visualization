@@ -43,7 +43,8 @@ const ELEMENT_KEYS = [
   ['stream=', 'the most one connection carries on a server, in Gb/s -- one core’s worth: stream=40'],
   ['cpugbps=', 'what a server’s CPU can send and receive together, in Gb/s -- one budget for both: cpugbps=310'],
   ['rxcost=', 'how many times more receiving costs a server’s CPU than sending (1 unless set): rxcost=1.3'],
-  ['busy=', 'the share of a server’s CPU other work takes, off its cpugbps=: busy=20%'],
+  ['cores=', 'how many cores a server gives the network, each carrying one connection at its stream=: cores=32'],
+  ['busy=', 'the share of a server’s CPU other work takes, off its cpugbps= or its cores=: busy=20%'],
   ['model=', 'a device defined by a model line: its settings and tags are this one’s too'],
   ['addr=', 'the address the load tools reach a server at, when its name does not resolve: addr=10.1.{rack}.{id}'],
 ];
@@ -436,6 +437,7 @@ const REFERENCE = [
     ['node s[1..16] role=server stream=40', 'one connection carries at most 40 Gb/s, at either end: a flow of 4 connections, 160'],
     ['node s[1..16] role=server cpugbps=310', 'its CPU sends and receives 310 Gb/s together: 200 out and 110 in, or 155 each way'],
     ['node s[1..16] role=server cpugbps=310 rxcost=1.3', 'receiving costs it 1.3 times what sending does'],
+    ['node s[1..16] role=server stream=8.5 cores=16', 'sixteen cores at 8.5 Gb/s a connection: 136 Gb/s sent and received together, under any cpugbps='],
     ['node s7 role=server busy=20%', 'a fifth of its CPU taken by other work: 248 of its 310 left for the network'],
     ['node s7 role=server addr=10.1.7.15', 'the address iperf, mx and netmesh reach it at; its name is still what their results say'],
     ['node leaf +switch ports=32x400,2x10', 'its ports: its cables are checked against them, breakout included (one 400G port is four 100G cables)'],
