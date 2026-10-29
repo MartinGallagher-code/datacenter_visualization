@@ -15,10 +15,10 @@ import {
   capacityWidth, changeColor, countDescendants, FINDING_COLORS, LOAD_COLORS, loadColor, linkSummary, spliceSummary,
 } from './render.js';
 import {
-  biggestChanges, burstRisk, busiest, busyable, cablesOf, counterparts, counterpartLevels, EXPLAIN_PATTERNS, takeoutCandidates, TAKEOUT_KINDS, formatGbps, hostLimits, GEN_UNITS, hostsFor, loadable, loadUnit, PATTERNS, reachKinds, TARGETED,
+  biggestChanges, burstRisk, busiest, busyable, cablesOf, counterparts, counterpartLevels, EXPLAIN_PATTERNS, takeoutCandidates, TAKEOUT_KINDS, formatGbps, hostLimits, CORE_LIMIT, GEN_UNITS, HOST_SPLITS, HOST_SPLIT_LABELS, SPLIT_LIMIT, hostsFor, loadable, loadUnit, PATTERNS, reachKinds, TARGETED,
   CONNECTION_LIMITS, IMIX_BYTES, PACKET_PICKS, PER_CONNECTION, readsAsLoad, SPLITS, SPREADS, TEST_UNITS, trafficKind, utilOf,
 } from './traffic.js';
-import { bindProblem, MTUS, RUN_LABELS, RUN_TOOLS, runScript, runTar, scriptName, tarName } from './runfiles.js';
+import { bindProblem, MTUS, RUN_LABELS, RUN_TOOLS, runScript, runTar, scriptName, tarball, tarName } from './runfiles.js';
 import { foldAll, foldRuns, makeFold, pane, setNote } from './fold.js';
 
 const el = (tag, cls, text) => {
@@ -750,7 +750,7 @@ function viewLabel(view, name) {
 }
 
 /**
- * Whether any element has a stream= or a cpugbps=: what decides whether the
+ * Whether any element has a stream=, a cpugbps= or cores=: what decides whether the
  * connections box and the busy choice are worth showing. Once per layout.
  */
 const limitsSeen = new WeakMap();
@@ -761,7 +761,8 @@ function serverLimits(model) {
     for (const x of model.all) {
       if (!x.attrs) continue;
       if (x.attrs.stream !== undefined) seen.stream = true;
-      if (x.attrs.cpugbps !== undefined) seen.cpu = true;
+      // cores= is a CPU ceiling too, once there is a stream= to multiply.
+      if (x.attrs.cpugbps !== undefined || x.attrs.cores !== undefined) seen.cpu = true;
     }
     limitsSeen.set(model, seen);
   }
@@ -1108,24 +1109,31 @@ export function hostTip(state, node, view) {
     lines.push(`its NICs: ${pct((Math.max(sent[0], got[0]) * view.toGbps) / own)} of the ${formatGbps(own)} they can move each way`
       + (full ? ` — full, holding back ${full.out + full.in} flow${full.out + full.in === 1 ? '' : 's'} itself` : ''));
   }
-  // Its own limits beyond its NICs: one connection's ceiling, and its CPU.
-  const lim = hostLimits(node, view.model && view.model.opts ? view.model.opts.busy : null);
+  // Its own limits beyond its NICs: one connection's ceiling, and its CPU --
+  // its cpugbps=, or its cores each carrying one stream=, whichever is less.
+  const opts = view.model && view.model.opts ? view.model.opts : {};
+  const lim = hostLimits(node, opts.busy || null, opts.cores || 0);
   if (lim.stream && !forwardsHere(state, node)) {
     const k = c && c.hosts && c.hosts.streams ? c.hosts.streams.get(node) : 0;
     lines.push(`one connection carries at most ${formatGbps(lim.stream)}b/s (stream=)`
       + (k ? ` — holding back ${k} flow${k === 1 ? '' : 's'} itself` : ''));
   }
+  const coreText = lim.cores ? `${lim.cores} core${lim.cores === 1 ? '' : 's'}${opts.cores && lim.cores === Math.floor(opts.cores) ? ' (the load generator’s cores per server)' : ' (cores=)'}` : '';
   if (lim.cpu && !forwardsHere(state, node)) {
     const cpu = c && c.hosts && c.hosts.cpu ? c.hosts.cpu.get(node) : null;
     const k = c && c.hosts && c.hosts.cpuFull ? c.hosts.cpuFull.get(node) : 0;
     const rx = lim.rxcost !== 1 ? `, receiving costing ${trimNum(lim.rxcost)}×` : '';
     const busy = lim.busy ? ` (of its ${formatGbps(lim.idle)}: ${pct(lim.busy)} busy elsewhere, ${lim.busyFrom ? 'as measured' : 'busy='})` : '';
+    const whose = lim.byCores ? `its ${coreText} at its stream=` : 'it';
+    const from = lim.byCores ? `${coreText} × stream=${lim.cpugbps ? `, under its cpugbps=${trimNum(lim.cpugbps)}` : ''}` : 'cpugbps=';
     lines.push(cpu && view.toGbps !== null
-      ? `its CPU: ${pct((cpu[0] * view.toGbps) / lim.cpu)} of the ${formatGbps(lim.cpu)} it can send and receive together${busy}${rx}`
+      ? `its CPU: ${pct((cpu[0] * view.toGbps) / lim.cpu)} of the ${formatGbps(lim.cpu)} ${whose} can send and receive together${busy}${rx}`
         + (k ? ` — full, holding back ${k} flow${k === 1 ? '' : 's'} itself` : '')
-      : `its CPU can send and receive ${formatGbps(lim.cpu)} together${busy}${rx} (cpugbps=)`);
+      : `its CPU can send and receive ${formatGbps(lim.cpu)} together${busy}${rx} (${from})`);
   } else if (lim.busy && !forwardsHere(state, node)) {
-    lines.push(`${pct(lim.busy)} busy elsewhere — no cpugbps= to take it from, so it holds nothing back`);
+    lines.push(`${pct(lim.busy)} busy elsewhere — no cpugbps= or cores= with a stream= to take it from, so it holds nothing back`);
+  } else if (lim.cores && !forwardsHere(state, node)) {
+    lines.push(`${coreText} — with no stream= to say what one carries, they hold nothing back`);
   }
   if (each.length > 1) {
     for (const e of each) {
@@ -1848,6 +1856,53 @@ export function renderLoadGen(state, host, actions, { unit } = {}) {
     });
     return input;
   };
+  // Areas: several loads at once, each with settings of its own on hosts of
+  // its own. The tabs say which is shown; every area runs when it runs.
+  const areaInfo = actions.areaState();
+  const tabs = el('div', 'gen-row gen-areas');
+  tabs.append(el('span', null, 'area'));
+  areaInfo.areas.forEach((a, i) => {
+    const tab = el('button', `gen-area${a.shown ? ' active' : ''}`, a.name);
+    tab.title = `${a.name}: ${a.hosts.toLocaleString()} host${a.hosts === 1 ? '' : 's'}`;
+    tab.addEventListener('click', () => actions.showArea(i));
+    tabs.append(tab);
+  });
+  const more = el('button', 'gen-area-add', '+ area');
+  more.title = 'Another load, run at the same time on hosts of its own: give it a hosts filter no other area’s takes. '
+    + 'Each area goes to the load tools as a run of its own -- its own files, run id, remote directory and reports';
+  more.addEventListener('click', () => actions.addArea());
+  tabs.append(more);
+  if (areaInfo.areas.length > 1) {
+    const name = el('input', 'gen-area-name');
+    name.type = 'text';
+    name.value = g.name;
+    name.title = 'This area’s name: its files are named for it (matrix-A.csv, reports-A)';
+    name.addEventListener('change', () => actions.renameArea(name.value));
+    const drop = el('button', 'gen-area-remove', 'Remove');
+    drop.title = `Remove area ${g.name}`;
+    drop.addEventListener('click', () => actions.removeArea(areaInfo.areas.findIndex((a) => a.shown)));
+    tabs.append(name, drop);
+  }
+  box.append(tabs);
+  if (areaInfo.areas.length > 1) {
+    const share = el('label', 'gen-areas-share');
+    const tick = el('input');
+    tick.type = 'checkbox';
+    tick.checked = !!areaInfo.share;
+    tick.addEventListener('change', () => actions.setAreasShare(tick.checked));
+    share.append(tick, el('span', null, ' areas may share hosts'));
+    share.title = 'Two loads on one host at once -- a host in two areas runs both, sharing its CPU and NICs, as the model shows. '
+      + 'Off, a host two areas take is refused. On, each area’s run listens on ports of its own (5300, 5400, … for mx), '
+      + 'and needs tools that stop only their own agents: mx 1.11.2 or later, netmesh from the binnacle after 0.8.0';
+    const row = el('div', 'gen-row');
+    row.append(share);
+    if (areaInfo.share && areaInfo.shared) {
+      row.append(el('span', 'muted', `${areaInfo.shared.toLocaleString()} host${areaInfo.shared === 1 ? '' : 's'} in more than one area`));
+    }
+    box.append(row);
+  }
+  if (areaInfo.why) box.append(el('div', 'bad gen-areas-why', areaInfo.why));
+
 
   const shape = el('div', 'gen-row');
   const pattern = choose(PATTERNS, PATTERN_LABELS, g.pattern, (v) => actions.setGen({ pattern: v }));
@@ -2036,33 +2091,168 @@ export function renderLoadGen(state, host, actions, { unit } = {}) {
   who.append(hosts, count);
   box.append(who);
 
-  // Processes a flow: how many connections each flow between two hosts runs
-  // as -- the same setting as Cable load's connections a flow. A server's
-  // stream= caps each one, so a flow carries at most this many times it.
+  // Split: the hosts as groups that share none -- each rack, each pick, each
+  // rule, so many in runs, dealt in turn or at random, by an attribute --
+  // to keep peers inside each, and to save as host lists.
+  const splitRow = el('div', 'gen-row gen-split-row');
+  const splitBy = choose(HOST_SPLITS, HOST_SPLIT_LABELS, HOST_SPLITS.includes(g.split) ? g.split : 'none',
+    (v) => actions.setGen({ split: v }));
+  splitBy.className = 'gen-split';
+  splitBy.title = 'Split the hosts into groups that share none:\n'
+    + '  each rack (row, …) -- a group a container\n'
+    + '  each pick -- Ctrl-click racks, rows or servers, a group each\n'
+    + '  each rule -- a filter a group, one a line or ; apart: in:A01 ; in:A02\n'
+    + '  into blocks -- so many runs of neighbours, in the layout’s order\n'
+    + '  groups of -- runs of so many neighbours\n'
+    + '  interleaved -- so many groups dealt a host at a time, so each spans every rack\n'
+    + '  at random -- so many groups dealt at random\n'
+    + '  by attribute -- a group for each value of one: model, plane, …\n'
+    + 'A host two picks or rules both hold is refused, not given to one of them.';
+  splitRow.append(el('span', null, 'split'), splitBy);
+  const splitNumber = (cls, value, title, key) => {
+    const input = el('input', cls);
+    input.type = 'number';
+    input.min = '1';
+    input.max = String(SPLIT_LIMIT);
+    input.value = String(value);
+    input.title = title;
+    input.addEventListener('change', () => actions.setGen({ [key]: Math.max(1, Math.min(SPLIT_LIMIT, Math.round(Number(input.value) || 1))) }));
+    return input;
+  };
+  if (g.split === 'container') {
+    const kinds = reachOf(state.model);
+    const kind = choose(kinds.length ? kinds : ['rack'], Object.fromEntries((kinds.length ? kinds : ['rack']).map((k) => [k, k])),
+      g.splitKind, (v) => actions.setGen({ splitKind: v }));
+    kind.className = 'gen-split-kind';
+    splitRow.append(kind);
+  } else if (['blocks', 'interleave', 'random'].includes(g.split)) {
+    splitRow.append(splitNumber('gen-split-n', g.splitN, 'How many groups', 'splitN'), el('span', null, 'groups'));
+    if (g.split === 'random') {
+      const again = el('button', 'gen-split-reshuffle', 'Reshuffle');
+      again.title = 'Deal the hosts out again, under a new seed';
+      again.addEventListener('click', () => actions.setGen({ splitSeed: ((g.splitSeed || 0) + 1) >>> 0 || 1 }));
+      splitRow.append(again);
+    }
+  } else if (g.split === 'size') {
+    splitRow.append(splitNumber('gen-split-n', g.splitN, 'How many hosts in each group: the last has what is left', 'splitN'), el('span', null, 'hosts'));
+  } else if (g.split === 'attr') {
+    const key = el('input', 'gen-split-key');
+    key.type = 'text';
+    key.value = g.splitKey;
+    key.placeholder = 'model';
+    key.title = 'The attribute whose values are the groups: model, plane, pod, …';
+    key.addEventListener('change', () => actions.setGen({ splitKey: key.value.trim() }));
+    splitRow.append(key);
+  }
+  box.append(splitRow);
+  if (g.split === 'rules') {
+    const rules = el('textarea', 'gen-split-rules');
+    rules.rows = 3;
+    rules.value = g.splitRules;
+    rules.placeholder = 'in:A01\nin:A02\nrack=R[05..08]';
+    rules.title = 'A filter a group, one a line or ; apart -- the host filter’s language. A host two rules both '
+      + 'hold is refused; one no rule holds is left out of every group.';
+    rules.addEventListener('change', () => actions.setGen({ splitRules: rules.value }));
+    box.append(rules);
+  }
+  if (g.split !== 'none') {
+    const sp = actions.genSplit();
+    const said = el('div', sp.why ? 'bad gen-split-why' : 'muted gen-split-why');
+    if (sp.why) said.textContent = sp.why;
+    else {
+      const shown = sp.groups.slice(0, 8).map((x) => `${x.name} ${x.hosts.length.toLocaleString()}`).join(' · ');
+      said.textContent = `${sp.groups.length.toLocaleString()} group${sp.groups.length === 1 ? '' : 's'}: ${shown}`
+        + `${sp.groups.length > 8 ? ' · …' : ''}${sp.left ? ` -- ${sp.left.toLocaleString()} host${sp.left === 1 ? '' : 's'} in none` : ''}`;
+    }
+    box.append(said);
+    if (!sp.why && sp.groups.length) {
+      const use = el('div', 'gen-row');
+      const within = el('label', 'gen-within');
+      const tick = el('input');
+      tick.type = 'checkbox';
+      tick.checked = !!g.within;
+      tick.addEventListener('change', () => actions.setGen({ within: tick.checked }));
+      within.append(tick, el('span', null, ' peers only within each group'));
+      within.title = 'Each group a load of its own: every host sends in the pattern -- all, random peers, shift, '
+        + 'ring -- to hosts of its own group only, as if the group were the whole floor';
+      use.append(within);
+      const lists = sp.groups.length >= 2 ? actions.splitLists() : null;
+      if (lists) {
+        const each = el('button', 'gen-split-areas', 'An area each');
+        each.title = `Make each group an area of its own (${lists.groups.length}): this area’s settings, the group’s hosts. `
+          + 'Each then runs a load of its own, at the same time, and the areas can be set apart';
+        each.addEventListener('click', () => actions.areasFromSplit());
+        use.append(each);
+        const save = el('button', 'gen-split-save', 'Save host lists');
+        save.title = `hosts-lists.tar: a hosts file a group (${lists.files.length - 1}), and all of them in hosts-grouped.txt, `
+          + 'a [group] header each, as model_network reads one; each host as the load tools take it, taken-out hosts left out';
+        save.addEventListener('click', () => actions.saveText('hosts-lists.tar',
+          tarball(lists.files.map((f) => ({ name: `hosts-lists/${f.name}`, text: f.text, mode: 0o644 })), { dir: 'hosts-lists' }), 'application/x-tar'));
+        use.append(save);
+      }
+      box.append(use);
+    }
+  }
+
+  // Connections a flow: how many each flow between two hosts runs as -- the
+  // same setting as Cable load's. A server's stream= caps each one, so a flow
+  // carries at most this many times it.
   const procs = el('div', 'gen-row');
   const procInput = el('input', 'gen-procs');
   procInput.type = 'number';
   procInput.min = '1';
   procInput.max = String(CONNECTION_LIMITS.max);
   procInput.value = String(state.traffic.connections);
-  procInput.title = 'How many processes (connections) each flow between two hosts runs as: iperf -P, mx --streams, '
-    + 'netmesh flows=. A server’s stream= caps each one -- one core’s worth -- so a flow carries at most this many '
-    + 'times it. The same setting as Cable load’s connections a flow';
+  procInput.title = 'How many connections each flow between two hosts runs as: iperf -P, mx --streams, netmesh flows=. '
+    + 'A server’s stream= caps each one -- one core’s worth -- so a flow carries at most this many times it. Each '
+    + 'server holds this many for every peer it sends to and every one sending to it. The same setting as Cable load’s '
+    + 'connections a flow';
   procInput.addEventListener('change', () => actions.setConnections(procInput.value));
-  procs.append(el('span', null, 'processes'), procInput, el('span', null, 'a flow'));
+  procs.append(el('span', null, 'connections'), procInput, el('span', null, 'a flow'));
   box.append(procs);
   const capped = g.on ? actions.genProcesses() : null;
   if (capped && capped.held) {
     const why = el('div', 'bad gen-procs-why');
     why.append(el('span', null, `stream=${formatGbps(capped.stream)} holds ${capped.held.toLocaleString()} of ${capped.flows.toLocaleString()} `
       + `flow${capped.flows === 1 ? '' : 's'} below what ${capped.held === 1 ? 'it was' : 'they were'} asked: `
-      + `${capped.conns} process${capped.conns === 1 ? '' : 'es'} a flow carr${capped.conns === 1 ? 'ies' : 'y'} ${formatGbps(capped.stream * capped.conns)}b/s at most. `
+      + `${capped.conns} connection${capped.conns === 1 ? '' : 's'} a flow carr${capped.conns === 1 ? 'ies' : 'y'} ${formatGbps(capped.stream * capped.conns)}b/s at most. `
       + `${capped.need} would carry every one in full. `));
     const use = el('button', 'gen-procs-use', `Use ${capped.need}`);
-    use.title = `Run each flow as ${capped.need} processes`;
+    use.title = `Run each flow as ${capped.need} connections`;
     use.addEventListener('click', () => actions.setConnections(capped.need));
     why.append(use);
     box.append(why);
+  }
+
+  // Cores per server: how many cores the run may use on each, one carrying
+  // one connection at its stream= -- the CPU ceiling, and mx's --workers.
+  const cores = el('div', 'gen-row');
+  const coreInput = el('input', 'gen-cores');
+  coreInput.type = 'number';
+  coreInput.min = '0';
+  coreInput.max = String(CORE_LIMIT);
+  coreInput.placeholder = 'all';
+  coreInput.value = state.traffic.cores ? String(state.traffic.cores) : '';
+  coreInput.title = 'How many cores the run may use on each server: blank for what each server’s cores= says, or no limit. '
+    + 'Each core carries one connection at the server’s stream=, so a server sends and receives at most cores × stream= '
+    + 'together (receiving at its rxcost=), under its cpugbps=. The run files give it to mx as --workers, one process a core';
+  coreInput.addEventListener('change', () => actions.setCores(coreInput.value));
+  cores.append(el('span', null, 'cores'), coreInput, el('span', null, 'per server'));
+  box.append(cores);
+  const c = capped && capped.cores;
+  if (c && c.held) {
+    const why = el('div', 'bad gen-cores-why');
+    why.append(el('span', null, `${c.held.toLocaleString()} of ${c.servers.toLocaleString()} server${c.servers === 1 ? '' : 's'} `
+      + `${c.held === 1 ? 'has' : 'have'} too few cores for ${c.held === 1 ? 'its' : 'their'} load: ${c.have} carr${c.have === 1 ? 'ies' : 'y'} `
+      + `${c.have} connection${c.have === 1 ? '' : 's'} at stream=. The busiest needs ${c.need}. `));
+    const use = el('button', 'gen-cores-use', `Use ${c.need}`);
+    use.title = `Give the run ${c.need} cores on each server`;
+    use.addEventListener('click', () => actions.setCores(c.need));
+    why.append(use);
+    box.append(why);
+  } else if (c && c.need) {
+    box.append(el('div', 'muted gen-cores-why', `The busiest server needs ${c.need} core${c.need === 1 ? '' : 's'} at its stream= `
+      + `for what it sends and takes in${c.set ? `, of the ${c.set} set` : ''}.`));
   }
 
   if (TARGETED.has(g.pattern)) {
@@ -2081,6 +2271,14 @@ export function renderLoadGen(state, host, actions, { unit } = {}) {
   if (run) {
     const lines = el('div', 'cable-summary');
     if (run.why) lines.append(el('div', 'bad', run.why));
+    // Each area's own, with several.
+    if (run.areas && run.areas.length > 1) {
+      for (const a of run.areas) {
+        lines.append(el('div', a.flows ? 'muted gen-area-run' : 'bad gen-area-run', a.flows
+          ? `${a.tag}: ${a.senders} of ${a.hosts} hosts send · ${a.flows} flows · ${formatLoad(shown.model, a.offered)}`
+          : `${a.tag}: ${a.why || 'nothing to send'}`));
+      }
+    }
     else {
       lines.append(el('div', null, `${run.senders} of ${run.hosts} hosts send · ${run.flows} flows · `
         + `${formatLoad(shown.model, run.offered)}`));

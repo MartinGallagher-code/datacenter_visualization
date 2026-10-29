@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.47.0** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.51.0** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -825,8 +825,14 @@ a test reaches well before they do:
   way.
   (`cpu=` stays free to name the part, `cpu=epyc-9654`, as layouts already
   use it.)
+- **`cores=`** — how many cores it gives the network, `cores=32`. Each
+  carries one connection at its `stream=`, so a server sends and receives
+  at most cores × `stream=` together (receiving at its `rxcost=`, as
+  below) — whichever of that and its `cpugbps=` is less. `stream=8.5
+  cores=16` is 136 Gb/s in all: 68 each way, or all of it one way. With no
+  `stream=` there is nothing for a core to carry, and it sets no ceiling.
 - **`busy=`** — the share of its CPU other work takes, `busy=20%` (or a
-  bare `busy=20`), off its `cpugbps=`: `cpugbps=310 busy=20%` leaves 248 for
+  bare `busy=20`), off its `cpugbps=` (or its cores): `cpugbps=310 busy=20%` leaves 248 for
   the network. Write the idle figure once on the model and `busy=` on the
   servers or lines that are loaded. With no `cpugbps=` it has nothing to
   take from, and the tooltip says so. Measured is better than written:
@@ -838,14 +844,32 @@ a test reaches well before they do:
 
 The routing box shows *connections a flow* whenever a server has a
 `stream=`, packet spraying included: it sets what a flow may carry. The
-**Load generator** has the same setting as **processes a flow**, always
-shown — and when `stream=` holds generated flows below what they were
-asked, it says how many, what one flow can carry at the processes set, and
-how many processes would carry every flow in full, with a **Use N** button:
-50 Gb/s from each server over five peers is 10 Gb/s a flow, which
-`stream=8.5` holds to 8.5 with one process (42.5 from each server) and two
-carry whole. It is what the run files write as iperf's `-P`, mx's
-`--streams` and netmesh's `flows=`.
+**Load generator** has the same setting, always shown — **connections a
+flow**, counted for each pair of hosts, not each server: a server holds
+that many for every peer it sends to and every one sending to it. When
+`stream=` holds generated flows below what they were asked, it says how
+many, what one flow can carry at the connections set, and how many would
+carry every flow in full, with a **Use N** button: 50 Gb/s from each server
+over five peers is 10 Gb/s a flow, which `stream=8.5` holds to 8.5 with one
+connection (42.5 from each server) and two carry whole. It is what the run
+files write as iperf's `-P`, mx's `--streams` and netmesh's `flows=`.
+
+Beside it, **cores per server** says how many cores the run may use on
+each — blank for what each server's `cores=` says, or no limit. It caps
+`cores=`, never raises it, and holds the way `cores=` does: cores ×
+`stream=` for sending and receiving together. The generator says how many
+cores the busiest server needs for what it sends and takes in — that
+50 Gb/s each way at `stream=8.5` is twelve — and, when servers have fewer,
+how many, with a **Use N** button. The run files give it to mx as
+`--workers N`, one process a core.
+
+So the three numbers are:
+
+| Setting | Counted per | Holds | Run files |
+|---|---|---|---|
+| connections a flow | pair of hosts | `stream=` each | iperf `-P`, mx `--streams`, netmesh `flows=` |
+| cores per server (or `cores=`) | server | cores × `stream=`, send and receive together | mx `--workers` |
+| `cpugbps=` | server | the CPU's own budget, send and receive together | — |
 
 Both hold flows back in [contention](#contention-a-full-cable-shares-itself-out)
 just as a full cable does; hovering a server says which it is at, and the
@@ -1034,6 +1058,90 @@ off.
   rack takes its servers, never its ToRs. A layout that tags nothing
   `+switch` cannot tell a server from a switch, so the box says so and
   every device with cables counts.
+- **split** — the hosts as groups that share none, and what they are for:
+  peers only within each, and host lists to save. Splitting them:
+
+  | Split | Groups |
+  |---|---|
+  | **each** rack (row, pod, …) | a container each |
+  | **each pick** | each Ctrl-click pick: a rack, a row, a server |
+  | **each rule** | a filter each, one a line or `;` apart: `in:A01 ; in:A02 ; rack=R[05..08]` |
+  | **into blocks** of N | N runs of neighbours, in the layout's order |
+  | **groups of** N | runs of N neighbours, the last what is left |
+  | **interleaved** N | dealt a host at a time, so every group spans every rack |
+  | **at random** N | dealt at random; **Reshuffle** deals again |
+  | **by attribute** | a group for each value of one: `model`, `plane`, … |
+
+  No host is ever in two groups: picks or rules that overlap — a server
+  inside a picked rack, two rules that both hold `r1h1` — are refused,
+  naming where, rather than one of them quietly winning, and nothing runs
+  until they are fixed. Hosts no pick or rule holds are counted, and send
+  nothing. The row says what the split comes to ("3 groups: g1 2 · g2 2 ·
+  g3 2").
+  - **peers only within each group** — each group a load of its own, its
+    hosts sending to each other in the pattern (all, random peers, shift,
+    ring) as if it were the whole floor: the disjoint sets of a test that
+    runs several at once. *Within its own rack* is the same thing with the
+    racks for groups; this is any groups. **to hosts**, outside its own
+    rack, still holds inside a group.
+  - **Save host lists** — `hosts-lists.tar`: a `hosts-<group>.txt` a group,
+    a host a line as the load tools take one (`name`, or `name=addr`), and
+    all of them in `hosts-grouped.txt` with a `[group]` header each — the
+    grouped `hosts.txt` model_network's autopilot, iperf2 mesh and topology
+    discovery read. Taken-out hosts are left out. Each list goes as it is to
+    `--servers`, or into binnacle's `muster add` to be handed out a batch at
+    a time.
+  - **An area each** — every group an area of its own (below), with this
+    area's settings and the group's hosts as its filter: a container's
+    `in:/D/A/r1`, a pick's, a rule's, an attribute's `plane=2`, or the hosts
+    themselves by path, `path=[D/A/r1/h1,D/A/r2/h1]`.
+- **area** — several loads at once, each with settings of its own on hosts
+  of its own: an all-to-all at 20 Gb/s in one pod while another runs an
+  incast of 64-byte packets. **+ area** adds one like the area shown, with
+  no hosts yet; the tabs show each, a name box names it (its files are
+  named for it), and **Remove** takes it away. **Run** runs every area;
+  the cables carry them all, shared out together, and the panel says what
+  each sends ("A: 3 of 3 hosts send · 6 flows · 60G").
+
+  **No host is in two areas — unless you say so.** Two areas whose filters
+  take a host — including an area with no filter, which takes every host
+  — are refused, naming the areas and a host they share, and nothing runs
+  until each has hosts of its own. An incast's or outcast's target is the
+  first pick (or the selection) inside its area and in no other, so no
+  area reaches into another's hosts. Connections a flow and cores per
+  server are the whole run's.
+
+  **areas may share hosts** lets them: two things running on some hosts
+  at once — a storage load on every server while one rack also takes an
+  incast. A host in two areas runs both, and the model shares its CPU and
+  NICs between them as it does any two flows; the row says how many hosts
+  are shared. What the tools need for it is ports of their own and stopping
+  only their own, so with hosts shared each area's run listens a hundred
+  ports on from the one before (mx 5300, 5400, …; netmesh 5310, 5410, …;
+  iperf 5001, 5101, …), the notes list them to open, and the Host status
+  pane's preflight checks them all. mx's workers share a port by
+  `SO_REUSEPORT`, so two mx runs on one port would quietly take each
+  other's packets. Stopping by pid is the other half: **mx 1.11.2** and
+  netmesh from the binnacle after 0.8.0 stop only their own agents, where
+  older ones also kill every other agent on the host when they stop.
+  iperf-orchestrator already stops its servers by port.
+
+  The run files make each area a run of its own, all started at once, so
+  no run reads, writes or cleans up after another — the tools' own
+  options for runs side by side, nothing new on the hosts:
+
+  | Tool | Each area's own |
+  |---|---|
+  | mx | `matrix-A.csv`, `--remote-dir /var/tmp/mx-A`, `--reports reports-A`, `mx_results-A.tsv` |
+  | iperf-orchestrator | `iperf_plan-A.conf` (`remote_dir=` in it), `--run-id dcviz-A`, `iperf_results-A.tsv` |
+  | netmesh | `mesh-A.csv`, `--remote-dir /var/tmp/netmesh-A`, `--reports reports-A`, `netmesh_results-A.tsv` |
+
+  Each area has its own `expected-A.tsv`, and its run file, `mx-run-A.tsv`,
+  carries the layout and says which area it was (`#~run area A`): load
+  them together and they land side by side. The script checks every area,
+  starts every area's run in the background, each to its own log
+  (`mx-run-A.log`), waits for them all, and then exports and collects
+  each.
 
 - **Take out at random** — servers, racks and switches, each by a
   number or **% of the** ones there are, and each among all of its kind or
@@ -1158,23 +1266,32 @@ layout, and compare what ran with what the model said.
   same — all-to-all, random peers, a ring at one amount — is one plan. Pairs
   at different rates make a plan per rate (up to eight; more are binned),
   each on its own port so they run at once in separate terminals, and their
-  exports go into one `iperf_results.tsv`. iperf sends TCP, so a sized load's
-  replies go back as TCP the other way at their own bit rate.
-- **mx's workers are sized to the load.** A pair's connections are mx's
-  `--streams` — its rate split over that many sockets — but what does the
-  work on each host is `--workers`, separate processes that each sustain
-  about 200k packets a second of request and reply. `--workers auto`
-  runs one a core and stops at 8, which a full-frame load at tens of Gb/s
-  outruns: 50 Gb/s of 1472-byte requests is 4 million a second. So the
-  files size them as `mx hints` does — twice the busiest host's requests
-  a second (out, or in, which it answers) over 200k, plus one, and never
-  fewer than the processes a flow — and the notes say how many each host
-  needs. Past 8 the run line says `--workers N`, the mx run under netmesh
-  too; at 8 or fewer `auto` already gives it on a host with that many
-  cores, and the notes say so. iperf needs nothing of the kind: `-P` is
-  threads within each iperf, each its own core; nor does netmesh, whose
-  probes are a trickle for one process however many ports they spread
-  over.
+  exports go into one `iperf_results.tsv`. Runs at once each keep a remote
+  directory of their own (`remote_dir=/tmp/iperf_orchestrator-dcviz-2` in
+  the plan): iperf-orchestrator ends a run by removing its `--remote-dir` on
+  every host, and a host in two rates' runs would otherwise lose the files
+  of the one still running. iperf sends TCP, so a sized load's replies go
+  back as TCP the other way at their own bit rate.
+- **mx's workers are sized to the load, or to the cores.** A pair's
+  connections are mx's `--streams` — its rate split over that many
+  sockets — but what does the work on each host is `--workers`, separate
+  processes, one a core, that each sustain about 200k packets a second of
+  request and reply. With **cores per server** set, that is the number:
+  the run line says `--workers N` (even at 8 or fewer, since `auto` takes
+  whatever the box has), and the notes say if the load would want more.
+  Without it, the files size them as `mx hints` does — twice the busiest
+  host's requests a second (out, or in, which it answers) over 200k, plus
+  one, and never fewer than the connections a flow — capped at the fewest
+  `cores=` among the run's hosts, since mx runs one number everywhere; the
+  notes say when the cap cut it. `--workers auto` runs one a core and stops
+  at 8, which a full-frame load at tens of Gb/s outruns (50 Gb/s of
+  1472-byte requests is 4 million a second), so past 8 the run line says
+  `--workers N`, the mx run under netmesh too. iperf has no cores setting:
+  `-P` is threads within each iperf and the kernel spreads them, so its
+  notes count the connections the busiest host holds against the cores it
+  has — fewer connections than cores leaves cores idle, and the notes say
+  to raise connections a flow. netmesh is one light agent process a host,
+  whatever the cores; they go to the mx run under it.
 - **netmesh makes no load.** It measures the network: run alone it probes
   the idle network; `netmesh run --mesh mesh.csv --baseline 20 -- mx run …`
   probes 20 s idle and then under the load, which is the latency the

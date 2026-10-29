@@ -44,7 +44,7 @@ const DEFAULT_CAP = 2000000;
 // would say nothing about its servers.
 const NON_INHERITED = new Set([
   'id', 'name', 'at', 'u', 'cols', 'dir', 'gap', 'label', 'size', 'seq', 'align', 'if', 'gbps', 'pps',
-  'buffer', 'ports', 'breakout', 'latency', 'stream', 'cpugbps', 'rxcost', 'busy', 'addr',
+  'buffer', 'ports', 'breakout', 'latency', 'stream', 'cpugbps', 'rxcost', 'busy', 'cores', 'addr',
 ]);
 
 const DEFAULT_NET_COLORS = ['#4fa3ff', '#ff9f43', '#4dd4ac', '#c986ff', '#ff6b8b', '#f5d442'];
@@ -203,6 +203,9 @@ const NET_NUMBERS = { width: [0.1, 100], gbps: GBPS_RANGE };
 // receive together, and rxcost= how much more receiving costs it than
 // sending. Not cpu=: layouts already use that to name the part.
 const ELEMENT_REALS = { gbps: GBPS_RANGE, pps: [1, 1e13], stream: GBPS_RANGE, cpugbps: GBPS_RANGE, rxcost: [0.1, 10] };
+// cores=: how many cores a server gives the network, each carrying one
+// connection at its stream=, so cores times stream= is a ceiling of its own.
+const ELEMENT_WHOLE = { cores: [1, 100000] };
 // A device's datasheet figures that carry a unit, each read by one function
 // here so the check and every use agree.
 const BYTE_UNITS = {
@@ -695,6 +698,7 @@ function materialize(syn, parent, model) {
     checkAlign(attrs, wrote, model, syn.line);
     checkNumbers(attrs, wrote, model, syn.line);
     checkNumbers(attrs, wrote, model, syn.line, ELEMENT_REALS, false);
+    checkNumbers(attrs, wrote, model, syn.line, ELEMENT_WHOLE);
     checkUnits(attrs, wrote, model, syn.line);
     checkColor(attrs, wrote, model, syn.line);
 
@@ -1164,6 +1168,7 @@ const truthy = (value) => {
           const what = `model "${name}"`;
           checkNumbers(child.attrs, what, model, child.line);
           checkNumbers(child.attrs, what, model, child.line, ELEMENT_REALS, false);
+          checkNumbers(child.attrs, what, model, child.line, ELEMENT_WHOLE);
           checkUnits(child.attrs, what, model, child.line);
           checkColor(child.attrs, what, model, child.line);
           model.models.set(name.toLowerCase(), { name, attrs: { ...child.attrs }, tags: child.tags, line: child.line });

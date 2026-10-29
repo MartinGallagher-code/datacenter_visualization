@@ -37,7 +37,7 @@ import {
 import {
   betweenPicks, biggestChanges, bitRate, burstRisk, busiest, cableKeys, cablesOf, compareLoads, countersOf, devicesOf,
   adaptiveWeights, BUFFER_ALPHA, CONNECTION_LIMITS, EXPLAIN, explainResults, sendersOver, FRAMING_BYTES, IMIX_BYTES, PACKET_PICKS, contend, pathLatency, switchBuffer, switchLatency, switchPps, CONTEND_LIMITS, estimateFlows, findingKind, findingsOf, flowsOf, flowsOver, formatGbps, GEN_LIMITS,
-  generateFlows, hostCapacity, hostLimits, busyable, busyOf, layersOf, EXPLAIN_PATTERNS, pairedFlows, randomTakeouts, takeoutCandidates,
+  generateFlows, hostCapacity, hostLimits, HOST_SPLITS, splitFiles, splitHosts, busyable, busyOf, layersOf, EXPLAIN_PATTERNS, pairedFlows, randomTakeouts, takeoutCandidates,
   counterparts, counterpartLevels,
   hostsFor, hostsOf, loadable, loadUnit, mergeResults, packetGb, reachKinds, readsAsLoad, routeEstimate, routeTraffic,
   switchCapacity, switchLoads, testFlows, trafficKind, utilOf, viewOf as cableView,
@@ -54,7 +54,7 @@ import {
   droppedLayoutsNotice, layoutNotice, prefixed, resultsFileNotice,
 } from '../js/report.js';
 import {
-  bindProblem, buildIperf, buildMx, buildNetmesh, hostToken, mxSizes, mxWorkers, rateGroups, runPairs, runProblem, runScript, runTar, runWhy, scriptName, tarball, tarName, tcpPayloadShare,
+  bindProblem, buildIperf, buildMx, buildNetmesh, hostConnections, hostToken, mergeAreas, mxSizes, mxWorkers, rateGroups, runPairs, runProblem, runScript, runTar, runWhy, scriptName, tagged, tarball, tarName, tcpPayloadShare,
 } from '../js/runfiles.js';
 import { asFile, layoutSha, modelBlock, readStamp, runStamp, sha256 } from '../js/stamp.js';
 import { PROBE_SCRIPT, PROBE_TAR, probeFiles, probeSummary, TOOL_PORTS } from '../js/probe.js';
@@ -2479,6 +2479,109 @@ link fabric role=server tor
   r = contend(busyM, [f(bb, bc, 80), f(bc, bb, 80, 2)], { toGbps: 1, busy: new Map([[bb, 0.5]]) });
   eq(r.contention.flows.map((x) => x.value), [20, 20], 'a measured share, given, wins over busy=: half of 120 is 20 each');
   ok(hostLimits(bb, new Map([[bb, 0.5]])).busyFrom, 'and says it was measured');
+
+  // cores=: the cores a server gives the network, each carrying one
+  // connection at its stream=. Cores times stream= is a CPU ceiling beside
+  // cpugbps=, the lower of the two holding; and a run's cores per server
+  // (hostLimits' third argument, contend's opts.cores) caps it again.
+  const coresM = parseLayout(`
+net fabric gbps=400
+node tor +switch
+model box16 stream=10 cores=16
+node a role=server stream=10 cores=4
+node b role=server stream=10 cores=8 cpugbps=50
+node c role=server
+node d role=server stream=10 cores=4 busy=50%
+node e role=server model=box16
+link fabric role=server tor
+`);
+  eq(coresM.warnings, [], 'cores= is an element key, on a model line too');
+  ok(/cores=0 is outside 1\.\.100000/.test(parseLayout('node x cores=0').warnings.join('\n')), 'cores= is checked against its range');
+  ok(/cores=2\.5 is not a whole number/.test(parseLayout('node x cores=2.5').warnings.join('\n')), 'and is a whole number');
+  const [ca, cb, cc, cd, ce] = ['a', 'b', 'c', 'd', 'e'].map((n) => coresM.resolve(n));
+  const cl = (el, busy = null, cap = 0) => { const x = hostLimits(el, busy, cap); return [x.cores, x.coreGbps, x.cpu, x.byCores]; };
+  eq([cl(ca), cl(cb), cl(cc), cl(cd), cl(ce)],
+     [[4, 40, 40, true], [8, 80, 50, false], [null, null, null, false], [4, 40, 20, true], [16, 160, 160, true]],
+     'four cores at stream=10 send and receive 40; cpugbps=50 under eight; none with no cores=; busy= comes off them; and from a model');
+  eq([cl(ca, null, 2), cl(cb, null, 2), cl(cc, null, 6), cl(ce, null, 64)],
+     [[2, 20, 20, true], [2, 20, 20, true], [6, null, null, false], [16, 160, 160, true]],
+     'cores per server caps them, never raises them, and with no stream= sets no ceiling');
+  const fc = (src, dst, value, id = 1) => ({ id, src, dst, value });
+  r = contend(coresM, [fc(ca, cc, 80)], { toGbps: 1, connections: 8, split: 'even' });
+  eq([r.contention.flows[0].value, r.contention.hosts.cpuFull.get(ca)], [40, 1],
+     'eight connections would carry 80, but four cores carry four of them: 40, held at the server’s CPU');
+  r = contend(coresM, [fc(ca, cc, 80)], { toGbps: 1, connections: 8, split: 'even', cores: 2 });
+  eq(r.contention.flows[0].value, 20, 'two cores per server for the run: 20');
+  r = contend(coresM, [fc(ca, cc, 80), fc(cc, ca, 80, 2)], { toGbps: 1, connections: 8, split: 'even' });
+  eq(r.contention.flows.map((x) => x.value), [20, 20], 'sending and receiving share the cores, as they share cpugbps=');
+
+  // Host splits: one list of hosts as several that share none, each way
+  // splitHosts knows; picks and rules that overlap are refused, never given
+  // to one of them.
+  {
+  const m = parseLayout(['dc D', '  row A', '    rack r[1..3] u=10', '      node h[1..4] role=server name={rack}{id} plane={id}',
+    '      node t role=tor +switch name={rack}tor', '  row S', '    rack SP u=4', '      node spine role=spine +switch',
+    'net nic gbps=100', 'net up gbps=400', 'link nic scope=rack role=server role=tor', 'link up role=tor role=spine'].join('\n'));
+  const hosts = hostsFor(m).hosts;
+  const ctx = { compile: (rule) => compileQuery(rule, {}), picks: [] };
+  const show = (sp) => sp.why || `${sp.groups.map((g) => `${g.name}[${g.hosts.map((h) => h.name).join(',')}]`).join(' ')}${sp.left ? ` left ${sp.left}` : ''}`;
+  const split = (spec, c = ctx) => show(splitHosts(m, hosts, spec, c));
+  eq(HOST_SPLITS, ['none', 'container', 'picks', 'rules', 'blocks', 'size', 'interleave', 'random', 'attr'], 'the ways a list splits');
+  eq(split({ by: 'none' }), `all[${hosts.map((h) => h.name).join(',')}]`, 'no split is one group of them all');
+  eq(split({ by: 'container', kind: 'rack' }), 'r1[r1h1,r1h2,r1h3,r1h4] r2[r2h1,r2h2,r2h3,r2h4] r3[r3h1,r3h2,r3h3,r3h4]', 'each rack its own');
+  eq(split({ by: 'blocks', n: 5 }), 'g1[r1h1,r1h2,r1h3] g2[r1h4,r2h1,r2h2] g3[r2h3,r2h4] g4[r3h1,r3h2] g5[r3h3,r3h4]',
+     'into five runs of neighbours, as even as they go, the first a host longer');
+  eq(split({ by: 'size', n: 5 }), 'g1[r1h1,r1h2,r1h3,r1h4,r2h1] g2[r2h2,r2h3,r2h4,r3h1,r3h2] g3[r3h3,r3h4]', 'runs of five, the last what is left');
+  eq(split({ by: 'interleave', n: 4 }), 'g1[r1h1,r2h1,r3h1] g2[r1h2,r2h2,r3h2] g3[r1h3,r2h3,r3h3] g4[r1h4,r2h4,r3h4]',
+     'dealt a host at a time: every group spans every rack');
+  const dealt = splitHosts(m, hosts, { by: 'random', n: 3, seed: 1 }, ctx);
+  eq(dealt.groups.map((g) => g.hosts.length), [4, 4, 4], 'at random: three even groups');
+  eq(new Set(dealt.groups.flatMap((g) => g.hosts)).size, 12, 'every host in exactly one');
+  ok(split({ by: 'random', n: 3, seed: 1 }) === show(dealt) && split({ by: 'random', n: 3, seed: 2 }) !== show(dealt),
+     'the same seed deals the same, another seed deals again');
+  ok(dealt.groups.every((g) => g.hosts.every((h, i) => !i || hosts.indexOf(g.hosts[i - 1]) < hosts.indexOf(h))), 'each in the layout’s order');
+  eq(split({ by: 'attr', key: 'plane' }), 'plane=h1[r1h1,r2h1,r3h1] plane=h2[r1h2,r2h2,r3h2] plane=h3[r1h3,r2h3,r3h3] plane=h4[r1h4,r2h4,r3h4]',
+     'a group for each value of an attribute');
+  ok(/name the attribute/.test(split({ by: 'attr' })), 'and says so with none named');
+  eq(split({ by: 'rules', rules: 'in:r1 ; in:r2' }), 'in:r1[r1h1,r1h2,r1h3,r1h4] in:r2[r2h1,r2h2,r2h3,r2h4] left 4',
+     'each rule its own, and the hosts no rule holds left out');
+  eq(split({ by: 'rules', rules: 'in:r1\nr1h1' }), 'in:r1 and r1h1 share hosts (r1h1 is in both): each host belongs to one group',
+     'rules that overlap are refused, saying where');
+  const pick = (name) => m.all.find((el) => el.name === name);
+  eq(split({ by: 'picks' }, { ...ctx, picks: [pick('r1'), pick('r2h1')] }), 'r1[r1h1,r1h2,r1h3,r1h4] r2h1[r2h1] left 7', 'each pick its own: a rack, a server');
+  eq(split({ by: 'picks' }, { ...ctx, picks: [pick('r1'), pick('r1h2')] }), 'r1 and r1h2 share hosts (r1h2 is in both): each host belongs to one group',
+     'a server inside a picked rack is refused, not given to either');
+  ok(/pick the groups/.test(split({ by: 'picks' })), 'and with nothing picked, says how');
+  eq(splitHosts(m, hosts, { by: 'blocks', n: 50 }, ctx).groups.length, 12, 'never more groups than hosts, and none empty');
+
+  // Peers only within each group: every flow stays inside one.
+  const groups = splitHosts(m, hosts, { by: 'interleave', n: 3 }, ctx).groups.map((g) => g.hosts);
+  const groupOf = new Map(groups.flatMap((g, i) => g.map((el) => [el, i])));
+  let made = generateFlows(m, { pattern: 'all', value: 10, unit: 'Gb/s' }, { groups });
+  eq([made.flows.length, made.flows.every((f) => groupOf.get(f.src) === groupOf.get(f.dst))], [3 * 4 * 3, true],
+     'all to all within each of three groups of four: 36 flows, none between groups');
+  eq(new Set(made.flows.map((f) => f.id)).size, made.flows.length, 'each flow its own id');
+  made = generateFlows(m, { pattern: 'random', peers: 2, value: 10, unit: 'Gb/s', seed: 3 }, { groups });
+  ok(made.flows.length === 24 && made.flows.every((f) => groupOf.get(f.src) === groupOf.get(f.dst)), 'random peers chosen within each group');
+  made = generateFlows(m, { pattern: 'ring', value: 10, unit: 'Gb/s' }, { groups });
+  ok(made.flows.length === 12 && made.flows.every((f) => groupOf.get(f.src) === groupOf.get(f.dst)), 'a ring round each group');
+  made = generateFlows(m, { pattern: 'all', value: 10, unit: 'Gb/s', reach: 'rack' }, { groups });
+  // Interleaved, each group of four holds two of one rack: 12 pairs less those 2.
+  ok(made.flows.length === 3 * 10 && made.flows.every((f) => f.src.parent !== f.dst.parent && groupOf.get(f.src) === groupOf.get(f.dst)),
+     `and outside its own rack still holds inside a group  (${made.flows.length})`);
+  ok(/peers within each group: all, random, shift or ring/.test(generateFlows(m, { pattern: 'incast', value: 10, unit: 'Gb/s' }, { groups, target: pick('r1h1') }).why),
+     'a pattern with one target has no peers to keep inside');
+
+  // As files: a hosts list a group, and all of them grouped, [group] headers
+  // as model_network's hosts.txt has them.
+  const files = splitFiles(splitHosts(m, hosts, { by: 'attr', key: 'plane' }, ctx).groups, (el) => el.name);
+  eq(files.map((f) => f.name), ['hosts-grouped.txt', 'hosts-plane-h1.txt', 'hosts-plane-h2.txt', 'hosts-plane-h3.txt', 'hosts-plane-h4.txt'],
+     'a file a group, named for it, and one grouped file');
+  eq(files[1].text, 'r1h1\nr2h1\nr3h1\n', 'a host a line');
+  ok(files[0].text.startsWith('[plane=h1]\nr1h1\nr2h1\nr3h1\n[plane=h2]\n'), 'the grouped file, a [group] header each');
+  eq(splitFiles([{ name: 'in:r1', hosts: [hosts[0]] }, { name: 'in:r1', hosts: [hosts[1]] }], (el) => el.name).map((f) => f.name),
+     ['hosts-grouped.txt', 'hosts-in_r1.txt', 'hosts-in_r1-2.txt'], 'names that would clash kept apart');
+  }
 
   // A per-server CPU metric, read as each server's busy share.
   const cpuRaw = parseResults('!test cpu_util unit=%\ncpu_util\tb\t35\ncpu_util\tc\t100\n!test cpu_frac\ncpu_frac\tb\t0.35\n'
@@ -5337,6 +5440,33 @@ if (python.error) {
      'a light load: auto is enough, and the notes say how many cores it takes');
   eq(mxWorkers(light, { connections: 12 }).workers, 12, 'never fewer workers than the processes a flow');
   eq(mxWorkers(light, { connections: 12 }).flag, true, 'and more than auto runs, said');
+  // The cores each host has for the run: a worker is a process, one a core.
+  const set4 = mxWorkers(made, { connections: 2, cores: 4, coresOf: () => 4 });
+  eq([set4.workers, set4.want, set4.set, set4.flag], [4, 9, true, true], 'cores per server says how many workers, outright');
+  const mx4 = buildMx(made, { seconds: 90, connections: 2, cores: 4, coresOf: () => 4 });
+  ok(mx4.commands.includes('mx run --matrix matrix.csv --for 90 --streams 2 --workers 4'), 'and the run says so, under auto’s 8 too');
+  ok(mx4.notes.some((n) => /Each host runs 4 mx worker processes, one a core, as cores per server says \(--workers 4\)\. The load wants about 9 .* so 4 may not keep up\./.test(n)),
+     `with what the load would want  (${mx4.notes.find((n) => /worker/.test(n))})`);
+  const capped6 = mxWorkers(made, { connections: 2, coresOf: () => 6 });
+  eq([capped6.workers, capped6.capped, capped6.flag], [6, true, false], 'a host’s cores= caps the estimate; six is auto’s to give');
+  const mx6 = buildMx(made, { seconds: 90, connections: 2, coresOf: () => 6 });
+  ok(mx6.commands.includes('mx run --matrix matrix.csv --for 90 --streams 2')
+     && mx6.notes.some((n) => /wants about 9 .* gives its hosts 6 cores \(cores=\), and a worker is a core, so the run leaves --workers auto/.test(n)),
+     `and the notes say what it wanted  (${mx6.notes.find((n) => /worker/.test(n))})`);
+  ok(buildMx(made, { connections: 2, coresOf: (el) => (el.name === 'r1h1' ? 3 : 12) }).commands.some((c) => / --workers /.test(c)) === false
+     && mxWorkers(made, { connections: 2, coresOf: (el) => (el.name === 'r1h1' ? 3 : 12) }).workers === 3,
+     'the host with fewest cores sets it: mx runs the same number everywhere');
+  // Six hosts all to all: five peers out and five in, two connections each.
+  eq(hostConnections(made, 2), 20, 'the busiest host holds a pair’s connections for every peer, each way');
+  const ip32 = buildIperf(made, { connections: 2, cores: 32, coresOf: () => 32 });
+  ok(ip32.notes.some((n) => /The busiest host holds 20 connections \(2 a pair, sending and receiving\), each mostly one core’s work: so at most 20 of its 32 cores carry them\. Raise connections a flow to use more; iperf has no cores setting of its own\./.test(n)),
+     `iperf: fewer connections than cores leaves cores idle  (${ip32.notes.find((n) => /busiest host holds/.test(n))})`);
+  ok(buildIperf(made, { connections: 2, cores: 8, coresOf: () => 8 }).notes.some((n) => /over the 8 cores it has for the run: iperf has no cores setting of its own, and the kernel spreads them\./.test(n)),
+     'and more than enough is the kernel’s to spread');
+  ok(buildIperf(made, { connections: 2 }).notes.some((n) => /^The busiest host holds 20 connections .*work\.$/.test(n)), 'with no cores said, just the count');
+  const nm4 = buildNetmesh(made, { connections: 2, cores: 4, coresOf: () => 4 });
+  ok(nm4.notes.some((n) => /netmesh is one light agent process a host, whatever the cores: cores per server \(4\) goes to the mx run under it, as --workers\./.test(n))
+     && nm4.commands.some((c) => /-- mx run .* --workers 4 --reports reports-mx$/.test(c)), 'netmesh: the cores go to the mx run under it');
   // Incast: the one receiving answers every request, so it is the busiest.
   const into = runPairs([{ src: h('r1h1'), dst: h('r2h1'), value: 1 }, { src: h('r1h2'), dst: h('r2h1'), value: 1 },
     { src: h('r1h3'), dst: h('r2h1'), value: 1 }], { toGbps: 1, unit: 'Gb/s', sized: null });
@@ -5379,6 +5509,12 @@ if (python.error) {
   const exports = ip2.commands.filter((c) => c.includes('export-overlay'));
   ok(exports.length === 2 && !exports[0].includes('--overlay-append') && exports[1].includes('--overlay-append'),
      'both into one results file');
+  // Runs at once each keep a remote directory of their own: a run ends by
+  // removing its --remote-dir, and a host can be in both rates' runs.
+  ok(ip2.files[0].text.includes('# remote_dir=/tmp/iperf_orchestrator-dcviz-1\n') && ip2.files[1].text.includes('# remote_dir=/tmp/iperf_orchestrator-dcviz-2\n'),
+     'two rates at once: a remote directory each');
+  ok(!ip.files[0].text.includes('remote_dir='), 'one run alone keeps the default');
+  ok(ip2.notes.some((n) => /a run ends by removing its remote directory/.test(n)), 'and the notes say why');
   const many = rateGroups(made.pairs.map((p, i) => ({ ...p, gbps: 1 + i })));
   ok(many.length <= 8 && many.reduce((n, g) => n + g.pairs.length, 0) === 30, 'thirty rates are binned into eight runs at most, every pair in one');
   // An address the tools reach a host at, and the map back to its name.
@@ -5423,8 +5559,57 @@ if (python.error) {
     .includes('mx run --matrix matrix.csv --for 90 --streams 2 --workers 9 --bind eth1'), 'mx: --bind on the run');
   const nmB = buildNetmesh(made, { seconds: 90, connections: 2, bind: 'eth1' });
   ok(nmB.commands.includes('netmesh run --mesh mesh.csv --for 90 --bind eth1'), 'netmesh: --bind on the run');
-  ok(nmB.commands.some((c) => c.includes('--baseline 20 --bind eth1 -- mx run') && c.endsWith('--streams 2 --workers 9 --bind eth1')),
-     'and on the mx run under it, with the workers its load needs');
+  ok(nmB.commands.some((c) => c.includes('--baseline 20 --bind eth1 -- mx run') && c.endsWith('--streams 2 --workers 9 --bind eth1 --reports reports-mx')),
+     'and on the mx run under it, with the workers its load needs, and reports of its own: both tools write reports/<host>.csv');
+
+  // Areas: each a run of its own, on hosts of its own -- its own files, run
+  // ids, remote directories and reports -- and several merged into one
+  // script that checks each, starts them all at once and collects each.
+  eq([tagged('matrix.csv', 'A'), tagged('reports', 'B'), tagged('/var/tmp/mx', 'A'), tagged('mx-run.tsv', ''), tagged('hosts.map', 'g1')],
+     ['matrix-A.csv', 'reports-B', '/var/tmp/mx-A', 'mx-run.tsv', 'hosts-g1.map'], 'a file of an area’s own');
+  const rack = (r) => runPairs(all.flows.filter((f) => f.src.name.startsWith(r) && f.dst.name.startsWith(r)), { toGbps: 1, unit: 'Gb/s', sized: null });
+  const [areaA, areaB] = [rack('r1'), rack('r2')];
+  const tiny = { text: 'dc D\n', name: 'tiny.dc' };
+  const mxAreaA = buildMx(areaA, { seconds: 90, connections: 2, area: 'A', expected: 'e\n', model: tiny });
+  const mxAreaB = buildMx(areaB, { seconds: 90, connections: 2, area: 'B', expected: 'e\n', model: tiny });
+  eq(mxAreaA.files.map((f) => f.name), ['matrix-A.csv', 'model.dc', 'expected-A.tsv'], 'an area’s matrix and expected.tsv, named for it');
+  ok(mxAreaA.commands.includes('mx run --matrix matrix-A.csv --for 90 --streams 2 --remote-dir /var/tmp/mx-A --reports reports-A')
+     && mxAreaA.commands.includes('mx export --matrix matrix-A.csv --reports reports-A --peers -o mx_results-A.tsv')
+     && mxAreaA.commands.some((c) => c.includes('cat expected-A.tsv') && c.endsWith('} > mx-run-A.tsv')),
+     'its run keeps to its own remote directory and reports, and its run file is its own');
+  const merged = mergeAreas([{ area: 'A', built: mxAreaA }, { area: 'B', built: mxAreaB }]);
+  eq(merged.files.map((f) => f.name), ['matrix-A.csv', 'model.dc', 'expected-A.tsv', 'matrix-B.csv', 'expected-B.tsv'], 'the layout once');
+  const step = (re) => merged.commands.findIndex((c) => re.test(c));
+  ok(merged.commands.filter((c) => c.startsWith('started=')).length === 1 && step(/^started=/) < step(/^mx check --matrix matrix-A/)
+     && step(/^mx check --matrix matrix-B/) < step(/^mx run --matrix matrix-A.* > mx-run-A\.log 2>&1 &$/)
+     && step(/^mx run --matrix matrix-A/) < step(/^mx run --matrix matrix-B.* > mx-run-B\.log 2>&1 &$/)
+     && step(/^mx run --matrix matrix-B/) < step(/^wait$/) && step(/^wait$/) < step(/^mx export --matrix matrix-A/)
+     && step(/> mx-run-A\.tsv$/) < step(/> mx-run-B\.tsv$/),
+     `when they began, each area's checks, every run at once, then each export and run file  (${merged.commands.filter((c) => !c.startsWith('#')).map((c) => c.split(' ').slice(0, 3).join(' ')).join(' | ')})`);
+  ok(/^2 areas, each a load of its own on hosts of its own, run at the same time: A, B\./.test(merged.notes[0])
+     && merged.notes.some((n) => n.startsWith('A: ')) && merged.notes.some((n) => n.startsWith('B: ')), 'the notes say so, and each area’s own');
+  ok(spawnSync('bash', ['-n'], { input: runScript(merged) }).status === 0, 'and the script is one bash reads');
+  const ipArea = buildIperf(areaA, { seconds: 90, area: 'A' });
+  eq(ipArea.files.map((f) => f.name), ['iperf_plan-A.conf'], 'iperf: an area’s plan');
+  ok(ipArea.files[0].text.includes('# remote_dir=/tmp/iperf_orchestrator-dcviz-A\n')
+     && ipArea.commands.includes('iperf-orchestrator run --plan iperf_plan-A.conf --servers iperf_plan-A.conf --run-id dcviz-A --for 90')
+     && ipArea.commands.some((c) => c.includes('--run-id dcviz-A') && c.includes('--overlay-run dcviz-A --overlay-out iperf_results-A.tsv')),
+     'its run id, remote directory and results its own');
+  const nmArea = buildNetmesh(areaA, { seconds: 90, area: 'A' });
+  ok(nmArea.files[0].name === 'mesh-A.csv' && nmArea.commands.includes('netmesh run --mesh mesh-A.csv --for 90 --remote-dir /var/tmp/netmesh-A --reports reports-A')
+     && nmArea.commands.includes('dcimport netmesh_results-A.tsv --tidy reports-A/')
+     && nmArea.commands.some((c) => /^# netmesh run --mesh mesh-A\.csv --baseline 20 --remote-dir \/var\/tmp\/netmesh-A --reports reports-A -- mx run --matrix matrix-A\.csv .* --remote-dir \/var\/tmp\/mx-A --reports reports-mx-A$/.test(c)),
+     'netmesh: its mesh, remote directory and reports, and the mx under it apart from both');
+  // Areas sharing hosts: each run on ports of its own, and the notes say
+  // which, and which versions stop only their own agents.
+  ok(buildMx(areaB, { area: 'B', portOffset: 100 }).files[0].text.includes('# tx_size=1472 rx_size=32 port=5400\n')
+     && buildNetmesh(areaB, { area: 'B', portOffset: 100 }).files[0].text.includes('# size=64 port=5410 ')
+     && buildIperf(areaB, { area: 'B', portOffset: 100 }).files[0].text.includes('# port=5101 '),
+     'an area’s ports, a hundred on for each area before it');
+  const sharing = mergeAreas([{ area: 'A', built: buildMx(areaA, { area: 'A' }) }, { area: 'B', built: buildMx(areaB, { area: 'B', portOffset: 100 }) }], { shared: 3 });
+  ok(/^2 areas, each a load of its own, run at the same time: A, B\./.test(sharing.notes[0])
+     && /The areas share 3 hosts, so each area's run has ports of its own \(A 5300, B 5400\): open them all\. .*mx 1\.11\.2 or later/.test(sharing.notes[1]),
+     `the notes say the hosts are shared, the ports, and the versions  (${sharing.notes[1]})`);
   ok(nmB.notes.some((n) => /an older netmesh takes only a whole address and refuses eth1/.test(n)), 'and the notes say which netmesh reads it as a NIC');
   ok(buildMx(made, { bind: 'eth[12]' }).commands.some((c) => c.endsWith("--bind 'eth[12]'")), 'a pattern the shell would expand goes quoted');
   ok(!buildMx(made, { bind: 'eth 1' }).commands.some((c) => c.includes('--bind eth')), 'and one that cannot be a pattern goes nowhere');

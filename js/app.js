@@ -22,14 +22,14 @@ import { attachHints, renderReference } from './hints.js';
 import { layoutFromHosts, matchesPattern, recordsSince, tailRecords } from './tsv.js';
 import { routesBetween } from './paths.js';
 import {
-  adaptiveWeights, betweenPicks, busyable, busyOf, randomTakeouts, TAKEOUT_KINDS, explainResults, pathLatency, bitRate, cableKeys, CONNECTION_LIMITS, contend, countersOf, estimateFlows, flowsOf, flowsOver, GEN_LIMITS,
-  findingsOf, generateFlows, hostCapacity, hostLimits, hostsFor, hostsOf, pairedFlows, TARGETED, loadable, loadUnit, mergeResults, packetGb, readsAsLoad, REPLY_IDS, routeEstimate,
-  routeTraffic, switchLoads, testFlows, trafficKind, viewOf, formatGbps,
+  adaptiveWeights, betweenPicks, busyable, busyOf, randomTakeouts, TAKEOUT_KINDS, explainResults, pathLatency, bitRate, cableKeys, CONNECTION_LIMITS, CORE_LIMIT, contend, countersOf, estimateFlows, flowsOf, flowsOver, GEN_LIMITS,
+  devicesOf, findingsOf, GEN_IDS, generateFlows, hostCapacity, hostLimits, hostsFor, hostsOf, pairedFlows, TARGETED, loadable, loadUnit, mergeResults, packetGb, readsAsLoad, REPLY_IDS, routeEstimate,
+  routeTraffic, splitFiles, splitHosts, switchLoads, testFlows, trafficKind, viewOf, formatGbps,
 } from './traffic.js';
 import { layoutSha, modelBlock, readStamp, runStamp } from './stamp.js';
 import { VERSION } from './version.js';
 import { foldPanel, makeFold, onFoldChange, panelFolded, setFolded } from './fold.js';
-import { bindProblem, mxSizes, RUN_BUILDERS, RUN_LABELS, runPairs, runProblem, runWhy, tcpPayloadShare } from './runfiles.js';
+import { AREA_PORT_STEP, bindProblem, hostToken, mergeAreas, mxSizes, RUN_BUILDERS, RUN_PORTS, RUN_LABELS, runPairs, runProblem, runWhy, tcpPayloadShare } from './runfiles.js';
 import { PROBE_TESTS, probeFiles, probeSummary } from './probe.js';
 import {
   compareHosts, compareLatency, compareMtu, compareRuns, comparisonResults, DEFAULT_TOLERANCE, LATENCY_UNITS, LOSSY,
@@ -96,8 +96,13 @@ const state = {
   traffic: {
     // `split` is how the switches share a flow out: hashed per connection,
     // as real ECMP does, unless the fabric is known to do otherwise; and
-    // `connections` how many each flow between two hosts is made of.
-    key: null, counters: null, split: 'hashed', connections: 1, seed: 1, spread: 'gravity', view: 'model',
+    // `connections` how many each flow between two hosts is made of; and
+    // `cores` the most cores the generated load may use on each server (0:
+    // what their cores= say, or no limit), each carrying one at its stream=.
+    key: null, counters: null, split: 'hashed', connections: 1, cores: 0, seed: 1, spread: 'gravity', view: 'model',
+    // Whether the generator's areas may share hosts: two loads on one host
+    // at once. Off, a host two areas take is refused.
+    areasShare: false,
     // With two or more picks: count only the metric's flows between them,
     // and a test flow from the first pick to the second.
     betweenOnly: false,
@@ -113,7 +118,12 @@ const state = {
     // Gb/s; hosts is a filter, empty for every device not tagged +switch.
     // `from` names a per-host metric the servers send what they read, at
     // `value` % of it, in place of an amount of its own.
-    gen: { on: false, pattern: 'all', value: 50, unit: null, per: 'host', bytes: 0, reply: 0, hot: 20, shift: 0, peers: 1, reach: 'any', hosts: '', seed: 1, from: null },
+    gen: { on: false, pattern: 'all', value: 50, unit: null, per: 'host', bytes: 0, reply: 0, hot: 20, shift: 0, peers: 1, reach: 'any', hosts: '', seed: 1, from: null,
+      // The hosts split into groups that share none (splitHosts): how, and
+      // with what -- and `within`, whether peers are chosen only inside each.
+      split: 'none', splitN: 2, splitKind: 'rack', splitRules: '', splitKey: '', splitSeed: 1, within: false,
+      // Its name, as an area: one of several loads run at once (areas, below).
+      name: 'A' },
     // A full cable shares out what it carries, as TCP does, and holds back
     // the flows crossing it; off, the cables show what the flows offer.
     contention: true,
@@ -473,6 +483,10 @@ const state = {
   },
 };
 
+// The generator's areas: `gen` is the one the panel shows, and the first of
+// them until there are more.
+state.traffic.areas = [state.traffic.gen];
+
 const canvas = $('view');
 const renderer = new Renderer(canvas, state);
 
@@ -510,30 +524,42 @@ function modelSource(withDown) {
   const picks = state.picked.length >= 2 ? state.picked : null;
   const test = picks && t.test.on && t.test.value > 0 ? t.test : null;
   const between = !!(picks && metric && t.betweenOnly);
+  // The generator's load: every area of it at once, each on hosts of its
+  // own -- `gen` is the area the panel shows.
   const gen = t.gen.on ? t.gen : null;
+  const areas = gen ? t.areas : [];
   if (!metric && !test && !gen) return null;
   const out = withDown ? state.takenOut() : { els: [], links: [], size: 0 };
   const downKey = withDown ? `${[...state.down.els].sort().join('\u0001')}\u0002${[...state.down.links].sort().join('\u0001')}` : '';
   const pickKey = picks && (test || between) ? picks.map((p) => p.key).join('\u0001') : '';
   const testKey = test ? `${test.value}\u0001${test.unit}` : '';
-  // Incast sends to the first pick, or failing that the selection.
-  const target = gen && TARGETED.has(gen.pattern) ? state.picked[0] || state.selected || null : null;
-  const genKey = gen ? JSON.stringify([gen.pattern, gen.value, genUnit(), gen.per, gen.peers, gen.reach, gen.hosts, gen.seed,
-    target && target.key, gen.from, gen.bytes, gen.reply, gen.hot, gen.shift]) : '';
+  // Several areas: the hosts each takes, and why they cannot run -- a host
+  // two of them take.
+  const scope = areas.length > 1 ? areaScope(areas) : null;
+  // Incast sends to the first pick, or failing that the selection -- with
+  // areas, the first inside the area and in no other.
+  const targets = areas.map((a, i) => (TARGETED.has(a.pattern) ? areaTarget(scope, i) : null));
+  const target = targets[t.areas.indexOf(gen)] || null;
+  const genKey = gen ? JSON.stringify([scope && scope.why, t.areasShare, ...areas.map((a, i) => [a.name, a.pattern, a.value, genUnit(a), a.per, a.peers,
+    a.reach, a.hosts, a.seed, targets[i] && targets[i].key, a.from, a.bytes, a.reply, a.hot, a.shift, a.within && splitKey(a)])]) : '';
   // A metric the generator reads: re-read when its file is, so by object.
-  const from = gen && gen.from ? genSource() : null;
+  const froms = areas.map((a) => (a.from ? genSource(a) : null));
+  const from = froms.find(Boolean) || null;
   const duplexKey = metric && kind === 'hosts' ? duplexOf(metric) : null;
   const packets = metric ? packetsOf(metric) : null;
   const packetKey = packets ? `${packets.bytes}\u0001${packets.reply}` : '';
   const busy = busySource();
+  // The load generator's cores per server holds for the run it makes.
+  const cores = gen ? t.cores : 0;
   const pairingKey = JSON.stringify([t.explainLayers, t.explainSeed]);
   const slot = withDown ? 'model' : 'base';
   const c = state.trafficCache[slot];
   if (c && c.overlay === metric && c.layout === state.model && c.agg === (metric && metric.agg)
       && c.split === t.split && c.connections === t.connections && c.seed === t.seed && c.spread === t.spread && c.down === downKey
       && c.picks === pickKey && c.test === testKey && c.between === between && c.gen === genKey
-      && sameSource(c.from, from) && c.contention === t.contention && c.duplex === duplexKey
-      && c.packets === packetKey && c.busy === busy && c.pairing === pairingKey) {
+      && c.froms && c.froms.length === froms.length && froms.every((f, i) => sameSource(c.froms[i], f))
+      && c.contention === t.contention && c.duplex === duplexKey
+      && c.packets === packetKey && c.busy === busy && c.cores === cores && c.pairing === pairingKey) {
     return c.value;
   }
   // Nothing taken out: the model and its baseline are one routing.
@@ -546,7 +572,7 @@ function modelSource(withDown) {
   // top of one; with no metric, the generator's unit is the one, and a test
   // flow's own when it is all there is.
   const unit = metric ? metricUnit(metric, kind) : gen ? testUnit(genBase(genUnit())) : testUnit(test.unit);
-  const opts = { split: t.split, connections: t.connections, seed: t.seed, spread: t.spread, down: out, busy };
+  const opts = { split: t.split, connections: t.connections, seed: t.seed, spread: t.spread, down: out, busy, cores };
   const only = between ? betweenPicks(picks) : null;
   let count = 0;
   let total = 0;
@@ -610,47 +636,79 @@ function modelSource(withDown) {
   let genFlows = [];
   let genRun = null;
   if (gen) {
+    const many = areas.length > 1;
+    const tags = many ? areaTags(areas) : [''];
+    const runs = [];
+    let next = 0;
+    for (const [i, area] of areas.entries()) {
+      const one = generateArea(area, { unit, target: targets[i], from: froms[i], tag: tags[i], why: scope ? scope.why : '' });
+      // Each flow an id of its own across every area, its reply's after it.
+      if (many) {
+        const ids = new Map();
+        for (const flow of one.made) ids.set(flow.id, GEN_IDS + next++);
+        one.made = one.made.map((flow) => ({ ...flow, id: ids.get(flow.id), area: tags[i] }));
+        one.flowsNow = one.flowsNow.map((flow) => ({ ...flow, id: flow.reply ? REPLY_IDS + ids.get(flow.id - REPLY_IDS) : ids.get(flow.id), area: tags[i] }));
+        one.run.made = one.made;
+      }
+      for (const flow of one.flowsNow) genFlows.push(flow);
+      runs.push(one.run);
+    }
+    genRun = many ? mergeRuns(runs, areas.indexOf(gen)) : { ...runs[0], areas: runs };
+  }
+
+  /**
+   * One area's load: its flows as made (`made`), as they go on the cables
+   * (`flowsNow`: sized into bits, each answered by its reply), and its run.
+   */
+  function generateArea(area, { unit: base, target: aim, from: source, tag, why: refused }) {
     let match = null;
-    try { match = compileQuery(gen.hosts, state); } catch { match = null; }
+    try { match = compileQuery(area.hosts, state); } catch { match = null; }
     // Read off a metric, each host sends what it measured: a rate as it
     // reads, a percentage as that share of its own NICs.
-    const amounts = from ? (el) => {
-      if (!from.overlay.direct.has(el.key)) return null;
-      const reading = overlayValue(from.overlay, el);
+    const amounts = source ? (el) => {
+      if (!source.overlay.direct.has(el.key)) return null;
+      const reading = overlayValue(source.overlay, el);
       if (!reading || !reading.numeric || !Number.isFinite(reading.value)) return null;
-      return from.percent ? (reading.value / 100) * hostCapacity(state.model, el) : reading.value * from.toGbps;
+      return source.percent ? (reading.value / 100) * hostCapacity(state.model, el) : reading.value * source.toGbps;
     } : null;
     // Requests and replies of a size: made in pps, then each request sized
     // into bits and answered by its reply, the other way.
-    const sized = genSized();
-    const g = gen.from && !from
-      ? { flows: [], hosts: 0, senders: 0, offered: 0, noCapacity: 0, noReading: 0, why: 'the metric it reads is not loaded and ticked' }
-      : generateFlows(state.model, { ...gen, unit: genUnit() }, {
-        match, target, base: sized ? { toGbps: null, unit: 'pps' } : unit, amounts,
-      });
-    genFlows = g.flows;
-    let genPackets = null;
+    const sized = genSized(area);
+    // Peers only within each group of a split: the groups, or why not.
+    const split = area.within && area.split !== 'none' ? genSplit(area) : null;
+    const none = (why) => ({ flows: [], hosts: 0, senders: 0, offered: 0, noCapacity: 0, noReading: 0, why });
+    const g = refused ? none(refused)
+      : area.from && !source ? none('the metric it reads is not loaded and ticked')
+        : split && split.why ? none(`the split: ${split.why}`)
+          : sized && !(base.toGbps > 0) ? none(`packets of a size are a bit rate, and the cables carry ${base.unit}`)
+            : generateFlows(state.model, { ...area, unit: genUnit(area) }, {
+              match, target: aim, base: sized ? { toGbps: null, unit: 'pps' } : base, amounts,
+              groups: split ? split.groups.map((x) => x.hosts) : null,
+            });
+    let flowsNow = g.flows;
+    let packets = null;
     if (sized && g.flows.length) {
-      const req = packetGb(gen.bytes) / unit.toGbps;
-      const rep = gen.reply > 0 ? packetGb(gen.reply) / unit.toGbps : 0;
-      genFlows = [];
+      const req = packetGb(area.bytes) / base.toGbps;
+      const rep = area.reply > 0 ? packetGb(area.reply) / base.toGbps : 0;
+      flowsNow = [];
       for (const flow of g.flows) {
-        genFlows.push({ ...flow, value: flow.value * req, pps: flow.value });
+        flowsNow.push({ ...flow, value: flow.value * req, pps: flow.value });
         if (rep) {
-          genFlows.push({ ...flow, id: REPLY_IDS + flow.id, src: flow.dst, dst: flow.src, value: flow.value * rep, pps: flow.value, reply: true });
+          flowsNow.push({ ...flow, id: REPLY_IDS + flow.id, src: flow.dst, dst: flow.src, value: flow.value * rep, pps: flow.value, reply: true });
         }
       }
-      genPackets = { bytes: gen.bytes, reply: gen.reply, why: '' };
+      packets = { bytes: area.bytes, reply: area.reply, why: '' };
     }
-    genRun = {
-      ...g, flows: g.flows.length, target, unit: genUnit(), pattern: gen.pattern, value: gen.value, per: gen.from ? 'host' : gen.per,
-      from: from ? from.overlay : null, packets: genPackets,
+    const run = {
+      ...g, flows: g.flows.length, target: aim, unit: genUnit(area), pattern: area.pattern, value: area.value, per: area.from ? 'host' : area.per,
+      from: source ? source.overlay : null, packets, name: area.name, tag, hostsFilter: area.hosts,
       // The flows as made, before sizing, and what their values are: what
       // the run files are written from.
       made: g.flows,
-      rate: { toGbps: sized ? null : unit.toGbps, unit: sized ? 'pps' : unit.unit, sized: sized ? { bytes: gen.bytes, reply: gen.reply } : null },
-      offered: genPackets ? genFlows.reduce((sum, flow) => sum + flow.value, 0) : g.offered,
+      rate: { toGbps: sized ? null : base.toGbps, unit: sized ? 'pps' : base.unit, sized: sized ? { bytes: area.bytes, reply: area.reply } : null },
+      offered: packets ? flowsNow.reduce((sum, flow) => sum + flow.value, 0) : g.offered,
     };
+    return { made: g.flows, flowsNow, run };
   }
   let testFlowsNow = [];
   let testRun = null;
@@ -727,8 +785,8 @@ function modelSource(withDown) {
   };
   state.trafficCache[slot] = {
     overlay: metric, layout: state.model, agg: metric && metric.agg, split: t.split, connections: t.connections, seed: t.seed, spread: t.spread,
-    down: downKey, picks: pickKey, test: testKey, between, gen: genKey, from, contention: t.contention, duplex: duplexKey,
-    packets: packetKey, busy, pairing: pairingKey, value,
+    down: downKey, picks: pickKey, test: testKey, between, gen: genKey, froms, contention: t.contention, duplex: duplexKey,
+    packets: packetKey, busy, cores, pairing: pairingKey, value,
   };
   return value;
 }
@@ -738,15 +796,15 @@ function modelSource(withDown) {
  * where the cables say what they carry, else Gb/s. With a metric loaded that
  * is not a bit rate, its own unit is the only one a load can be added in.
  */
-function genUnit() {
+function genUnit(g = state.traffic.gen) {
   const t = state.traffic;
   const overlay = t.key ? state.overlays.get(t.key) : null;
   const metric = overlay && overlay.enabled && trafficKind(overlay) !== 'cables' && loadable(overlay) ? overlay : null;
   const base = metric ? metricUnit(metric, trafficKind(metric)) : null;
   if (base && base.toGbps === null) return base.unit;
   // Read off a metric, a load is in Gb/s.
-  if (t.gen.from) return 'Gb/s';
-  if (t.gen.unit) return t.gen.unit;
+  if (g.from) return 'Gb/s';
+  if (g.unit) return g.unit;
   return state.model.links.some((link) => link.gbps) ? '%' : 'Gb/s';
 }
 
@@ -758,19 +816,175 @@ const genBase = (unit) => (unit === '%' || (unit === 'pps' && genSized()) ? 'Gb/
  * in pps with its packets sized, which loads the cables as a bit rate. Not
  * when it reads a metric, nor on top of one that is not a bit rate.
  */
-function genSized() {
-  const g = state.traffic.gen;
-  if (g.from || !(g.bytes > 0) || genUnit() !== 'pps') return false;
+function genSized(g = state.traffic.gen) {
+  if (g.from || !(g.bytes > 0) || genUnit(g) !== 'pps') return false;
   const overlay = state.traffic.key ? state.overlays.get(state.traffic.key) : null;
   const metric = overlay && overlay.enabled && trafficKind(overlay) !== 'cables' && loadable(overlay) ? overlay : null;
   return !metric || metricUnit(metric, trafficKind(metric)).toGbps !== null;
 }
 
 /**
- * The per-host metric the generator reads, if it is loaded and ticked: a
- * rate, read in Gb/s, or a percentage, read as that share of each host's
- * NICs. Null for anything else.
+ * What a filter can read besides the layout: the results loaded, ticked or
+ * not, and how many elements each covers -- so a filter such as temp_c>70
+ * is read again when they change.
  */
+function overlayStamp() {
+  let stamp = '';
+  for (const o of state.overlays.values()) stamp += `${o.key}:${o.enabled ? 1 : 0}:${o.direct ? o.direct.size : 0}|`;
+  return stamp;
+}
+
+/** What decides a split of the generator's hosts, as a cache key. */
+function splitKey(g) {
+  return JSON.stringify([g.hosts, g.split, g.splitN, g.splitKind, g.splitRules, g.splitKey, g.splitSeed,
+    g.split === 'picks' ? state.picked.map((p) => p.key) : null, overlayStamp()]);
+}
+
+/**
+ * The load generator's hosts -- those its filter picks -- split as it says
+ * (splitHosts): { hosts, groups, left, why }. Taken-out hosts stay in, as
+ * they do in the load: the run files drop them, and so do the lists saved.
+ */
+const splitCache = new Map();
+function genSplit(g = state.traffic.gen) {
+  const key = splitKey(g);
+  const cached = splitCache.get(key);
+  if (cached && cached.layout === state.model) return cached.value;
+  let value;
+  let match = null;
+  const filter = (g.hosts || '').trim();
+  try {
+    if (filter) match = compileQuery(filter, state);
+  } catch (err) {
+    value = { hosts: [], groups: [], left: 0, why: `the host filter does not read: ${err.message}` };
+  }
+  if (!value) {
+    const hosts = hostsFor(state.model, match).hosts;
+    value = {
+      hosts,
+      ...splitHosts(state.model, hosts, { by: g.split, n: g.splitN, kind: g.splitKind, rules: g.splitRules, key: g.splitKey, seed: g.splitSeed },
+        { picks: state.picked, compile: (rule) => compileQuery(rule, state) }),
+    };
+  }
+  if (splitCache.size > 32) splitCache.clear();
+  splitCache.set(key, { layout: state.model, value });
+  return value;
+}
+
+// ------------------------------------------------------------- load areas
+// Several loads at once, each an area of the generator's: settings of its
+// own on hosts of its own. Never a host in two: that is refused, not
+// settled by one area winning, so no host runs two loads at once and no
+// area's run touches another's.
+
+/** The hosts an area's filter takes, by filter, once per layout. */
+const areaHostCache = new WeakMap();
+function areaHosts(filter) {
+  let byFilter = areaHostCache.get(state.model);
+  if (!byFilter) areaHostCache.set(state.model, (byFilter = new Map()));
+  const text = (filter || '').trim();
+  const key = `${text}\u0000${overlayStamp()}`;
+  let got = byFilter.get(key);
+  if (!got) {
+    let match = null;
+    let why = '';
+    try { if (text) match = compileQuery(text, state); } catch (err) { why = err.message; }
+    const hosts = why ? [] : hostsFor(state.model, match).hosts;
+    got = { hosts, set: new Set(hosts), why };
+    if (byFilter.size > 64) byFilter.clear();
+    byFilter.set(key, got);
+  }
+  return got;
+}
+
+/**
+ * Each area's hosts, and why the areas cannot run: a filter, or a host two
+ * of them take. Once per layout and set of filters and names, since the
+ * cables ask for it at every redraw.
+ */
+let scopeCache = null;
+function areaScope(areas) {
+  const key = JSON.stringify([...areas.map((a) => [a.name, a.hosts]), state.traffic.areasShare, overlayStamp()]);
+  if (scopeCache && scopeCache.key === key && scopeCache.layout === state.model) return scopeCache.value;
+  const value = scopeOf(areas);
+  scopeCache = { key, layout: state.model, value };
+  return value;
+}
+function scopeOf(areas) {
+  const tags = areaTags(areas);
+  const share = state.traffic.areasShare;
+  const sets = [];
+  const owner = new Map();
+  let why = '';
+  let shared = 0;
+  areas.forEach((a, i) => {
+    const got = areaHosts(a.hosts);
+    sets.push(got.set);
+    if (why) return;
+    if (got.why) { why = `area ${tags[i]}: its hosts filter does not read: ${got.why}`; return; }
+    for (const el of got.hosts) {
+      const j = owner.get(el);
+      if (j !== undefined && share) {
+        // Allowed: counted once however many areas share it.
+        if (j >= 0) shared++;
+        owner.set(el, -1);
+        continue;
+      }
+      if (j !== undefined) {
+        const blank = [j, i].filter((k) => !(areas[k].hosts || '').trim()).map((k) => tags[k]);
+        why = `areas ${tags[j]} and ${tags[i]} share hosts (${el.name || el.id} is in both): give each area hosts of its own, or let areas share hosts`
+          + (blank.length ? ` -- ${blank.join(' and ')} ${blank.length === 1 ? 'has' : 'have'} no hosts filter, so ${blank.length === 1 ? 'takes' : 'take'} every host` : '');
+        return;
+      }
+      owner.set(el, i);
+    }
+  });
+  return { sets, why, share, shared };
+}
+
+/**
+ * Where an area's incast goes, or its outcast comes from: the first pick,
+ * or the selection -- with several areas, the first of them inside the
+ * area and in no other, so no area reaches into another's hosts.
+ */
+function areaTarget(scope, i) {
+  const candidates = [...state.picked, state.selected].filter(Boolean);
+  if (!scope) return candidates[0] || null;
+  return candidates.find((c) => {
+    const devices = devicesOf(c);
+    // Sharing hosts, any inside the area will do; apart, only one in no other.
+    return devices.some((el) => scope.sets[i].has(el))
+      && (scope.share || !devices.some((el) => scope.sets.some((set, j) => j !== i && set.has(el))));
+  }) || null;
+}
+
+/** Each area's name as its files take it: letters, digits, - and _, and none twice. */
+function areaTags(areas) {
+  const used = new Set();
+  return areas.map((a, i) => {
+    let tag = String(a.name || '').replace(/[^A-Za-z0-9_-]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 24) || String.fromCharCode(65 + (i % 26));
+    for (let k = 2; used.has(tag); k++) tag = `${tag.replace(/-\d+$/, '')}-${k}`;
+    used.add(tag);
+    return tag;
+  });
+}
+
+/** Several areas' runs as the one the panel reads, with each of them under `areas`. */
+function mergeRuns(runs, active) {
+  const sum = (key) => runs.reduce((n, r) => n + (r[key] || 0), 0);
+  const ran = runs.filter((r) => r.flows);
+  const shown = runs[active] || runs[0];
+  return {
+    ...shown,
+    flows: sum('flows'), hosts: sum('hosts'), senders: sum('senders'), offered: sum('offered'),
+    noCapacity: sum('noCapacity'), noReading: sum('noReading'), untagged: runs.some((r) => r.untagged),
+    // Refused together, or each area that has nothing to send saying why.
+    why: ran.length ? '' : runs.map((r) => `${r.tag}: ${r.why}`).join(' · '),
+    made: runs.flatMap((r) => r.made),
+    areas: runs,
+  };
+}
+
 /**
  * Each server's CPU busy share, from the metric chosen for it: null with
  * none chosen, or it is not loaded and ticked. Read once per metric object,
@@ -786,8 +1000,13 @@ function busySource() {
   return value;
 }
 
-function genSource() {
-  const overlay = state.overlays.get(state.traffic.gen.from);
+/**
+ * The per-host metric the generator reads, if it is loaded and ticked: a
+ * rate, read in Gb/s, or a percentage, read as that share of each host's
+ * NICs. Null for anything else.
+ */
+function genSource(g = state.traffic.gen) {
+  const overlay = state.overlays.get(g.from);
   return overlay && overlay.enabled ? readsAsLoad(overlay, duplexOf(overlay)) : null;
 }
 
@@ -1125,7 +1344,7 @@ const actions = {
     state.traffic.key = null;
     state.traffic.counters = null;
     state.traffic.test.on = false;
-    state.traffic.gen.on = false;
+    for (const a of state.traffic.areas) a.on = false;
     refreshPanels();
     invalidate();
   },
@@ -1159,9 +1378,75 @@ const actions = {
 
   // The load generator: its pattern, size, unit, peers, reach and hosts, and
   // whether it runs. Running it shows it.
+  // Running or not is every area's at once; the rest is the area shown.
   setGen(changes) {
-    Object.assign(state.traffic.gen, changes);
-    if (changes.on) state.traffic.view = 'model';
+    const { on, ...rest } = changes;
+    Object.assign(state.traffic.gen, rest);
+    if (on !== undefined) for (const a of state.traffic.areas) a.on = on;
+    if (on) state.traffic.view = 'model';
+    refreshPanels();
+    invalidate();
+  },
+
+  // Load areas: another, like the one shown but with no hosts yet (so it
+  // asks for some); one gone; which is shown; its name; and one an area for
+  // each group of the shown area's split, its hosts the group's own.
+  addArea() {
+    const t = state.traffic;
+    const used = new Set(t.areas.map((a) => a.name));
+    let name = 'A';
+    for (let k = 0; used.has(name); k++) name = k < 26 ? String.fromCharCode(65 + k) : `area${k - 25}`;
+    const area = { ...t.gen, name, hosts: '', split: 'none', within: false };
+    t.areas.push(area);
+    t.gen = area;
+    refreshPanels();
+    invalidate();
+  },
+  removeArea(i) {
+    const t = state.traffic;
+    if (t.areas.length < 2) return;
+    const [gone] = t.areas.splice(i, 1);
+    if (t.gen === gone) t.gen = t.areas[Math.min(i, t.areas.length - 1)];
+    refreshPanels();
+    invalidate();
+  },
+  showArea(i) {
+    const t = state.traffic;
+    if (t.areas[i]) t.gen = t.areas[i];
+    refreshPanels();
+  },
+  renameArea(name) {
+    const clean = String(name || '').trim().replace(/\s+/g, '_').slice(0, 40);
+    if (clean && !state.traffic.areas.some((a) => a !== state.traffic.gen && a.name === clean)) state.traffic.gen.name = clean;
+    refreshPanels();
+    invalidate();
+  },
+  areasFromSplit() {
+    const t = state.traffic;
+    const g = t.gen;
+    const sp = genSplit(g);
+    if (sp.why || sp.groups.length < 2) return;
+    const filter = (g.hosts || '').trim();
+    t.areas = sp.groups.map((group) => ({
+      ...g, name: group.name, hosts: filter ? `(${filter}) ${group.rule}` : group.rule, split: 'none', within: false,
+    }));
+    t.gen = t.areas[0];
+    refreshPanels();
+    invalidate();
+  },
+  // The areas and why they cannot run together, for the panel; and whether
+  // they may share hosts.
+  areaState() {
+    const t = state.traffic;
+    const tags = areaTags(t.areas);
+    const scope = t.areas.length > 1 ? areaScope(t.areas) : null;
+    return {
+      areas: t.areas.map((a, i) => ({ name: a.name, tag: tags[i], hosts: areaHosts(a.hosts).hosts.length, shown: a === t.gen })),
+      why: scope ? scope.why : '', share: t.areasShare, shared: scope ? scope.shared : 0,
+    };
+  },
+  setAreasShare(on) {
+    state.traffic.areasShare = !!on;
     refreshPanels();
     invalidate();
   },
@@ -1304,14 +1589,25 @@ const actions = {
   // picks them, less anything taken out -- the hosts a load would run on.
   probeFiles() {
     if (!hostsFor(state.model).hosts.length) return null;
-    const filter = (state.traffic.gen.hosts || '').trim();
-    let match = null;
-    if (filter) {
-      try { match = compileQuery(filter, state); } catch (err) {
-        return { why: `the load generator’s host filter does not read: ${err.message}` };
+    // Every area's hosts, with several: each runs a load of its own.
+    const areas = state.traffic.areas;
+    const filter = areas.map((x) => (x.hosts || '').trim()).filter(Boolean).join(' ; ');
+    let picked;
+    if (areas.length > 1) {
+      const got = areas.map((x) => areaHosts(x.hosts));
+      const bad = got.find((x) => x.why);
+      if (bad) return { why: `an area’s host filter does not read: ${bad.why}` };
+      const all = new Set(got.flatMap((x) => x.hosts));
+      picked = hostsFor(state.model).hosts.filter((el) => all.has(el));
+    } else {
+      let match = null;
+      if (filter) {
+        try { match = compileQuery(filter, state); } catch (err) {
+          return { why: `the load generator’s host filter does not read: ${err.message}` };
+        }
       }
+      picked = hostsFor(state.model, match).hosts;
     }
-    const picked = hostsFor(state.model, match).hosts;
     const hosts = state.down.els.size ? picked.filter((el) => !isOut(el)) : picked;
     const out = picked.length - hosts.length;
     if (!hosts.length) {
@@ -1328,9 +1624,13 @@ const actions = {
       }
       return best;
     };
+    // Areas sharing hosts each listen on ports of their own: preflight checks them all.
+    const scope = areas.length > 1 ? areaScope(areas) : null;
+    const ports = scope && scope.share && scope.shared
+      ? areas.flatMap((x, k) => Object.values(RUN_PORTS).map((port) => port + AREA_PORT_STEP * k)) : null;
     const files = probeFiles(hosts, {
       speed, bind: state.runFiles.bind, mtu: state.runFiles.mtu, every: state.probe.every, whySlow: state.probe.whySlow,
-      model: { text: state.layoutText, name: state.layoutName || 'the layout' },
+      model: { text: state.layoutText, name: state.layoutName || 'the layout' }, ports,
     });
     files.notes.unshift(`The load generator’s hosts: ${filter ? `those its filter picks (${filter})` : 'every host, as its filter is empty'}`
       + `${out ? `, less the ${out} taken out` : ''} -- ${hosts.length.toLocaleString()} of them.`);
@@ -1360,7 +1660,7 @@ const actions = {
     if (run.why) return { why: run.why };
     // Built once a load and setting: a floor's matrix is megabytes, and the
     // panel redraws far more often than any of these change.
-    const key = [tool, state.runFiles.seconds, state.runFiles.mtu, state.runFiles.bind, state.traffic.connections,
+    const key = [tool, state.runFiles.seconds, state.runFiles.mtu, state.runFiles.bind, state.traffic.connections, state.traffic.cores,
       [...state.down.els].sort().join('\u0001')].join('\u0002');
     let cached = RUN_FILES_CACHE.get(run);
     if (!cached) RUN_FILES_CACHE.set(run, (cached = new Map()));
@@ -1411,45 +1711,93 @@ const actions = {
     invalidate();
   },
 
-  // How many connections each flow between two hosts is made of, each
-  // hashed on its own.
   // What the servers' stream= does to the generated load: how many flows it
-  // holds below what they were asked for at the processes a flow set now,
-  // and how many processes a flow would carry every one of them in full.
-  // Null with no generated bit rate, or no stream= on its hosts.
+  // holds below what they were asked for at the connections a flow set now,
+  // and how many connections a flow would carry every one of them in full.
+  // And their cores, each carrying one connection at its stream=: what the
+  // busiest server needs for what it sends and takes in, receiving at its
+  // rxcost=, and how many servers have fewer -- their cores=, or the cores
+  // per server set here. Null with no generated bit rate, or no stream= on
+  // its hosts.
   genProcesses() {
     const view = state.cableView ? state.cableView() : null;
     const m = view && view.model;
-    console.log('GP', !!m, m && m.kind, m && m.toGbps, m && m.flows && m.flows.length, m && m.flows && m.flows[0] && JSON.stringify(m.flows[0].src.attrs));
-    console.log('GP', !!m, m && m.kind, m && m.toGbps, m && m.flows && m.flows.length, m && m.flows && m.flows[0] && JSON.stringify([m.flows[0].value, m.flows[0].src.attrs]));
     if (!m || m.kind !== 'gen' || !m.toGbps) return null;
     const conns = state.traffic.connections;
+    const busy = m.opts ? m.opts.busy : null;
     let flows = 0;
     let held = 0;
     let need = 1;
     let least = Infinity;
+    const load = new Map();   // host -> [out, in], in Gb/s, as asked
     for (const f of m.flows) {
-      let cap = null;
-      for (const el of [f.src, f.dst]) {
-        const per = hostLimits(el).stream;
-        if (per && (cap === null || per < cap)) cap = per;
-      }
       // What it asked for: once shared out, `value` is what it carries.
       const asked = f.wanted !== undefined ? f.wanted : f.value;
-      if (!cap || !(asked > 0)) continue;
-      flows++;
+      if (!(asked > 0)) continue;
       const gbps = asked * m.toGbps;
+      let cap = null;
+      for (const [el, side] of [[f.src, 0], [f.dst, 1]]) {
+        const per = hostLimits(el).stream;
+        if (!per) continue;
+        if (cap === null || per < cap) cap = per;
+        const at = load.get(el) || [0, 0];
+        at[side] += gbps;
+        load.set(el, at);
+      }
+      if (!cap) continue;
+      flows++;
       if (gbps > cap * conns * (1 + 1e-9)) held++;
       need = Math.max(need, Math.ceil(gbps / cap - 1e-9));
       least = Math.min(least, cap);
     }
-    return flows ? { flows, held, need, stream: least, conns } : null;
+    if (!flows) return null;
+    // Cores: how many each server's load wants, one a stream= of it.
+    let coresNeed = 0;
+    let coresHeld = 0;
+    let coresHave = Infinity;
+    for (const [el, [out, into]] of load) {
+      const lim = hostLimits(el, busy, state.traffic.cores);
+      const per = lim.stream * (1 - lim.busy);
+      if (!(per > 0)) continue;
+      const want = Math.ceil((out + into * lim.rxcost) / per - 1e-9);
+      coresNeed = Math.max(coresNeed, want);
+      if (lim.cores && want > lim.cores) {
+        coresHeld++;
+        coresHave = Math.min(coresHave, lim.cores);
+      }
+    }
+    return {
+      flows, held, need, stream: least, conns,
+      cores: { need: coresNeed, held: coresHeld, have: coresHeld ? coresHave : 0, servers: load.size, set: state.traffic.cores },
+    };
   },
 
   setConnections(n) {
     state.traffic.connections = Math.max(1, Math.min(CONNECTION_LIMITS.max, Math.round(Number(n) || 1)));
     refreshPanels();
     invalidate();
+  },
+
+  // The most cores the generated load may use on each server, 0 for what
+  // their cores= say: each carries one connection at its stream=.
+  setCores(n) {
+    state.traffic.cores = Math.max(0, Math.min(CORE_LIMIT, Math.round(Number(n) || 0)));
+    refreshPanels();
+    invalidate();
+  },
+
+  // The generator's hosts split into groups, and those groups as host lists
+  // to save: a file a group and one grouped file, taken-out hosts left out.
+  genSplit() {
+    return genSplit();
+  },
+  splitLists() {
+    const sp = genSplit();
+    if (sp.why || sp.groups.length < 2) return null;
+    const groups = sp.groups.map((g) => ({ name: g.name, hosts: state.down.els.size ? g.hosts.filter((el) => !isOut(el)) : g.hosts }))
+      .filter((g) => g.hosts.length);
+    const line = (el) => { const { name, addr } = hostToken(el); return addr === name ? name : `${name}=${addr}`; };
+    return { files: splitFiles(groups, line), groups };
   },
 
   // Whether servers with findings are marked on the floor plan.
@@ -1650,7 +1998,7 @@ const actions = {
     state.traffic.key = null;
     state.traffic.counters = null;
     state.traffic.test.on = false;
-    state.traffic.gen.on = false;
+    for (const a of state.traffic.areas) a.on = false;
     state.down.els.clear();
     state.down.links.clear();
     state.down.random = new Set();
@@ -3416,14 +3764,39 @@ function isOut(el) {
 function buildRunFiles(tool, view) {
   const run = view.gen;
   const out = state.down.els.size ? isOut : undefined;
+  // Several areas: a run of each, on its own hosts, all at once.
+  if (run.areas && run.areas.length > 1) {
+    const parts = [];
+    let dropped = 0;
+    // Areas on the same hosts each listen on ports of their own.
+    const scope = areaScope(state.traffic.areas);
+    const shared = scope.share ? scope.shared : 0;
+    for (const [k, area] of run.areas.entries()) {
+      if (!area.flows) continue;
+      const made = runPairs(area.made, area.rate, out);
+      dropped += made.dropped;
+      const why = runWhy(tool, made);
+      if (why) return { why: `area ${area.tag}: ${why}`, dropped };
+      parts.push({ area: area.tag, built: buildRun(tool, view, area, made, shared ? AREA_PORT_STEP * k : 0) });
+    }
+    if (!parts.length) return { why: 'no area has anything to send', dropped };
+    if (parts.length === 1) return { built: parts[0].built, dropped };
+    return { built: mergeAreas(parts, { shared }), dropped };
+  }
   const made = runPairs(run.made, run.rate, out);
   const why = runWhy(tool, made);
   if (why) return { why, dropped: made.dropped };
-  const g = state.traffic.gen;
+  return { built: buildRun(tool, view, run, made), dropped: made.dropped };
+}
+
+/** One run's files: the whole load's, or one area's (its `tag` set). */
+function buildRun(tool, view, run, made, portOffset = 0) {
+  const g = state.traffic.areas.find((a) => a.name === run.name) || state.traffic.gen;
+  const tag = run.tag || '';
   const peers = run.pattern === 'random' || run.pattern === 'hotspot' ? ` to ${g.peers} peer${g.peers === 1 ? '' : 's'}` : '';
-  const summary = `the ${run.pattern} pattern${peers}, ${run.from ? `${run.value}% of a metric` : `${run.value} ${run.unit}`}`
+  const summary = `${tag ? `area ${tag}: ` : ''}the ${run.pattern} pattern${peers}, ${run.from ? `${run.value}% of a metric` : `${run.value} ${run.unit}`}`
     + `${run.per === 'peer' ? ' to each peer' : ' from each host'}${g.hosts ? `, hosts ${g.hosts}` : ''}`;
-  const pairs = livePairs(view);
+  const pairs = livePairs(view, tag);
   const { mtu } = state.runFiles;
   const expected = pairs.size ? modelResults(pairs, {
     summary, txBytes: tool === 'mx' ? mxSizes(made, mtu).tx : 0, tool: RUN_LABELS[tool],
@@ -3434,15 +3807,18 @@ function buildRunFiles(tool, view) {
   // What the run was made from, for the run file: the layout itself and how
   // the load was set up, so a run loaded months later says what it was.
   const model = { text: state.layoutText, name: state.layoutName };
-  const stamped = expected ? `${expected}${runStamp(runSetup(tool, summary, mtu))}\n${modelBlock(model.text, model)}\n` : '';
+  const stamped = expected ? `${expected}${runStamp(runSetup(tool, summary, mtu, tag))}\n${modelBlock(model.text, model)}\n` : '';
   const options = {
     seconds: state.runFiles.seconds, connections: state.traffic.connections, summary, expected: stamped, mtu, bind: state.runFiles.bind, model,
+    // The cores each host has for the run: the cores per server set, or its cores=.
+    cores: state.traffic.cores, coresOf: (el) => hostLimits(el, null, state.traffic.cores).cores,
+    area: tag, portOffset,
   };
-  return { built: RUN_BUILDERS[tool](made, options), dropped: made.dropped };
+  return RUN_BUILDERS[tool](made, options);
 }
 
 /** How a load was set up, as the run file's `#~run` lines record it. */
-function runSetup(tool, summary, mtu) {
+function runSetup(tool, summary, mtu, area = '') {
   const paths = [...state.down.els].map((key) => (state.model.byKey.get(key) || { path: key }).path).sort();
   return {
     made: new Date().toISOString().replace(/\.\d+Z$/, 'Z'),
@@ -3450,8 +3826,10 @@ function runSetup(tool, summary, mtu) {
     tool: RUN_LABELS[tool],
     layout: state.layoutName || '(the editor)',
     load: summary,
+    area,
     seconds: state.runFiles.seconds,
     connections: state.traffic.connections,
+    cores: state.traffic.cores || '',
     mtu,
     bind: state.runFiles.bind,
     out: paths.join(' '),
@@ -3460,8 +3838,9 @@ function runSetup(tool, summary, mtu) {
 }
 
 /** The generated load's flows as the model has them, by pair, nothing taken out among them. */
-function livePairs(view) {
-  const flows = state.down.els.size ? view.flows.filter((f) => !isOut(f.src) && !isOut(f.dst)) : view.flows;
+function livePairs(view, area = '') {
+  let flows = state.down.els.size ? view.flows.filter((f) => !isOut(f.src) && !isOut(f.dst)) : view.flows;
+  if (area) flows = flows.filter((f) => f.area === area);
   return modelPairs(flows, view.toGbps);
 }
 

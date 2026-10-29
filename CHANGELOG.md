@@ -11,6 +11,117 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.51.0 — 2026-10-29
+
+- **Areas may share hosts.** With **areas may share hosts** ticked, a host
+  can be in two areas and runs both loads -- two things running on some
+  hosts at once -- and the model shares its CPU and NICs between them; the
+  row counts the hosts shared. Off, as before, a host two areas take is
+  refused (the refusal now says the box is there). A target need only be
+  inside its own area.
+  - **Ports of their own.** Areas sharing hosts each listen a hundred
+    ports on from the one before -- mx 5300, 5400; netmesh 5310, 5410;
+    iperf 5001, 5101 -- in their matrix, mesh and plan files; the notes
+    list them to open, and the Host status preflight checks them all. mx's
+    workers share a port by `SO_REUSEPORT`, so two mx runs on one port
+    would take each other's packets.
+  - **Stopping only their own.** mx and netmesh stopped an agent by its
+    pid and then killed every agent on the host matching their name, the
+    other area's included. Fixed in mx 1.11.2 and in binnacle's netmesh
+    (after 0.8.0); the notes say which versions are needed.
+    iperf-orchestrator already stops its servers by port.
+  `js/app.js` (`areasShare`, `setAreasShare`), `js/runfiles.js`
+  (`RUN_PORTS`, `AREA_PORT_STEP`, `portOffset`), `js/probe.js` (`ports`),
+  `js/ui.js`.
+
+## 1.50.0 — 2026-10-29
+
+- **Load areas: several loads at once, on hosts of their own.** The Load
+  generator's **area** tabs hold loads with settings of their own -- one
+  pod all-to-all at 20 Gb/s while another takes an incast of 64-byte
+  packets -- and **Run** runs them all, shared out together on the cables,
+  the panel saying what each sends. **+ area** adds one, **Remove** takes it
+  away, a name box names it, and a split's **An area each** makes an area of
+  every group, its hosts the group's (`in:/…`, a rule, `plane=2`, or
+  `path=[…]`).
+  - **Safely**: no host is in two areas. Filters that share a host -- an
+    area with none takes every host -- are refused, naming the areas and a
+    host, and nothing runs until each has hosts of its own. A target (incast,
+    outcast, hotspot) is the first pick inside its own area and no other.
+  - **A run each, all at once**: each area's files, run ids, remote
+    directories and reports are its own, by the tools' own options --
+    mx `matrix-A.csv --remote-dir /var/tmp/mx-A --reports reports-A`,
+    iperf-orchestrator `iperf_plan-A.conf` with `remote_dir=` and
+    `--run-id dcviz-A`, netmesh `mesh-A.csv --remote-dir /var/tmp/netmesh-A
+    --reports reports-A` -- and its own `expected-A.tsv` and run file,
+    stamped `#~run area A`. The script checks every area, starts every run
+    in the background, each to its own log, waits, then exports and
+    collects each. The Host status pane probes every area's hosts.
+  `js/app.js` (areas, `areaScope`, `generateArea`, `buildRun`),
+  `js/runfiles.js` (`tagged`, `mergeAreas`, run phases), `js/traffic.js`
+  (each split group's `rule`), `js/ui.js`, `css/app.css`.
+- **iperf runs at once no longer share a remote directory.** A load at
+  several rates is a plan a rate, run at the same time; iperf-orchestrator
+  ends each run by removing its `--remote-dir` on every host, so a host in
+  two of them could lose the files of the one still running. Each plan now
+  says `remote_dir=/tmp/iperf_orchestrator-dcviz-N`.
+- **netmesh's "under the load" line keeps mx's reports apart.** netmesh and
+  mx both collect `reports/<host>.csv`, so the mx run under netmesh wrote
+  into netmesh's reports; it now says `--reports reports-mx`.
+
+## 1.49.0 — 2026-10-29
+
+- **Split the hosts.** The Load generator splits its hosts into groups that
+  share none: each rack (row, pod, …), each pick, each filter rule, into N
+  blocks, groups of N, N interleaved (every group spans every rack), N at
+  random (with **Reshuffle**), or by an attribute's values. Picks or rules
+  that overlap are refused, saying which and where, never resolved by one
+  of them winning; hosts in no group are counted and send nothing.
+  - **Peers only within each group**: every group a load of its own, its
+    hosts sending in the pattern (all, random, shift, ring) only to each
+    other -- *within its own rack*, for any groups. A pattern with a target
+    says it has no peers to keep inside.
+  - **Save host lists**: `hosts-lists.tar`, a hosts file a group and one
+    `hosts-grouped.txt` with `[group]` headers -- model_network's grouped
+    `hosts.txt` -- taken-out hosts left out. No tool in the suite split a
+    host list; binnacle's `muster` hands out a pool's hosts a batch at a
+    time and takes these lists as they are.
+  `js/traffic.js` (`splitHosts`, `splitFiles`, `HOST_SPLITS`, and
+  `generateFlows`' `opts.groups`), `js/app.js`, `js/ui.js`, `css/app.css`.
+- `tests/browser.mjs` runs only the tests whose names hold `BROWSER_ONLY`,
+  when it is set.
+
+## 1.48.0 — 2026-10-29
+
+- **Cores per server, apart from connections a flow.** The Load generator's
+  "processes a flow" was never processes: it is how many connections each
+  flow between two hosts runs as, counted per pair, and it is now called
+  **connections a flow**, as in the routing box. How many cores a server
+  gives the run is a setting of its own:
+  - **`cores=`** on a server (or its model line): each core carries one
+    connection at its `stream=`, so it sends and receives at most cores ×
+    `stream=` together, receiving at its `rxcost=` -- whichever of that and
+    its `cpugbps=` is less, less `busy=`. A whole number, 1 to 100000; not
+    inherited. In the completions and the Syntax panel.
+  - **cores per server** in the Load generator: the most the run may use
+    on each, capping `cores=` (blank: what `cores=` says, or no limit).
+    Under it the generator says how many cores the busiest server needs
+    for what it sends and takes in, and when servers have fewer, how many,
+    with a **Use N** button. Hovering a server says when its cores are what
+    its CPU comes to.
+  - **Run files:** mx runs `--workers N`, one process a core -- the cores
+    per server outright, or the load's estimate capped at the fewest
+    `cores=` among the run's hosts, with the notes saying which. iperf and
+    netmesh have no cores setting, so their notes say what the cores mean
+    to them: the busiest host's connections against its cores (fewer
+    leaves cores idle), and netmesh's single agent. The run stamp records
+    `cores`.
+  `js/traffic.js` (`hostLimits`, `contend`'s `opts.cores`, `CORE_LIMIT`),
+  `js/parse.js`, `js/app.js` (`setCores`, `genProcesses`), `js/ui.js`,
+  `js/runfiles.js` (`mxWorkers`, `hostConnections`), `js/hints.js`.
+- Two debugging `console.log` lines left in `genProcesses` by 1.46.0 are
+  gone.
+
 ## 1.47.0 — 2026-10-29
 
 - **mx's run files size its worker processes to the load.** A pair's

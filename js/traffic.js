@@ -65,6 +65,8 @@ export const SINGLE_PATH = new Set(['hashed', 'polarized']);
 export const PER_CONNECTION = new Set(['hashed', 'polarized', 'adaptive']);
 // How many connections a flow can be routed as, each hashed on its own.
 export const CONNECTION_LIMITS = { max: 64 };
+// The most cores a run may be given on each server, as cores= takes them.
+export const CORE_LIMIT = 100000;
 // The units a test flow can be given when no metric sets one.
 export const TEST_UNITS = ['Gb/s', 'Mb/s', 'pps'];
 export const SPREADS = ['gravity', 'even', 'peers'];
@@ -1227,7 +1229,7 @@ export function contend(model, flows, opts = {}) {
     const ends = [[flow.src, 'out'], [flow.dst, 'in']].filter(([el]) => !f.forwards(el));
     for (const [el, side] of ends) if (switchCapacity(el)) part(i, [hostBitSlot(el, side), 1], 1);
     for (const [el, side] of ends) {
-      const lim = hostLimits(el, opts.busy);
+      const lim = hostLimits(el, opts.busy, opts.cores);
       if (lim.cpu) part(i, [cpuSlot(el), 1], side === 'in' ? lim.rxcost : 1);
     }
     if (!(flow.pps > 0)) return;
@@ -1241,7 +1243,7 @@ export function contend(model, flows, opts = {}) {
     // A packet slot is in packets a second, whatever the load's unit.
     if (o.pps) { cap[k] = switchPps(o.el) || Infinity; return; }
     if (toGbps === null || toGbps === undefined) return;
-    const gbps = o.link ? o.link.gbps : o.cpu ? hostLimits(o.el, opts.busy).cpu : switchCapacity(o.el);
+    const gbps = o.link ? o.link.gbps : o.cpu ? hostLimits(o.el, opts.busy, opts.cores).cpu : switchCapacity(o.el);
     if (gbps) cap[k] = gbps / toGbps;
   });
   const n = routed.length;
@@ -1496,21 +1498,32 @@ export function switchCapacity(el) {
 /**
  * A server's own limits, beyond its NICs: `stream` the most one connection
  * carries, in Gb/s -- one core's worth on a kernel stack -- `cpu` what it
- * can send and receive together, its cpugbps= less the share `busy` with
- * other work (`idle` the whole of it), and `rxcost` how many times more
- * receiving costs it than sending (1 unless it says).
+ * can send and receive together, less the share `busy` with other work, and
+ * `rxcost` how many times more receiving costs it than sending (1 unless it
+ * says). What it can do together is its cpugbps= (`idle`), or its `cores`
+ * each carrying one stream= (`coreGbps`), whichever is less; `byCores` says
+ * the cores are what it comes to.
  *
- * @param busy  Map(el -> share) read from a metric, over each busy=
+ * @param busy   Map(el -> share) read from a metric, over each busy=
+ * @param cores  the most cores a run may use on each server (the load
+ *               generator's cores per server), over its cores=; 0 for no cap
  */
-export function hostLimits(el, busy = null) {
+export function hostLimits(el, busy = null, cores = 0) {
   const num = (key, least) => {
     const n = Number(el.attrs && el.attrs[key]);
     return el.attrs && el.attrs[key] !== undefined && Number.isFinite(n) && n >= least ? n : null;
   };
   const idle = num('cpugbps', 1e-9);
+  const stream = num('stream', 1e-9);
+  const own = num('cores', 1);
+  const cap = cores >= 1 ? Math.floor(cores) : null;
+  const n = own && cap ? Math.min(Math.floor(own), cap) : own ? Math.floor(own) : cap;
+  const coreGbps = n && stream ? n * stream : null;
+  const whole = coreGbps && (!idle || coreGbps < idle) ? coreGbps : idle;
   const share = busy && busy.has(el) ? busy.get(el) : el.attrs && el.attrs.busy !== undefined ? readShare(el.attrs.busy) : null;
   return {
-    stream: num('stream', 1e-9), cpu: idle && share ? idle * (1 - share) : idle, idle, busy: share || 0,
+    stream, cpu: whole && share ? whole * (1 - share) : whole, idle: whole, cpugbps: idle, busy: share || 0,
+    cores: n, coreGbps, byCores: !!coreGbps && whole === coreGbps,
     busyFrom: !!(busy && busy.has(el)), rxcost: num('rxcost', 0.1) || 1,
   };
 }
@@ -1912,7 +1925,7 @@ export const TARGETED = new Set(['incast', 'outcast', 'hotspot']);
 export const GEN_UNITS = ['%', 'Gb/s', 'Mb/s', 'pps'];
 // Clear of a metric's ids (0, 1, 2, ...) and a test flow's (1000000 on), so
 // every generated flow hashes onto a path of its own.
-const GEN_IDS = 2000000;
+export const GEN_IDS = 2000000;
 // How long a chain of moves pairing a host again may be.
 const AUGMENT_DEPTH = 200;
 // How much a generated load may cost to route: flows, and destinations times
@@ -1942,6 +1955,173 @@ export function hostsFor(model, match = null) {
     hosts.push(el);
   }
   return { hosts, untagged: !switches && !match };
+}
+
+// ---------------------------------------------------------------- host splits
+
+// The ways one list of hosts splits into several, none sharing a host:
+//   container   each rack (row, pod, ...) its own
+//   picks       each pick its own -- a rack, a row, a server, whatever
+//   rules       each filter rule its own, one a line or `;` apart
+//   blocks      `n` runs of neighbours, in the layout's order
+//   size        runs of `n` neighbours
+//   interleave  `n` groups dealt one host at a time, so each spans every rack
+//   random      `n` groups dealt at random, by `seed`
+//   attr        each value of an attribute its own: model=, plane=, ...
+export const HOST_SPLITS = ['none', 'container', 'picks', 'rules', 'blocks', 'size', 'interleave', 'random', 'attr'];
+export const HOST_SPLIT_LABELS = {
+  none: 'no split', container: 'each', picks: 'each pick', rules: 'each rule', blocks: 'into blocks', size: 'groups of',
+  interleave: 'interleaved', random: 'at random', attr: 'by attribute',
+};
+// More groups than this is a list nobody reads, and a typo in n.
+export const SPLIT_LIMIT = 1000;
+
+/**
+ * One list of hosts as several that share none: `spec` says how,
+ * with `n`, `kind`, `rules`, `key` and `seed` as each way needs (HOST_SPLITS). Never a
+ * host in two groups: picks or rules that overlap are refused, with which
+ * and where, rather than one of them quietly winning. Hosts in no group --
+ * outside every container, pick or rule, or with no such attribute -- are
+ * counted in `left`. Groups keep the layout's order, and none is empty.
+ *
+ * @param hosts  the hosts to split, in the layout's order
+ * Each group has a `rule` too: a filter that takes its hosts and no others
+ * (of those split), so a group can be an area's hosts.
+ *
+ * @param ctx    { picks: elements, compile: (rule) => (el) => bool }
+ * @returns { groups: [{ name, hosts, rule }], left, why }
+ */
+export function splitHosts(model, hosts, spec = {}, ctx = {}) {
+  const by = HOST_SPLITS.includes(spec.by) ? spec.by : 'none';
+  // A group no rule says more briefly is its hosts by path.
+  const listed = (g) => (g.rule ? g : { ...g, rule: `path=[${g.hosts.map((el) => el.path).join(',')}]` });
+  const out = (groups, extra = {}) => ({ groups: groups.filter((g) => g.hosts.length).map(listed), left: 0, why: '', ...extra });
+  if (by === 'none' || !hosts.length) return out([{ name: 'all', hosts: [...hosts] }]);
+  const n = Math.max(1, Math.min(SPLIT_LIMIT, Math.floor(Number(spec.n) || 0) || 2));
+  const keyed = (keyOf, nameOf, ruleOf) => {
+    const groups = new Map();
+    let left = 0;
+    for (const el of hosts) {
+      const k = keyOf(el);
+      if (k === null || k === undefined) { left++; continue; }
+      let g = groups.get(k);
+      if (!g) groups.set(k, (g = { name: nameOf(k), hosts: [], rule: ruleOf(k) }));
+      g.hosts.push(el);
+    }
+    if (groups.size > SPLIT_LIMIT) return out([], { why: `${groups.size.toLocaleString()} groups: more than ${SPLIT_LIMIT.toLocaleString()} is too many` });
+    return out([...groups.values()], { left });
+  };
+  // Each of several sets its own, refusing a host two of them hold.
+  const disjoint = (sets) => {
+    const owner = new Map();
+    const groups = [];
+    for (const set of sets) {
+      const g = { name: set.name, hosts: [], rule: set.rule };
+      for (const el of hosts) {
+        if (!set.has(el)) continue;
+        const was = owner.get(el);
+        if (was) {
+          return out([], { why: `${was.name} and ${set.name} share hosts (${el.name || el.id} is in both): each host belongs to one group` });
+        }
+        owner.set(el, g);
+        g.hosts.push(el);
+      }
+      groups.push(g);
+    }
+    return out(groups, { left: hosts.length - owner.size });
+  };
+  if (by === 'container') {
+    const kind = spec.kind || 'rack';
+    return keyed((el) => {
+      for (let p = el.parent; p; p = p.parent) if (p.kind === kind) return p;
+      return null;
+    }, (p) => p.name || p.id, (p) => `in:/${p.path}`);
+  }
+  if (by === 'attr') {
+    const key = String(spec.key || '').trim();
+    if (!key) return out([], { why: 'name the attribute to split by: model, plane, ...' });
+    const quote = (v) => (/^[\w.:/@%+,-]+$/.test(v) ? v : `"${v.replace(/"/g, '')}"`);
+    return keyed((el) => (el.attrs && el.attrs[key] !== undefined && el.attrs[key] !== '' ? String(el.attrs[key]) : null),
+      (v) => `${key}=${v}`, (v) => `${key}=${quote(v)}`);
+  }
+  if (by === 'picks') {
+    const picks = ctx.picks || [];
+    if (picks.length < 1) return out([], { why: 'pick the groups: Ctrl-click each rack, row or server' });
+    return disjoint(picks.map((p) => {
+      const set = new Set(devicesOf(p));
+      return { name: p.name || p.id, has: (el) => set.has(el), rule: `in:/${p.path}` };
+    }));
+  }
+  if (by === 'rules') {
+    const rules = String(spec.rules || '').split(/[;\n]/).map((r) => r.trim()).filter(Boolean);
+    if (!rules.length) return out([], { why: 'write a rule a group, one a line or ; apart: in:A01 ; in:A02' });
+    const sets = [];
+    for (const rule of rules) {
+      let match;
+      try { match = ctx.compile(rule); } catch (err) { return out([], { why: `${rule}: ${err.message}` }); }
+      sets.push({ name: rule, has: match, rule: `(${rule})` });
+    }
+    return disjoint(sets);
+  }
+  // Counted out of the layout's order: in runs, dealt in turn, or at random.
+  const k = Math.min(n, hosts.length);
+  let order = hosts;
+  if (by === 'random') {
+    const seed = (spec.seed || 0) >>> 0;
+    order = [...hosts];
+    for (let i = order.length - 1; i > 0; i--) {
+      const j = Math.floor(mix(seed, 0x51ed, i) * (i + 1));
+      [order[i], order[j]] = [order[j], order[i]];
+    }
+  }
+  if (by === 'size') {
+    const groups = [];
+    for (let i = 0; i < hosts.length; i += n) groups.push({ name: `g${groups.length + 1}`, hosts: hosts.slice(i, i + n) });
+    if (groups.length > SPLIT_LIMIT) return out([], { why: `${groups.length.toLocaleString()} groups of ${n}: more than ${SPLIT_LIMIT.toLocaleString()} is too many` });
+    return out(groups);
+  }
+  const groups = Array.from({ length: k }, (_, i) => ({ name: `g${i + 1}`, hosts: [] }));
+  if (by === 'interleave') {
+    hosts.forEach((el, i) => groups[i % k].hosts.push(el));
+    return out(groups);
+  }
+  // blocks, and random: runs as even as they go, the first ones a host longer.
+  let at = 0;
+  for (let i = 0; i < k; i++) {
+    const size = Math.floor(order.length / k) + (i < order.length % k ? 1 : 0);
+    groups[i].hosts = order.slice(at, at + size);
+    at += size;
+  }
+  if (by === 'random') {
+    // Each group back in the layout's order: which hosts is the random part.
+    const index = new Map(hosts.map((el, i) => [el, i]));
+    for (const g of groups) g.hosts.sort((a, b) => index.get(a) - index.get(b));
+  }
+  return out(groups);
+}
+
+/**
+ * Split host lists as files: a hosts.txt a group, and all of them in one in
+ * the grouped form `[group]` headers make -- model_network's hosts.txt, which
+ * its autopilot, iperf2 mesh and topology discovery read -- each host as the
+ * load tools take it (`line`).
+ */
+export function splitFiles(groups, line, { base = 'hosts' } = {}) {
+  const used = new Set();
+  const fileName = (name) => {
+    let stem = String(name).toLowerCase().replace(/[^a-z0-9.=_-]+/g, '_').replace(/^_+|_+$/g, '') || 'group';
+    stem = stem.replace(/=/g, '-');
+    let file = `${base}-${stem}.txt`;
+    for (let i = 2; used.has(file); i++) file = `${base}-${stem}-${i}.txt`;
+    used.add(file);
+    return file;
+  };
+  const header = (name) => `[${String(name).replace(/[\[\]\n]/g, ' ').trim() || 'group'}]`;
+  const files = groups.map((g) => ({
+    name: fileName(g.name), text: `${g.hosts.map(line).join('\n')}\n`, note: `${g.name}: ${g.hosts.length.toLocaleString()} host${g.hosts.length === 1 ? '' : 's'}`,
+  }));
+  const grouped = `${groups.map((g) => [header(g.name), ...g.hosts.map(line)].join('\n')).join('\n')}\n`;
+  return [{ name: `${base}-grouped.txt`, text: grouped, note: `all ${groups.length} groups, a [group] header each` }, ...files];
 }
 
 /**
@@ -2075,15 +2255,26 @@ export function generateFlows(model, gen, opts = {}) {
   // Kept inside: every rack (row, ...) is a load of its own, its hosts
   // sending to each other in the pattern -- all-to-all, random peers, a
   // ring -- as if it were the whole floor. A host in no such container, or
-  // alone in one, sends nothing.
-  if (within && ['all', 'random', 'shift', 'ring'].includes(pattern)) {
-    const groups = new Map();
-    for (const el of hosts) {
-      const g = groupOf(el);
-      if (!g) continue;
-      const list = groups.get(g);
-      if (list) list.push(el);
-      else groups.set(g, [el]);
+  // alone in one, sends nothing. Groups given (`opts.groups`, a split of
+  // the hosts) are kept inside the same way: peers only within each.
+  const inside = opts.groups ? 'group' : within;
+  if (opts.groups && !['all', 'random', 'shift', 'ring'].includes(pattern)) {
+    return result([], { why: `peers within each group: all, random, shift or ring -- ${pattern} has one target, not peers` });
+  }
+  if (inside && ['all', 'random', 'shift', 'ring'].includes(pattern)) {
+    let groups;
+    if (opts.groups) {
+      const mine = new Set(hosts);
+      groups = new Map(opts.groups.map((g, i) => [i, g.filter((el) => mine.has(el))]));
+    } else {
+      groups = new Map();
+      for (const el of hosts) {
+        const g = groupOf(el);
+        if (!g) continue;
+        const list = groups.get(g);
+        if (list) list.push(el);
+        else groups.set(g, [el]);
+      }
     }
     const flows = [];
     let noCapacity = 0;
@@ -2091,17 +2282,17 @@ export function generateFlows(model, gen, opts = {}) {
     for (const members of groups.values()) {
       gi++;
       if (members.length < 2) continue;
-      const one = generateFlows(model, { ...gen, reach: 'any', seed: ((gen.seed || 0) + Math.imul(gi, 0x9e3779b1)) >>> 0 },
-        { ...opts, hosts: members });
-      if (one.why) return result([], { why: one.why.replace(/(\d+) hosts/, `$1 hosts in one ${within}`) });
+      const one = generateFlows(model, { ...gen, reach: within ? 'any' : gen.reach, seed: ((gen.seed || 0) + Math.imul(gi, 0x9e3779b1)) >>> 0 },
+        { ...opts, hosts: members, groups: null });
+      if (one.why) return result([], { why: one.why.replace(/(\d+) hosts/, `$1 hosts in one ${inside}`) });
       noCapacity += one.noCapacity;
       noReading += one.noReading;
       for (const flow of one.flows) flows.push({ ...flow, id: GEN_IDS + flows.length });
       if (flows.length > GEN_LIMITS.flows) {
-        return result([], { why: `${flows.length.toLocaleString()}+ flows within each ${within}: too many to route here — fewer peers, or narrow the hosts (a filter such as path=*/H1/*)` });
+        return result([], { why: `${flows.length.toLocaleString()}+ flows within each ${inside}: too many to route here — fewer peers, or narrow the hosts (a filter such as path=*/H1/*)` });
       }
     }
-    if (!flows.length) return result([], { why: `no ${within} holds two of these hosts: nothing to send within one` });
+    if (!flows.length) return result([], { why: `no ${inside} holds two of these hosts: nothing to send within one` });
     return result(flows, { noCapacity });
   }
 
