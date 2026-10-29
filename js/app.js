@@ -23,12 +23,12 @@ import { layoutFromHosts, matchesPattern, recordsSince, tailRecords } from './ts
 import { routesBetween } from './paths.js';
 import {
   adaptiveWeights, betweenPicks, busyable, busyOf, randomTakeouts, TAKEOUT_KINDS, explainResults, pathLatency, bitRate, cableKeys, CONNECTION_LIMITS, contend, countersOf, estimateFlows, flowsOf, flowsOver, GEN_LIMITS,
-  findingsOf, generateFlows, hostCapacity, hostsFor, hostsOf, pairedFlows, TARGETED, loadable, loadUnit, mergeResults, packetGb, readsAsLoad, REPLY_IDS, routeEstimate,
+  findingsOf, generateFlows, hostCapacity, hostLimits, hostsFor, hostsOf, pairedFlows, TARGETED, loadable, loadUnit, mergeResults, packetGb, readsAsLoad, REPLY_IDS, routeEstimate,
   routeTraffic, switchLoads, testFlows, trafficKind, viewOf, formatGbps,
 } from './traffic.js';
 import { layoutSha, modelBlock, readStamp, runStamp } from './stamp.js';
 import { VERSION } from './version.js';
-import { makeFold, setFolded } from './fold.js';
+import { foldPanel, makeFold, onFoldChange, panelFolded, setFolded } from './fold.js';
 import { bindProblem, mxSizes, RUN_BUILDERS, RUN_LABELS, runPairs, runProblem, runWhy, tcpPayloadShare } from './runfiles.js';
 import { PROBE_TESTS, probeFiles, probeSummary } from './probe.js';
 import {
@@ -896,6 +896,7 @@ function refreshPanels() {
   renderHostStatus(state, $('host-status'), actions);
   renderCompare(state, $('compare'), actions);
   renderInspector(state, $('inspector'), actions);
+  syncFoldAll();       // a section shown or hidden changes what "all" is
   $('overlay-hint').textContent = state.activeOverlays.length > 1
     ? `— ${state.activeOverlays.length} shown side by side`
     : '';
@@ -1412,6 +1413,39 @@ const actions = {
 
   // How many connections each flow between two hosts is made of, each
   // hashed on its own.
+  // What the servers' stream= does to the generated load: how many flows it
+  // holds below what they were asked for at the processes a flow set now,
+  // and how many processes a flow would carry every one of them in full.
+  // Null with no generated bit rate, or no stream= on its hosts.
+  genProcesses() {
+    const view = state.cableView ? state.cableView() : null;
+    const m = view && view.model;
+    console.log('GP', !!m, m && m.kind, m && m.toGbps, m && m.flows && m.flows.length, m && m.flows && m.flows[0] && JSON.stringify(m.flows[0].src.attrs));
+    console.log('GP', !!m, m && m.kind, m && m.toGbps, m && m.flows && m.flows.length, m && m.flows && m.flows[0] && JSON.stringify([m.flows[0].value, m.flows[0].src.attrs]));
+    if (!m || m.kind !== 'gen' || !m.toGbps) return null;
+    const conns = state.traffic.connections;
+    let flows = 0;
+    let held = 0;
+    let need = 1;
+    let least = Infinity;
+    for (const f of m.flows) {
+      let cap = null;
+      for (const el of [f.src, f.dst]) {
+        const per = hostLimits(el).stream;
+        if (per && (cap === null || per < cap)) cap = per;
+      }
+      // What it asked for: once shared out, `value` is what it carries.
+      const asked = f.wanted !== undefined ? f.wanted : f.value;
+      if (!cap || !(asked > 0)) continue;
+      flows++;
+      const gbps = asked * m.toGbps;
+      if (gbps > cap * conns * (1 + 1e-9)) held++;
+      need = Math.max(need, Math.ceil(gbps / cap - 1e-9));
+      least = Math.min(least, cap);
+    }
+    return flows ? { flows, held, need, stream: least, conns } : null;
+  },
+
   setConnections(n) {
     state.traffic.connections = Math.max(1, Math.min(CONNECTION_LIMITS.max, Math.round(Number(n) || 1)));
     refreshPanels();
@@ -3545,6 +3579,25 @@ function setupSections() {
   }
 }
 
+// Collapse all: every section of a side panel folded to its title, and
+// again, when they all are, every one open. The label says which it will do,
+// after a fold by hand as much as after its own.
+function syncFoldAll() {
+  for (const button of document.querySelectorAll('.fold-all')) {
+    const all = panelFolded($(button.dataset.panel));
+    button.textContent = all ? 'Open all' : 'Collapse all';
+    button.title = all ? 'Open every section of this panel' : 'Fold every section of this panel to its title';
+  }
+}
+for (const button of document.querySelectorAll('.fold-all')) {
+  button.addEventListener('click', (e) => {
+    e.stopPropagation();                                  // not a section toggle
+    foldPanel($(button.dataset.panel));
+    syncFoldAll();
+  });
+}
+onFoldChange(() => requestAnimationFrame(syncFoldAll));
+
 for (const button of document.querySelectorAll('.collapse-panel')) {
   button.addEventListener('click', (e) => {
     e.stopPropagation();                                  // not a section toggle
@@ -3631,6 +3684,7 @@ function applyEditorHeight() {
 
 applyPanels();
 setupSections();
+syncFoldAll();
 
 // -------------------------------------------------------------------- events
 

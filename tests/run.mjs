@@ -3600,6 +3600,21 @@ if (python.error) {
   ok(changed.status === 1 && /^fast\n  kernel: 6\.1\.0-18-amd64 -> 6\.1\.0-21-amd64$/m.test(changed.stdout)
      && /^probe_changed\tfast\t1\tat=\S+\twhat="kernel: 6\.1\.0-18-amd64 -> 6\.1\.0-21-amd64"$/m.test(readFileSync(join(dir, 'chg.tsv'), 'utf8')),
      `diff names what changed, host by host, and as a metric  (${changed.stdout.trim().split('\n').slice(0, 3).join(' | ')})`);
+  // 256 hosts at once by default, as many as open files allow: under a
+  // tight ulimit it says so and probes fewer at once -- every host still.
+  ok(/--jobs JOBS\s+hosts probed at once \(default 256\)/.test(spawnSync('python3', [join(root, 'tools/dcprobe'), 'scan', '--help'], { encoding: 'utf8' }).stdout),
+     'dcprobe probes 256 hosts at once by default');
+  writeFileSync(join(dir, 'many.txt'), `${Array.from({ length: 120 }, (_, i) => `h${i}=127.0.0.1`).join('\n')}\n`);
+  const tight = spawnSync('bash', ['-c', `ulimit -n 300 && python3 ${join(root, 'tools/dcprobe')} scan --servers many.txt -o many.tsv --sample 0.2 --ssh ${join(dir, 'ssh')}`],
+                          { encoding: 'utf8', cwd: dir });
+  ok(tight.status === 0 && /open files are limited to 300 here, so 59 hosts at once rather than 120/.test(tight.stderr)
+     && (readFileSync(join(dir, 'many.tsv'), 'utf8').match(/^probe_reach\t\S+\tPASS/gm) || []).length === 120,
+     `under ulimit -n 300: fewer at once, said so, and all 120 probed  (${tight.stderr.split('\n')[0]})`);
+  const roomy = spawnSync('bash', ['-c', `ulimit -n 300 && python3 ${join(root, 'tools/dcprobe')} scan --servers hosts.txt -o status.tsv --quiet --ssh ${join(dir, 'ssh')}`],
+                          { encoding: 'utf8', cwd: dir });
+  ok(!/open files are limited/.test(roomy.stderr), 'and nothing said when the fleet fits anyway');
+  writeFileSync(join(dir, 'status.tsv'), text);
+
   // --model: the layout, whole, in the results, as the viewer reads it back.
   writeFileSync(join(dir, 'model.dc'), 'dc D\r\n  rack r u=10\n\n    node fast\n');
   writeFileSync(join(dir, 'named.txt'), '# layout: floor.dc\nlocal=127.0.0.1\n');

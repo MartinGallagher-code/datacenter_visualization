@@ -239,6 +239,24 @@ input[type="checkbox"] { accent-color: var(--accent); }
   line-height: 1.3;
 }
 .collapse-panel:hover { background: var(--hover); color: var(--ink); }
+/* Collapse all: beside the hide arrow, at the end of the panel's first
+   title, the arrow last. */
+.fold-all {
+  order: 8;
+  margin: -2px 2px 0 auto;
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: none;
+  color: var(--ink-dim);
+  font-size: 10.5px;
+  font-weight: normal;
+  letter-spacing: 0;
+  text-transform: none;
+  line-height: 1.5;
+}
+.fold-all:hover { background: var(--hover); color: var(--ink); }
+.block h2:has(.fold-all) > .collapse-panel { margin-left: 0; }
 
 /* A drag anywhere must not select panel text on the way past. */
 body.resizing { cursor: col-resize; user-select: none; }

@@ -11,6 +11,26 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.46.0 — 2026-10-29
+
+- **Processes a flow, in the load generator.** The same setting as Cable
+  load's *connections a flow* -- iperf's `-P`, mx's `--streams`,
+  netmesh's `flows=` -- always shown with the load. A server's `stream=`
+  caps each one, so when it holds generated flows below what they were
+  asked, the generator says how many, what one flow carries at the
+  processes set, and how many would carry every flow in full, with a
+  **Use N** button. `js/ui.js`, `js/app.js`.
+- **Collapse all**, at the top of each side panel: every section of it
+  folded to its title, and, once they all are, **Open all**. The label
+  follows folds made by hand too. `js/fold.js`, `js/app.js`, `index.html`,
+  `css/app.css`.
+- **dcprobe probes 256 hosts at once by default**, up from 32 (`--jobs`
+  as ever). Each is an ssh child holding a few open files, so dcprobe
+  raises its own soft open-file limit to fit, as far as the hard limit
+  allows; where it cannot, it probes as many at once as fit, says so, and
+  still probes every host. A fleet smaller than that is never warned
+  about. `python/dcviz/dcprobe.py`.
+
 ## 1.45.0 — 2026-10-28
 
 - **A host scan carries the layout it was made against.** `dcprobe

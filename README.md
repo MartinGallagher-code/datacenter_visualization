@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.45.0** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.46.0** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -837,7 +837,15 @@ a test reaches well before they do:
   place of its `busy=`. The metric must be ticked to count.
 
 The routing box shows *connections a flow* whenever a server has a
-`stream=`, packet spraying included: it sets what a flow may carry.
+`stream=`, packet spraying included: it sets what a flow may carry. The
+**Load generator** has the same setting as **processes a flow**, always
+shown — and when `stream=` holds generated flows below what they were
+asked, it says how many, what one flow can carry at the processes set, and
+how many processes would carry every flow in full, with a **Use N** button:
+50 Gb/s from each server over five peers is 10 Gb/s a flow, which
+`stream=8.5` holds to 8.5 with one process (42.5 from each server) and two
+carry whole. It is what the run files write as iperf's `-P`, mx's
+`--streams` and netmesh's `flows=`.
 
 Both hold flows back in [contention](#contention-a-full-cable-shares-itself-out)
 just as a full cable does; hovering a server says which it is at, and the
@@ -2260,6 +2268,13 @@ many there are; a filter that picks none says so instead.
 | `--model FILE` | (scan, watch, preflight) the layout, written whole into the results, named by `hosts.txt`'s `# layout:` line |
 | `diff` | what changed between two scans — kernel, OS, CPU, memory, NIC driver and firmware, NIC speed, MTU and link — host by host, and `-o` as `probe_changed` |
 
+**Hosts are probed in parallel, 256 at once** (`--jobs`): a scan of 1,000
+hosts is four waves of about two seconds each — the ssh connection and the
+one-second sample. Each host at once is an ssh child holding a few open
+files here, so `dcprobe` raises its own open-file limit to fit, as far as
+the system lets it; where `ulimit -n` will not stretch that far it probes
+as many at once as fit, says so, and still probes every host.
+
 What a scan measures, over a one-second sample (`--sample`):
 
 | Metric | What it is |
@@ -2353,6 +2368,9 @@ quietly left stale.
   to show is not shown, and a section's title stays at the top of the panel
   while its contents scroll under it. **Alt+click** a title to open that one
   alone, every other beside it folded; Alt+click it again to open them all.
+  **Collapse all**, at the top of each side panel, folds every section of
+  that panel to its title; once they all are, it reads **Open all** and
+  opens them again. The parts inside a section keep what they were.
   The **Inspector** is the right panel's first section — what was clicked
   is what is being looked at — and its own parts sit a step below the
   panel's sections.
