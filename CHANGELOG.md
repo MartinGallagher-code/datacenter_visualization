@@ -11,6 +11,23 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.53.0 — 2026-10-31
+
+- **`cables=bus`: an element met along its length.** Every cable left its
+  device from the left or right edge into a lane, which is how cables run up
+  a rack -- and how a bus drawn across a datapath (1.52.0's `w=`) had every
+  register's cable gather at its far end. With `cables=bus` on an element,
+  each cable arrives at its top or bottom edge, whichever faces the device
+  at the other end, square to it and at the point nearest that device, so
+  the registers drop straight onto the bus running past them, as on a die.
+  The device end still leaves by its side and lane, fanned out as before;
+  two buses join edge to edge where they overlap; hover finds these cables
+  by the curves they are drawn with. `cables=sides` is the default and any
+  other value is reported; not inherited; in the completions and the Syntax
+  panel. 1.52.0 and 1.53.0 share one pull request, so 1.52.0 is not
+  published on its own. `js/route.js` (`busRun`, `busCurve`), `js/parse.js`,
+  `js/hints.js`.
+
 ## 1.52.0 — 2026-10-30
 
 - **`w=`: an element's width, in U.** `u=` has been a height everywhere since

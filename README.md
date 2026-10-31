@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.52.0** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.53.0** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -398,6 +398,21 @@ back to straight lines (they stay fanned out), and a view dense enough to
 fade to a haze — more than 10,000 cables — draws them straight anyway, since
 there a curve costs half as much again to draw and cannot be told from a
 line.
+
+**A bus is met along its length.** `cables=bus` on an element — a long,
+thin one, drawn across the devices it serves with `w=` — makes every cable
+arrive at its top or bottom edge, whichever faces the device at the other
+end, square to it and at the point nearest that device: a datapath's
+registers drop straight onto the internal bus running past them, as on a
+die, instead of all meeting it at one end. The device end still leaves by
+its side and lane. Two buses join edge to edge where they overlap.
+`cables=sides` is the default, and anything else is reported.
+
+```
+node SB w=193 cables=bus +switch          # the special bus, across the datapath
+node A role=reg                           # the accumulator, above it
+link bus name=SB name=A|X|Y|S|ALU
+```
 
 ### Splices
 

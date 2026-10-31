@@ -3064,6 +3064,68 @@ link fabric role=server tor
   ok(/offered 160% of what its NIC carries/.test(over.hosts.get(m.resolve('R02/s5'))[0].text), 'without contention, a NIC offered past full');
 }
 
+// ------------------------------------------------------------- bus cables
+// cables=bus: an element met along its length, as a register meets the bus
+// running past it on a die -- each cable arriving square at the bus's facing
+// edge, at the point nearest the device, and two buses joined edge to edge
+// where they overlap. Anything else still leaves from a side into a lane.
+{
+  const text = ['dc D',
+    '  chip C dir=y',
+    '    regs R dir=x',
+    '      node r1 +switch', '      node r2 +switch', '      node r3 +switch',
+    '    node bus w=80 +switch cables=bus',
+    '    node bus2 w=60 +switch cables=bus',
+    '    node under +switch',
+    'net n gbps=10',
+    'link n name=bus name=r1|r2|r3|under|bus2',
+  ].join('\n');
+  const m = parseLayout(text);
+  eq(m.warnings, [], 'cables=bus parses clean');
+  ok(/cables=wide is not sides or bus/.test(parseLayout('node x cables=wide').warnings.join('\n')), 'any other cables= is reported');
+  ok(parseLayout('chip C cables=bus\n  node x').resolve('x').attrs.cables === undefined, 'and is not inherited');
+  layout(m.root);
+  const r = new Renderer({ getContext: () => null }, { ...viewOf(m), curvedCables: true });
+  r.camera.scale = 4;
+  r.rebuildLinkCache(0);
+  const routed = r.linkCache.nets.get('n');
+  const box = (n) => m.resolve(n).box;
+  const bus = box('bus');
+  const toBus = (n) => routed.cables.find((c) => [c.a, c.b].includes(m.resolve(n)) && [c.a, c.b].includes(m.resolve('bus')));
+  const curveOf = (cable) => piecesOf(cable, r.linkCache.ports, true).find((p) => p.pts).pts;
+  for (const n of ['r1', 'r2', 'r3']) {
+    const pts = curveOf(toBus(n));
+    const dev = box(n);
+    eq([pts[7], pts[6] >= bus.x && pts[6] <= bus.x + bus.w], [bus.y, true], `${n} above the bus meets its top edge, within its length`);
+    ok(pts[6] > dev.x - 6 && pts[6] < dev.x + dev.w + 6, `${n}'s cable arrives beside ${n}, not at the bus's end  (${pts[6].toFixed(1)}, ${n} at ${dev.x}-${dev.x + dev.w})`);
+    eq([pts[4], pts[5] < pts[7]], [pts[6], true], `and square to the bus: straight down onto it`);
+  }
+  const xs = ['r1', 'r2', 'r3'].map((n) => curveOf(toBus(n))[6]);
+  ok(xs[0] < xs[1] && xs[1] < xs[2], 'three devices meet the bus at three points, in their order');
+  const below = curveOf(toBus('under'));
+  eq(below[7], bus.y + bus.h, 'a device below the bus meets its bottom edge');
+  const join = curveOf(toBus('bus2'));
+  const b2 = box('bus2');
+  eq([join[1], join[7], join[0] === join[6]], [bus.y + bus.h, b2.y, true], 'two buses join edge to edge, straight across');
+  ok(join[0] >= Math.max(bus.x, b2.x) && join[0] <= Math.min(bus.x + bus.w, b2.x + b2.w), 'where they overlap');
+  // Found under the pointer by the same curve it is drawn with.
+  const pts = curveOf(toBus('r2'));
+  const mid = (k) => (pts[k] + 3 * pts[k + 2] + 3 * pts[k + 4] + pts[k + 6]) / 8;
+  const toScreen = (x, y) => [(x - r.camera.x) * r.camera.scale, (y - r.camera.y) * r.camera.scale];
+  const hit = r.pickCable(...toScreen(mid(0), mid(1)));
+  ok(hit && hit.cables.some((c) => c.cable === toBus('r2')), 'the pointer on a cable to a bus finds it');
+  // Without cables=bus, the same cables meet the bus at its side, into a lane.
+  const plain = parseLayout(text.replace(' cables=bus', '').replace(' cables=bus', ''));
+  layout(plain.root);
+  const rp = new Renderer({ getContext: () => null }, { ...viewOf(plain), curvedCables: true });
+  rp.camera.scale = 4;
+  rp.rebuildLinkCache(0);
+  const side = rp.linkCache.nets.get('n').cables.find((c) => [c.a, c.b].includes(plain.resolve('r1')));
+  const sidePts = piecesOf(side, rp.linkCache.ports, true).find((p) => p.pts).pts;
+  const pb = plain.resolve('bus').box;
+  ok(sidePts[6] < pb.x || sidePts[6] > pb.x + pb.w, 'and without it, a cable still meets the bus beside it, as before');
+}
+
 // ------------------------------------------------------------ cable hover
 // The cable under the pointer, found by the same pieces it is drawn with: a
 // crossing by its curve, cables sharing a stub all at once, and inside a

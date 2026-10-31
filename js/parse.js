@@ -43,7 +43,7 @@ const DEFAULT_CAP = 2000000;
 // gbps= on an element is a switch's own forwarding capacity, so a rack's
 // would say nothing about its servers.
 const NON_INHERITED = new Set([
-  'id', 'name', 'at', 'u', 'w', 'cols', 'dir', 'gap', 'label', 'size', 'seq', 'align', 'if', 'gbps', 'pps',
+  'id', 'name', 'at', 'u', 'w', 'cols', 'dir', 'gap', 'label', 'size', 'seq', 'align', 'cables', 'if', 'gbps', 'pps',
   'buffer', 'ports', 'breakout', 'latency', 'stream', 'cpugbps', 'rxcost', 'busy', 'cores', 'addr',
 ]);
 
@@ -402,6 +402,17 @@ function checkAlign(attrs, what, model, line) {
   }
 }
 
+// How cables meet an element: at its sides, into lanes beside it (the
+// default), or along its length, as a bus.
+const CABLES = new Set(['sides', 'bus']);
+function checkCables(attrs, what, model, line) {
+  const how = attrs.cables;
+  if (how !== undefined && !CABLES.has(how)) {
+    warnOnce(model, `cables\u0000${line}\u0000${how}`,
+      `line ${line}: ${what}: cables=${how} is not sides or bus -- cables meet it at its sides`);
+  }
+}
+
 const quoteTokens = (list) => list.map((t) => `"${t}"`).join(', ');
 
 function makeElement(kind, id, parent, attrs, tags, model, line) {
@@ -696,6 +707,7 @@ function materialize(syn, parent, model) {
     const wrote = `"${syn.idSpec ?? syn.kind}"`;
     checkDir(attrs, wrote, model, syn.line);
     checkAlign(attrs, wrote, model, syn.line);
+    checkCables(attrs, wrote, model, syn.line);
     checkNumbers(attrs, wrote, model, syn.line);
     checkNumbers(attrs, wrote, model, syn.line, ELEMENT_REALS, false);
     checkNumbers(attrs, wrote, model, syn.line, ELEMENT_WHOLE);

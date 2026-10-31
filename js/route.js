@@ -18,6 +18,12 @@
 // A splice (`splice=N` on a link rule) gathers N cables into one: the
 // members' stubs end in a marker beside them, and one cable runs on from it.
 //
+// A bus (`cables=bus` on the element) is met along its length instead: a
+// cable leaves the device at the other end as usual and arrives at the bus's
+// top or bottom edge, whichever faces it, straight down or up at the point
+// of the bus nearest that device -- the way a register on a die hangs off
+// the bus running past it. Two buses join edge to edge where they overlap.
+//
 // With traffic on the cables (`styleOf` given), each piece is drawn by what
 // passes through it instead of in one width per net: a stub by everything its
 // port sends and receives, a stretch of lane by every cable running along that
@@ -39,6 +45,8 @@ const groupOf = (block) => block.parent || ROOT;
 
 const edgeOf = (box, side) => (side > 0 ? box.x + box.w : box.x);
 const midY = (box) => box.y + box.h / 2;
+// Whether cables meet a block along its length (cables=bus) or at its sides.
+const isBus = (block) => !!(block && block.attrs && block.attrs.cables === 'bus');
 
 /**
  * Lay out every cable.
@@ -93,7 +101,14 @@ export function routeCables(edges, splices, order, widthOf, styleOf = null) {
     if (p !== undefined) return p;
     const lane = laneOf(block, net);
     p = null;
-    if (lane && block.box) {
+    if (block.box && isBus(block)) {
+      // Met along its length: no side, no lane; its two long edges.
+      const b = block.box;
+      p = {
+        bus: true, group: groupOf(block), side: 0, edge: b.x + b.w / 2, start: b.x + b.w / 2, y: midY(b),
+        lane: 0, left: b.x, right: b.x + b.w, top: b.y, bottom: b.y + b.h, ends: [], h: b.h, fan: null,
+      };
+    } else if (lane && block.box) {
       const b = block.box;
       const edge = edgeOf(b, lane.side);
       p = {
@@ -110,7 +125,7 @@ export function routeCables(edges, splices, order, widthOf, styleOf = null) {
     let o = nets.get(net);
     if (!o) {
       nets.set(net, (o = {
-        h: [], v: new Map(), free: [], markers: [], cables: [], curves: null,
+        h: [], v: new Map(), free: [], buses: [], markers: [], cables: [], curves: null,
         traffic, tstubs: [], tv: new Map(), tsegs: [], tstubsegs: [], tcurves: [],
       }));
     }
@@ -258,6 +273,7 @@ const columnX = (P, Q) => (P.side > 0 ? Math.max(P.edge, Q.edge) + P.lane : Math
  * along each port's lane it was fanned out to, for piecesOf.
  */
 function run(o, P, Q, w, t, e = null) {
+  if (P.bus || Q.bus) { busRun(o, P, Q, w, t, e); return; }
   if (e) { e.P = P; e.Q = Q; }
   if (inColumn(P, Q)) {
     const x = columnX(P, Q);
@@ -293,6 +309,57 @@ function run(o, P, Q, w, t, e = null) {
 }
 
 /**
+ * A cable to or from a bus. The device end leaves by its stub and lane as
+ * any cable does; the bus end has neither, the cable arriving at the bus's
+ * facing edge. Laid out with the rest once every cable is known, so the
+ * device end is fanned out with its port's other cables. Kept with the
+ * device as P and the bus as Q, the traffic turned round to match.
+ */
+function busRun(o, P, Q, w, t, e) {
+  let turned = t;
+  if (P.bus && !Q.bus) {
+    [P, Q] = [Q, P];
+    turned = { ab: t.ba, ba: t.ab, worst: t.worst };
+  }
+  if (e) { e.P = P; e.Q = Q; }
+  const cable = { P, Q, px: 0, qx: 0, w, offP: 0, offQ: 0, t: turned, e, both: P.bus };
+  if (!P.bus) {
+    cable.px = P.edge + P.side * P.lane;
+    if (o.traffic) tstub(o, P, cable.px, turned.ab, turned.ba, turned.worst);
+    else stub(o, P, cable.px, w);
+    (P.fan || (P.fan = [])).push(cable);
+  }
+  o.buses.push(cable);
+}
+
+/**
+ * Where a cable to a bus runs: the cubic it is drawn as, from the device's
+ * lane (offset along it by `off`) to the bus's facing edge at the point
+ * nearest the device, arriving square to the bus -- or, bus to bus, square
+ * from one facing edge to the other where the two overlap.
+ *
+ * @returns [x0, y0, c1x, c1y, c2x, c2y, x1, y1]
+ */
+export function busCurve(P, Q, px, off) {
+  const facing = (B, y) => (y < B.top ? B.top : y > B.bottom ? B.bottom : (y - B.top < B.bottom - y ? B.top : B.bottom));
+  if (P.bus) {
+    // Where the two run side by side, else between their nearer ends.
+    const lo = Math.max(P.left, Q.left);
+    const hi = Math.min(P.right, Q.right);
+    const x = lo <= hi ? (lo + hi) / 2 : (P.right < Q.left ? (P.right + Q.left) / 2 : (Q.right + P.left) / 2);
+    const y0 = P.y < Q.y ? P.bottom : P.top;
+    const y1 = P.y < Q.y ? Q.top : Q.bottom;
+    const dy = (y1 - y0) / 3;
+    return [x, y0, x, y0 + dy, x, y1 - dy, x, y1];
+  }
+  const y0 = P.y + off;
+  const x1 = Math.max(Q.left, Math.min(Q.right, px));
+  const y1 = facing(Q, y0);
+  const reach = curveReach(px, y0, x1, y1);
+  return [px, y0, px + P.side * reach, y0, x1, y1 + (y1 === Q.top ? -reach : reach), x1, y1];
+}
+
+/**
  * Spread the cables that leave one port along its lane, instead of starting
  * them all from one point -- forty ToR uplinks arriving at a spine used to
  * meet in a single spot and leave as one smear. Each port's cables are
@@ -303,6 +370,8 @@ function run(o, P, Q, w, t, e = null) {
 function fanOut(o) {
   const ports = new Set();
   for (const cable of o.free) { ports.add(cable.P); ports.add(cable.Q); }
+  // A bus has no lane to fan along; the device end of a cable to one does.
+  for (const cable of o.buses) if (!cable.P.bus) ports.add(cable.P);
   for (const port of ports) {
     const fan = port.fan;
     port.fan = null;
@@ -537,11 +606,23 @@ function flatten(o) {
     if (!list) curves.set(w, (list = []));
     list.push(px, y0, px + P.side * reach, y0, qx + Q.side * reach, y1, qx, y1);
   }
+  for (const { P, Q, px, w, offP, t, e } of o.buses) {
+    if (e) e.offP = offP;
+    const [x0, y0, c1x, c1y, c2x, c2y, x1, y1] = busCurve(P, Q, px, offP);
+    if (o.traffic) {
+      o.tcurves.push(x0, y0, c1x, c1y, c2x, c2y, x1, y1, Math.max(t.ab, t.ba), t.worst);
+      continue;
+    }
+    let list = curves.get(w);
+    if (!list) curves.set(w, (list = []));
+    list.push(x0, y0, c1x, c1y, c2x, c2y, x1, y1);
+  }
   o.segs = segs;
   o.curves = curves;
   o.h = undefined;
   o.v = undefined;
   o.free = undefined;
+  o.buses = undefined;
   o.tstubs = undefined;
   o.tv = undefined;
 }
@@ -575,6 +656,18 @@ export function piecesOf(cable, port, curved = true) {
   const { P, Q } = cable;
   if (!P || !Q) return out;
   const line = (x0, y0, x1, y1) => { if (x0 !== x1 || y0 !== y1) out.push({ x0, y0, x1, y1 }); };
+  if (P.bus || Q.bus) {
+    // busRun kept the device as P; bus to bus, either way round.
+    const px = P.bus ? 0 : P.edge + P.side * P.lane;
+    const pts = busCurve(P, Q, px, cable.offP || 0);
+    if (!P.bus) {
+      line(P.start, P.y, px, P.y);
+      line(px, P.y, px, pts[1]);
+    }
+    if (!curved) line(pts[0], pts[1], pts[6], pts[7]);
+    else out.push({ pts });
+    return out;
+  }
   if (inColumn(P, Q)) {
     const x = columnX(P, Q);
     line(P.start, P.y, x, P.y);
