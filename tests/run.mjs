@@ -3126,6 +3126,35 @@ link fabric role=server tor
   ok(sidePts[6] < pb.x || sidePts[6] > pb.x + pb.w, 'and without it, a cable still meets the bus beside it, as before');
 }
 
+// ------------------------------------------------------------ the 6502 sample
+// examples/mos6502.dc: a chip drawn as a floor plan -- buses met along their
+// length, data from memory reaching the accumulator over the real path, and
+// the one-byte-a-cycle data pins as the limit the board shares.
+{
+  const m = parseLayout(readFileSync(join(root, 'examples/mos6502.dc'), 'utf8'));
+  eq(m.warnings, [], 'the 6502 sample parses clean');
+  for (const id of ['6502-ADH', '6502-ADL', '6502-SB', '6502-DB']) {
+    const bus = m.resolve(id);
+    eq([bus.attrs.cables, bus.attrs.w], ['bus', '193'], `${id} is a bus as wide as the datapath`);
+  }
+  const between = (a, b) => routesBetween([m.resolve(a), m.resolve(b)]);
+  const ends = (q) => [...q.links].map((l) => `${l.a.attrs.id}-${l.b.attrs.id}`);
+  eq(ends(between('BRD-ZP', '6502-A')),
+     ['BRD-MUX-BRD-ZP', 'BRD-DBUS-BRD-MUX', '6502-D0-7-BRD-DBUS', '6502-DBB-6502-D0-7', '6502-DB-6502-DBB', '6502-DB-6502-A'],
+     'LDA zp: zero page, the data pins, the data bus buffer, the data bus, A');
+  eq(ends(between('6502-X', '6502-A')), ['6502-SB-6502-X', '6502-SB-6502-A'], 'TXA: register to register over the special bus');
+  eq(ends(between('BRD-ROM', '6502-IR')).slice(-2), ['6502-PREDECODE-6502-D0-7', '6502-PREDECODE-6502-IR'],
+     'an opcode fetch goes through predecode into IR');
+  const r = (n) => m.resolve(n);
+  const two = [{ id: 0, src: r('BRD-ZP'), dst: r('6502-A'), value: 0.008 }, { id: 1, src: r('BRD-MAIN'), dst: r('BRD-VIDEO'), value: 0.008 }];
+  const c = contend(m, two, { toGbps: 1 });
+  eq([c.contention.flows.map((f) => f.value), c.contention.held], [[0.008, 0.008], 0],
+     'the CPU and video each read RAM at a byte a cycle: neither steals from the other');
+  const three = contend(m, [...two, { id: 2, src: r('BRD-STACK'), dst: r('6502-A'), value: 0.008 }], { toGbps: 1 });
+  eq(three.contention.flows.map((f) => Math.round(f.value * 1e9) / 1e9), [0.004, 0.008, 0.004],
+     'two CPU reads in one cycle share the one byte the data bus carries');
+}
+
 // ------------------------------------------------------------ cable hover
 // The cable under the pointer, found by the same pieces it is drawn with: a
 // crossing by its curve, cables sharing a stub all at once, and inside a

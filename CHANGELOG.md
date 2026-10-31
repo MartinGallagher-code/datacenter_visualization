@@ -11,6 +11,20 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.53.1 — 2026-10-31
+
+- **`examples/mos6502.dc`: a chip as a floor plan.** The MOS 6502's
+  datapath and control on a board with RAM, ROM, I/O and Apple II-style
+  video. Its four internal buses (ADH, ADL, SB, DB) are drawn as wide as the
+  datapath with `w=` and met along their length with `cables=bus`, so the
+  routes are the chip's own: shift-click the zero page and the accumulator
+  for `LDA zp`, X and A for `TXA`, the ROM and IR for an opcode fetch. Bus
+  speeds are one byte per cycle at 1 MHz, from the 6502 model in
+  Modeling_2026 (`full_stack/mos_6502`); load two CPU reads at once and they
+  share the one byte, while the CPU and video each read RAM at full rate.
+  A sample and its test only, so a patch. 1.52.0, 1.53.0 and 1.53.1 share
+  one pull request.
+
 ## 1.53.0 — 2026-10-31
 
 - **`cables=bus`: an element met along its length.** Every cable left its

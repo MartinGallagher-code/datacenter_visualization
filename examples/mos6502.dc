@@ -1,0 +1,99 @@
+title MOS 6502 (1975) -- the chip, and an Apple II-class board, as a floor
+# The 6502's datapath as the MCS6500 hardware manual's block diagram draws it:
+# four internal 8-bit buses -- DB (data), ADL and ADH (address low and high)
+# and SB (special) -- with the registers that read and drive them, the
+# control section above, and the 40 pins below. On the board, the CPU and
+# the video scanner share the RAM by clock phase: the scanner reads it in
+# phase 1, the CPU in phase 2 (Sather, Understanding the Apple II), so the
+# video steals nothing from the CPU.
+#
+# Ids are unique and say what a thing is (6502-SB, BRD-ZP); names are the
+# type, and label the boxes.
+#
+# Figures at 1 MHz, from the 6502 model in Modeling_2026
+# (full_stack/mos_6502/topology.json, each figure with its source there):
+#   external bus: one byte every cycle, every cycle -- 8 Mb/s (Tier A,
+#     MCS6500 hardware manual); the CPU drives it in phase 2 only
+#   RAM: phase 1 to the video, phase 2 to the CPU -- 16 Mb/s in all
+#   internal bus: one transfer a clock phase -- 16 Mb/s (Tier C: an estimate
+#     from the two-phase clock, not a measurement)
+#   latency: one clock phase, 500 ns, a bus (Tier C)
+# Each internal bus is drawn as wide as the datapath it runs across, and
+# met along its length: the registers drop straight onto it (w= and
+# cables=bus, viewer 1.53.0 or later).
+# The viewer moves traffic over this; it does not run 6502 instructions --
+# that model is what the chip does. Try: shift-click the zero page and the
+# accumulator to see an LDA's path, or a test flow from RAM to the video and
+# another from RAM to the CPU, each at 8 Mb/s -- both get it.
+# Its cables carry traffic both ways, so the input data latch (in only) and
+# the data output register (out only) are drawn as one data bus buffer:
+# two boxes would split every byte between them.
+dc SYS dir=x name=system
+  package CPU dir=y id=6502 name="6502, 40-pin DIP"
+    control CTL dir=x id=6502-CTL name="control"
+      node PREDECODE id=6502-PREDECODE name="predecode register" role=fetch +switch
+      node IR id=6502-IR name="instruction register" role=ir
+      node PLA id=6502-PLA name="decode ROM (PLA)" role=decode +switch
+      node RCL id=6502-RCL name="random control logic" role=control
+      node TIMING id=6502-TIMING name="timing (T-states)" role=timing
+      node INT id=6502-INT name="interrupt logic" role=interrupt
+      node CLK id=6502-CLK name="clock generator (phi1, phi2)" role=clock
+    buses BUSES dir=y id=6502-BUSES name="internal buses"
+      node ADH id=6502-ADH name="address bus high (ADH)" role=bus +switch latency=500ns w=193 cables=bus
+      node ADL id=6502-ADL name="address bus low (ADL)" role=bus +switch latency=500ns w=193 cables=bus
+      node SB id=6502-SB name="special bus (SB)" role=bus +switch latency=500ns w=193 cables=bus
+      node DB id=6502-DB name="data bus (DB)" role=bus +switch latency=500ns w=193 cables=bus
+    datapath DP dir=x id=6502-DP name="datapath"
+      node ABH id=6502-ABH name="address register high" role=addr +switch
+      node ABL id=6502-ABL name="address register low" role=addr +switch
+      node PCH id=6502-PCH name="PC high" role=reg
+      node PCINC id=6502-PCINC name="PC incrementer" role=pcinc +switch
+      node PCL id=6502-PCL name="PC low" role=reg
+      node DBB id=6502-DBB name="data bus buffer (input latch DL, output register DOR)" role=latch +switch
+      node S id=6502-S name="stack pointer" role=reg
+      node ALU id=6502-ALU name="ALU (A in, B in, adder hold)" role=alu
+      node A id=6502-A name="accumulator" role=reg
+      node Y id=6502-Y name="index Y" role=reg
+      node X id=6502-X name="index X" role=reg
+      node P id=6502-P name="status register" role=reg
+    pins PINS dir=x id=6502-PINS name="pins"
+      node AH id=6502-A8-15 name="address pins A8-A15" role=pins +switch
+      node AL id=6502-A0-7 name="address pins A0-A7" role=pins +switch
+      node D id=6502-D0-7 name="data pins D0-D7" role=pins +switch
+      node CPINS id=6502-CTLPINS name="control pins (R/W, SYNC, RDY, IRQ, NMI, RES, phi0-2)" role=ctlpins
+  board BRD dir=y id=BRD name="board"
+    node ADEC id=BRD-ADEC name="address decoder" role=adec
+    node DBUS id=BRD-DBUS name="data bus" role=sysbus +switch latency=500ns
+    node MUX id=BRD-MUX name="RAM address multiplexer" role=mux +switch
+    ram RAM dir=x id=BRD-RAM name="RAM, 48 KB"
+      node ZP id=BRD-ZP name="zero page (0000-00FF)" role=memory
+      node STACK id=BRD-STACK name="stack page (0100-01FF)" role=memory
+      node MAIN id=BRD-MAIN name="RAM (0200-BFFF)" role=memory
+    node ROM id=BRD-ROM name="ROM (D000-FFFF)" role=memory
+    node IO id=BRD-IO name="I/O (C000-CFFF)" role=io
+    node VIDEO id=BRD-VIDEO name="video scanner" role=video
+net bus gbps=0.016
+net pin gbps=0.008
+net ext gbps=0.008
+net ram gbps=0.016
+net ctl gbps=0.001
+# The internal buses: who drives and reads each.
+link bus id=6502-ADH id=6502-ABH|6502-PCH|6502-DBB|6502-SB
+link bus id=6502-ADL id=6502-ABL|6502-PCL|6502-S|6502-ALU|6502-DBB
+link bus id=6502-SB  id=6502-A|6502-X|6502-Y|6502-S|6502-ALU|6502-DB
+link bus id=6502-DB  id=6502-DBB|6502-PCL|6502-PCH|6502-P|6502-ALU|6502-A
+link bus id=6502-PCINC id=6502-PCL|6502-PCH
+# To and from the pins.
+link pin id=6502-ABH id=6502-A8-15
+link pin id=6502-ABL id=6502-A0-7
+link pin id=6502-D0-7 id=6502-DBB|6502-PREDECODE
+# The opcode's way in, and the control it becomes.
+link ctl id=6502-PREDECODE id=6502-IR
+link ctl id=6502-PLA id=6502-IR|6502-TIMING|6502-RCL
+link ctl id=6502-RCL id=6502-TIMING|6502-INT|6502-CLK|6502-CTLPINS
+# The board: addresses end at the decoder, which picks a device; data moves
+# on the data bus, and the RAM is shared with the video.
+link ext id=BRD-ADEC id=6502-A8-15|6502-A0-7
+link ext id=BRD-DBUS id=6502-D0-7|BRD-ROM|BRD-IO|BRD-MUX
+link ext id=BRD-MUX id=BRD-VIDEO
+link ram id=BRD-MUX id=BRD-ZP|BRD-STACK|BRD-MAIN

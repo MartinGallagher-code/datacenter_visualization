@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.53.0** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.53.1** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -2745,6 +2745,8 @@ examples/iperf/          a floor plan using every layout feature, with a real
                          export-overlay run painted over it (see its README)
 examples/hostnames-results.tsv  results addressed by flat name
 examples/mx/              every layout construct, painted by a real mx run
+examples/mos6502.dc       the MOS 6502 datapath on an Apple II-class board,
+                          its buses drawn with w= and cables=bus
 examples/live/            three wide TSV tables in one folder: the format that
                           needs no layout file, and what "Load all" loads
 js/traffic.js             cable load: flows routed over the fabric (shortest
