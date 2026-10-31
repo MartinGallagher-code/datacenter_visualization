@@ -11,6 +11,19 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.52.0 — 2026-10-30
+
+- **`w=`: an element's width, in U.** `u=` has been a height everywhere since
+  1.x, and nothing set a width: a device outside a rack was always 64 wide,
+  and a box could not be drawn to fill the room it stands for -- an IO die
+  as wide as the memory channels above it, say, between columns of CCDs.
+  `w=` is the width on the same scale: a device exactly that wide, a
+  container (rows included) at least that wide, what its children need
+  always fitting. A rack and what is in it keep the rack's width; a
+  collapsed container its compact size. Whole, 1 to 1000, not inherited; in
+  the completions and the Syntax panel. `js/layout.js` (`widthOf`),
+  `js/parse.js`, `js/hints.js`.
+
 ## 1.51.0 — 2026-10-29
 
 - **Areas may share hosts.** With **areas may share hosts** ticked, a host

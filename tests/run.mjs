@@ -1167,6 +1167,31 @@ layout(small.root, () => true);
   eq(box('D/room').h, 62, 'collapsed, a container keeps its compact size');
 }
 
+// w= is the width in U, on the same scale, as u= is the height: a device
+// exactly that wide, a container at least that wide; in a rack, the rack's
+// width holds.
+{
+  const wide = parseLayout(['dc D',
+    '  cage C', '    node die w=40 u=20', '    node plain',
+    '  cage room w=60', '    node x',
+    '  cage full w=2 dir=x', '    node a', '    node b', '    node c',
+    '  row R w=80', '    rack r u=10 w=40', '      node n w=30',
+    '  cage kid w=10', '    cage inner', '      node y',
+  ].join('\n'));
+  eq(wide.warnings, [], 'w= parses clean');
+  ok(/w=0 is outside 1\.\.1000/.test(parseLayout('node x w=0').warnings.join('\n')), 'w= is checked against its range');
+  ok(/w=2\.5 is not a whole number/.test(parseLayout('node x w=2.5').warnings.join('\n')), 'and is a whole number');
+  layout(wide.root);
+  const box = (k) => wide.byKey.get(k).box;
+  eq([box('D/C/die').w, box('D/C/die').h], [40 * U_PX, 20 * U_PX], 'a device is as wide as its w= says, as tall as its u=');
+  eq(box('D/C/plain').w, 64, 'and one without w= keeps the default');
+  eq(box('D/room').w, 60 * U_PX, 'a container is at least its w= wide');
+  ok(box('D/full').w > 3 * 64, 'but never too narrow for what it holds');
+  eq(box('D/R').w, 80 * U_PX, 'a row takes its w= too');
+  eq([box('D/R/r').w, box('D/R/r/n').w], [64, 64 - 2 * 5], 'a rack, and what is in it, keep the rack’s width');
+  eq(box('D/kid/inner').w, 120, 'and w= is not inherited by what is inside');
+}
+
 // A row lays its racks out in one line, and used to ignore cols= while doing
 // it: a row holding a network layer above its racks drew the two side by side
 // however it was asked. cols= (or dir=y) makes a row a grid like any other.

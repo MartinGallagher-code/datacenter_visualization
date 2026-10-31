@@ -43,7 +43,7 @@ const DEFAULT_CAP = 2000000;
 // gbps= on an element is a switch's own forwarding capacity, so a rack's
 // would say nothing about its servers.
 const NON_INHERITED = new Set([
-  'id', 'name', 'at', 'u', 'cols', 'dir', 'gap', 'label', 'size', 'seq', 'align', 'if', 'gbps', 'pps',
+  'id', 'name', 'at', 'u', 'w', 'cols', 'dir', 'gap', 'label', 'size', 'seq', 'align', 'if', 'gbps', 'pps',
   'buffer', 'ports', 'breakout', 'latency', 'stream', 'cpugbps', 'rxcost', 'busy', 'cores', 'addr',
 ]);
 
@@ -192,7 +192,7 @@ function buildSyntaxTree(text, warnings) {
 // of 1000U is already absurd; the ceiling is there to catch a typo, not to
 // ration anyone.
 export const NUMBERS = {
-  u: [1, 1000], at: [1, 1000], size: [1, 1000], cols: [1, 1000], gap: [0, 1000],
+  u: [1, 1000], at: [1, 1000], size: [1, 1000], cols: [1, 1000], gap: [0, 1000], w: [1, 1000],
 };
 // A net's line width is the one number that may be fractional.
 const NET_NUMBERS = { width: [0.1, 100], gbps: GBPS_RANGE };

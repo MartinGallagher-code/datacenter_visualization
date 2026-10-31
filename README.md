@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.51.0** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.52.0** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -270,6 +270,12 @@ made either. A condition that cannot be read is reported and ignored, and
   children need always fits. A row made taller than its racks keeps them
   standing on the floor, with the room above. A collapsed container keeps
   its compact size whatever its `u=`.
+- **`w=` is its width, in U, on the same scale** — what `u=` is to height:
+  a device outside a rack is exactly that wide (`node IOD w=160 u=680`, an
+  IO die as wide as the memory strip above it and as tall as the CCDs
+  beside it), and a container is *at least* that wide. A rack and what is
+  in it keep the rack's width, and a collapsed container its compact size.
+  It is not inherited.
 - `cols=2` / `dir=x|y` / `gap=` shape generic containers — `gap=0` packs
   children with no gutter, and omitting it keeps the per-kind default.
 - `align=center` (or `right`; `left` is the default) places each line of a
@@ -289,7 +295,7 @@ made either. A condition that cannot be read is reported and ignored, and
       rack [1..20] id=R{seq:2} u=42
         node u[01..40] role=server
   ```
-- The numbers are checked: `u`, `at`, `size` and `cols` must be whole and
+- The numbers are checked: `u`, `w`, `at`, `size` and `cols` must be whole and
   between 1 and 1000 (`gap` from 0), and a net's `width` between 0.1 and 100. Anything else
   is reported and ignored rather than quietly coerced — `u=1e9` used to read
   as 1 and `u=-5` drew a rack of negative height.
