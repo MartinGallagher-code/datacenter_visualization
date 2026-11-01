@@ -22,9 +22,15 @@ title MOS 6502 (1975) -- the chip, and an Apple II-class board, as a floor
 # met along its length: the registers drop straight onto it (w= and
 # cables=bus, viewer 1.53.0 or later).
 # The viewer moves traffic over this; it does not run 6502 instructions --
-# that model is what the chip does. Try: shift-click the zero page and the
-# accumulator to see an LDA's path, or a test flow from RAM to the video and
-# another from RAM to the CPU, each at 8 Mb/s -- both get it.
+# tools/mos6502-export brings what the Modeling_2026 model works out (CPI,
+# MIPS, each board's effective clock) onto these elements. Try: shift-click
+# X and the accumulator (TXA, over SB), or the ROM and the instruction
+# register (an opcode fetch, through predecode); or a test flow from RAM to
+# the video and another from RAM to the CPU, each at 8 Mb/s -- both get it.
+# A route is the fewest hops over cables that carry both ways, so a load
+# into the accumulator is drawn over AC/DB backwards: the chip loads A only
+# from SB (SB/AC), over the SB/DB pass. The links below say which way each
+# control drives.
 # Its cables carry traffic both ways, so the input data latch (in only) and
 # the data output register (out only) are drawn as one data bus buffer:
 # two boxes would split every byte between them.
@@ -39,10 +45,10 @@ dc SYS dir=x name=system
       node INT id=6502-INT name="interrupt logic" role=interrupt
       node CLK id=6502-CLK name="clock generator (phi1, phi2)" role=clock
     buses BUSES dir=y id=6502-BUSES name="internal buses"
-      node ADH id=6502-ADH name="address bus high (ADH)" role=bus +switch latency=500ns w=193 cables=bus
-      node ADL id=6502-ADL name="address bus low (ADL)" role=bus +switch latency=500ns w=193 cables=bus
-      node SB id=6502-SB name="special bus (SB)" role=bus +switch latency=500ns w=193 cables=bus
-      node DB id=6502-DB name="data bus (DB)" role=bus +switch latency=500ns w=193 cables=bus
+      node ADH id=6502-ADH name="address bus high (ADH)" role=bus +switch latency=500ns w=209 cables=bus
+      node ADL id=6502-ADL name="address bus low (ADL)" role=bus +switch latency=500ns w=209 cables=bus
+      node SB id=6502-SB name="special bus (SB)" role=bus +switch latency=500ns w=209 cables=bus
+      node DB id=6502-DB name="data bus (DB)" role=bus +switch latency=500ns w=209 cables=bus
     datapath DP dir=x id=6502-DP name="datapath"
       node ABH id=6502-ABH name="address register high" role=addr +switch
       node ABL id=6502-ABL name="address register low" role=addr +switch
@@ -50,6 +56,7 @@ dc SYS dir=x name=system
       node PCINC id=6502-PCINC name="PC incrementer" role=pcinc +switch
       node PCL id=6502-PCL name="PC low" role=reg
       node DBB id=6502-DBB name="data bus buffer (input latch DL, output register DOR)" role=latch +switch
+      node CONST id=6502-CONST name="ADH constants (page 00, page 01)" role=const +switch
       node S id=6502-S name="stack pointer" role=reg
       node ALU id=6502-ALU name="ALU (A in, B in, adder hold)" role=alu
       node A id=6502-A name="accumulator" role=reg
@@ -77,11 +84,23 @@ net pin gbps=0.008
 net ext gbps=0.008
 net ram gbps=0.016
 net ctl gbps=0.001
-# The internal buses: who drives and reads each.
-link bus id=6502-ADH id=6502-ABH|6502-PCH|6502-DBB|6502-SB
+# The internal buses, wired as the visual6502 netlist names its datapath
+# controls (nodenames.js: ADL/ABL, ADH/ABH and dpc0-dpc43; the bus names are
+# Hanson's, from his block diagram). Each line lists the controls that make
+# its connections -- X/Y "drive Y from X" -- so which way each one carries is
+# here even where a cable cannot say it.
+#   ADH: ADH/ABH; PCH/ADH, ADH/PCH; DL/ADH; SB/ADH (a pass, both ways);
+#        0/ADH0, 0/ADH1-7 (the constants that make page 00 and page 01)
+link bus id=6502-ADH id=6502-ABH|6502-PCH|6502-DBB|6502-SB|6502-CONST
+#   ADL: ADL/ABL; PCL/ADL, ADL/PCL; S/ADL; ADD/ADL, ADL/ADD; DL/ADL
 link bus id=6502-ADL id=6502-ABL|6502-PCL|6502-S|6502-ALU|6502-DBB
+#   SB:  Y/SB, SB/Y; X/SB, SB/X; S/SB, SB/S; ADD/SB, SB/ADD; AC/SB, SB/AC
+#        (through the decimal adjust); SB/DB (a pass, both ways)
 link bus id=6502-SB  id=6502-A|6502-X|6502-Y|6502-S|6502-ALU|6502-DB
+#   DB:  DL/DB; DB/ADD, not-DB/ADD; AC/DB (drive only: A loads from SB);
+#        PCL/DB; PCH/DB; P/DB, DB/P (Hanson); DB into DOR
 link bus id=6502-DB  id=6502-DBB|6502-PCL|6502-PCH|6502-P|6502-ALU|6502-A
+#   the PC increment: PCL/PCL, PCH/PCH, carry from PCL to PCH
 link bus id=6502-PCINC id=6502-PCL|6502-PCH
 # To and from the pins.
 link pin id=6502-ABH id=6502-A8-15

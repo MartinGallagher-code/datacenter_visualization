@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.53.1** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.54.0** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -2202,6 +2202,70 @@ shows a host slipping before any absolute layer turns red.
 reckon floor.dc --mx reports/ --run wed --baseline tue.tsv --overlay wed.tsv
 ```
 
+### `mos6502-export` — experiments from Modeling_2026's 6502 model
+
+`examples/mos6502.dc` draws the 6502 and an Apple II-class board; the
+numbers come from the 6502 model in
+[Modeling_2026](https://github.com/MartinGallagher-code/Modeling_2026)
+(`full_stack/mos_6502`). `tools/mos6502-export` runs one experiment on a
+checkout of it and writes the result in this format, each number on the
+element it is about:
+
+```sh
+tools/mos6502-export --modeling ~/Modeling_2026 --board c64 --sprites 2 -o c64.tsv
+dcviz serve --results c64.tsv          # the file carries the layout: the chip opens with it
+```
+
+| Element | Metrics |
+|---|---|
+| `6502` | `cpu_cpi`, `cpu_ipc`, `cpu_mips` (at the board's effective clock), `cpu_bus_bytes_per_instr` |
+| `BRD` | `board_effective_mhz`, `board_cpu_share_pct`, `board_cpu_bus_mbps`, `board_machine` |
+| `BRD-VIDEO` | `video_steal_pct`: the cycles the video takes from the CPU (the C64's badlines) |
+| `SYS` | the model's independent checks: `holdout_c64_vic20` and `holdout_apple_vic20`, `PASS` or `FAIL` at the model's own tolerance, and each one's `_residual_pct`, with the predicted and published ratios as tags |
+
+The settings are the levers the model's own simulations pull:
+
+| Flag | What it changes |
+|---|---|
+| `--board` | `apple_ii` (default), `c64`, `bbc_micro`, `vic_20`; `--region pal\|ntsc` for the C64 and VIC-20 |
+| `--mix FILE` | the instruction mix: one `MNEMONIC MODE WEIGHT` a line (`LDA absolute,X 0.2`), or `branch WEIGHT`; weights sum to 1. Default: the model's typical mix |
+| `--zero-page F` | the share of the mix's memory accesses that use zero page, as the model's zero-page sweep moves them |
+| `--page-cross F`, `--branch-taken F` | indexed reads that cross a page (+1 cycle; default 0.10), branches taken (default 0.6) |
+| `--no-overlap` | the model's counterfactual: no overlapped next-opcode fetch, a cycle more each instruction |
+| `--screen on\|off`, `--sprites N` | the C64's VIC-II: the screen blanked steals nothing, each sprite on every line steals more |
+
+`--sweep NAME=V1,V2,...` runs one experiment for each value of one setting,
+writes each to its own file in `--out-dir`, and prints a table of them:
+
+```sh
+$ tools/mos6502-export --sweep zero-page=0,0.5,1 --out-dir zp
+   zero-page     CPI     IPC    MIPS      MHz   CPU %  file
+           0   3.278   0.305   0.311   1.0205  100.00  zp/apple_ii-typical-zp0.tsv
+         0.5   3.103   0.322   0.329   1.0205  100.00  zp/apple_ii-typical-zp0.5.tsv
+           1   2.928   0.342   0.349   1.0205  100.00  zp/apple_ii-typical-zp1.tsv
+```
+
+Open one file at a time: two files loaded together merge, as appending
+would. To watch one experiment change, write it to the same file each time
+and let **Live** reload it.
+
+Nothing is computed here that the model does not compute. The mix is priced
+by the model's `isa.mix_cpi` against the vendor cycle table, the clocks and
+steal come from its `Mos6502Board`, the bus from `Mos6502Bus`, and the
+tolerance from its `tier_policy.py`. The zero-page, page-cross, sprite and
+board figures match the model's own simulations to the last digit. Every
+sample carries `tier=`, the tier the model gives its inputs: `A`
+vendor-disclosed, `B` third-party measured, `C` estimated (the typical mix
+is), `input` for a mix you supply. Each file names the Modeling_2026 commit
+it came from. These are CPI figures priced off the cycle table, so they are
+not the corpus model's CPI 3.40 that the model's three-boards simulation
+quotes MIPS from.
+
+The checkout is `--modeling PATH` or `$MODELING_2026`. The tool is not in
+the pip package, since it needs the checkout to run.
+`examples/mos6502-experiment.tsv` is one experiment, the defaults on an
+Apple II, made from Modeling_2026 at the commit it names.
+
 ### `dcimport` — netmesh output, directly
 
 `dcadd --csv` already imports any CSV with a target column and a value
@@ -2747,6 +2811,8 @@ examples/hostnames-results.tsv  results addressed by flat name
 examples/mx/              every layout construct, painted by a real mx run
 examples/mos6502.dc       the MOS 6502 datapath on an Apple II-class board,
                           its buses drawn with w= and cables=bus
+examples/mos6502-experiment.tsv  an experiment on it from Modeling_2026's 6502
+                          model, made by tools/mos6502-export
 examples/live/            three wide TSV tables in one folder: the format that
                           needs no layout file, and what "Load all" loads
 js/traffic.js             cable load: flows routed over the fabric (shortest
@@ -2766,11 +2832,16 @@ tools/dcadd, tools/dcimport
                           two-line shims that run those from a clone with
                           nothing installed, so the copy that ships and the
                           copy that runs are one file
+tools/mos6502-export      a 6502 experiment from a Modeling_2026 checkout, as
+                          results for examples/mos6502.dc (not packaged: it
+                          needs the checkout)
 pyproject.toml            packaging (hatchling; no runtime dependencies)
 CHANGELOG.md              what changed, per version
 docs/releasing.md         how a release is cut, and the one manual PyPI step
 docs/                     the results-format guide for converting data in
-tests/fixtures/           real tool output, as the contract the suite checks
+tests/fixtures/           real tool output, as the contract the suite checks;
+                          modeling-6502/ is a stand-in for Modeling_2026's
+                          6502 model, with made-up numbers
 tests/run.mjs             headless test suite (node tests/run.mjs)
 tests/browser.mjs         the same for the page itself (node tests/browser.mjs) —
                           drives Chromium through the interactions that module

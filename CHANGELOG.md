@@ -11,6 +11,39 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.54.0 — 2026-11-01
+
+- **`tools/mos6502-export`: experiments from Modeling_2026's 6502 model,
+  on the chip.** Runs one experiment on a checkout of Modeling_2026
+  (`full_stack/mos_6502`) and writes it as results for
+  `examples/mos6502.dc`:
+  - **6502:** CPI, IPC, MIPS and bus bytes per instruction.
+  - **Board:** effective clock, the CPU's share of cycles, its bus traffic.
+  - **Video:** the cycles it steals.
+  - **Holdouts:** the model's two benchmark-ratio checks, `PASS`/`FAIL` at
+    its own tolerance.
+  - **Levers:** board, region, an instruction mix from a file, zero page,
+    page crossing, branches taken, the overlapped fetch, and the C64's
+    screen and sprites. `--sweep` runs one setting over several values.
+
+  Every figure comes from the model's own functions. The zero-page,
+  sprite and board sweeps match the model's simulations exactly. Each
+  sample carries the model's tier for its inputs, and the file names the
+  Modeling_2026 commit and carries the layout, so opening the file opens
+  the chip. The tool is not packaged, since it needs the checkout; the
+  suite runs it against a stand-in with made-up numbers
+  (`tests/fixtures/modeling-6502`). `examples/mos6502-experiment.tsv` is
+  one experiment from the real model.
+- **`examples/mos6502.dc` checked against the visual6502 netlist.** Every
+  internal-bus connection is now listed with the datapath control signals
+  that make it (`ADL/ABL`, `ADH/ABH`, `dpc0`–`dpc43`), and the wiring
+  matched them. The one missing piece is added: the ADH constants that
+  make page 00 and page 01. The buses are widened to match. A cable
+  carries both ways and a route is the fewest hops, so a load into A is
+  drawn over AC/DB backwards (the chip loads A only from SB). The file
+  now says so, and says which way each control drives.
+- 1.52.0 to 1.54.0 share one pull request.
+
 ## 1.53.1 — 2026-10-31
 
 - **`examples/mos6502.dc`: a chip as a floor plan.** The MOS 6502's
