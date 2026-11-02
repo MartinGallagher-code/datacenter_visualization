@@ -21,7 +21,7 @@ Everything else derives:
 | `pyproject.toml` / PyPI | `python/dcviz/__init__.py` (`[tool.hatch.version]`) |
 | `dcadd`/`dcimport`/`dcviz --version` | the same, via `dcviz.version_notice()` |
 | The About box in the left panel | `js/version.js`, written in by `js/app.js` |
-| The GitHub release notes | `CHANGELOG.md` |
+| The GitHub release notes | `CHANGELOG.md`: every section since the last released tag (`.github/release_notes.py`) |
 | `README.md`'s "Current version" line | nothing — it is prose, and the only copy a tool cannot derive, so the test suite pins it instead |
 | The git tag | checked against the tree, never injected into it |
 

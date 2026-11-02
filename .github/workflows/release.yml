@@ -136,28 +136,21 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0       # the tags, to find the last release
       - uses: actions/download-artifact@v4
         with:
           name: dist
           path: dist
 
-      # The release notes are the changelog's section for this version, cut
-      # out rather than written again: a summary typed twice is a summary
-      # that disagrees with itself by the third release.
+      # The release notes are cut from the changelog, never written again: a
+      # summary typed twice disagrees with itself by the third release. Every
+      # pull request moves the version and most numbers are never published
+      # on their own, so the notes are every section since the last released
+      # tag, not this version's alone (.github/release_notes.py).
       - name: Notes from the changelog
         run: |
-          python - <<'EOF' > notes.md
-          import pathlib, re
-          version = "${{ needs.build.outputs.version }}"
-          text = pathlib.Path("CHANGELOG.md").read_text()
-          body = re.split(rf"^## {re.escape(version)}\b.*$", text, maxsplit=1, flags=re.M)
-          section = re.split(r"^## ", body[1], maxsplit=1, flags=re.M)[0].strip()
-          print(section)
-          print()
-          print(f"    pip install datacenter-layout-viewer=={version}")
-          print()
-          print("Or serve a clone: `python3 -m http.server 8000`. No dependencies either way.")
-          EOF
+          python .github/release_notes.py "${{ needs.build.outputs.version }}" $(git tag -l 'v*') > notes.md
           cat notes.md
 
       - name: Publish the release

@@ -1167,6 +1167,31 @@ layout(small.root, () => true);
   eq(box('D/room').h, 62, 'collapsed, a container keeps its compact size');
 }
 
+// w= is the width in U, on the same scale, as u= is the height: a device
+// exactly that wide, a container at least that wide; in a rack, the rack's
+// width holds.
+{
+  const wide = parseLayout(['dc D',
+    '  cage C', '    node die w=40 u=20', '    node plain',
+    '  cage room w=60', '    node x',
+    '  cage full w=2 dir=x', '    node a', '    node b', '    node c',
+    '  row R w=80', '    rack r u=10 w=40', '      node n w=30',
+    '  cage kid w=10', '    cage inner', '      node y',
+  ].join('\n'));
+  eq(wide.warnings, [], 'w= parses clean');
+  ok(/w=0 is outside 1\.\.1000/.test(parseLayout('node x w=0').warnings.join('\n')), 'w= is checked against its range');
+  ok(/w=2\.5 is not a whole number/.test(parseLayout('node x w=2.5').warnings.join('\n')), 'and is a whole number');
+  layout(wide.root);
+  const box = (k) => wide.byKey.get(k).box;
+  eq([box('D/C/die').w, box('D/C/die').h], [40 * U_PX, 20 * U_PX], 'a device is as wide as its w= says, as tall as its u=');
+  eq(box('D/C/plain').w, 64, 'and one without w= keeps the default');
+  eq(box('D/room').w, 60 * U_PX, 'a container is at least its w= wide');
+  ok(box('D/full').w > 3 * 64, 'but never too narrow for what it holds');
+  eq(box('D/R').w, 80 * U_PX, 'a row takes its w= too');
+  eq([box('D/R/r').w, box('D/R/r/n').w], [64, 64 - 2 * 5], 'a rack, and what is in it, keep the rack’s width');
+  eq(box('D/kid/inner').w, 120, 'and w= is not inherited by what is inside');
+}
+
 // A row lays its racks out in one line, and used to ignore cols= while doing
 // it: a row holding a network layer above its racks drew the two side by side
 // however it was asked. cols= (or dir=y) makes a row a grid like any other.
@@ -3037,6 +3062,68 @@ link fabric role=server tor
   const plain = routeTraffic(m, offered, { split: 'even' });
   const over = findingsOf(m, [], { result: plain, loads: plain.loads, toGbps: 1, unit: 'Gb/s' });
   ok(/offered 160% of what its NIC carries/.test(over.hosts.get(m.resolve('R02/s5'))[0].text), 'without contention, a NIC offered past full');
+}
+
+// ------------------------------------------------------------- bus cables
+// cables=bus: an element met along its length, as a register meets the bus
+// running past it on a die -- each cable arriving square at the bus's facing
+// edge, at the point nearest the device, and two buses joined edge to edge
+// where they overlap. Anything else still leaves from a side into a lane.
+{
+  const text = ['dc D',
+    '  chip C dir=y',
+    '    regs R dir=x',
+    '      node r1 +switch', '      node r2 +switch', '      node r3 +switch',
+    '    node bus w=80 +switch cables=bus',
+    '    node bus2 w=60 +switch cables=bus',
+    '    node under +switch',
+    'net n gbps=10',
+    'link n name=bus name=r1|r2|r3|under|bus2',
+  ].join('\n');
+  const m = parseLayout(text);
+  eq(m.warnings, [], 'cables=bus parses clean');
+  ok(/cables=wide is not sides or bus/.test(parseLayout('node x cables=wide').warnings.join('\n')), 'any other cables= is reported');
+  ok(parseLayout('chip C cables=bus\n  node x').resolve('x').attrs.cables === undefined, 'and is not inherited');
+  layout(m.root);
+  const r = new Renderer({ getContext: () => null }, { ...viewOf(m), curvedCables: true });
+  r.camera.scale = 4;
+  r.rebuildLinkCache(0);
+  const routed = r.linkCache.nets.get('n');
+  const box = (n) => m.resolve(n).box;
+  const bus = box('bus');
+  const toBus = (n) => routed.cables.find((c) => [c.a, c.b].includes(m.resolve(n)) && [c.a, c.b].includes(m.resolve('bus')));
+  const curveOf = (cable) => piecesOf(cable, r.linkCache.ports, true).find((p) => p.pts).pts;
+  for (const n of ['r1', 'r2', 'r3']) {
+    const pts = curveOf(toBus(n));
+    const dev = box(n);
+    eq([pts[7], pts[6] >= bus.x && pts[6] <= bus.x + bus.w], [bus.y, true], `${n} above the bus meets its top edge, within its length`);
+    ok(pts[6] > dev.x - 6 && pts[6] < dev.x + dev.w + 6, `${n}'s cable arrives beside ${n}, not at the bus's end  (${pts[6].toFixed(1)}, ${n} at ${dev.x}-${dev.x + dev.w})`);
+    eq([pts[4], pts[5] < pts[7]], [pts[6], true], `and square to the bus: straight down onto it`);
+  }
+  const xs = ['r1', 'r2', 'r3'].map((n) => curveOf(toBus(n))[6]);
+  ok(xs[0] < xs[1] && xs[1] < xs[2], 'three devices meet the bus at three points, in their order');
+  const below = curveOf(toBus('under'));
+  eq(below[7], bus.y + bus.h, 'a device below the bus meets its bottom edge');
+  const join = curveOf(toBus('bus2'));
+  const b2 = box('bus2');
+  eq([join[1], join[7], join[0] === join[6]], [bus.y + bus.h, b2.y, true], 'two buses join edge to edge, straight across');
+  ok(join[0] >= Math.max(bus.x, b2.x) && join[0] <= Math.min(bus.x + bus.w, b2.x + b2.w), 'where they overlap');
+  // Found under the pointer by the same curve it is drawn with.
+  const pts = curveOf(toBus('r2'));
+  const mid = (k) => (pts[k] + 3 * pts[k + 2] + 3 * pts[k + 4] + pts[k + 6]) / 8;
+  const toScreen = (x, y) => [(x - r.camera.x) * r.camera.scale, (y - r.camera.y) * r.camera.scale];
+  const hit = r.pickCable(...toScreen(mid(0), mid(1)));
+  ok(hit && hit.cables.some((c) => c.cable === toBus('r2')), 'the pointer on a cable to a bus finds it');
+  // Without cables=bus, the same cables meet the bus at its side, into a lane.
+  const plain = parseLayout(text.replace(' cables=bus', '').replace(' cables=bus', ''));
+  layout(plain.root);
+  const rp = new Renderer({ getContext: () => null }, { ...viewOf(plain), curvedCables: true });
+  rp.camera.scale = 4;
+  rp.rebuildLinkCache(0);
+  const side = rp.linkCache.nets.get('n').cables.find((c) => [c.a, c.b].includes(plain.resolve('r1')));
+  const sidePts = piecesOf(side, rp.linkCache.ports, true).find((p) => p.pts).pts;
+  const pb = plain.resolve('bus').box;
+  ok(sidePts[6] < pb.x || sidePts[6] > pb.x + pb.w, 'and without it, a cable still meets the bus beside it, as before');
 }
 
 // ------------------------------------------------------------ cable hover
@@ -4961,6 +5048,54 @@ if (python.error) {
   ok((fed.stderr || '').includes('skipped 2'), 'and the two unreadable ones are reported');
   ok((fed.stderr || '').includes("'u02,62.3'"), 'by content, so the cause is visible');
   ok(!(fed.stderr || '').includes('# note'), 'blank lines and comments are not "skipped"');
+}
+
+// ------------------------------------------------------------ release notes
+// A release carries every version since the last one released, and its
+// notes must say so: cut from its own changelog section alone, the first
+// release after 1.0.1 described one pull request out of sixty-odd.
+if (python.error) {
+  skip('release notes', 'no python3');
+} else {
+  const script = join(root, '.github/release_notes.py');
+  const notesFor = (...args) => {
+    const r = spawnSync('python3', [script, ...args], { encoding: 'utf8', env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' } });
+    return { code: r.status, out: r.stdout || '', err: (r.stderr || '').trim() };
+  };
+  const changelog = readFileSync(join(root, 'CHANGELOG.md'), 'utf8');
+  const headings = [...changelog.matchAll(/^## (\d+\.\d+\.\d+)\b/gm)].map((m) => m[1]);
+  const newer = (a, b) => { const x = a.split('.').map(Number); const y = b.split('.').map(Number); return x[0] - y[0] || x[1] - y[1] || x[2] - y[2]; };
+  const since101 = headings.filter((v) => newer(v, '1.0.1') > 0 && newer(v, VERSION) <= 0);
+
+  const all = notesFor(VERSION, 'v1.0.0', 'v1.0.1');
+  eq(all.code, 0, 'notes for this version, with 1.0.0 and 1.0.1 released');
+  ok(all.out.startsWith(`Everything since 1.0.1, the last release: ${since101.length} versions, ${since101[since101.length - 1]} to ${VERSION}.`),
+     `they say what they cover: ${since101.length} versions since 1.0.1`);
+  eq([...all.out.matchAll(/^## (\d+\.\d+\.\d+)/gm)].map((m) => m[1]), since101, 'every section since the last release, newest first, and no older one');
+  ok(all.out.trimEnd().endsWith('No dependencies either way.') && all.out.includes(`pip install datacenter-layout-viewer==${VERSION}`), 'and how to install it');
+  eq(notesFor(VERSION, 'v1.0.1', `v${VERSION}`, 'v9.9.9').out, all.out, 'its own tag, made before the notes, and any later one are ignored');
+
+  const one = notesFor('1.0.1', 'v1.0.0');
+  const own = changelog.split(/^## 1\.0\.1\b.*$/m)[1].split(/^## /m)[0].trim();
+  ok(one.code === 0 && one.out.startsWith(own) && !one.out.includes('## '), 'one version since the last release: its own section, as before');
+  ok(notesFor('1.0.1').out.startsWith('Every version up to 1.0.1: 2 of them, 1.0.0 on.'), 'nothing released yet: every version up to it');
+  const missing = notesFor('0.9.0');
+  ok(missing.code === 1 && /no '## 0\.9\.0' section/.test(missing.err), 'a version with no section is refused, before anything is published');
+
+  const capped = spawnSync('python3', ['-c', [
+    'import sys; sys.path.insert(0, sys.argv[1]); import release_notes as r',
+    'print(r.notes(sys.argv[2], open(sys.argv[3]).read(), ["v1.0.1"], limit=20000))'].join('\n'),
+  join(root, '.github'), VERSION, join(root, 'CHANGELOG.md')], { encoding: 'utf8', env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' } });
+  const kept = [...capped.stdout.matchAll(/^## (\d+\.\d+\.\d+)/gm)].length;
+  ok(capped.stdout.length <= 20000 && kept > 0 && kept < since101.length && capped.stdout.includes(`${VERSION} — `),
+     `past the limit the oldest are left out (${kept} of ${since101.length} kept), the newest never`);
+  ok(new RegExp(`…and ${since101.length - kept} older versions, back to 1\\.1\\.0: see \\[CHANGELOG\\.md\\]`).test(capped.stdout), 'and the notes say how many, and where they are');
+
+  const workflow = readFileSync(join(root, '.github/workflows/release.yml'), 'utf8');
+  const job = workflow.slice(workflow.indexOf('  github-release:'), workflow.indexOf('  pypi:'));
+  ok(job.includes("python .github/release_notes.py \"${{ needs.build.outputs.version }}\" $(git tag -l 'v*') > notes.md"),
+     'the release workflow makes its notes with it');
+  ok(/fetch-depth: 0/.test(job), 'and fetches the tags it needs to find the last release');
 }
 
 // ------------------------------------------- stats that outlived their aggregation

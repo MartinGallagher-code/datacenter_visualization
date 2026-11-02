@@ -2404,6 +2404,41 @@ await test('a bond with balance=even', async () => {
   ok(nics.length > 0 && nics.every((x) => x === 50), `every NIC carries exactly half  (${nics.join(', ')}%)`);
 }, { url: '?layout=fx/bonded-even.dc' });
 
+// cables=bus: a bus drawn across the registers it serves, each register's
+// cable dropping straight onto it rather than all meeting it at one end.
+// On the page: counted, drawn, and found under the pointer.
+await test('cables meeting a bus along its length', async () => {
+  await openLayout([
+    'dc D', '  chip CPU dir=y', '    regs REGS dir=x',
+    '      node r1 +switch', '      node r2 +switch', '      node r3 +switch',
+    '    node bus w=80 u=2 +switch cables=bus',
+    'net n gbps=10', 'link n name=bus name=r1|r2|r3',
+  ].join('\n'));
+  await page.locator('#btn-fit').click().catch(() => {});
+  await page.waitForTimeout(400);
+  const links = await page.evaluate(() => {
+    const m = /([\d,]+) links/.exec(document.querySelector('#statusinfo').textContent);
+    return m ? Number(m[1].replace(/,/g, '')) : -1;
+  });
+  eq(links, 3, 'three cables to the bus, counted on screen');
+  // Sweep just above the bus, where the cables arrive, for each one.
+  const found = await page.evaluate(() => {
+    const c = document.querySelector('#view');
+    const r = c.getBoundingClientRect();
+    const seen = new Set();
+    for (let y = 10; y < r.height; y += 3) {
+      for (let x = 4; x < r.width; x += 3) {
+        c.dispatchEvent(new PointerEvent('pointermove', { clientX: r.left + x, clientY: r.top + y, bubbles: true }));
+        const tip = document.querySelector('#tooltip');
+        const m = !tip.hidden && /^n: .*\b(r[123])\b.* ↔ .*bus|^n: .*bus.* ↔ .*\b(r[123])\b/.exec(tip.textContent);
+        if (m) seen.add(m[1] || m[2]);
+      }
+    }
+    return [...seen].sort();
+  });
+  eq(found, ['r1', 'r2', 'r3'], 'each register’s cable to the bus is found under the pointer');
+}, { url: '?layout=fx/tiny.dc' });
+
 await test('hovering a cable', async () => {
   await page.locator('#load-gen button', { hasText: 'Run' }).click();
   await page.waitForTimeout(400);

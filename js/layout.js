@@ -65,7 +65,10 @@ function measure(el, isVisible) {
     if (el.kind === 'rack' && !el.children.length) {
       h = labelOf('rack') + (el.uHeight || 42) * U_PX + padOf('rack') * 2;
     }
-    el.box = { x: 0, y: 0, w: c.w, h };
+    // w= is its width the same way, on the same scale: a device is exactly
+    // that wide; a collapsed container keeps its compact size.
+    const w = !el.children.length && widthOf(el) ? widthOf(el) * U_PX : c.w;
+    el.box = { x: 0, y: 0, w, h };
     return;
   }
 
@@ -110,7 +113,7 @@ function measure(el, isVisible) {
       child.rel = { x, y: label + pad + extra + (tallest - child.box.h) };
       x += child.box.w + gap;
     }
-    el.box = { x: 0, y: 0, w: Math.max(x - gap + pad, 90), h: label + pad * 2 + tallest + extra };
+    el.box = { x: 0, y: 0, w: Math.max(x - gap + pad, 90, widthOf(el) * U_PX), h: label + pad * 2 + tallest + extra };
     return;
   }
 
@@ -137,7 +140,8 @@ function measure(el, isVisible) {
     lineHeight = Math.max(lineHeight, child.box.h);
     col++;
   }
-  const w = Math.max(widest, 120);
+  // w= is a floor too: what the children need always fits.
+  const w = Math.max(widest, 120, widthOf(el) * U_PX);
   // align=center or right moves each line of children across the room the
   // container has, so a narrow network layer sits centred over the racks
   // below it rather than against the left edge.
@@ -167,6 +171,15 @@ const ALIGN_SHARE = { left: 0, center: 0.5, centre: 0.5, right: 1 };
 function heightOf(el) {
   if (el.kind === 'rack' || el.uSize) return 0;
   return intAttr(el.attrs.u, 0, NUMBERS.u);
+}
+
+/**
+ * The width w= asks of an element outside a rack, in U -- the scale u= is
+ * drawn to -- or 0 for none. A rack and what is in it keep the rack's width.
+ */
+function widthOf(el) {
+  if (el.kind === 'rack' || (el.parent && el.parent.kind === 'rack')) return 0;
+  return intAttr(el.attrs.w, 0, NUMBERS.w);
 }
 
 function gridColumns(el, count) {
