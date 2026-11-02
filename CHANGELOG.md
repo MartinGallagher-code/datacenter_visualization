@@ -11,76 +11,50 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
-## 1.54.0 — 2026-11-01
+## 1.54.1 — 2026-11-02
 
-- **`tools/mos6502-export`: experiments from Modeling_2026's 6502 model,
-  on the chip.** Runs one experiment on a checkout of Modeling_2026
-  (`full_stack/mos_6502`) and writes it as results for
-  `examples/mos6502.dc`:
-  - **6502:** CPI, IPC, MIPS and bus bytes per instruction.
-  - **Board:** effective clock, the CPU's share of cycles, its bus traffic.
-  - **Video:** the cycles it steals.
-  - **Holdouts:** the model's two benchmark-ratio checks, `PASS`/`FAIL` at
-    its own tolerance.
-  - **Levers:** board, region, an instruction mix from a file, zero page,
-    page crossing, branches taken, the overlapped fetch, and the C64's
-    screen and sprites. `--sweep` runs one setting over several values.
-
-  Every figure comes from the model's own functions. The zero-page,
-  sprite and board sweeps match the model's simulations exactly. Each
-  sample carries the model's tier for its inputs, and the file names the
-  Modeling_2026 commit and carries the layout, so opening the file opens
-  the chip. The tool is not packaged, since it needs the checkout; the
-  suite runs it against a stand-in with made-up numbers
-  (`tests/fixtures/modeling-6502`). `examples/mos6502-experiment.tsv` is
-  one experiment from the real model.
-- **`examples/mos6502.dc` checked against the visual6502 netlist.** Every
-  internal-bus connection is now listed with the datapath control signals
-  that make it (`ADL/ABL`, `ADH/ABH`, `dpc0`–`dpc43`), and the wiring
-  matched them. The one missing piece is added: the ADH constants that
-  make page 00 and page 01. The buses are widened to match. A cable
-  carries both ways and a route is the fewest hops, so a load into A is
-  drawn over AC/DB backwards (the chip loads A only from SB). The file
-  now says so, and says which way each control drives.
-- 1.52.0 to 1.54.0 share one pull request.
-
-## 1.53.1 — 2026-10-31
-
-- **`examples/mos6502.dc`: a chip as a floor plan.** The MOS 6502's
-  datapath and control on a board with RAM, ROM, I/O and Apple II-style
-  video. Its four internal buses (ADH, ADL, SB, DB) are drawn as wide as the
-  datapath with `w=` and met along their length with `cables=bus`, so the
-  routes are the chip's own: shift-click the zero page and the accumulator
-  for `LDA zp`, X and A for `TXA`, the ROM and IR for an opcode fetch. Bus
-  speeds are one byte per cycle at 1 MHz, from the 6502 model in
-  Modeling_2026 (`full_stack/mos_6502`); load two CPU reads at once and they
-  share the one byte, while the CPU and video each read RAM at full rate.
-  A sample and its test only, so a patch. 1.52.0, 1.53.0 and 1.53.1 share
-  one pull request.
+- **The release notes are everything since the last release.** Every pull
+  request moves the version, and most numbers are never published on their
+  own: PyPI is still on 1.0.1. Until now the GitHub release notes were the
+  released version's own section and nothing else, so the next release
+  would have described its last pull request and none of the 62 versions
+  before it. `.github/release_notes.py` gathers
+  every section newer than the last released tag, says how many there are
+  and since which release, and leaves out the oldest, saying so, if the
+  notes would pass GitHub's 125,000-character limit. `release.yml` calls it
+  and fetches the tags it needs. Release tooling only, so a patch.
+- `w=` and `cables=bus` examples in the README and the Syntax panel are a
+  patch panel and an overhead busway.
+- **1.53.1 and 1.54.0 are not in this release.** They were the MOS 6502
+  drawn as a floor plan (`examples/mos6502.dc`) and `tools/mos6502-export`,
+  which wrote Modeling_2026's 6502 experiments onto it. Both were taken out
+  before release, and are kept whole in MartinGallagher-code/parking_lot,
+  under `datacenter_visualization/mos6502/`, with the steps to put them
+  back. Their numbers are spent.
+- 1.52.0 to 1.54.1 share one pull request, so only 1.54.1 is published.
 
 ## 1.53.0 — 2026-10-31
 
 - **`cables=bus`: an element met along its length.** Every cable left its
   device from the left or right edge into a lane, which is how cables run up
-  a rack -- and how a bus drawn across a datapath (1.52.0's `w=`) had every
-  register's cable gather at its far end. With `cables=bus` on an element,
-  each cable arrives at its top or bottom edge, whichever faces the device
-  at the other end, square to it and at the point nearest that device, so
-  the registers drop straight onto the bus running past them, as on a die.
+  a rack -- and how a busway or backplane drawn across what it serves
+  (1.52.0's `w=`) had every cable gather at its far end. With `cables=bus`
+  on an element, each cable arrives at its top or bottom edge, whichever
+  faces the device at the other end, square to it and at the point nearest
+  that device, so what stands under a bus drops straight onto it.
   The device end still leaves by its side and lane, fanned out as before;
   two buses join edge to edge where they overlap; hover finds these cables
   by the curves they are drawn with. `cables=sides` is the default and any
   other value is reported; not inherited; in the completions and the Syntax
-  panel. 1.52.0 and 1.53.0 share one pull request, so 1.52.0 is not
-  published on its own. `js/route.js` (`busRun`, `busCurve`), `js/parse.js`,
+  panel. `js/route.js` (`busRun`, `busCurve`), `js/parse.js`,
   `js/hints.js`.
 
 ## 1.52.0 — 2026-10-30
 
 - **`w=`: an element's width, in U.** `u=` has been a height everywhere since
   1.x, and nothing set a width: a device outside a rack was always 64 wide,
-  and a box could not be drawn to fill the room it stands for -- an IO die
-  as wide as the memory channels above it, say, between columns of CCDs.
+  and a box could not be drawn to fill the room it stands for -- a patch
+  panel as wide as the racks it serves, say, or a busway along a row.
   `w=` is the width on the same scale: a device exactly that wide, a
   container (rows included) at least that wide, what its children need
   always fitting. A rack and what is in it keep the rack's width; a

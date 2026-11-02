@@ -3126,44 +3126,6 @@ link fabric role=server tor
   ok(sidePts[6] < pb.x || sidePts[6] > pb.x + pb.w, 'and without it, a cable still meets the bus beside it, as before');
 }
 
-// ------------------------------------------------------------ the 6502 sample
-// examples/mos6502.dc: a chip drawn as a floor plan -- buses met along their
-// length, data from memory reaching the accumulator over the real path, and
-// the one-byte-a-cycle data pins as the limit the board shares.
-{
-  const m = parseLayout(readFileSync(join(root, 'examples/mos6502.dc'), 'utf8'));
-  eq(m.warnings, [], 'the 6502 sample parses clean');
-  for (const id of ['6502-ADH', '6502-ADL', '6502-SB', '6502-DB']) {
-    const bus = m.resolve(id);
-    eq([bus.attrs.cables, bus.attrs.w], ['bus', '209'], `${id} is a bus as wide as the datapath`);
-  }
-  // Wired as the visual6502 netlist's datapath controls connect them.
-  const on = (id) => m.links.filter((l) => l.net === 'bus' && [l.a, l.b].includes(m.resolve(id)))
-    .map((l) => (l.a === m.resolve(id) ? l.b : l.a).attrs.id.replace('6502-', '')).sort();
-  eq(on('6502-ADH'), ['ABH', 'CONST', 'DBB', 'PCH', 'SB'], 'ADH: ADH/ABH, PCH, DL/ADH, the SB/ADH pass, the 0/ADH constants');
-  eq(on('6502-ADL'), ['ABL', 'ALU', 'DBB', 'PCL', 'S'], 'ADL: ADL/ABL, ADD/ADL and ADL/ADD, DL/ADL, PCL, S/ADL');
-  eq(on('6502-SB'), ['A', 'ADH', 'ALU', 'DB', 'S', 'X', 'Y'], 'SB: A, X, Y, S, the ALU, and the passes to DB and ADH');
-  eq(on('6502-DB'), ['A', 'ALU', 'DBB', 'P', 'PCH', 'PCL', 'SB'], 'DB: DL and DOR, the ALU B side, AC/DB, P, PCL, PCH, the SB pass');
-  const between = (a, b) => routesBetween([m.resolve(a), m.resolve(b)]);
-  const ends = (q) => [...q.links].map((l) => `${l.a.attrs.id}-${l.b.attrs.id}`);
-  // A load into A is drawn the fewest hops, over AC/DB backwards (the file
-  // says so); up to the data bus, the route is the chip's.
-  eq(ends(between('BRD-ZP', '6502-A')).slice(0, 5),
-     ['BRD-MUX-BRD-ZP', 'BRD-DBUS-BRD-MUX', '6502-D0-7-BRD-DBUS', '6502-DBB-6502-D0-7', '6502-DB-6502-DBB'],
-     'LDA zp: zero page, the data pins, the input latch, the data bus');
-  eq(ends(between('6502-X', '6502-A')), ['6502-SB-6502-X', '6502-SB-6502-A'], 'TXA: register to register over the special bus');
-  eq(ends(between('BRD-ROM', '6502-IR')).slice(-2), ['6502-PREDECODE-6502-D0-7', '6502-PREDECODE-6502-IR'],
-     'an opcode fetch goes through predecode into IR');
-  const r = (n) => m.resolve(n);
-  const two = [{ id: 0, src: r('BRD-ZP'), dst: r('6502-A'), value: 0.008 }, { id: 1, src: r('BRD-MAIN'), dst: r('BRD-VIDEO'), value: 0.008 }];
-  const c = contend(m, two, { toGbps: 1 });
-  eq([c.contention.flows.map((f) => f.value), c.contention.held], [[0.008, 0.008], 0],
-     'the CPU and video each read RAM at a byte a cycle: neither steals from the other');
-  const three = contend(m, [...two, { id: 2, src: r('BRD-STACK'), dst: r('6502-A'), value: 0.008 }], { toGbps: 1 });
-  eq(three.contention.flows.map((f) => Math.round(f.value * 1e9) / 1e9), [0.004, 0.008, 0.004],
-     'two CPU reads in one cycle share the one byte the data bus carries');
-}
-
 // ------------------------------------------------------------ cable hover
 // The cable under the pointer, found by the same pieces it is drawn with: a
 // crossing by its curve, cables sharing a stub all at once, and inside a
@@ -5088,110 +5050,52 @@ if (python.error) {
   ok(!(fed.stderr || '').includes('# note'), 'blank lines and comments are not "skipped"');
 }
 
-// ------------------------------------------------------------ mos6502-export
-// A 6502 experiment from Modeling_2026, as results for examples/mos6502.dc.
-// CI has no Modeling_2026, so the tool is pointed at a stand-in with made-up
-// numbers worked out by hand (tests/fixtures/modeling-6502): what is tested
-// is what the tool does with what the model says.
+// ------------------------------------------------------------ release notes
+// A release carries every version since the last one released, and its
+// notes must say so: cut from its own changelog section alone, the first
+// release after 1.0.1 described one pull request out of sixty-odd.
 if (python.error) {
-  skip('mos6502-export', 'no python3');
+  skip('release notes', 'no python3');
 } else {
-  const fake = join(root, 'tests/fixtures/modeling-6502');
-  const dir = mkdtempSync(join(tmpdir(), 'mos6502-'));
-  const env = { ...process.env, PYTHONDONTWRITEBYTECODE: '1', MODELING_2026: fake };
-  const tool = (args, e = env) => {
-    const run = spawnSync('python3', [join(root, 'tools/mos6502-export'), ...args], { encoding: 'utf8', env: e });
-    return { code: run.status, out: run.stdout || '', err: (run.stderr || '').trim() };
+  const script = join(root, '.github/release_notes.py');
+  const notesFor = (...args) => {
+    const r = spawnSync('python3', [script, ...args], { encoding: 'utf8', env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' } });
+    return { code: r.status, out: r.stdout || '', err: (r.stderr || '').trim() };
   };
-  const chip = parseLayout(readFileSync(join(root, 'examples/mos6502.dc'), 'utf8'));
-  const valuesOf = (text) => {
-    const got = {};
-    for (const line of text.split('\n')) {
-      const f = line.split('\t');
-      if (f.length >= 3 && !line.startsWith('#') && !line.startsWith('!')) got[f[0]] = Number.isNaN(Number(f[2])) ? f[2] : Number(f[2]);
-    }
-    return got;
-  };
-  const near = (a, b) => Math.abs(a - b) < 1e-4;
+  const changelog = readFileSync(join(root, 'CHANGELOG.md'), 'utf8');
+  const headings = [...changelog.matchAll(/^## (\d+\.\d+\.\d+)\b/gm)].map((m) => m[1]);
+  const newer = (a, b) => { const x = a.split('.').map(Number); const y = b.split('.').map(Number); return x[0] - y[0] || x[1] - y[1] || x[2] - y[2]; };
+  const since101 = headings.filter((v) => newer(v, '1.0.1') > 0 && newer(v, VERSION) <= 0);
 
-  const one = tool([]);
-  eq([one.code, one.err], [0, ''], 'an experiment with the model’s defaults writes to the standard output');
-  const readWarnings = [];
-  const overlays = parseResults(one.out, new Map(), readWarnings);
-  eq(readWarnings, [], 'and it reads without a warning');
-  const unresolved = [...overlays.values()].flatMap((o) => bindOverlay(o, chip).unresolved);
-  eq(unresolved, [], 'every number lands on an element of examples/mos6502.dc');
-  eq(overlays.size, 13, 'thirteen metrics: the CPU, the board, the video, the two holdouts');
-  const v = valuesOf(one.out);
-  ok(near(v.cpu_cpi, 2.66) && near(v.cpu_ipc, 1 / 2.66) && near(v.cpu_mips, 1 / 2.66), 'CPI from the model’s mix and table, IPC and MIPS from it');
-  eq([v.cpu_bus_bytes_per_instr, v.board_effective_mhz, v.board_cpu_share_pct, v.board_machine, v.video_steal_pct],
-     [2.66, 1, 100, '"Apple II"', 0], 'an Apple II: its clock, every cycle the CPU’s, the bus bytes an instruction moves');
-  eq([v.holdout_c64_vic20, v.holdout_apple_vic20, v.holdout_c64_vic20_residual_pct, v.holdout_apple_vic20_residual_pct],
-     ['FAIL', 'PASS', 20, 5], 'the holdouts graded at the model’s own 10%: a 20% residual fails, a 5% one passes');
-  ok(/cpu_cpi\t6502\t2\.66\trun=apple_ii-typical\tmix=typical\ttier=C/.test(one.out), 'each sample says its run and its tier: the typical mix is an estimate');
-  ok(/holdout_c64_vic20\tSYS\tFAIL\t.*predicted=1\.20000\tmeasured=1\.00000\ttolerance_pct=10\ttier=B/.test(one.out), 'a holdout carries what it compared');
-  const stamp = readStamp(one.out);
-  ok(stamp.model && stamp.model.intact, 'it carries the layout, intact');
-  eq([stamp.model.sha256, stamp.model.name], [layoutSha(readFileSync(join(root, 'examples/mos6502.dc'), 'utf8')), 'mos6502.dc'],
-     'the very layout in examples/, so opening the file alone opens the chip');
-  eq([stamp.run.tool, stamp.run.board, stamp.run.mix, stamp.run.overlap], ['mos6502-export', 'apple_ii', 'typical', 'yes'], 'and the settings it was made with');
-  ok(/^unknown/.test(stamp.run.modeling_2026) || /^[0-9a-f]{7,}/.test(stamp.run.modeling_2026), 'and the Modeling_2026 commit, where there is one');
-  eq(readStamp(tool(['--no-layout']).out).model, null, '--no-layout carries none');
+  const all = notesFor(VERSION, 'v1.0.0', 'v1.0.1');
+  eq(all.code, 0, 'notes for this version, with 1.0.0 and 1.0.1 released');
+  ok(all.out.startsWith(`Everything since 1.0.1, the last release: ${since101.length} versions, ${since101[since101.length - 1]} to ${VERSION}.`),
+     `they say what they cover: ${since101.length} versions since 1.0.1`);
+  eq([...all.out.matchAll(/^## (\d+\.\d+\.\d+)/gm)].map((m) => m[1]), since101, 'every section since the last release, newest first, and no older one');
+  ok(all.out.trimEnd().endsWith('No dependencies either way.') && all.out.includes(`pip install datacenter-layout-viewer==${VERSION}`), 'and how to install it');
+  eq(notesFor(VERSION, 'v1.0.1', `v${VERSION}`, 'v9.9.9').out, all.out, 'its own tag, made before the notes, and any later one are ignored');
 
-  // The levers, each as the model works it.
-  const c64 = valuesOf(tool(['--board', 'c64', '--sprites', '2']).out);
-  ok(near(c64.video_steal_pct, 7) && near(c64.board_effective_mhz, 0.93) && near(c64.board_cpu_share_pct, 93) && near(c64.cpu_mips, 0.93 / 2.66),
-     'a C64 with two sprites: 7% stolen, the clock and MIPS cut by it');
-  ok(near(valuesOf(tool(['--board', 'c64', '--screen', 'off']).out).board_effective_mhz, 1), 'the screen blanked: nothing stolen');
-  ok(near(valuesOf(tool(['--zero-page', '1']).out).cpu_cpi, 2.46) && near(valuesOf(tool(['--zero-page', '0']).out).cpu_cpi, 2.86),
-     '--zero-page moves the memory accesses: all zero page 2.46, none 2.66+0.2');
-  ok(near(valuesOf(tool(['--no-overlap']).out).cpu_cpi, 3.66), '--no-overlap: the model’s counterfactual, a cycle more');
-  ok(near(valuesOf(tool(['--branch-taken', '1']).out).cpu_cpi, 2.7), '--branch-taken prices the branches');
-  const mixFile = join(dir, 'loop.mix');
-  writeFileSync(mixFile, '# a tight loop\nLDA absolute,X 0.5\nbranch 0.5   # taken back\n');
-  const mixed = tool(['--mix', mixFile, '--page-cross', '1']);
-  ok(near(valuesOf(mixed.out).cpu_cpi, 0.5 * 5 + 0.5 * 2.6), 'a mix from a file, with every indexed read crossing a page');
-  ok(/mix=loop\.mix\ttier=input/.test(mixed.out), 'and its numbers say the mix was yours, not the model’s');
+  const one = notesFor('1.0.1', 'v1.0.0');
+  const own = changelog.split(/^## 1\.0\.1\b.*$/m)[1].split(/^## /m)[0].trim();
+  ok(one.code === 0 && one.out.startsWith(own) && !one.out.includes('## '), 'one version since the last release: its own section, as before');
+  ok(notesFor('1.0.1').out.startsWith('Every version up to 1.0.1: 2 of them, 1.0.0 on.'), 'nothing released yet: every version up to it');
+  const missing = notesFor('0.9.0');
+  ok(missing.code === 1 && /no '## 0\.9\.0' section/.test(missing.err), 'a version with no section is refused, before anything is published');
 
-  // Refusals: said, not guessed past.
-  const refused = (args, why, e) => {
-    const r = tool(args, e);
-    ok(r.code === 2 && why.test(r.err), `refused: ${args.join(' ') || '(no checkout)'}  (${r.err})`);
-  };
-  writeFileSync(join(dir, 'bad.mix'), 'LDA nowhere 1\n');
-  writeFileSync(join(dir, 'short.mix'), 'TAX implied 0.5\n');
-  refused(['--mix', join(dir, 'bad.mix')], /bad\.mix:1: LDA nowhere is not in the cycle table/);
-  refused(['--mix', join(dir, 'short.mix')], /the weights sum to 0\.5; they must sum to 1/);
-  refused(['--mix', mixFile, '--zero-page', '0.5'], /--zero-page .* needs all four rows/);
-  refused(['--sprites', '2'], /--sprites applies to the C64 only/);
-  refused(['--sweep', 'sprites=0,8', '--out-dir', dir], /applies to the C64 only/);
-  refused(['--sweep', 'zero-page=0,1'], /--out-dir/);
-  refused(['--sweep', 'colour=red', '--out-dir', dir], /NAME is one of board, region/);
-  refused([], /no Modeling_2026 checkout: pass --modeling PATH/, { ...env, MODELING_2026: '' });
-  refused(['--modeling', dir], /is not a Modeling_2026 checkout/);
-  eq(tool(['--zero-page', '2']).code, 2, 'a fraction above 1 is refused');
+  const capped = spawnSync('python3', ['-c', [
+    'import sys; sys.path.insert(0, sys.argv[1]); import release_notes as r',
+    'print(r.notes(sys.argv[2], open(sys.argv[3]).read(), ["v1.0.1"], limit=20000))'].join('\n'),
+  join(root, '.github'), VERSION, join(root, 'CHANGELOG.md')], { encoding: 'utf8', env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' } });
+  const kept = [...capped.stdout.matchAll(/^## (\d+\.\d+\.\d+)/gm)].length;
+  ok(capped.stdout.length <= 20000 && kept > 0 && kept < since101.length && capped.stdout.includes(`${VERSION} — `),
+     `past the limit the oldest are left out (${kept} of ${since101.length} kept), the newest never`);
+  ok(new RegExp(`…and ${since101.length - kept} older versions, back to 1\\.1\\.0: see \\[CHANGELOG\\.md\\]`).test(capped.stdout), 'and the notes say how many, and where they are');
 
-  // A sweep: one file a value, and a table of them.
-  const sweep = tool(['--sweep', 'board=apple_ii,c64,bbc,vic20', '--out-dir', join(dir, 'boards')]);
-  eq(sweep.code, 0, 'a sweep over the boards runs');
-  eq(readdirSync(join(dir, 'boards')).sort(), ['apple_ii-typical.tsv', 'bbc_micro-typical.tsv', 'c64-pal-typical.tsv', 'vic_20-pal-typical.tsv'],
-     'one file a board, named for its settings');
-  ok(/bbc_micro\s+2\.660\s+0\.376\s+0\.752\s+2\.0000\s+100\.00/.test(sweep.out), 'and a table: the BBC Micro at 2 MHz, twice the MIPS');
-  ok(/^usage:/.test(tool(['--help']).out), '--help prints the usage');
-  rmSync(dir, { recursive: true, force: true });
-}
-
-// The experiment that ships beside the example, made from the real model.
-{
-  const text = readFileSync(join(root, 'examples/mos6502-experiment.tsv'), 'utf8');
-  const chip = parseLayout(readFileSync(join(root, 'examples/mos6502.dc'), 'utf8'));
-  const warned = [];
-  eq([...parseResults(text, new Map(), warned).values()].flatMap((o) => bindOverlay(o, chip).unresolved), [], 'examples/mos6502-experiment.tsv lands on the chip');
-  eq(warned, [], 'and reads without a warning');
-  const stamp = readStamp(text);
-  ok(stamp.model.intact && stamp.model.sha256 === layoutSha(readFileSync(join(root, 'examples/mos6502.dc'), 'utf8')),
-     'and carries examples/mos6502.dc as it is now -- edit the layout, and make the experiment again');
-  ok(/^[0-9a-f]{7,}$/.test(stamp.run.modeling_2026), 'made from a committed Modeling_2026, which it names');
+  const workflow = readFileSync(join(root, '.github/workflows/release.yml'), 'utf8');
+  const job = workflow.slice(workflow.indexOf('  github-release:'), workflow.indexOf('  pypi:'));
+  ok(job.includes("python .github/release_notes.py \"${{ needs.build.outputs.version }}\" $(git tag -l 'v*') > notes.md"),
+     'the release workflow makes its notes with it');
+  ok(/fetch-depth: 0/.test(job), 'and fetches the tags it needs to find the last release');
 }
 
 // ------------------------------------------- stats that outlived their aggregation
