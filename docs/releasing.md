@@ -21,7 +21,7 @@ Everything else derives:
 | `pyproject.toml` / PyPI | `python/dcviz/__init__.py` (`[tool.hatch.version]`) |
 | `dcadd`/`dcimport`/`dcviz --version` | the same, via `dcviz.version_notice()` |
 | The About box in the left panel | `js/version.js`, written in by `js/app.js` |
-| The GitHub release notes | `CHANGELOG.md`: every section since the last released tag (`.github/release_notes.py`) |
+| The GitHub release notes | `CHANGELOG.md`: every section since the last version with a GitHub release (`.github/release_notes.py`) |
 | `README.md`'s "Current version" line | nothing — it is prose, and the only copy a tool cannot derive, so the test suite pins it instead |
 | The git tag | checked against the tree, never injected into it |
 
@@ -68,10 +68,13 @@ changelog entry.
 3. Merge to `main`.
 4. **Actions → release → Run workflow.** One click, nothing to type.
 
-The workflow reads the version out of the tree, tags that commit, builds,
-re-checks that the wheel installs and reports the right number, creates the
-GitHub release with the changelog section as its notes, and publishes to
-PyPI.
+The workflow reads the version out of the tree, checks that its tag is
+free, builds, re-checks that the wheel installs and reports the right
+number, and only then tags that commit. It then creates the GitHub release,
+with every changelog section since the last release as its notes, and
+publishes to PyPI. Tagging last means a run that fails on the way leaves no
+tag behind: 1.54.1's run tagged first, then failed its wheel check, and its
+tag had to be cleared by hand.
 
 It asks for nothing because there is nothing worth asking. The tag is
 *derived* from `python/dcviz/__init__.py`, never typed at it — a release that
@@ -80,6 +83,11 @@ and PyPI never lets a number be reused. The same rule is why re-running the
 button on an unbumped tree stops immediately: the tag already exists, so that
 version is already out, and it says so rather than failing at the upload
 twenty steps later.
+
+A tag is not a release. The notes count a version as released only when it
+has a GitHub release, so a tag left by a failed run cannot cut the next
+release's notes short. Delete such a tag (`git push origin --delete vX.Y.Z`)
+once you are sure it has no release, and bump the version as usual.
 
 Pushing a `v*` tag by hand still works and does the same thing, with the tag
 checked against the tree instead of created from it:

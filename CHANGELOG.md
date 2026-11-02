@@ -11,6 +11,25 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.54.2 — 2026-11-02
+
+- **1.54.1 was not published: its release run failed, and this fixes why.**
+  - **The wheel check expected an old `--version` line.** It still expected
+    `dcviz (Datacenter Layout Viewer) X.Y.Z`. The tools have printed the
+    GNU-style `dcviz X.Y.Z` since 2026-09-16 (`4b675ab`), and no release had
+    run since to notice. The check now expects `dcviz X.Y.Z`, and
+    `tests/run.mjs` holds it to what `dcviz --version` really prints.
+  - **The run tagged before it checked.** The button's tag is now made last,
+    after the wheel has been built, installed and used, so a failed run
+    leaves no tag. The first step only checks that the tag is free.
+  - **The notes count only real releases.** A version counts as released
+    when it has a GitHub release (`gh release list`), not merely a tag. The
+    `v1.54.1` tag the failed run left behind has no release, so these notes
+    still run from 1.0.1. Delete that tag with
+    `git push origin --delete v1.54.1`.
+- Release tooling only, so a patch. 1.54.1's entry below says what that
+  release would have carried; all of it is in this one.
+
 ## 1.54.1 — 2026-11-02
 
 - **The release notes are everything since the last release.** Every pull
