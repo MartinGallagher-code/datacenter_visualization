@@ -6,8 +6,10 @@ last release, not only its own.
 
     python .github/release_notes.py VERSION [TAG ...] > notes.md
 
-TAGs are the tags already released (`git tag -l 'v*'`); any at or above
-VERSION, its own tag among them, are ignored. Every pull request moves the
+TAGs are the versions already released: the tags that have a GitHub
+release (`gh release list`), since a tag alone is not a release -- a run can
+stop after tagging, as 1.54.1's did. Any at or above VERSION, its own among
+them, are ignored. Every pull request moves the
 version, and most numbers are never published on their own, so a release
 carries every section from the last released tag up to its own. Notes cut
 from its own section alone said nothing about the rest. With no earlier

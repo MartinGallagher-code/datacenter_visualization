@@ -5093,9 +5093,26 @@ if (python.error) {
 
   const workflow = readFileSync(join(root, '.github/workflows/release.yml'), 'utf8');
   const job = workflow.slice(workflow.indexOf('  github-release:'), workflow.indexOf('  pypi:'));
-  ok(job.includes("python .github/release_notes.py \"${{ needs.build.outputs.version }}\" $(git tag -l 'v*') > notes.md"),
+  ok(job.includes('python .github/release_notes.py "${{ needs.build.outputs.version }}" $released > notes.md'),
      'the release workflow makes its notes with it');
-  ok(/fetch-depth: 0/.test(job), 'and fetches the tags it needs to find the last release');
+  ok(job.includes("released=$(gh release list --repo \"${{ github.repository }}\" --limit 1000 --json tagName --jq '.[].tagName')")
+     && /GH_TOKEN: \$\{\{ github\.token \}\}/.test(job.slice(job.indexOf('Notes from the changelog'))),
+     'counting as released only what has a GitHub release: a tag a failed run left behind is not one');
+
+  // The build job: the tag is checked first and made last, so a run that
+  // fails on the way leaves no tag. 1.54.1's run tagged, then failed.
+  const build = workflow.slice(workflow.indexOf('  build:'), workflow.indexOf('  github-release:'));
+  const at = (name) => build.indexOf(`- name: ${name}\n`);
+  ok(at('Check the tag') > 0 && at('Check the tag') < at('Build') && at('Build') < at('Install the wheel and use it')
+     && at('Install the wheel and use it') < at('Tag it'), 'release: check the tag, build, install and use the wheel, and only then tag');
+  ok(/- name: Tag it\n\s+if: github\.event_name != 'push'/.test(build) && !build.slice(0, at('Tag it')).includes('git push'),
+     'nothing is pushed before the wheel has been used, and a pushed tag is not made twice');
+  // The wheel check's --version line is what dcviz prints. It once still
+  // expected the format from before 4b675ab, and the 1.54.1 run failed on it.
+  const expected = (build.match(/test "\$\(\/tmp\/env\/bin\/dcviz --version \| head -1\)" \\\n\s+= "([^"]+)"/) || [])[1];
+  const printed = spawnSync('python3', ['-m', 'dcviz', '--version'], { encoding: 'utf8', env: { ...process.env, PYTHONPATH: join(root, 'python'), PYTHONDONTWRITEBYTECODE: '1' } });
+  eq(expected && expected.replace('${{ steps.version.outputs.version }}', VERSION), (printed.stdout || '').split('\n')[0],
+     'the release’s wheel check expects the --version line dcviz prints');
 }
 
 // ------------------------------------------- stats that outlived their aggregation

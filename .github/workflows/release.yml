@@ -75,9 +75,10 @@ jobs:
             || { echo "::error::CHANGELOG.md has no '## $version' entry -- add one before releasing"; exit 1; }
 
       # Two ways in, one rule: the tag and the tree must end up agreeing.
-      # From the button there is no tag yet, so make it. From a pushed tag
-      # there is, so check it.
-      - name: Tag it
+      # From a pushed tag, check it now. From the button there is no tag
+      # yet: check none is in the way, and make it only once the wheel has
+      # been built and used (below), so a run that fails leaves no tag.
+      - name: Check the tag
         env:
           TAG: ${{ steps.version.outputs.tag }}
           VERSION: ${{ steps.version.outputs.version }}
@@ -95,10 +96,35 @@ jobs:
           # PyPI would refuse the upload at the very end of the run. Say so
           # now, and say what to do about it.
           if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
-            echo "::error::$TAG already exists -- $VERSION is released. Bump the version (see docs/releasing.md) and run this again."
+            echo "::error::$TAG already exists -- $VERSION is released, or a run stopped after tagging it. Bump the version (see docs/releasing.md) and run this again."
             exit 1
           fi
+          echo "$TAG is free"
 
+      - name: Build
+        run: |
+          python -m pip install --upgrade build twine
+          python -m build
+          python -m twine check --strict dist/*
+
+      # The first line of --version is the program and the project's number,
+      # GNU style (python/dcviz/__init__.py, version_notice); tests/run.mjs
+      # checks this line against what dcviz prints.
+      - name: Install the wheel and use it
+        run: |
+          python -m venv /tmp/env
+          /tmp/env/bin/pip install dist/*.whl
+          test "$(/tmp/env/bin/dcviz --version | head -1)" \
+             = "dcviz ${{ steps.version.outputs.version }}"
+          test -f "$(/tmp/env/bin/dcviz path)/js/app.js"
+
+      # Only now, with the wheel built and used, does the button's tag exist.
+      - name: Tag it
+        if: github.event_name != 'push'
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag -a "$TAG" -m "Datacenter Layout Viewer $VERSION"
@@ -108,20 +134,6 @@ jobs:
           # this by pushing with a PAT.
           git push origin "$TAG"
           echo "tagged $TAG at $(git rev-parse --short HEAD)"
-
-      - name: Build
-        run: |
-          python -m pip install --upgrade build twine
-          python -m build
-          python -m twine check --strict dist/*
-
-      - name: Install the wheel and use it
-        run: |
-          python -m venv /tmp/env
-          /tmp/env/bin/pip install dist/*.whl
-          test "$(/tmp/env/bin/dcviz --version | head -1)" \
-             = "dcviz (Datacenter Layout Viewer) ${{ steps.version.outputs.version }}"
-          test -f "$(/tmp/env/bin/dcviz path)/js/app.js"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -136,8 +148,6 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v5
-        with:
-          fetch-depth: 0       # the tags, to find the last release
       - uses: actions/download-artifact@v4
         with:
           name: dist
@@ -146,11 +156,16 @@ jobs:
       # The release notes are cut from the changelog, never written again: a
       # summary typed twice disagrees with itself by the third release. Every
       # pull request moves the version and most numbers are never published
-      # on their own, so the notes are every section since the last released
-      # tag, not this version's alone (.github/release_notes.py).
+      # on their own, so the notes are every section since the last release,
+      # not this version's alone (.github/release_notes.py). A version is
+      # released when it has a GitHub release: a tag alone is not one, since
+      # a run can stop after tagging (1.54.1's did).
       - name: Notes from the changelog
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          python .github/release_notes.py "${{ needs.build.outputs.version }}" $(git tag -l 'v*') > notes.md
+          released=$(gh release list --repo "${{ github.repository }}" --limit 1000 --json tagName --jq '.[].tagName')
+          python .github/release_notes.py "${{ needs.build.outputs.version }}" $released > notes.md
           cat notes.md
 
       - name: Publish the release
