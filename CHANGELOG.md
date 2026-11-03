@@ -11,6 +11,15 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.54.3 — 2026-11-03
+
+- **Work on this repository now goes through the shared ticket board.**
+  `CLAUDE.md` gains the "Every task is a ticket" section from
+  `MartinGallagher-code/shared_tools`: every change is a ticket kept as a
+  file there (this one is DV-001), moving Backlog → In Progress →
+  Adversarial Test → Review → Done, with the kanban board linked. Nothing
+  in the viewer, the formats or the tools changes.
+
 ## 1.54.2 — 2026-11-02
 
 - **1.54.1 was not published: its release run failed, and this fixes why.**
