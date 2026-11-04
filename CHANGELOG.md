@@ -11,6 +11,18 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.54.4 — 2026-11-04
+
+- **The ticket section of `CLAUDE.md` is updated to the current text from
+  `MartinGallagher-code/shared_tools`.** Step 1 now says to pull an existing
+  clone of `shared_tools` rather than only to clone it (a stale clone read an
+  old `CLAUDE.md` and ran an old `ticket.py`), and step 3 names the
+  `shared_tools` clone's script and passes `--request`. This is the repository's
+  copy of that snippet, nothing else in `CLAUDE.md` changes (ST-004). It also
+  reads Backlog → In Progress → Review → Done: Adversarial Test is now only on
+  the owner's request (ST-005). Nothing in the viewer, the formats or the tools
+  changes.
+
 ## 1.54.3 — 2026-11-03
 
 - **Work on this repository now goes through the shared ticket board.**
