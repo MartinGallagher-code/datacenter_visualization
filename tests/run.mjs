@@ -64,6 +64,9 @@ import {
 } from '../js/loadgen.js';
 import { applyNetOverrides, forgetOverlay, keepNetOverrides, uniqueLabels, urlLabel } from '../js/keep.js';
 import {
+  cableTip, formatBytes, formatLoad, formatPps, formatTime, hostTip, switchColor, switchTip,
+} from '../js/ui.js';
+import {
   compareHosts, compareLatency, compareMtu, compareRuns, comparisonResults, modelPairs, modelResults, suspects,
 } from '../js/compare.js';
 import {
@@ -6465,6 +6468,164 @@ if (python.error) {
   eq(labels('a.tsv', 'b.tsv'), [[], ['a.tsv', 'b.tsv']], 'no clash: nothing renamed');
   eq(labels('a.tsv', 'a.tsv', 'b.tsv'), [['a.tsv'], ['a.tsv', 'a.tsv (2)', 'b.tsv']], 'one clash: the second numbered from (2)');
   eq(labels('x', 'x', 'x'), [['x'], ['x', 'x (2)', 'x (3)']], 'three of one label: named once, numbered on');
+}
+
+// --------------------------------------------------------- ui formatters
+// The numbers the viewer prints: load, packet rate, buffer size and latency.
+// A wrong unit here gives a page that looks right, so each is pinned at its
+// unit boundaries, and the tooltip builders with hand-made records.
+{
+  // formatLoad: a bit rate goes through formatGbps; anything else keeps its unit.
+  const bits = { toGbps: 1, unit: 'Gb/s' };
+  eq([formatLoad(bits, 0), formatLoad(bits, 0.5), formatLoad(bits, 1), formatLoad(bits, 400), formatLoad(bits, 1000), formatLoad(bits, 3200)],
+     ['0Gb/s', '500Mb/s', '1Gb/s', '400Gb/s', '1Tb/s', '3.2Tb/s'], 'formatLoad: a bit rate at its M/G/T boundaries');
+  eq(formatLoad({ toGbps: 1e-3, unit: 'Mb/s' }, 2500), '2.5Gb/s', 'formatLoad: Mb/s converted to Gb/s first');
+  eq(formatLoad(bits, -40), '-40Gb/s', 'formatLoad: a negative bit rate');
+  eq([formatLoad({ toGbps: null, unit: '%' }, 42), formatLoad({ toGbps: null, unit: '%' }, 4.5), formatLoad({ toGbps: null, unit: '%' }, 0.25)],
+     ['42.00 %', '4.50 %', '0.250 %'], 'formatLoad: another unit, at formatNum’s three precisions');
+  eq(formatLoad({ toGbps: null, unit: '' }, 150), '150', 'formatLoad: no unit, no trailing space');
+  eq(formatLoad({ unit: 'ms' }, 7), '7.00 ms', 'formatLoad: toGbps missing reads as not a bit rate');
+  eq(formatLoad({ toGbps: null, unit: 'x' }, NaN), '— x', 'formatLoad: a non-finite value prints a dash, not NaN');
+
+  // formatPps: pps, Mpps, Gpps.
+  eq([formatPps(0), formatPps(999), formatPps(12000), formatPps(999999)], ['0 pps', '999 pps', '12,000 pps', '999,999 pps'],
+     'formatPps: below a million, whole packets with en-US grouping');
+  eq([formatPps(1e6), formatPps(4.7e6), formatPps(999.9e6), formatPps(1e9), formatPps(8e9), formatPps(1.25e9)],
+     ['1 Mpps', '4.7 Mpps', '999.9 Mpps', '1 Gpps', '8 Gpps', '1.3 Gpps'], 'formatPps: at and past 1e6 and 1e9');
+  eq(formatPps(-5), '-5 pps', 'formatPps: a negative rate stays in pps');
+
+  // formatBytes: B, KB, MB, GB.
+  eq([formatBytes(0), formatBytes(1), formatBytes(999), formatBytes(1000), formatBytes(640000), formatBytes(999949)],
+     ['0 B', '1 B', '999 B', '1 KB', '640 KB', '999.9 KB'], 'formatBytes: bytes and kilobytes');
+  eq([formatBytes(1e6), formatBytes(1.2e6), formatBytes(123456789), formatBytes(1e9), formatBytes(32e9)],
+     ['1 MB', '1.2 MB', '123.5 MB', '1 GB', '32 GB'], 'formatBytes: megabytes and gigabytes');
+  eq(formatBytes(-5), '-5 B', 'formatBytes: a negative size stays in bytes');
+
+  // formatTime: ns, µs, ms, negative times by their size.
+  eq([formatTime(0), formatTime(1e-9), formatTime(940e-9), formatTime(999e-9)], ['0 ns', '1 ns', '940 ns', '999 ns'],
+     'formatTime: nanoseconds');
+  eq([formatTime(1e-6), formatTime(3.7e-6), formatTime(999e-6)], ['1 µs', '3.7 µs', '999 µs'], 'formatTime: microseconds');
+  eq([formatTime(1e-3), formatTime(1.2e-3), formatTime(2.5)], ['1 ms', '1.2 ms', '2500 ms'], 'formatTime: milliseconds, never seconds');
+  eq([formatTime(-2e-3), formatTime(-3.7e-6), formatTime(-940e-9)], ['-2 ms', '-3.7 µs', '-940 ns'],
+     'formatTime: a negative time is scaled by its size');
+
+  // switchColor: how full, and the contended colour when it holds flows back.
+  eq(switchColor({ util: 0.5 }), loadColor(0.5), 'switchColor: half full');
+  eq(switchColor({ util: 0.2, ppsUtil: 0.7 }), loadColor(0.7), 'switchColor: the fuller of bandwidth and packets');
+  eq(switchColor({}), loadColor(0), 'switchColor: nothing known reads as empty');
+  eq(switchColor({ util: 1.0005 }), loadColor(1), 'switchColor: rounding past full is still full, not over');
+  eq(switchColor({ util: 1.2 }), LOAD_COLORS.over, 'switchColor: over capacity');
+  eq(switchColor({ util: 0.1, held: 2 }), LOAD_COLORS.over, 'switchColor: holding flows back');
+  eq(switchColor({ util: 0.1, packets: { held: 1 } }), LOAD_COLORS.over, 'switchColor: out of packets');
+  ok(LOAD_COLORS.over !== loadColor(1), 'switchColor: the contended colour differs from full');
+
+  // switchTip.
+  const gview = { toGbps: 1, unit: 'Gb/s' };
+  eq(switchTip({ capacity: 3200, through: 800, util: 0.25, declared: 0, held: 0, fullPorts: 0, ports: 32 }, gview),
+     ['switching 800Gb/s of the 3.2T its ports carry (25%)'], 'switchTip: what its ports carry');
+  eq(switchTip({ capacity: 0, through: 40, util: null, ports: 4 }, gview),
+     ['switching 40Gb/s, its ports’ capacity unknown (no gbps=)'], 'switchTip: no gbps= anywhere');
+  eq(switchTip({ capacity: 1600, through: 1600, util: 1, declared: 1600, portGbps: 3200, held: 3, fullPorts: 2, ports: 32 }, gview), [
+    'switching 1.6Tb/s of the 1.6T it can forward (100%)',
+    'full — holding back 3 flows itself',
+    '2 of 32 ports full',
+    'its ports add up to 3.2T: oversubscribed 2:1',
+  ], 'switchTip: declared, full, oversubscribed');
+  eq(switchTip({ capacity: 100, through: 10, util: 0.1, held: 1 }, gview)[1], 'full — holding back 1 flow itself', 'switchTip: one flow, singular');
+  eq(switchTip({ capacity: 100, through: 10, util: 0.1, pps: 2e9, packets: { through: 1.5e9, offered: 2.5e9, held: 4 }, ppsUtil: 0.75 }, gview), [
+    'switching 10Gb/s of the 100G its ports carry (10%)',
+    'passing 1.5 Gpps of the 2 Gpps it can (75%), of 2.5 Gpps offered',
+    'out of packets — holding back 4 flows itself',
+  ], 'switchTip: its packet rate, held back');
+  eq(switchTip({ capacity: 100, through: 10, util: 0.1, pps: 4.7e6 }, gview)[1],
+     'can pass 4.7 Mpps: no load here knows its packets — give pps a packet size', 'switchTip: a pps= with no packet size');
+
+  // A hand-built fabric: two hosts on one switch, one net.
+  const node = (path, attrs = {}, tags = []) => ({
+    name: path.split('/').pop(), path, attrs, links: [], tags: new Set(tags), tagsAll: new Set(tags),
+  });
+  const h1 = node('dc/r1/h1', { gbps: 50 });
+  const h2 = node('dc/r1/h2', { pps: 2e6 });
+  const tor = node('dc/r1/tor', {}, ['switch']);
+  const l1 = { a: h1, b: tor, gbps: 100, net: 'data' };
+  const l2 = { a: h2, b: tor, gbps: 100, net: 'data' };
+  const lmgmt = { a: h1, b: tor, net: 'mgmt' };
+  h1.links.push(l1, lmgmt);
+  h2.links.push(l2);
+  tor.links.push(l1, l2, lmgmt);
+  const st = {
+    model: { nets: new Map([['data', { name: 'data', label: 'Data' }], ['mgmt', { name: 'mgmt', traffic: false }]]), all: [h1, h2, tor] },
+    traffic: {},
+  };
+  const loads = new Map([[l1, [40, 10]], [l2, [10, 40]]]);
+  const v = { loads, toGbps: 1, unit: 'Gb/s', contention: null, model: null };
+
+  // hostTip.
+  eq(hostTip(st, h1, null), [], 'hostTip: no view, nothing');
+  eq(hostTip(st, h1, { ...v, compare: new Map() }), [], 'hostTip: nothing for a comparison');
+  eq(hostTip(st, h1, v), [
+    'sending 40Gb/s · receiving 10Gb/s — 40% of its 100G',
+    'its NICs: 80% of the 50G they can move each way',
+  ], 'hostTip: a host, against its cable and its own gbps= (the traffic=false net left out)');
+  eq(hostTip(st, tor, v), [
+    'sending 50Gb/s · receiving 50Gb/s — 25% of its 200G',
+    '  Data to r1/h1: out 10Gb/s · in 40Gb/s · 40%',
+    '  Data to r1/h2: out 40Gb/s · in 10Gb/s · 40%',
+  ], 'hostTip: a switch, cable by cable');
+  eq(hostTip(st, h2, v), [
+    'sending 10Gb/s · receiving 40Gb/s — 40% of its 100G',
+    'can pass 2 Mpps each way: no load here knows its packets — give pps a packet size',
+  ], 'hostTip: a pps= with no packet size');
+  eq(hostTip(st, h1, { ...v, loads: new Map() }), ['no traffic on its cables'], 'hostTip: idle');
+  const held = {
+    offered: new Map([[l1, [60, 10]]]),
+    full: new Map([[l1, [2, 0]]]),
+    hosts: { full: new Map([[h1, { out: 2, in: 0 }]]) },
+  };
+  const flows = [
+    { src: h1, dst: h2, value: 40, wanted: 60 },
+    { src: h2, dst: h1, value: 10, wanted: 10 },
+    { src: h1, dst: h2, value: 0, wanted: 0 },
+  ];
+  eq(hostTip(st, h1, { ...v, contention: held, model: { flows } }), [
+    'sending 40Gb/s, of 60Gb/s offered · receiving 10Gb/s — 40% of its 100G',
+    'its NICs: 80% of the 50G they can move each way — full, holding back 2 flows itself',
+    '2 flows out, 1 in · 1 held back by a full cable',
+  ], 'hostTip: shared out, with what it offered and its flows');
+
+  // cableTip.
+  const hit = { net: 'data', cables: [{ cable: { a: h1, b: tor, link: l1 } }] };
+  eq(cableTip(st, hit, null, null), ['Data: r1/h1 ↔ r1/tor', '1 cable · 100G'], 'cableTip: no load, what it is');
+  eq(cableTip(st, hit, v, null), [
+    'Data: r1/h1 ↔ r1/tor', '1 cable · 100G',
+    'r1/h1 → r1/tor: 40Gb/s', 'r1/tor → r1/h1: 10Gb/s',
+    '40% full, the busier way',
+  ], 'cableTip: its load each way');
+  eq(cableTip(st, hit, { ...v, loads: new Map() }, null)[2], 'carrying nothing', 'cableTip: idle');
+  eq(cableTip(st, hit, { ...v, loads: new Map([[l1, [130, 0]]]) }, null)[4],
+     '130% full, the busier way — more offered than it can carry', 'cableTip: over');
+  eq(cableTip(st, hit, { ...v, contention: held }, null).slice(2), [
+    'r1/h1 → r1/tor: 40Gb/s, of 60Gb/s offered', 'r1/tor → r1/h1: 10Gb/s',
+    'full — holding back 2 flows crossing it',
+  ], 'cableTip: shared out, full');
+  eq(cableTip(st, hit, { ...v, model: {} }, 'pending').at(-1), 'flows over it: …', 'cableTip: flows pending');
+  eq(cableTip(st, hit, { ...v, model: { toGbps: 1 } }, { count: 7, flows: [
+    { flow: { src: h1, dst: h2, value: 30, wanted: 45 }, amount: 30 },
+    { flow: { src: h1, dst: h2, value: 10, wanted: 10, test: true }, amount: 10 },
+  ] }).slice(5), [
+    'flows over it: 7',
+    '  r1/h1 → r1/h2  30Gb/s of 45Gb/s',
+    '  r1/h1 → r1/h2  10Gb/s  (test flow)',
+    '  … and 2 more',
+  ], 'cableTip: the flows over it');
+  const two = { net: 'data', cables: [{ cable: { a: h1, b: tor, link: l1 } }, { cable: { a: h2, b: tor, link: l2 } }] };
+  eq(cableTip(st, two, v, null), [
+    'Data: r1/tor ↔ r1/h1, r1/h2', '2 cables · 100G each, 200G in all',
+    'out of r1/tor: 50Gb/s', 'into r1/tor: 50Gb/s',
+    'the fullest is 40% full, the busier way',
+  ], 'cableTip: one port’s cables, drawn as one');
+  eq(cableTip(st, { net: 'mgmt', cables: [{ cable: { a: h1, b: tor, link: lmgmt } }] }, null, null),
+     ['mgmt: r1/h1 ↔ r1/tor', '1 cable · no gbps='], 'cableTip: a net with no label, a cable with no gbps=');
 }
 
 console.log(failures ? `${failures}/${count} tests FAILED` : `all ${count} tests passed`);

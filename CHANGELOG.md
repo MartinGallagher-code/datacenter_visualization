@@ -11,7 +11,7 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
-## 1.54.7 — 2026-11-04
+## 1.54.8 — 2026-11-04
 
 - **The sentences a comparison reports move from `js/app.js` into
   `js/loadgen.js`, beside the comparison itself, and `tests/run.mjs` checks
@@ -28,6 +28,17 @@ their shapes are not a promise.
   re-exports them, so nothing that imports them from there changes.
 - A doc comment in `app.js` that an earlier edit had mangled
   (`The comparison now:/**`) is whole again. No behaviour changes.
+
+## 1.54.7 — 2026-11-04
+
+- **`tests/run.mjs` now tests `js/ui.js`'s formatters and tooltip builders
+  directly** (DV-003). `formatLoad`, `formatPps`, `formatBytes` and
+  `formatTime` are pinned at each unit boundary (just below and at 1e3, 1e6
+  and 1e9; ns, µs and ms), with zero and negative values; `switchColor`,
+  `switchTip`, `hostTip` and `cableTip` are checked line for line against
+  small hand-built fabrics. Until now these were reached only through what
+  `tests/browser.mjs` happened to render, and a Gpps value labelled "Mpps"
+  passed both suites. Tests only: no behaviour changes.
 
 ## 1.54.6 — 2026-11-04
 
