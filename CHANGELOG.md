@@ -18,8 +18,10 @@ their shapes are not a promise.
   clone of `shared_tools` rather than only to clone it (a stale clone read an
   old `CLAUDE.md` and ran an old `ticket.py`), and step 3 names the
   `shared_tools` clone's script and passes `--request`. This is the repository's
-  copy of that snippet, nothing else in `CLAUDE.md` changes (ST-004). Nothing
-  in the viewer, the formats or the tools changes.
+  copy of that snippet, nothing else in `CLAUDE.md` changes (ST-004). It also
+  reads Backlog → In Progress → Review → Done: Adversarial Test is now only on
+  the owner's request (ST-005). Nothing in the viewer, the formats or the tools
+  changes.
 
 ## 1.54.3 — 2026-11-03
 
