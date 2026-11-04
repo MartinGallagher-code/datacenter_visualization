@@ -3277,6 +3277,7 @@ function compareCtx() {
   };
 }
 
+/**
  * The comparison now: the chosen metric against the chosen model, or why
  * there is none. Worked out again only when one of them, the tolerance or
  * the layout changes.
