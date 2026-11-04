@@ -11,6 +11,14 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.54.5 — 2026-11-04
+
+- **Step 3 of the ticket section of `CLAUDE.md` puts its command on one line**,
+  in a code block of its own, as shared_tools' copy now does (ST-008, ST-010).
+  The command used to wrap across two lines inside one code span, so pasting it
+  into a shell ran two commands and failed. Nothing else in `CLAUDE.md`, and
+  nothing in the viewer, the formats or the tools, changes.
+
 ## 1.54.4 — 2026-11-04
 
 - **The ticket section of `CLAUDE.md` is updated to the current text from
