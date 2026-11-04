@@ -59,10 +59,10 @@ import {
 import { asFile, layoutSha, modelBlock, readStamp, runStamp, sha256 } from '../js/stamp.js';
 import { PROBE_SCRIPT, PROBE_TAR, probeFiles, probeSummary, TOOL_PORTS } from '../js/probe.js';
 import {
-  AGENT_PEGGED, PROBE_BYTES, agentCeiling, areaTags, areaTarget, compareNow, filePairs, isRoundTrip, livePairs, loadOf, mergeRuns,
-  overlayNamed, roundTrips, runFilesOf, runSetup, runSummary, scopeOf,
+  AGENT_PEGGED, PROBE_BYTES, agentCeiling, areaTags, areaTarget, compareNow, compareSummary, filePairs, isRoundTrip, livePairs, loadOf, mergeRuns,
+  overlayNamed, roundTrips, roundTripSummary, runFilesOf, runSetup, runSummary, scopeOf,
 } from '../js/loadgen.js';
-import { applyNetOverrides, forgetOverlay, keepNetOverrides, urlLabel } from '../js/keep.js';
+import { applyNetOverrides, forgetOverlay, keepNetOverrides, uniqueLabels, urlLabel } from '../js/keep.js';
 import {
   cableTip, formatBytes, formatLoad, formatPps, formatTime, hostTip, switchColor, switchTip,
 } from '../js/ui.js';
@@ -6402,6 +6402,72 @@ if (python.error) {
   eq(PROBE_BYTES, 64, 'for a 64-byte probe');
   eq(loadOf(null), null, 'no load, nothing to queue behind');
   eq(loadOf({ loads: 'L', toGbps: 1, packets: { bytes: 9 } }), { loads: 'L', toGbps: 1, packetBytes: 9 }, 'a load as pathLatency takes it');
+}
+
+// ------------------------------------------- what a comparison says, as loadgen.js words it
+// The sentences the Compare panel shows, from comparisons built by hand. The
+// latency= suggestion is the one figure the viewer tells the owner to write
+// back into the model, so it is pinned to the digit.
+{
+  const hosts = (...verdicts) => verdicts.map((verdict) => ({ verdict }));
+  const counts = (ok, short = 0, over = 0, missing = 0, unplanned = 0) => ({ ok, short, over, missing, unplanned });
+  const rate = (unit, result, ceiling) => ({ kind: 'rate', unit, result, ceiling });
+
+  eq(compareSummary(rate('Gb/s', {
+    totals: { measured: 7.5, model: 10 }, flows: [{}, {}], tolerance: 15, counts: counts(1, 1),
+    hosts: hosts('ok', 'short', 'over', 'silent', 'gone'),
+  }, ['every host that fell short had its agent pegged'])), [
+    '7.5Gb/s measured, of the 10Gb/s the model expects on the same flows: 75%',
+    '2 flows, within 15%: 1 as modeled, 1 short of it',
+    '5 hosts: 1 as modeled, 1 short, 1 over, 1 with nothing measured',
+    'every host that fell short had its agent pegged',
+  ], 'Gb/s per flow: the share, the flows, the hosts (silent ones said, unknown verdicts not counted) and the ceiling');
+
+  eq(compareSummary(rate('pps', {
+    totals: { measured: 1e6, model: 4e6 }, flows: [], tolerance: 10, counts: counts(3, 2, 1, 4, 5),
+    hosts: hosts('short', 'short', 'over'),
+  })), [
+    '1 Mpps measured, of the 4 Mpps the model expects on the same hosts: 25%',
+    '0 flows, within 10%: 3 as modeled, 2 short of it, 1 beat it, 4 not measured, 5 not in the model',
+    '3 hosts: 0 as modeled, 2 short, 1 over',
+  ], 'pps per host: every kind of flow counted, and no silent hosts said');
+
+  eq(compareSummary(rate('pps', {
+    totals: { measured: 12000, model: 0 }, flows: [], tolerance: 15, hosts: Array.from({ length: 1200 }, () => ({ verdict: 'ok' })),
+  })), ['1,200 hosts: 1200 as modeled, 0 short, 0 over'], 'nothing modeled and no counts: the hosts alone');
+
+  const trip = (result, extra = {}) => ({ kind: 'latency', measured: { name: 'rtt_p50' }, under: false, mtu: null, result, ...extra });
+  const busy = trip({
+    totals: { measured: 30e-6, model: 4e-6 }, common: 26e-6, counts: counts(1, 2, 3, 4, 5), flows: Array.from({ length: 1200 }, () => ({})), tolerance: 15,
+  }, { under: true, mtu: { mtu: 9000, small: [] } });
+  eq(roundTripSummary(busy), [
+    'rtt_p50: 30 µs for the middle pair; the fabric accounts for 4 µs with the load’s queues, and 26 µs is common to every pair -- the hosts’ stacks and the prober',
+    'to put that in the model: latency=6.5us on the servers (a round trip crosses both ends’ stacks twice)',
+    '1,200 pairs, within 15%: 1 as expected, 2 slower, 3 faster, 4 not measured, 5 not in the model',
+    'every path carries the fabric’s 9000-byte MTU',
+  ], 'a round trip under load: the common part a quarter per stack crossing, every count, and no path small');
+  eq(compareSummary(busy), roundTripSummary(busy), 'compareSummary hands a round trip to roundTripSummary');
+
+  const idle = (small) => trip({
+    totals: { measured: 5e-4, model: 2e-3 }, common: 0, counts: counts(2), flows: [{}, {}], tolerance: 20,
+  }, small ? { mtu: { mtu: 1500, small } } : {});
+  eq(roundTripSummary(idle(null)), [
+    'rtt_p50: 500 µs for the middle pair; the fabric accounts for 2 ms, and 0 ns is common to every pair -- the hosts’ stacks and the prober',
+    '2 pairs, within 20%: 2 as expected',
+  ], 'nothing common: no latency= to suggest, and no MTU line without a path MTU');
+  eq(roundTripSummary(idle(['k'])).at(-1), '1 pair with a path MTU under the fabric’s 1500', 'one pair under the fabric’s MTU');
+  eq(roundTripSummary(idle(['k', 'l', 'm'])).at(-1), '3 pairs with a path MTU under the fabric’s 1500', 'several');
+}
+
+// ------------------------------------------- one batch's clashing file names, as keep.js numbers them
+{
+  const labels = (...names) => {
+    const items = names.map((label) => ({ label }));
+    return [uniqueLabels(items), items.map((i) => i.label)];
+  };
+  eq(labels('a.tsv', 'b.tsv'), [[], ['a.tsv', 'b.tsv']], 'no clash: nothing renamed');
+  eq(labels('a.tsv', 'a.tsv', 'b.tsv'), [['a.tsv'], ['a.tsv', 'a.tsv (2)', 'b.tsv']], 'one clash: the second numbered from (2)');
+  eq(labels('x', 'x', 'x'), [['x'], ['x', 'x (2)', 'x (3)']], 'three of one label: named once, numbered on');
 }
 
 // --------------------------------------------------------- ui formatters

@@ -67,3 +67,22 @@ export function applyNetOverrides(model, overrides) {
     else overrides.delete(netName);
   }
 }
+
+/**
+ * Two files in one batch that would answer to the same name. Nothing can tell
+ * them apart, so rather than let the second delete the first, they are
+ * numbered and the report says it happened.
+ */
+export function uniqueLabels(items) {
+  const seen = new Map();
+  const clashed = [];
+  for (const item of items) {
+    const n = (seen.get(item.label) || 0) + 1;
+    seen.set(item.label, n);
+    if (n > 1) {
+      clashed.push(item.label);
+      item.label = `${item.label} (${n})`;
+    }
+  }
+  return [...new Set(clashed)];
+}

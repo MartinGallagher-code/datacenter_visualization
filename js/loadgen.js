@@ -4,11 +4,12 @@
 // The load generator's logic that needs no page: its areas (whose hosts,
 // where each one's target is, how their runs add up), its run files, and a
 // run measured against the model. app.js holds the state and calls these
-// with what they need, so tests/run.mjs can call them too.
+// with what they need, so tests/run.mjs can call them too -- the sentences
+// that report a comparison included.
 
 import { overlayValue } from './results.js';
 import {
-  devicesOf, flowsOf, hostsOf, loadUnit, packetGb, pathLatency, routeTraffic, trafficKind,
+  devicesOf, flowsOf, formatGbps, formatPps, formatTime, hostsOf, loadUnit, packetGb, pathLatency, routeTraffic, trafficKind,
 } from './traffic.js';
 import { AREA_PORT_STEP, mergeAreas, runPairs, runWhy, tcpPayloadShare } from './runfiles.js';
 import {
@@ -486,4 +487,59 @@ export function compareRoundTrips(measured, against, gen, tolerance, ctx) {
   }
   const modelName = file ? file.source || 'expected.tsv' : against === 'gen' ? 'the load generator' : 'the layout';
   return { result, suspects: found, unit: 's', kind: 'latency', modelName, caveats, mtu, under: under && !caveats.length };
+}
+
+/** What a round-trip comparison says, line by line. */
+export function roundTripSummary(cmp) {
+  const { result } = cmp;
+  const t = result.totals;
+  const lines = [];
+  lines.push(`${cmp.measured.name}: ${formatTime(t.measured)} for the middle pair; the fabric accounts for ${formatTime(t.model)}`
+    + `${cmp.under ? ' with the load’s queues' : ''}, and ${formatTime(result.common)} is common to every pair -- the hosts’ stacks and the prober`);
+  if (result.common > 0) {
+    // A round trip goes through each end's stack twice, there and back.
+    lines.push(`to put that in the model: latency=${Number((result.common / 4 * 1e6).toPrecision(3))}us on the servers`
+      + ' (a round trip crosses both ends’ stacks twice)');
+  }
+  const c = result.counts;
+  const parts = [`${c.ok} as expected`];
+  if (c.short) parts.push(`${c.short} slower`);
+  if (c.over) parts.push(`${c.over} faster`);
+  if (c.missing) parts.push(`${c.missing} not measured`);
+  if (c.unplanned) parts.push(`${c.unplanned} not in the model`);
+  lines.push(`${result.flows.length.toLocaleString()} pairs, within ${result.tolerance}%: ${parts.join(', ')}`);
+  if (cmp.mtu) {
+    lines.push(cmp.mtu.small.length
+      ? `${cmp.mtu.small.length.toLocaleString()} pair${cmp.mtu.small.length === 1 ? '' : 's'} with a path MTU under the fabric’s ${cmp.mtu.mtu}`
+      : `every path carries the fabric’s ${cmp.mtu.mtu}-byte MTU`);
+  }
+  return lines;
+}
+
+/** What a comparison says, line by line: for its header, and its file's. */
+export function compareSummary(cmp) {
+  if (cmp.kind === 'latency') return roundTripSummary(cmp);
+  const { result, unit } = cmp;
+  const fmt = (v) => (unit === 'Gb/s' ? `${formatGbps(v)}b/s` : formatPps(v));
+  const lines = [];
+  const t = result.totals;
+  if (t.model > 0) {
+    lines.push(`${fmt(t.measured)} measured, of the ${fmt(t.model)} the model expects on the same `
+      + `${result.flows.length ? 'flows' : 'hosts'}: ${Math.round((t.measured / t.model) * 100)}%`);
+  }
+  if (result.counts) {
+    const c = result.counts;
+    const parts = [`${c.ok} as modeled`];
+    if (c.short) parts.push(`${c.short} short of it`);
+    if (c.over) parts.push(`${c.over} beat it`);
+    if (c.missing) parts.push(`${c.missing} not measured`);
+    if (c.unplanned) parts.push(`${c.unplanned} not in the model`);
+    lines.push(`${result.flows.length.toLocaleString()} flows, within ${result.tolerance}%: ${parts.join(', ')}`);
+  }
+  const h = { ok: 0, short: 0, over: 0, silent: 0 };
+  for (const x of result.hosts) if (h[x.verdict] !== undefined) h[x.verdict]++;
+  lines.push(`${result.hosts.length.toLocaleString()} hosts: ${h.ok} as modeled, ${h.short} short, ${h.over} over`
+    + `${h.silent ? `, ${h.silent} with nothing measured` : ''}`);
+  for (const line of cmp.ceiling || []) lines.push(line);
+  return lines;
 }
