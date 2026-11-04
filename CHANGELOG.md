@@ -11,6 +11,30 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.54.6 — 2026-11-04
+
+- **The load generator's logic that needs no page moves out of `js/app.js`
+  into `js/loadgen.js`, where `tests/run.mjs` tests it directly** (DV-002).
+  That is its areas (each area's hosts and why two cannot share one, each
+  area's target, several areas' runs as one), the run files built for a
+  load (an area's ports `AREA_PORT_STEP` past the one before on shared hosts,
+  the summary and `#~run` setup each file carries, the model's pairs), and a
+  run measured against the model, round trips included. `app.js` keeps the
+  state and the wiring and calls the module with what each function reads.
+  Until now these were reached only by `tests/browser.mjs`; 59 module tests
+  now cover them, and breaking any one of the rules fails `run.mjs`.
+- **`js/keep.js` holds three rules `run.mjs` used to test a copy of**: what a
+  fetched file is called (`urlLabel`), how an overlay is forgotten
+  (`forgetOverlay`, the × on a metric card), and when a net's tick is kept
+  across a re-parse and dropped for another file. The three blocks that
+  copied app.js's code now test these exports, so a change in the viewer's
+  rule can no longer pass them.
+- No behaviour changes: every run file (mx, iperf, netmesh), the load
+  generator's panel and the comparison, generated in the browser for
+  `examples/dual-plane.dc` and `examples/mega.dc` with one load, two areas
+  apart, two refused and two sharing hosts, are byte-identical before and
+  after.
+
 ## 1.54.5 — 2026-11-04
 
 - **Step 3 of the ticket section of `CLAUDE.md` puts its command on one line**,

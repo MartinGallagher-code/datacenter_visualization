@@ -23,18 +23,20 @@ import { layoutFromHosts, matchesPattern, recordsSince, tailRecords } from './ts
 import { routesBetween } from './paths.js';
 import {
   adaptiveWeights, betweenPicks, busyable, busyOf, randomTakeouts, TAKEOUT_KINDS, explainResults, pathLatency, bitRate, cableKeys, CONNECTION_LIMITS, CORE_LIMIT, contend, countersOf, estimateFlows, flowsOf, flowsOver, GEN_LIMITS,
-  devicesOf, findingsOf, GEN_IDS, generateFlows, hostCapacity, hostLimits, hostsFor, hostsOf, pairedFlows, TARGETED, loadable, loadUnit, mergeResults, packetGb, readsAsLoad, REPLY_IDS, routeEstimate,
+  findingsOf, GEN_IDS, generateFlows, hostCapacity, hostLimits, hostsFor, hostsOf, pairedFlows, TARGETED, loadable, loadUnit, mergeResults, packetGb, readsAsLoad, REPLY_IDS, routeEstimate,
   routeTraffic, splitFiles, splitHosts, switchLoads, testFlows, trafficKind, viewOf, formatGbps,
 } from './traffic.js';
 import { layoutSha, modelBlock, readStamp, runStamp } from './stamp.js';
 import { VERSION } from './version.js';
 import { foldPanel, makeFold, onFoldChange, panelFolded, setFolded } from './fold.js';
-import { AREA_PORT_STEP, bindProblem, hostToken, mergeAreas, mxSizes, RUN_BUILDERS, RUN_PORTS, RUN_LABELS, runPairs, runProblem, runWhy, tcpPayloadShare } from './runfiles.js';
+import { AREA_PORT_STEP, bindProblem, hostToken, mxSizes, RUN_BUILDERS, RUN_PORTS, RUN_LABELS, runProblem, tcpPayloadShare } from './runfiles.js';
 import { PROBE_TESTS, probeFiles, probeSummary } from './probe.js';
+import { comparisonResults, DEFAULT_TOLERANCE, modelResults } from './compare.js';
 import {
-  compareHosts, compareLatency, compareMtu, compareRuns, comparisonResults, DEFAULT_TOLERANCE, LATENCY_UNITS, LOSSY,
-  modelPairs, modelResults, suspects,
-} from './compare.js';
+  areaTags, areaTarget, compareNow, isRoundTrip, livePairs, loadOf, mergeRuns, overlayNamed, roundTrips,
+  runFilesOf, runSetup, runSummary, scopeOf,
+} from './loadgen.js';
+import { applyNetOverrides, forgetOverlay as forget, keepNetOverrides, urlLabel } from './keep.js';
 import {
   classify, directoryFromDataTransfer, ensureRead, getFile, pathLabel, pickDirectory,
   namedAsData, probeSizes, readable, readDir, renderBrowser, supportsDirectoryPicker,
@@ -538,7 +540,7 @@ function modelSource(withDown) {
   const scope = areas.length > 1 ? areaScope(areas) : null;
   // Incast sends to the first pick, or failing that the selection -- with
   // areas, the first inside the area and in no other.
-  const targets = areas.map((a, i) => (TARGETED.has(a.pattern) ? areaTarget(scope, i) : null));
+  const targets = areas.map((a, i) => (TARGETED.has(a.pattern) ? areaTarget(scope, i, [...state.picked, state.selected].filter(Boolean)) : null));
   const target = targets[t.areas.indexOf(gen)] || null;
   const genKey = gen ? JSON.stringify([scope && scope.why, t.areasShare, ...areas.map((a, i) => [a.name, a.pattern, a.value, genUnit(a), a.per, a.peers,
     a.reach, a.hosts, a.seed, targets[i] && targets[i].key, a.from, a.bytes, a.reply, a.hot, a.shift, a.within && splitKey(a)])]) : '';
@@ -906,83 +908,9 @@ let scopeCache = null;
 function areaScope(areas) {
   const key = JSON.stringify([...areas.map((a) => [a.name, a.hosts]), state.traffic.areasShare, overlayStamp()]);
   if (scopeCache && scopeCache.key === key && scopeCache.layout === state.model) return scopeCache.value;
-  const value = scopeOf(areas);
+  const value = scopeOf(areas, areaHosts, state.traffic.areasShare);
   scopeCache = { key, layout: state.model, value };
   return value;
-}
-function scopeOf(areas) {
-  const tags = areaTags(areas);
-  const share = state.traffic.areasShare;
-  const sets = [];
-  const owner = new Map();
-  let why = '';
-  let shared = 0;
-  areas.forEach((a, i) => {
-    const got = areaHosts(a.hosts);
-    sets.push(got.set);
-    if (why) return;
-    if (got.why) { why = `area ${tags[i]}: its hosts filter does not read: ${got.why}`; return; }
-    for (const el of got.hosts) {
-      const j = owner.get(el);
-      if (j !== undefined && share) {
-        // Allowed: counted once however many areas share it.
-        if (j >= 0) shared++;
-        owner.set(el, -1);
-        continue;
-      }
-      if (j !== undefined) {
-        const blank = [j, i].filter((k) => !(areas[k].hosts || '').trim()).map((k) => tags[k]);
-        why = `areas ${tags[j]} and ${tags[i]} share hosts (${el.name || el.id} is in both): give each area hosts of its own, or let areas share hosts`
-          + (blank.length ? ` -- ${blank.join(' and ')} ${blank.length === 1 ? 'has' : 'have'} no hosts filter, so ${blank.length === 1 ? 'takes' : 'take'} every host` : '');
-        return;
-      }
-      owner.set(el, i);
-    }
-  });
-  return { sets, why, share, shared };
-}
-
-/**
- * Where an area's incast goes, or its outcast comes from: the first pick,
- * or the selection -- with several areas, the first of them inside the
- * area and in no other, so no area reaches into another's hosts.
- */
-function areaTarget(scope, i) {
-  const candidates = [...state.picked, state.selected].filter(Boolean);
-  if (!scope) return candidates[0] || null;
-  return candidates.find((c) => {
-    const devices = devicesOf(c);
-    // Sharing hosts, any inside the area will do; apart, only one in no other.
-    return devices.some((el) => scope.sets[i].has(el))
-      && (scope.share || !devices.some((el) => scope.sets.some((set, j) => j !== i && set.has(el))));
-  }) || null;
-}
-
-/** Each area's name as its files take it: letters, digits, - and _, and none twice. */
-function areaTags(areas) {
-  const used = new Set();
-  return areas.map((a, i) => {
-    let tag = String(a.name || '').replace(/[^A-Za-z0-9_-]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 24) || String.fromCharCode(65 + (i % 26));
-    for (let k = 2; used.has(tag); k++) tag = `${tag.replace(/-\d+$/, '')}-${k}`;
-    used.add(tag);
-    return tag;
-  });
-}
-
-/** Several areas' runs as the one the panel reads, with each of them under `areas`. */
-function mergeRuns(runs, active) {
-  const sum = (key) => runs.reduce((n, r) => n + (r[key] || 0), 0);
-  const ran = runs.filter((r) => r.flows);
-  const shown = runs[active] || runs[0];
-  return {
-    ...shown,
-    flows: sum('flows'), hosts: sum('hosts'), senders: sum('senders'), offered: sum('offered'),
-    noCapacity: sum('noCapacity'), noReading: sum('noReading'), untagged: runs.some((r) => r.untagged),
-    // Refused together, or each area that has nothing to send saying why.
-    why: ran.length ? '' : runs.map((r) => `${r.tag}: ${r.why}`).join(' · '),
-    made: runs.flatMap((r) => r.made),
-    areas: runs,
-  };
 }
 
 /**
@@ -2039,7 +1967,7 @@ function loadLayoutText(text, { keepCamera = false, name = '', generated = false
   // objects -- but not a different file: untick `mgmt` on one layout and the
   // next one's `net mgmt show=yes` arrived hidden, its own instruction
   // overruled by a decision about a document it has nothing to do with.
-  if (name !== state.layoutName) state.netOverrides.clear();
+  keepNetOverrides(state.netOverrides, name, state.layoutName);
   state.layoutText = text;
   state.layoutName = name;
   // A written floor plan is the floor plan. Anything generated from hostnames
@@ -2050,11 +1978,7 @@ function loadLayoutText(text, { keepCamera = false, name = '', generated = false
   state.model = parseLayout(text);
   // The user's own panel toggles outlive the re-parse; a net the file no
   // longer declares just drops its stale entry.
-  for (const [netName, enabled] of state.netOverrides) {
-    const net = state.model.nets.get(netName);
-    if (net) net.enabled = enabled;
-    else state.netOverrides.delete(netName);
-  }
+  applyNetOverrides(state.model, state.netOverrides);
   state.selected = null;
   // Picks follow their paths through a re-parse -- every keystroke in the
   // editor is one -- and the ones whose element is gone drop out.
@@ -2260,13 +2184,7 @@ const push = (notice) => state.notices.push(notice);
  * two removal paths cannot disagree again.
  */
 function forgetOverlay(overlay) {
-  const key = overlay.key || overlay.name;
-  state.rawOverlays.delete(key);
-  state.overlays.delete(key);
-  // Nothing of that file left to be collapsed.
-  const source = overlay.source || '';
-  const others = [...state.overlays.values()].some((o) => (o.source || '') === source);
-  if (!others) state.groupsOff.delete(source);
+  forget(overlay, { raw: state.rawOverlays, overlays: state.overlays, groupsOff: state.groupsOff });
 }
 
 /**
@@ -2377,21 +2295,8 @@ async function fetchText(url) {
 // Nothing loads on its own: the viewer starts empty, and layouts arrive from
 // the ?layout=/?results= URL parameters, the Load files… button, drag and
 // drop, or the built-in editor.
-/**
- * What a fetched file is called. The last path segment was not enough:
- * `?results=runs/monday/results.tsv,runs/tuesday/results.tsv` named both of
- * them `results.tsv`, and the second then replaced the first -- the same way
- * two folders of results used to collide in the Files panel. The path is what
- * tells two runs apart; the origin is the same for all of them.
- */
-function urlLabel(url) {
-  try {
-    const u = new URL(url, location.href);
-    return decodeURIComponent(u.pathname).replace(/^\//, '') || url;
-  } catch {
-    return url;
-  }
-}
+/** What a fetched file is called: its path, read against the page's address (keep.js). */
+const urlLabelOf = (url) => urlLabel(url, location.href);
 
 async function boot() {
   const params = new URLSearchParams(location.search);
@@ -2410,7 +2315,7 @@ async function boot() {
   // about ?results= but never about the ?layout= beside it, so a layout with
   // warnings arrived with nothing in the chip to say so.
   if (layoutUrl) {
-    const layoutName = urlLabel(layoutUrl);
+    const layoutName = urlLabelOf(layoutUrl);
     try {
       loadLayoutText(await fetchText(layoutUrl), { name: layoutName });
       state.sources.set(layoutName, { kind: 'url', url: layoutUrl, layout: true });
@@ -2426,7 +2331,7 @@ async function boot() {
 
   const texts = [];
   for (const url of resultUrls) {
-    const name = urlLabel(url);
+    const name = urlLabelOf(url);
     try {
       texts.push({ text: await fetchText(url), name });
       // Fetched files reload like opened ones: a dashboard served from a
@@ -3351,7 +3256,7 @@ function compareChoices() {
   const measured = [];
   const models = [];
   for (const o of state.overlays.values()) {
-    if (o.name === 'model_gbps' || (o.name === 'model_pps' && !overlayNamed('model_gbps', o.source))) {
+    if (o.name === 'model_gbps' || (o.name === 'model_pps' && !overlayNamed(state.overlays.values(), 'model_gbps', o.source))) {
       models.push(o);
       continue;
     }
@@ -3374,80 +3279,25 @@ function compareChoices() {
   return { measured, models, gen };
 }
 
-/** Whether a metric is a round trip measured per pair: netmesh's rtt_p50, say. */
-function isRoundTrip(o) {
-  return trafficKind(o) === 'flows' && LATENCY_UNITS[String(o.unit || '').trim()] !== undefined && /rtt|latency|round/i.test(o.name);
-}
-
-/** A loaded metric of a name from one file, or null. */
-function overlayNamed(name, source) {
-  for (const o of state.overlays.values()) if (o.name === name && o.source === source) return o;
-  return null;
-}
-
-// A packet tool's agent at a core's worth is its own ceiling: mx's agent is
-// Python, one core a worker, and short of the model for want of CPU looks
-// just like short for want of a cable.
-const AGENT_PEGGED = 90;
-
 /**
- * Of the hosts that fell short, those whose agent was pegged, as the run's
- * own agent_cpu (mx_agent_cpu, netmesh's agent_cpu) read: a caveat, or none.
+ * What the comparison and the round trips read off the viewer, as
+ * loadgen.js takes it.
  */
-function agentCeiling(result, measured) {
-  const all = [...state.overlays.values()].filter((o) => /agent_cpu$/i.test(o.name) && o.numeric);
-  const cpu = all.find((o) => o.source === measured.source) || all[0];
-  if (!cpu) return [];
-  const short = result.hosts.filter((h) => h.verdict === 'short').map((h) => h.el);
-  if (!short.length) return [];
-  const pegged = short.filter((el) => {
-    const r = overlayValue(cpu, el);
-    return r && r.value >= AGENT_PEGGED;
-  });
-  if (!pegged.length) return [];
-  const names = pegged.slice(0, 4).map((el) => el.name).join(', ') + (pegged.length > 4 ? ', …' : '');
-  return [`${pegged.length === short.length ? 'every one' : `${pegged.length}`} of the ${short.length} host${short.length === 1 ? '' : 's'} `
-    + `that fell short had its agent at ${AGENT_PEGGED}% of a core or more (${cpu.name}: ${names}) -- the agent, not the network, `
-    + 'set the ceiling there: more workers (mx start --workers), more --streams, or bigger packets'];
-}
-
-/** An expected.tsv's figures as the model's pairs. */
-function filePairs(anchor) {
-  const pairs = new Map();
-  const of = (name) => overlayNamed(name, anchor.source);
-  const each = (overlay, fn) => {
-    if (!overlay) return;
-    for (const f of flowsOf(overlay, state.model).flows) {
-      const key = `${f.src.key}\u0000${f.dst.key}`;
-      let pair = pairs.get(key);
-      if (!pair) {
-        pairs.set(key, (pair = {
-          src: f.src, dst: f.dst, gbps: null, offered: null, payload: null, requestGbps: null, pps: null, offeredPps: null, held: new Set(),
-        }));
-      }
-      fn(pair, f.value);
-    }
+function compareCtx() {
+  return {
+    model: state.model,
+    overlays: [...state.overlays.values()],
+    mtu: state.runFiles.mtu,
+    traffic: state.traffic,
+    underLoad: state.compare.underLoad,
+    isOut: state.down.els.size ? isOut : null,
+    downKey: [...state.down.els].sort().join('\u0001'),
+    takenOut: () => state.takenOut(),
   };
-  each(of('model_gbps'), (p, v) => { p.gbps = v; });
-  each(of('model_offered_gbps'), (p, v) => { p.offered = v; });
-  each(of('model_payload_gbps'), (p, v) => { p.payload = v; });
-  each(of('model_request_gbps'), (p, v) => { p.requestGbps = v; });
-  each(of('model_pps'), (p, v) => { p.pps = v; });
-  each(of('model_offered_pps'), (p, v) => { p.offeredPps = v; });
-  const held = of('model_held');
-  if (held) {
-    for (const [key, list] of held.flowsByEl) {
-      for (const f of list) {
-        if (!f.peerEl || f.numeric) continue;
-        const pair = pairs.get(`${key}\u0000${f.peerEl.key}`);
-        if (pair) pair.held.add(String(f.value));
-      }
-    }
-  }
-  return pairs;
 }
 
 /**
+ * The comparison now:/**
  * The comparison now: the chosen metric against the chosen model, or why
  * there is none. Worked out again only when one of them, the tolerance or
  * the layout changes.
@@ -3467,233 +3317,10 @@ function comparison() {
   const inputs = [measured, against, against === 'gen' || c.underLoad ? gen : null, c.tolerance, state.model, state.down.els.size,
     state.traffic.split, state.traffic.connections, loaded, c.underLoad, state.runFiles.mtu];
   if (compareCache.inputs && inputs.every((x, i) => x === compareCache.inputs[i])) return compareCache.value;
-  const value = { ...compareNow(measured, against, gen, c.tolerance), measured, against };
+  const value = { ...compareNow(measured, against, gen, c.tolerance, compareCtx()), measured, against };
   compareCache.inputs = inputs;
   compareCache.value = value;
   return value;
-}
-
-function compareNow(measured, against, gen, tolerance) {
-  if (isRoundTrip(measured)) return compareRoundTrips(measured, against, gen, tolerance);
-  const pairs = against === 'gen' ? livePairs(gen) : filePairs(against);
-  const modelName = against === 'gen' ? 'the load generator' : `${against.source || 'expected.tsv'}`;
-  const kind = trafficKind(measured);
-  const unit = loadUnit(measured, kind);
-  const anyPps = [...pairs.values()].some((p) => p.pps !== null);
-  const anyGbps = [...pairs.values()].some((p) => p.gbps !== null);
-  // In which terms: a bit rate as Gb/s; requests a second as such, where the
-  // model has them, or as Gb/s where the run says how big they were.
-  let terms = null;
-  let scale = 1;
-  if (unit.toGbps !== null) {
-    if (anyGbps) { terms = 'gbps'; scale = unit.toGbps; }
-  } else if (anyPps) terms = 'pps';
-  else if (anyGbps && measured.bytes > 0) { terms = 'gbps'; scale = packetGb(measured.bytes); }
-  if (!terms) {
-    return {
-      why: unit.toGbps !== null ? 'the model has no bit rates to set this against'
-        : 'this metric is in packets and the model in Gb/s: its packets need a size (bytes=)',
-    };
-  }
-  const model = new Map();
-  // iperf measures TCP payload, and the model the cable: its figures are set
-  // against the payload of the model's, as expected.tsv wrote it for iperf,
-  // or at the MTU the run files are made for.
-  const tcp = terms === 'gbps' && /^iperf_/i.test(measured.name);
-  const liveShare = tcpPayloadShare(state.runFiles.mtu);
-  let share = null;
-  // A packet tool's requests alone (mx_request_gbps) leave out the replies
-  // each host sends back: set against the model's requests, not its egress.
-  const requestsOnly = terms === 'gbps' && /request/i.test(measured.name);
-  let withoutReplies = false;
-  for (const [key, p] of pairs) {
-    let value = terms === 'gbps' ? p.gbps : p.pps;
-    if (value === null) continue;
-    let offered = terms === 'gbps' ? p.offered : p.offeredPps;
-    if (offered === null) offered = value;
-    if (requestsOnly && p.requestGbps !== null && p.requestGbps !== undefined && Math.abs(p.requestGbps - value) > 1e-12) {
-      withoutReplies = true;
-      offered = p.requestOffered !== undefined && p.requestOffered !== null ? p.requestOffered : offered * (value > 0 ? p.requestGbps / value : 0);
-      value = p.requestGbps;
-      // A pair the replies alone travel sends no requests: not a flow of its.
-      if (value === 0 && (p.requests === false || p.pps === null)) continue;
-    }
-    if (tcp) {
-      share = p.payload !== null && p.payload !== undefined && p.gbps > 0 ? p.payload / p.gbps : liveShare;
-      value *= share;
-      offered *= share;
-    }
-    model.set(key, { src: p.src, dst: p.dst, value, offered, held: p.held });
-  }
-  const caveats = [];
-  if (withoutReplies) {
-    caveats.push(`${measured.name} counts requests only: it is set against the model’s requests, without the replies `
-      + 'each host sends back -- egress (mx_egress_gbps) is the figure with them');
-  }
-  if (tcp && share !== null) {
-    caveats.push(`iperf counts TCP payload: it is set against the model’s payload, ${(share * 100).toFixed(1)}% of what `
-      + 'the model puts on the cables -- the rest is headers and framing');
-  }
-  if (against === 'gen') {
-    if (!state.traffic.contention) caveats.push('contention is off, so the model expects every flow to get all it asked for');
-    if (state.traffic.key) caveats.push('a metric is on the cables under the generated load, and the model shares them with it');
-  }
-  const unitText = terms === 'gbps' ? 'Gb/s' : 'pps';
-  if (kind === 'hosts') {
-    const modelOut = new Map();
-    for (const m of model.values()) modelOut.set(m.src, (modelOut.get(m.src) || 0) + m.value);
-    const measuredOut = new Map();
-    for (const h of hostsOf(measured, state.model, false).hosts) measuredOut.set(h.el, h.value * scale);
-    const hosts = compareHosts(modelOut, measuredOut, { tolerance });
-    const result = { flows: [], hosts, counts: null, silent: hosts.filter((h) => h.verdict === 'silent').map((h) => h.el), unexpected: [], losses: [], asModeled: [], tolerance };
-    let mt = 0;
-    let gt = 0;
-    for (const h of hosts) if (h.model !== null && h.measured !== null) { mt += h.model; gt += h.measured; }
-    result.totals = { model: mt, measured: gt, offered: 0, modelAll: [...modelOut.values()].reduce((a, b) => a + b, 0) };
-    return { result, suspects: [], unit: unitText, kind, modelName, caveats, ceiling: agentCeiling(result, measured) };
-  }
-  const measuredMap = new Map();
-  for (const f of flowsOf(measured, state.model).flows) {
-    measuredMap.set(`${f.src.key}\u0000${f.dst.key}`, { src: f.src, dst: f.dst, value: f.value * scale });
-  }
-  // Loss on flows, from any loss metric loaded beside it.
-  let lossy = null;
-  for (const o of state.overlays.values()) {
-    if (trafficKind(o) !== 'flows' || !/loss/i.test(o.name) || String(o.unit).trim() !== '%') continue;
-    lossy = lossy || new Map();
-    for (const f of flowsOf(o, state.model).flows) {
-      const key = `${f.src.key}\u0000${f.dst.key}`;
-      const was = lossy.get(key);
-      if (!was || f.value > was.value) lossy.set(key, { src: f.src, dst: f.dst, value: f.value });
-    }
-  }
-  const result = compareRuns(model, measuredMap, { tolerance, lossy });
-  const t = state.traffic;
-  const opts = { split: t.split, connections: t.connections, seed: t.seed, down: state.takenOut() };
-  const found = suspects(result, (flows) => routeTraffic(state.model, flows, opts).loads);
-  return { result, suspects: found, unit: unitText, kind, modelName, caveats, ceiling: agentCeiling(result, measured) };
-}
-
-// A prober's packet: netmesh's are 64 bytes, and come back the same size.
-const PROBE_BYTES = 64;
-
-/**
- * The fabric's own round trip for each pair -- there and back, over every
- * shortest route each way, idle and, given a load, with its queues -- in
- * seconds. Worked out once a layout, take-out and load, the steps towards
- * each destination shared by every pair.
- */
-const rttCache = new WeakMap();
-function roundTrips(pairs, load) {
-  const owner = load ? load.loads : state.model;
-  let cache = rttCache.get(owner);
-  const downKey = [...state.down.els].sort().join('\u0001');
-  if (!cache || cache.model !== state.model || cache.down !== downKey) {
-    rttCache.set(owner, (cache = { model: state.model, down: downKey, trips: new Map() }));
-    cache.idle = { down: state.takenOut(), shared: {} };
-    cache.loaded = load ? { down: state.takenOut(), shared: {}, load } : null;
-  }
-  const mid = (x) => (x.min + x.max) / 2;
-  for (const [key, p] of pairs) {
-    if (cache.trips.has(key)) continue;
-    const there = pathLatency(state.model, p.src, p.dst, PROBE_BYTES, cache.idle);
-    const back = pathLatency(state.model, p.dst, p.src, PROBE_BYTES, cache.idle);
-    let loaded = null;
-    if (cache.loaded) {
-      const a = pathLatency(state.model, p.src, p.dst, PROBE_BYTES, cache.loaded);
-      const b = pathLatency(state.model, p.dst, p.src, PROBE_BYTES, cache.loaded);
-      if (a && b) loaded = (a.loaded.min + a.loaded.max) / 2 + (b.loaded.min + b.loaded.max) / 2;
-    }
-    cache.trips.set(key, there && back ? { idle: mid(there) + mid(back), loaded } : null);
-  }
-  return cache.trips;
-}
-
-/** The generator's load, as pathLatency takes one, or null. */
-const loadOf = (gen) => (gen && gen.toGbps !== null && gen.toGbps !== undefined
-  ? { loads: gen.loads, toGbps: gen.toGbps, packetBytes: gen.packets ? gen.packets.bytes : 0 } : null);
-
-/**
- * A prober's round trips against the fabric's, pair by pair, with the path
- * MTU and loss it measured beside them: what netmesh says.
- */
-function compareRoundTrips(measured, against, gen, tolerance) {
-  const scale = LATENCY_UNITS[String(measured.unit).trim()];
-  const keyOf = (f) => `${f.src.key}\u0000${f.dst.key}`;
-  const measuredMap = new Map();
-  for (const f of flowsOf(measured, state.model).flows) measuredMap.set(keyOf(f), { src: f.src, dst: f.dst, value: f.value * scale });
-  const file = against && against !== 'gen' ? against : null;
-  // The pairs the model has: expected.tsv's, or the generator's; and every
-  // pair measured, whose round trip the layout alone can say.
-  const planned = file ? filePairs(file) : against === 'gen' ? livePairs(gen) : new Map();
-  const all = new Map(planned);
-  for (const [key, m] of measuredMap) if (!all.has(key)) all.set(key, m);
-  const fromFile = new Map();
-  if (file) {
-    const read = (name, field) => {
-      const o = overlayNamed(name, file.source);
-      if (!o) return;
-      for (const f of flowsOf(o, state.model).flows) {
-        const rec = fromFile.get(keyOf(f)) || {};
-        rec[field] = f.value * 1e-6;
-        fromFile.set(keyOf(f), rec);
-      }
-    };
-    read('model_rtt_us', 'idle');
-    read('model_rtt_load_us', 'loaded');
-  }
-  const caveats = [];
-  const under = !!state.compare.underLoad;
-  const load = under ? loadOf(gen) : null;
-  if (under && !load && ![...fromFile.values()].some((r) => r.loaded !== undefined)) {
-    caveats.push('no load to queue behind -- run the load generator, or load an expected.tsv made under it -- so set against the idle fabric');
-  }
-  const live = roundTrips(all, load);
-  const model = new Map();
-  for (const [key, p] of all) {
-    const rec = fromFile.get(key) || {};
-    const trip = live.get(key);
-    const value = under && rec.loaded !== undefined ? rec.loaded
-      : under && trip && trip.loaded !== null ? trip.loaded
-        : rec.idle !== undefined ? rec.idle : trip ? trip.idle : null;
-    if (value === null) continue;
-    if (!planned.size && !measuredMap.has(key)) continue;
-    model.set(key, { src: p.src, dst: p.dst, value, held: p.held || new Set() });
-  }
-  const result = compareLatency(model, measuredMap, { tolerance });
-  const t = state.traffic;
-  const route = (flows) => routeTraffic(state.model, flows, { split: t.split, connections: t.connections, seed: t.seed, down: state.takenOut() }).loads;
-  const found = suspects(result, route);
-
-  // The path MTU beside it: under the fabric's, a hop that is not.
-  let mtu = null;
-  const mtuOverlay = overlayNamed('path_mtu', measured.source)
-    || [...state.overlays.values()].find((o) => trafficKind(o) === 'flows' && /mtu/i.test(o.name) && !/^model_/.test(o.name));
-  if (mtuOverlay) {
-    let fabricMtu = state.runFiles.mtu;
-    const said = file && overlayNamed('model_path_mtu', file.source);
-    if (said) {
-      const first = flowsOf(said, state.model).flows[0];
-      if (first) fabricMtu = first.value;
-    }
-    const got = new Map();
-    for (const f of flowsOf(mtuOverlay, state.model).flows) got.set(keyOf(f), { src: f.src, dst: f.dst, value: f.value });
-    mtu = compareMtu(got, fabricMtu);
-    mtu.suspects = suspects(mtu, route);
-  }
-  // And loss: where the model has room, the surprise.
-  const lossOverlay = overlayNamed('loss', measured.source)
-    || [...state.overlays.values()].find((o) => trafficKind(o) === 'flows' && /loss/i.test(o.name) && String(o.unit).trim() === '%');
-  if (lossOverlay) {
-    for (const f of flowsOf(lossOverlay, state.model).flows) {
-      if (!(f.value >= LOSSY)) continue;
-      const p = planned.get(keyOf(f));
-      result.losses.push({ key: keyOf(f), src: f.src, dst: f.dst, loss: f.value, expected: !!(p && p.held && p.held.size), modeled: !!p });
-    }
-    result.losses.sort((a, b) => a.expected - b.expected || b.loss - a.loss);
-  }
-  const modelName = file ? file.source || 'expected.tsv' : against === 'gen' ? 'the load generator' : 'the layout';
-  return { result, suspects: found, unit: 's', kind: 'latency', modelName, caveats, mtu, under: under && !caveats.length };
 }
 
 /** What a round-trip comparison says, line by line. */
@@ -3763,51 +3390,44 @@ function isOut(el) {
  */
 function buildRunFiles(tool, view) {
   const run = view.gen;
-  const out = state.down.els.size ? isOut : undefined;
-  // Several areas: a run of each, on its own hosts, all at once.
-  if (run.areas && run.areas.length > 1) {
-    const parts = [];
-    let dropped = 0;
-    // Areas on the same hosts each listen on ports of their own.
-    const scope = areaScope(state.traffic.areas);
-    const shared = scope.share ? scope.shared : 0;
-    for (const [k, area] of run.areas.entries()) {
-      if (!area.flows) continue;
-      const made = runPairs(area.made, area.rate, out);
-      dropped += made.dropped;
-      const why = runWhy(tool, made);
-      if (why) return { why: `area ${area.tag}: ${why}`, dropped };
-      parts.push({ area: area.tag, built: buildRun(tool, view, area, made, shared ? AREA_PORT_STEP * k : 0) });
-    }
-    if (!parts.length) return { why: 'no area has anything to send', dropped };
-    if (parts.length === 1) return { built: parts[0].built, dropped };
-    return { built: mergeAreas(parts, { shared }), dropped };
-  }
-  const made = runPairs(run.made, run.rate, out);
-  const why = runWhy(tool, made);
-  if (why) return { why, dropped: made.dropped };
-  return { built: buildRun(tool, view, run, made), dropped: made.dropped };
+  // Areas on the same hosts each listen on ports of their own.
+  const many = run.areas && run.areas.length > 1;
+  const scope = many ? areaScope(state.traffic.areas) : null;
+  return runFilesOf(tool, run, {
+    out: state.down.els.size ? isOut : undefined,
+    shared: scope && scope.share ? scope.shared : 0,
+    build: (one, made, portOffset) => buildRun(tool, view, one, made, portOffset),
+  });
 }
 
 /** One run's files: the whole load's, or one area's (its `tag` set). */
 function buildRun(tool, view, run, made, portOffset = 0) {
   const g = state.traffic.areas.find((a) => a.name === run.name) || state.traffic.gen;
   const tag = run.tag || '';
-  const peers = run.pattern === 'random' || run.pattern === 'hotspot' ? ` to ${g.peers} peer${g.peers === 1 ? '' : 's'}` : '';
-  const summary = `${tag ? `area ${tag}: ` : ''}the ${run.pattern} pattern${peers}, ${run.from ? `${run.value}% of a metric` : `${run.value} ${run.unit}`}`
-    + `${run.per === 'peer' ? ' to each peer' : ' from each host'}${g.hosts ? `, hosts ${g.hosts}` : ''}`;
-  const pairs = livePairs(view, tag);
+  const summary = runSummary(run, g);
+  const pairs = livePairs(view, tag, state.down.els.size ? isOut : null);
   const { mtu } = state.runFiles;
   const expected = pairs.size ? modelResults(pairs, {
     summary, txBytes: tool === 'mx' ? mxSizes(made, mtu).tx : 0, tool: RUN_LABELS[tool],
     payloadShare: tool === 'iperf' ? tcpPayloadShare(mtu) : 0,
-    rtt: tool === 'netmesh' ? roundTrips(pairs, loadOf(view)) : null,
+    rtt: tool === 'netmesh' ? roundTrips(pairs, loadOf(view), compareCtx()) : null,
     mtu: tool === 'netmesh' ? mtu : 0,
   }) : '';
   // What the run was made from, for the run file: the layout itself and how
   // the load was set up, so a run loaded months later says what it was.
   const model = { text: state.layoutText, name: state.layoutName };
-  const stamped = expected ? `${expected}${runStamp(runSetup(tool, summary, mtu, tag))}\n${modelBlock(model.text, model)}\n` : '';
+  const setup = runSetup({
+    tool: RUN_LABELS[tool], summary, mtu, area: tag,
+    viewer: `datacenter_visualization ${VERSION}`,
+    layoutName: state.layoutName,
+    seconds: state.runFiles.seconds,
+    connections: state.traffic.connections,
+    cores: state.traffic.cores,
+    bind: state.runFiles.bind,
+    out: [...state.down.els].map((key) => (state.model.byKey.get(key) || { path: key }).path),
+    outCables: state.takenOut().links.map((l) => `${l.net}:${l.a.path}-${l.b.path}`),
+  });
+  const stamped = expected ? `${expected}${runStamp(setup)}\n${modelBlock(model.text, model)}\n` : '';
   const options = {
     seconds: state.runFiles.seconds, connections: state.traffic.connections, summary, expected: stamped, mtu, bind: state.runFiles.bind, model,
     // The cores each host has for the run: the cores per server set, or its cores=.
@@ -3815,33 +3435,6 @@ function buildRun(tool, view, run, made, portOffset = 0) {
     area: tag, portOffset,
   };
   return RUN_BUILDERS[tool](made, options);
-}
-
-/** How a load was set up, as the run file's `#~run` lines record it. */
-function runSetup(tool, summary, mtu, area = '') {
-  const paths = [...state.down.els].map((key) => (state.model.byKey.get(key) || { path: key }).path).sort();
-  return {
-    made: new Date().toISOString().replace(/\.\d+Z$/, 'Z'),
-    viewer: `datacenter_visualization ${VERSION}`,
-    tool: RUN_LABELS[tool],
-    layout: state.layoutName || '(the editor)',
-    load: summary,
-    area,
-    seconds: state.runFiles.seconds,
-    connections: state.traffic.connections,
-    cores: state.traffic.cores || '',
-    mtu,
-    bind: state.runFiles.bind,
-    out: paths.join(' '),
-    out_cables: state.takenOut().links.map((l) => `${l.net}:${l.a.path}-${l.b.path}`).sort().join(' '),
-  };
-}
-
-/** The generated load's flows as the model has them, by pair, nothing taken out among them. */
-function livePairs(view, area = '') {
-  let flows = state.down.els.size ? view.flows.filter((f) => !isOut(f.src) && !isOut(f.dst)) : view.flows;
-  if (area) flows = flows.filter((f) => f.area === area);
-  return modelPairs(flows, view.toGbps);
 }
 
 /** Hand text, or bytes, to the browser as a file to save. */

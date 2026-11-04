@@ -54,10 +54,15 @@ import {
   droppedLayoutsNotice, layoutNotice, prefixed, resultsFileNotice,
 } from '../js/report.js';
 import {
-  bindProblem, buildIperf, buildMx, buildNetmesh, hostConnections, hostToken, mergeAreas, mxSizes, mxWorkers, rateGroups, runPairs, runProblem, runScript, runTar, runWhy, scriptName, tagged, tarball, tarName, tcpPayloadShare,
+  AREA_PORT_STEP, bindProblem, buildIperf, buildMx, buildNetmesh, hostConnections, hostToken, mergeAreas, mxSizes, mxWorkers, rateGroups, runPairs, runProblem, runScript, runTar, runWhy, scriptName, tagged, tarball, tarName, tcpPayloadShare,
 } from '../js/runfiles.js';
 import { asFile, layoutSha, modelBlock, readStamp, runStamp, sha256 } from '../js/stamp.js';
 import { PROBE_SCRIPT, PROBE_TAR, probeFiles, probeSummary, TOOL_PORTS } from '../js/probe.js';
+import {
+  AGENT_PEGGED, PROBE_BYTES, agentCeiling, areaTags, areaTarget, compareNow, filePairs, isRoundTrip, livePairs, loadOf, mergeRuns,
+  overlayNamed, roundTrips, runFilesOf, runSetup, runSummary, scopeOf,
+} from '../js/loadgen.js';
+import { applyNetOverrides, forgetOverlay, keepNetOverrides, urlLabel } from '../js/keep.js';
 import {
   compareHosts, compareLatency, compareMtu, compareRuns, comparisonResults, modelPairs, modelResults, suspects,
 } from '../js/compare.js';
@@ -4868,12 +4873,21 @@ ok(!matchesFilter('mxrun.tsv', 'mx.*'), 'and that dot has to be there: it is not
   const bound = new Map();
   for (const [key, raw] of into) bound.set(key, bindOverlay(raw, plan));
 
-  // What removeOverlay does, against what it used to do.
+  // What removeOverlay does: keep.js's forgetOverlay, on both maps.
   const one = bound.get(overlayKey('r.tsv', 'a'));
   ok(one.key !== one.name, 'a bound overlay is keyed by more than its name');
   eq(bound.has(one.name), false, 'so deleting by name would find nothing');
-  bound.delete(one.key);
-  eq([...bound.keys()], [overlayKey('r.tsv', 'b')], 'and deleting by key removes exactly one');
+  const raw = new Map(into);
+  const groupsOff = new Set(['r.tsv', 'other.tsv']);
+  forgetOverlay(one, { raw, overlays: bound, groupsOff });
+  eq([...bound.keys()], [overlayKey('r.tsv', 'b')], 'forgetting one removes exactly it');
+  eq([...raw.keys()], [overlayKey('r.tsv', 'b')], 'from the raw metrics too');
+  ok(groupsOff.has('r.tsv'), 'and its file, with a metric left, stays collapsed');
+  forgetOverlay(bound.get(overlayKey('r.tsv', 'b')), { raw, overlays: bound, groupsOff });
+  eq([bound.size, raw.size, [...groupsOff]], [0, 0, ['other.tsv']], 'the last of a file’s metrics takes its collapsed state with it');
+  const nameOnly = new Map([['x', { name: 'x' }]]);
+  forgetOverlay({ name: 'x' }, { raw: new Map(), overlays: nameOnly, groupsOff: new Set() });
+  eq(nameOnly.size, 0, 'an overlay with no key is known by its name');
 }
 
 // ------------------------------------------- ?results= had the same collision
@@ -4882,14 +4896,18 @@ ok(!matchesFilter('mxrun.tsv', 'mx.*'), 'and that dot has to be there: it is not
 // ?results=runs/monday/results.tsv,runs/tuesday/results.tsv named both
 // results.tsv and the second replaced the first.
 {
-  // urlLabel lives in app.js, which needs a DOM; the property it has to hold
-  // is that two URLs differing anywhere in their path give different names.
-  const label = (url) => decodeURIComponent(new URL(url, 'http://x/').pathname).replace(/^\//, '');
+  // keep.js's urlLabel, as app.js calls it with the page's address: two URLs
+  // differing anywhere in their path give different names.
+  const label = (url) => urlLabel(url, 'http://x/');
   eq(label('runs/monday/results.tsv'), 'runs/monday/results.tsv', 'the path is the name');
   ok(label('runs/monday/results.tsv') !== label('runs/tuesday/results.tsv'),
      'two runs of the same file are two names');
   eq(label('http://elsewhere/x/r.tsv'), 'x/r.tsv', 'an absolute URL keeps its path');
   ok(label('a/r.tsv') !== 'r.tsv', 'and the last segment alone is not it');
+  eq(label('runs/a%20b/r.tsv'), 'runs/a b/r.tsv', 'escapes read as the characters they are');
+  eq(urlLabel('runs/r.tsv', 'http://x/viewer/index.html?layout=a.dc'), 'viewer/runs/r.tsv', 'a relative URL is read against the page');
+  eq(label('http://x/'), 'http://x/', 'a URL with no path is called what it is');
+  eq(urlLabel('a.tsv', 'not a base'), 'a.tsv', 'and one that does not read is its own name');
 }
 
 // ------------------------------------------- gap=, which did nothing
@@ -5214,22 +5232,17 @@ if (python.error) {
 // plan and the next one's `net mgmt show=yes` arrived hidden, its own
 // instruction overruled by a decision about a document it never met.
 //
-// app.js holds that state, so what is checked here is the rule it now
-// follows: the choice is kept while the layout's name is the same, and
-// dropped when it changes.
+// app.js holds that state and keep.js the rule it follows: the choice is
+// kept while the layout's name is the same, and dropped when it changes.
 {
   const overrides = new Map();
   let layoutName = '';
-  // What loadLayoutText does, in the order it does it.
+  // What loadLayoutText does, in the order it does it, with keep.js's rules.
   const load = (text, name) => {
-    if (name !== layoutName) overrides.clear();
+    keepNetOverrides(overrides, name, layoutName);
     layoutName = name;
     const model = parseLayout(text);
-    for (const [netName, enabled] of overrides) {
-      const net = model.nets.get(netName);
-      if (net) net.enabled = enabled;
-      else overrides.delete(netName);
-    }
+    applyNetOverrides(model, overrides);
     return model;
   };
   const untick = (model, name) => { model.nets.get(name).enabled = false; overrides.set(name, false); };
@@ -6225,6 +6238,167 @@ if (python.error) {
     // A bare `dcviz` is a usage error, not a crash and not a silent success.
     eq(cli().status, 2, 'dcviz with no subcommand exits 2');
   }
+}
+
+// ------------------------------------------- the load generator's areas, as loadgen.js has them
+// These lived in app.js, where only the browser suite reached them. A wrong
+// answer here makes run files that look valid: two areas loading one host,
+// a target reaching into another area, two runs on one port.
+{
+  const m = parseLayout([
+    'dc D', '  row A', '    rack r[1..2] u=10', '      node h[1..3] role=server name={rack}{id}',
+    '      node t role=tor +switch name={rack}tor', '  row S', '    rack SP u=4', '      node spine role=spine +switch',
+    'net nic gbps=100', 'net up gbps=400', 'link nic scope=rack role=server role=tor', 'link up role=tor role=spine',
+  ].join('\n'));
+  const h = (name) => m.all.find((el) => el.name === name);
+  const hostsIn = (filter) => {
+    if (filter === 'BROKEN') return { hosts: [], set: new Set(), why: 'it does not parse' };
+    const text = (filter || '').trim();
+    const hosts = hostsFor(m, text ? compileQuery(text, {}) : null).hosts;
+    return { hosts, set: new Set(hosts), why: '' };
+  };
+
+  eq(areaTags([{ name: 'A' }, { name: '' }, { name: 'web tier!' }, { name: 'A' }, { name: '' }]), ['A', 'B', 'web_tier', 'A-2', 'E'],
+     'an area’s tag: its name as a file takes it, a letter with none, and never one twice');
+
+  // No host in two areas, unless sharing is on.
+  const apart = scopeOf([{ name: 'A', hosts: 'in:r1' }, { name: 'B', hosts: 'in:r2' }], hostsIn, false);
+  eq(apart.why, '', 'two areas on hosts of their own run');
+  eq([apart.sets[0].size, apart.sets[1].size, apart.shared], [3, 3, 0], 'each its own three hosts, none shared');
+  const overlap = scopeOf([{ name: 'A', hosts: 'in:r1' }, { name: 'B', hosts: '' }], hostsIn, false);
+  eq(overlap.why, 'areas A and B share hosts (r1h1 is in both): give each area hosts of its own, or let areas share hosts'
+     + ' -- B has no hosts filter, so takes every host', 'a host in two areas is refused, naming it, and the area that takes every host');
+  const both = scopeOf([{ name: 'A', hosts: '' }, { name: 'B', hosts: '' }], hostsIn, false);
+  ok(/-- A and B have no hosts filter, so take every host$/.test(both.why), 'and both, when neither has a filter');
+  const shared = scopeOf([{ name: 'A', hosts: 'in:r1' }, { name: 'B', hosts: '' }, { name: 'C', hosts: 'in:r1' }], hostsIn, true);
+  eq([shared.why, shared.share, shared.shared], ['', true, 3], 'sharing on: allowed, and each shared host counted once however many areas take it');
+  ok(/^area B: its hosts filter does not read: it does not parse$/.test(
+    scopeOf([{ name: 'A', hosts: 'in:r1' }, { name: 'B', hosts: 'BROKEN' }], hostsIn, false).why), 'a filter that does not read is said, by area');
+
+  // A target only inside its own area -- and, apart, in no other.
+  const [r1h1, r2h1, r1tor] = [h('r1h1'), h('r2h1'), h('r1tor')];
+  ok(areaTarget(null, 0, [r2h1, r1h1]) === r2h1, 'one load: the first pick');
+  ok(areaTarget(null, 0, []) === null, 'and none with nothing picked');
+  ok(areaTarget(apart, 0, [r2h1, r1h1]) === r1h1, 'area A’s target is the first pick inside A');
+  ok(areaTarget(apart, 1, [r2h1, r1h1]) === r2h1, 'and B’s inside B');
+  ok(areaTarget(apart, 0, [r2h1]) === null, 'an area with no pick of its own has no target, rather than one in another area');
+  const rack1 = m.all.find((el) => el.kind === 'rack' && el.id === 'r1');
+  const rack2 = m.all.find((el) => el.kind === 'rack' && el.id === 'r2');
+  const spread = scopeOf([{ name: 'A', hosts: 'in:r1' }, { name: 'B', hosts: 'r1h1|in:r2' }], hostsIn, true);
+  ok(areaTarget(spread, 1, [rack1]) === rack1, 'sharing hosts, a rack that reaches into the area will do');
+  ok(areaTarget(apart, 0, [rack2, rack1]) === rack1, 'apart, a rack inside the area');
+  ok(areaTarget({ ...spread, share: false }, 0, [rack1]) === null, 'and not one that is also in another area');
+  ok(r1tor && areaTarget(apart, 0, [r1tor]) === null, 'a switch is not inside an area of hosts');
+
+  // Several areas' runs as one.
+  const runA = { tag: 'A', flows: 6, hosts: 4, senders: 3, offered: 60, noCapacity: 0, noReading: 0, why: '', made: [1, 2], pattern: 'all' };
+  const runB = { tag: 'B', flows: 0, hosts: 3, senders: 0, offered: 0, noCapacity: 1, noReading: 2, untagged: true, why: 'nothing to send', made: [], pattern: 'ring' };
+  const merged = mergeRuns([runA, runB], 1);
+  eq([merged.flows, merged.hosts, merged.senders, merged.offered, merged.noCapacity, merged.noReading, merged.untagged, merged.why, merged.made, merged.pattern],
+     [6, 7, 3, 60, 1, 2, true, '', [1, 2], 'ring'], 'areas’ runs add up, with the one shown’s settings');
+  ok(merged.areas.length === 2 && merged.areas[0] === runA && merged.areas[1] === runB, 'each run kept under areas');
+  eq(mergeRuns([{ ...runA, flows: 0, why: 'no hosts' }, runB], 0).why, 'A: no hosts · B: nothing to send', 'nothing to send anywhere: each area says why');
+  eq(mergeRuns([runA], 5).tag, 'A', 'an index past the end shows the first');
+
+  // Each area a run of its own; on shared hosts, ports a hundred apart.
+  const gen = generateFlows(m, { pattern: 'all', value: 10, unit: 'Gb/s' });
+  const rate = { toGbps: 1, unit: 'Gb/s', sized: null };
+  const inRack = (r) => gen.flows.filter((f) => f.src.name.startsWith(r) && f.dst.name.startsWith(r));
+  const areaRun = { areas: [{ tag: 'A', flows: 6, made: inRack('r1'), rate }, { tag: 'B', flows: 6, made: inRack('r2'), rate }, { tag: 'C', flows: 0, made: [], rate }] };
+  const offsets = (shared) => {
+    const seen = [];
+    const got = runFilesOf('mx', areaRun, { shared, build: (one, made, port) => { seen.push([one.tag, port]); return buildMx(made, { area: one.tag, portOffset: port }); } });
+    return { seen, got };
+  };
+  const sharing = offsets(3);
+  eq(sharing.seen, [['A', 0], ['B', AREA_PORT_STEP]], 'on shared hosts each area’s run is AREA_PORT_STEP ports past the one before');
+  eq(AREA_PORT_STEP, 100, 'which is a hundred');
+  ok(/port=5400/.test(sharing.got.built.files.find((f) => f.name === 'matrix-B.csv').text), 'and B’s matrix listens there');
+  ok(/The areas share 3 hosts/.test(sharing.got.built.notes.join('\n')), 'and the notes say they share');
+  eq(offsets(0).seen, [['A', 0], ['B', 0]], 'apart, every area on the tool’s own ports');
+  const third = { areas: [areaRun.areas[2], areaRun.areas[2], areaRun.areas[0], areaRun.areas[1]] };
+  const later = [];
+  runFilesOf('mx', third, { shared: 1, build: (one, made, port) => { later.push(port); return buildMx(made, { area: one.tag, portOffset: port }); } });
+  eq(later, [200, 300], 'the step goes by the area’s place, even past areas with nothing to send');
+  eq(runFilesOf('mx', { areas: [areaRun.areas[2], areaRun.areas[2]] }, { build: () => null }).why, 'no area has anything to send', 'no area with flows: why');
+  const one = runFilesOf('mx', { areas: [areaRun.areas[0], areaRun.areas[2]] }, { build: (a, made) => ({ only: a.tag, n: made.pairs.length }) });
+  eq(one.built.only, 'A', 'one area with flows: its files alone, not merged');
+  const dupe = parseLayout('dc D\n  rack r1 u=4\n    node s1 at=1 role=server\n  rack r2 u=4\n    node s1 at=1 role=server\n'
+    + 'net nic gbps=10\nlink nic name=s1 name=s1\n');
+  const [a1, a2] = dupe.all.filter((el) => el.name === 's1');
+  const twin = [{ id: 1, src: a1, dst: a2, value: 1 }];
+  ok(/^area A: two hosts are both called s1/.test(runFilesOf('mx', { areas: [{ tag: 'A', flows: 1, made: twin, rate }, areaRun.areas[1]] }, { build: () => ({}) }).why),
+     'a tool refusing one area’s hosts names the area');
+  const single = runFilesOf('iperf', { made: inRack('r1'), rate }, { build: (run, made, port) => ({ port, n: made.pairs.length }) });
+  eq([single.built.port, single.dropped], [0, 0], 'one load: its files, on the tool’s ports');
+  const out = (el) => el === h('r1h1');
+  eq(runFilesOf('iperf', { made: inRack('r1'), rate }, { out, build: () => ({}) }).dropped, 4, 'flows to and from a host taken out are dropped, and counted');
+
+  // The summary and setup a run file carries.
+  eq(runSummary({ tag: 'B', pattern: 'random', value: 40, unit: 'Gb/s', per: 'host' }, { peers: 1, hosts: 'in:r2' }),
+     'area B: the random pattern to 1 peer, 40 Gb/s from each host, hosts in:r2', 'what an area’s run says it is');
+  eq(runSummary({ pattern: 'all', from: 'x', value: 80, per: 'peer' }, { peers: 3, hosts: '' }),
+     'the all pattern, 80% of a metric to each peer', 'and a load read off a metric');
+  const setup = runSetup({
+    tool: 'mx', summary: 's', mtu: 9000, made: new Date('2026-11-04T10:00:00.123Z'), viewer: 'v', layoutName: '',
+    seconds: 60, connections: 2, cores: 0, bind: 'eth1', out: ['D/b', 'D/a'], outCables: ['up:z-y', 'nic:a-b'],
+  });
+  eq(setup, {
+    made: '2026-11-04T10:00:00Z', viewer: 'v', tool: 'mx', layout: '(the editor)', load: 's', area: '', seconds: 60, connections: 2,
+    cores: '', mtu: 9000, bind: 'eth1', out: 'D/a D/b', out_cables: 'nic:a-b up:z-y',
+  }, 'the run’s setup: to the second, what was taken out sorted, the editor when the layout has no name');
+
+  // The model's pairs for a load: one area's, and none to anything taken out.
+  const view = { flows: gen.flows.map((f) => ({ ...f, area: f.src.name.startsWith('r1') ? 'A' : 'B' })), toGbps: 1 };
+  eq(livePairs(view).size, 30, 'every pair of the load');
+  eq(livePairs(view, 'A').size, 15, 'or one area’s');
+  eq(livePairs(view, '', out).size, 20, 'none to or from a host taken out');
+}
+
+// ------------------------------------------- measured against the model, as loadgen.js has it
+{
+  const m = parseLayout([
+    'dc D', '  row A', '    rack r[1..2] u=10', '      node h[1..3] role=server name={rack}{id}',
+    '      node t role=tor +switch name={rack}tor', '  row S', '    rack SP u=4', '      node spine role=spine +switch',
+    'net nic gbps=25', 'net up gbps=100', 'link nic scope=rack role=server role=tor', 'link up role=tor role=spine',
+  ].join('\n'));
+  const load = (text, name) => {
+    const into = new Map();
+    parseResults(text, into, [], name);
+    return [...into.values()].map((raw) => bindOverlay(raw, m));
+  };
+  const expected = load('!test model_gbps unit=Gb/s\nmodel_gbps\tr1h1\t10\tpeer=r1h2\nmodel_gbps\tr1h2\t10\tpeer=r1h1\n', 'expected.tsv');
+  const measured = load('!test mx_egress_gbps unit=Gb/s\nmx_egress_gbps\tr1h1\t10\tpeer=r1h2\nmx_egress_gbps\tr1h2\t4\tpeer=r1h1\n'
+    + '!test mx_agent_cpu unit=%\nmx_agent_cpu\tr1h2\t97\nmx_agent_cpu\tr1h1\t20\n', 'run.tsv');
+  const overlays = [...expected, ...measured];
+  const egress = measured.find((o) => o.name === 'mx_egress_gbps');
+  ok(overlayNamed(overlays, 'model_gbps', 'expected.tsv') === expected[0], 'a metric found by name and file');
+  eq(overlayNamed(overlays, 'model_gbps', 'run.tsv'), null, 'and not from another file');
+  const pairs = filePairs(expected[0], overlays, m);
+  eq([...pairs.values()].map((p) => [p.src.name, p.dst.name, p.gbps]), [['r1h1', 'r1h2', 10], ['r1h2', 'r1h1', 10]], 'expected.tsv as the model’s pairs');
+  const ctx = {
+    model: m, overlays, mtu: 1500, traffic: { split: 'even', connections: 1, seed: 1, contention: true, key: '' },
+    underLoad: false, isOut: null, downKey: '', takenOut: () => ({ els: new Set(), links: [] }),
+  };
+  const cmp = compareNow(egress, expected[0], null, 15, ctx);
+  eq(cmp.modelName, 'expected.tsv', 'set against the file');
+  eq([cmp.result.counts.ok, cmp.result.counts.short], [1, 1], 'one flow as modeled, one short of it');
+  ok(cmp.ceiling.length === 1 && /every one of the 1 host that fell short had its agent at 90% of a core or more \(mx_agent_cpu: r1h2\)/.test(cmp.ceiling[0]),
+     `the agent pegged on the host that fell short is said  (${cmp.ceiling[0]})`);
+  eq(agentCeiling(cmp.result, egress, expected), [], 'no agent_cpu loaded: no caveat');
+  eq(AGENT_PEGGED, 90, 'pegged at 90% of a core');
+
+  // A prober's round trip.
+  const rtt = load('!test rtt_p50 unit=us\nrtt_p50\tr1h1\t30\tpeer=r2h1\n', 'mesh.tsv')[0];
+  ok(isRoundTrip(rtt) && !isRoundTrip(egress), 'a round trip is a latency per pair named for one');
+  const trips = compareNow(rtt, null, null, 15, { ...ctx, overlays: [rtt] });
+  eq([trips.kind, trips.modelName, trips.result.flows.length], ['latency', 'the layout', 1], 'set against the layout alone, with no model loaded');
+  const pair = new Map([['k', { src: m.all.find((el) => el.name === 'r1h1'), dst: m.all.find((el) => el.name === 'r2h1') }]]);
+  const fabric = roundTrips(pair, null, ctx).get('k');
+  ok(fabric && fabric.idle > 0 && fabric.loaded === null, `the fabric’s own round trip, idle  (${fabric && fabric.idle})`);
+  eq(PROBE_BYTES, 64, 'for a 64-byte probe');
+  eq(loadOf(null), null, 'no load, nothing to queue behind');
+  eq(loadOf({ loads: 'L', toGbps: 1, packets: { bytes: 9 } }), { loads: 'L', toGbps: 1, packetBytes: 9 }, 'a load as pathLatency takes it');
 }
 
 console.log(failures ? `${failures}/${count} tests FAILED` : `all ${count} tests passed`);

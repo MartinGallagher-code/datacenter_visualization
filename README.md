@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.54.5** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.54.6** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -2753,6 +2753,12 @@ js/traffic.js             cable load: flows routed over the fabric (shortest
                           per-host totals estimated by
                           the gravity model, switch counters onto their
                           cables, comparisons, and what-if
+js/loadgen.js             the load generator's areas, run files and the
+                          comparison with the model: what app.js calls with
+                          its state, so run.mjs tests it without a page
+js/keep.js                what the viewer keeps, forgets and calls things:
+                          a fetched file's name, a removed overlay, a net's
+                          tick across a re-parse
 js/tsv.js                 the wide-table reader: detection, the arrow that
                           makes a host a flow, tail -n, and the floor plan
                           read out of hostnames
