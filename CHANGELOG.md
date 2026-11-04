@@ -11,6 +11,24 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.54.7 — 2026-11-04
+
+- **The sentences a comparison reports move from `js/app.js` into
+  `js/loadgen.js`, beside the comparison itself, and `tests/run.mjs` checks
+  their exact text** (DV-005). That is `compareSummary` and
+  `roundTripSummary`: the share of the model measured, the flow and host
+  tallies, the agent-ceiling lines, a round trip's MTU line, and the
+  `latency=` figure the viewer suggests writing back into the model, now
+  pinned to the digit (the browser suite accepted any number there).
+- **`uniqueLabels`, which numbers two files of one batch that share a name,
+  moves into `js/keep.js`** and is tested for no clash, one, and three of one
+  label.
+- `formatPps` and `formatTime` move from `js/ui.js` to `js/traffic.js`, beside
+  `formatGbps`, so `loadgen.js` reaches them without the page's code; `ui.js`
+  re-exports them, so nothing that imports them from there changes.
+- A doc comment in `app.js` that an earlier edit had mangled
+  (`The comparison now:/**`) is whole again. No behaviour changes.
+
 ## 1.54.6 — 2026-11-04
 
 - **The load generator's logic that needs no page moves out of `js/app.js`
