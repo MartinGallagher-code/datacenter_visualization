@@ -12,7 +12,7 @@ import {
   readingText, recomputeDomain, recomputeStats,
 } from './results.js';
 import {
-  cableTip, fillWarnings, formatPps, formatTime, renderBuild, renderCableLoad, renderCompare, renderFindings, renderHostStatus, renderInspector, renderLive, renderLoadGen,
+  cableTip, fillWarnings, renderBuild, renderCableLoad, renderCompare, renderFindings, renderHostStatus, renderInspector, renderLive, renderLoadGen,
   hostTip, renderNets, renderNotices, renderOverlays, renderTree, renderWarnings, switchTip,
 } from './ui.js';
 import {
@@ -24,7 +24,7 @@ import { routesBetween } from './paths.js';
 import {
   adaptiveWeights, betweenPicks, busyable, busyOf, randomTakeouts, TAKEOUT_KINDS, explainResults, pathLatency, bitRate, cableKeys, CONNECTION_LIMITS, CORE_LIMIT, contend, countersOf, estimateFlows, flowsOf, flowsOver, GEN_LIMITS,
   findingsOf, GEN_IDS, generateFlows, hostCapacity, hostLimits, hostsFor, hostsOf, pairedFlows, TARGETED, loadable, loadUnit, mergeResults, packetGb, readsAsLoad, REPLY_IDS, routeEstimate,
-  routeTraffic, splitFiles, splitHosts, switchLoads, testFlows, trafficKind, viewOf, formatGbps,
+  routeTraffic, splitFiles, splitHosts, switchLoads, testFlows, trafficKind, viewOf,
 } from './traffic.js';
 import { layoutSha, modelBlock, readStamp, runStamp } from './stamp.js';
 import { VERSION } from './version.js';
@@ -33,10 +33,10 @@ import { AREA_PORT_STEP, bindProblem, hostToken, mxSizes, RUN_BUILDERS, RUN_PORT
 import { PROBE_TESTS, probeFiles, probeSummary } from './probe.js';
 import { comparisonResults, DEFAULT_TOLERANCE, modelResults } from './compare.js';
 import {
-  areaTags, areaTarget, compareNow, isRoundTrip, livePairs, loadOf, mergeRuns, overlayNamed, roundTrips,
+  areaTags, areaTarget, compareNow, compareSummary, isRoundTrip, livePairs, loadOf, mergeRuns, overlayNamed, roundTrips,
   runFilesOf, runSetup, runSummary, scopeOf,
 } from './loadgen.js';
-import { applyNetOverrides, forgetOverlay as forget, keepNetOverrides, urlLabel } from './keep.js';
+import { applyNetOverrides, forgetOverlay as forget, keepNetOverrides, uniqueLabels, urlLabel } from './keep.js';
 import {
   classify, directoryFromDataTransfer, ensureRead, getFile, pathLabel, pickDirectory,
   namedAsData, probeSizes, readable, readDir, renderBrowser, supportsDirectoryPicker,
@@ -2443,25 +2443,6 @@ const labelOf = (file) => file.webkitRelativePath || file.name;
 const asItems = (files) => [...files].map((file) => ({ file, label: labelOf(file) }));
 
 /**
- * Two files in one batch that would answer to the same name. Nothing can tell
- * them apart, so rather than let the second delete the first, they are
- * numbered and the report says it happened.
- */
-function uniqueLabels(items) {
-  const seen = new Map();
-  const clashed = [];
-  for (const item of items) {
-    const n = (seen.get(item.label) || 0) + 1;
-    seen.set(item.label, n);
-    if (n > 1) {
-      clashed.push(item.label);
-      item.label = `${item.label} (${n})`;
-    }
-  }
-  return [...new Set(clashed)];
-}
-
-/**
  * A run file the load generator made carries the layout it was made on, and
  * says so: load that layout with the readings, so they land on the floor
  * plan they were measured against. Nothing to ask when the viewer is empty,
@@ -3296,8 +3277,6 @@ function compareCtx() {
   };
 }
 
-/**
- * The comparison now:/**
  * The comparison now: the chosen metric against the chosen model, or why
  * there is none. Worked out again only when one of them, the tolerance or
  * the layout changes.
@@ -3321,61 +3300,6 @@ function comparison() {
   compareCache.inputs = inputs;
   compareCache.value = value;
   return value;
-}
-
-/** What a round-trip comparison says, line by line. */
-function roundTripSummary(cmp) {
-  const { result } = cmp;
-  const t = result.totals;
-  const lines = [];
-  lines.push(`${cmp.measured.name}: ${formatTime(t.measured)} for the middle pair; the fabric accounts for ${formatTime(t.model)}`
-    + `${cmp.under ? ' with the load’s queues' : ''}, and ${formatTime(result.common)} is common to every pair -- the hosts’ stacks and the prober`);
-  if (result.common > 0) {
-    // A round trip goes through each end's stack twice, there and back.
-    lines.push(`to put that in the model: latency=${Number((result.common / 4 * 1e6).toPrecision(3))}us on the servers`
-      + ' (a round trip crosses both ends’ stacks twice)');
-  }
-  const c = result.counts;
-  const parts = [`${c.ok} as expected`];
-  if (c.short) parts.push(`${c.short} slower`);
-  if (c.over) parts.push(`${c.over} faster`);
-  if (c.missing) parts.push(`${c.missing} not measured`);
-  if (c.unplanned) parts.push(`${c.unplanned} not in the model`);
-  lines.push(`${result.flows.length.toLocaleString()} pairs, within ${result.tolerance}%: ${parts.join(', ')}`);
-  if (cmp.mtu) {
-    lines.push(cmp.mtu.small.length
-      ? `${cmp.mtu.small.length.toLocaleString()} pair${cmp.mtu.small.length === 1 ? '' : 's'} with a path MTU under the fabric’s ${cmp.mtu.mtu}`
-      : `every path carries the fabric’s ${cmp.mtu.mtu}-byte MTU`);
-  }
-  return lines;
-}
-
-/** What a comparison says, line by line: for its header, and its file's. */
-function compareSummary(cmp) {
-  if (cmp.kind === 'latency') return roundTripSummary(cmp);
-  const { result, unit } = cmp;
-  const fmt = (v) => (unit === 'Gb/s' ? `${formatGbps(v)}b/s` : formatPps(v));
-  const lines = [];
-  const t = result.totals;
-  if (t.model > 0) {
-    lines.push(`${fmt(t.measured)} measured, of the ${fmt(t.model)} the model expects on the same `
-      + `${result.flows.length ? 'flows' : 'hosts'}: ${Math.round((t.measured / t.model) * 100)}%`);
-  }
-  if (result.counts) {
-    const c = result.counts;
-    const parts = [`${c.ok} as modeled`];
-    if (c.short) parts.push(`${c.short} short of it`);
-    if (c.over) parts.push(`${c.over} beat it`);
-    if (c.missing) parts.push(`${c.missing} not measured`);
-    if (c.unplanned) parts.push(`${c.unplanned} not in the model`);
-    lines.push(`${result.flows.length.toLocaleString()} flows, within ${result.tolerance}%: ${parts.join(', ')}`);
-  }
-  const h = { ok: 0, short: 0, over: 0, silent: 0 };
-  for (const x of result.hosts) if (h[x.verdict] !== undefined) h[x.verdict]++;
-  lines.push(`${result.hosts.length.toLocaleString()} hosts: ${h.ok} as modeled, ${h.short} short, ${h.over} over`
-    + `${h.silent ? `, ${h.silent} with nothing measured` : ''}`);
-  for (const line of cmp.ceiling || []) lines.push(line);
-  return lines;
 }
 
 /** Whether an element is taken out, or inside something that is. */

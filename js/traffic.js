@@ -3376,6 +3376,22 @@ export function formatGbps(gbps) {
   return `${trim(gbps * 1000)}M`;
 }
 
+const trimNum = (v) => (Number.isFinite(v) ? String(Math.round(v * 1000) / 1000) : '');
+
+/** A packet rate, readably: 8 Gpps, 4.7 Mpps, 12,000 pps. */
+export function formatPps(v) {
+  if (v >= 1e9) return `${trimNum(Math.round(v / 1e8) / 10)} Gpps`;
+  if (v >= 1e6) return `${trimNum(Math.round(v / 1e5) / 10)} Mpps`;
+  return `${Math.round(v).toLocaleString('en-US')} pps`;
+}
+
+/** A time, at the scale a packet's trip is: 940 ns, 3.7 µs, 1.2 ms. */
+export function formatTime(t) {
+  if (Math.abs(t) >= 1e-3) return `${trimNum(Math.round(t * 1e5) / 100)} ms`;
+  if (Math.abs(t) >= 1e-6) return `${trimNum(Math.round(t * 1e8) / 100)} µs`;
+  return `${Math.round(t * 1e9)} ns`;
+}
+
 // ------------------------------------------------------------------ findings
 //
 // What went wrong, server by server, from both sides: what the model of the

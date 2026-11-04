@@ -15,11 +15,15 @@ import {
   capacityWidth, changeColor, countDescendants, FINDING_COLORS, LOAD_COLORS, loadColor, linkSummary, spliceSummary,
 } from './render.js';
 import {
-  biggestChanges, burstRisk, busiest, busyable, cablesOf, counterparts, counterpartLevels, EXPLAIN_PATTERNS, takeoutCandidates, TAKEOUT_KINDS, formatGbps, hostLimits, CORE_LIMIT, GEN_UNITS, HOST_SPLITS, HOST_SPLIT_LABELS, SPLIT_LIMIT, hostsFor, loadable, loadUnit, PATTERNS, reachKinds, TARGETED,
+  biggestChanges, burstRisk, busiest, busyable, cablesOf, counterparts, counterpartLevels, EXPLAIN_PATTERNS, takeoutCandidates, TAKEOUT_KINDS, formatGbps, formatPps, formatTime, hostLimits, CORE_LIMIT, GEN_UNITS, HOST_SPLITS, HOST_SPLIT_LABELS, SPLIT_LIMIT, hostsFor, loadable, loadUnit, PATTERNS, reachKinds, TARGETED,
   CONNECTION_LIMITS, IMIX_BYTES, PACKET_PICKS, PER_CONNECTION, readsAsLoad, SPLITS, SPREADS, TEST_UNITS, trafficKind, utilOf,
 } from './traffic.js';
 import { bindProblem, MTUS, RUN_LABELS, RUN_TOOLS, runScript, runTar, scriptName, tarball, tarName } from './runfiles.js';
 import { foldAll, foldRuns, makeFold, pane, setNote } from './fold.js';
+
+// The formatters live with formatGbps in traffic.js, where modules that need
+// no page can reach them; the page's callers still find them here.
+export { formatPps, formatTime };
 
 const el = (tag, cls, text) => {
   const n = document.createElement(tag);
@@ -781,13 +785,6 @@ function contendedText(c) {
   if (c.hosts && c.hosts.cpuFull && c.hosts.cpuFull.size) parts.push(`${n(c.hosts.cpuFull.size, 'host')} out of CPU`);
   if (c.hosts && c.hosts.streams && c.hosts.streams.size) parts.push(`${n(c.hosts.streams.size, 'host')} at ${c.hosts.streams.size === 1 ? 'its' : 'their'} stream=`);
   return parts.join(' and ') || 'nothing full';
-}
-
-/** A packet rate, readably: 8 Gpps, 4.7 Mpps, 12,000 pps. */
-export function formatPps(v) {
-  if (v >= 1e9) return `${trimNum(Math.round(v / 1e8) / 10)} Gpps`;
-  if (v >= 1e6) return `${trimNum(Math.round(v / 1e5) / 10)} Mpps`;
-  return `${Math.round(v).toLocaleString('en-US')} pps`;
 }
 
 // Whether an element passes traffic on: tagged +switch, or -- where nothing
@@ -3447,13 +3444,6 @@ function renderPicks(state, host, actions) {
     renderPickTraffic(state, box, actions);
   }
   host.append(box);
-}
-
-/** A time, at the scale a packet's trip is: 940 ns, 3.7 µs, 1.2 ms. */
-export function formatTime(t) {
-  if (Math.abs(t) >= 1e-3) return `${trimNum(Math.round(t * 1e5) / 100)} ms`;
-  if (Math.abs(t) >= 1e-6) return `${trimNum(Math.round(t * 1e8) / 100)} µs`;
-  return `${Math.round(t * 1e9)} ns`;
 }
 
 // The floor of the trip between two picks, at 64 B and 1500 B.
