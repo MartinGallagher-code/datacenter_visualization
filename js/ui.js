@@ -1774,7 +1774,9 @@ export function renderCableLoad(state, host, actions) {
         item.append(dot);
         item.append(el('span', 'load-ends', `${shortPath(from)} → ${shortPath(to)}`));
         const held = heldBy(view, link);
-        item.append(el('span', 'val', `${loadAgainst(view, row.peak, link.gbps, util)}${held ? ` · ${held} held` : ''}`));
+        // An average is set against no capacity: no /25G beside it.
+        item.append(el('span', 'val', `${view.averaged ? formatLoad(view, row.peak) : loadAgainst(view, row.peak, link.gbps, util)}`
+          + `${held ? ` · ${held} held` : ''}`));
         item.title = `${link.net}: ${from.path} → ${to.path}\n`
           + `${formatLoad(view, Math.max(l[0], l[1]))} the ${view.averaged ? 'higher' : 'busier'} way, ${formatLoad(view, Math.min(l[0], l[1]))} the other`
           + `${held ? `\nFull: holding back ${held} flow${held === 1 ? '' : 's'} crossing it` : ''}`

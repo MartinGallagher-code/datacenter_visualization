@@ -2210,19 +2210,16 @@ await test('routing as a real fabric does it', async () => {
   eq(await page.locator('#cable-load input.connections').count(), 0, 'the ideal split has no connections to count');
 }, { url: '?layout=examples/dual-plane.dc' });
 
-// A per-host metric that is not a rate cannot load the cables: greyed, it
-// says why on the page. A flow metric of any unit can (DV-007): one that does
-// not add up is averaged on each cable instead of refused.
+// A per-host metric that is not a rate is not offered to the cables. A flow
+// metric of any unit is (DV-007): one that does not add up is averaged on
+// each cable, where it used to be greyed out with a reason.
 await test('why a metric cannot load the cables', async () => {
+  const card = (name) => page.locator('#overlays .overlay', { has: page.locator('.overlay-name', { hasText: new RegExp(`^${name}$`) }) });
   await drop('cpu.tsv', '!test cpu_pct unit=% label="CPU"\ncpu_pct\tR01/s1\t40\n');
   await page.waitForTimeout(500);
-  await page.locator('#overlays .overlay-head input[type=checkbox]').last().check();
+  await card('CPU').locator('.overlay-head input[type=checkbox]').check();
   await page.waitForTimeout(300);
-  const box = page.locator('#overlays label', { hasText: 'load the cables' }).last().locator('input');
-  ok(await box.isDisabled(), 'a per-host CPU in % is greyed out');
-  const text = await page.evaluate(() => document.querySelector('#overlays').innerText);
-  ok(/can’t load the cables: % is not a rate/.test(text),
-     `and says why where it can be read  (${(/can’t load.*/.exec(text) || [''])[0]})`);
+  eq(await card('CPU').locator('label', { hasText: 'load the cables' }).count(), 0, 'a per-host CPU in % is not offered');
   await drop('loss.tsv', '!test loss_pct unit=% label="Loss"\nloss_pct\tR01/s1\t2\tpeer=R03/s1\n');
   await page.waitForTimeout(500);
   await page.locator('#overlays .overlay-head input[type=checkbox]').last().check();
@@ -2255,7 +2252,7 @@ await test('a host-and-peer table on the cables', async () => {
   ok(/16 of 16 flows routed/.test(up), `the peer column makes every row a flow  (${up.slice(0, 160).replace(/\n/g, ' | ')})`);
   ok(/Busiest cables/.test(up), 'and an uplink adds up on the cables');
   const upRows = await busiest();
-  ok(upRows.length > 0 && /^R01\/s\d → /.test(upRows[0]), `the busiest is out of R01, where the 19 Gb/s flows start  (${upRows[0]})`);
+  ok(upRows.length > 0 && /^R01\/\S+ → /.test(upRows[0]), `the busiest is out of R01, where the 19 Gb/s flows start  (${upRows[0]})`);
 
   // The downlink is the same traffic, measured at the other end: drawn the
   // way it ran, it lands exactly where the uplink did.
@@ -2279,8 +2276,9 @@ await test('a host-and-peer table on the cables', async () => {
      `the panel says it is an average  (${avg.slice(0, 160).replace(/\n/g, ' | ')})`);
   ok(/Highest averages/.test(avg) && !/Busiest switches/.test(avg), 'with the highest averages, and no switch filling up');
   const avgRows = await busiest();
-  ok(/48 us/.test(avgRows[0] || '') && /R01\/s5|R03\/s5/.test(avgRows[0] || ''),
+  ok(/\b48(\.0+)? us\b/.test(avgRows[0] || '') && /R01\/s5|R03\/s5/.test(avgRows[0] || ''),
      `the highest is the slow pair’s own cable  (${avgRows[0]})`);
+  ok(avgRows.every((row) => !/\/\d+G/.test(row) && !/%/.test(row)), `and no average is set against a capacity  (${avgRows[0]})`);
   ok(/Colour: the average of the flows across each cable/.test(avg), 'and the key says what the colour is');
   ok(Number((/([\d,]+) figures/.exec(await status()) || [0, '0'])[1]) > 0, 'its figures are printed too');
 
