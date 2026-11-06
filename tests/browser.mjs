@@ -291,12 +291,13 @@ async function test(name, fn, { url = '' } = {}) {
 // Every test opens the page, so a page that does not come up fails all of
 // them, each after a 30-second timeout, each naming a symptom ("page.click:
 // Timeout 30000ms exceeded") rather than the cause. That is what a module
-// that does not parse looks like from here: when an edit in DV-005 dropped a
-// doc comment's `/**` from app.js, this suite would have taken about 17
-// minutes to get to the SyntaxError, on its last lines. So the page is
-// loaded once before any test. If app.js did not run to its last line --
-// which sets window.__dcLayoutViewer -- or anything was thrown on the way,
-// the run stops here, with what the page said.
+// that does not parse looks like from here: with the `/**` an edit in DV-005
+// dropped from a doc comment in app.js, this suite ran for 25 minutes and
+// printed 195 failures, and the SyntaxError, with no file or line, appeared
+// only in the list at the end. So the page is loaded once before any test.
+// If app.js did not run to its last line -- which sets
+// window.__dcLayoutViewer -- or anything was thrown on the way, the run
+// stops here, with what the page said.
 current = 'the page comes up';
 await page.goto(base, { waitUntil: 'networkidle' });
 {

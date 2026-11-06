@@ -29,9 +29,10 @@ Tests, CI and docs only; the viewer, the tools and the package do not change
 - **`tests/browser.mjs` loads the page once before any test and stops at once
   if it does not come up**: if `app.js` did not run to its end, or anything
   was thrown on the way, it prints the page's error with the file and line
-  and exits 1. With the same dropped `/**`, that takes 2 seconds, where the
-  suite used to run every test into a 30-second timeout and print the cause
-  only on its last lines (about 17 minutes, measured in DV-006's survey).
+  and exits 1. With the same dropped `/**`, that takes 2 seconds and names
+  `js/app.js:505:8`. The suite used to run every test into a 30-second
+  timeout: 25 minutes and 195 failures, with the SyntaxError, and no file or
+  line, only in the list at the end.
   The location comes from Chromium over the DevTools protocol, because
   Playwright's `pageerror` carries only the message.
 - **Anything the page throws during a test is printed when it is thrown**,
