@@ -523,10 +523,10 @@ function overlayCard(state, overlay, actions) {
     // Greyed, it says why where it can be read, not only on hover.
     if (!unit.ok) body.append(el('div', 'muted why', `can’t load the cables: ${unit.why}`));
     // Flows, of any unit: added up on a cable, as traffic is, or averaged,
-    // as a latency is. The unit picks; the file (combine=) or this can say.
+    // as a latency is. The unit picks; the file (cable=) or this can say.
     if (kind === 'flows' && unit.ok) {
       const crow = el('label', 'combine-row');
-      const pick = el('select', 'combine');
+      const pick = el('select', 'on-cable');
       for (const [value, text] of [['sum', 'add up the flows'], ['mean', 'average the flows']]) {
         const opt = el('option', null, text);
         opt.value = value;
@@ -540,7 +540,7 @@ function overlayCard(state, overlay, actions) {
         + 'across it, each counted by the share of it that crosses. '
         + (unit.adds ? `${overlay.unit || 'A number with no unit'} adds up, so that is the default.`
           : `${overlay.unit} does not add up, so averaging is the default.`)
-        + ' combine=sum or combine=mean on its !test line sets it in the file.';
+        + ' cable=sum or cable=mean on its !test line sets it in the file.';
       body.append(crow);
     }
   }

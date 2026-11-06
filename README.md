@@ -659,7 +659,7 @@ flows** or **average the flows**:
   slow pair's round trips then show on the cables its traffic ran over, and
   a cable that only slow flows cross stands out from one they share with
   fast ones.
-- The unit picks; **`combine=sum`** or **`combine=mean`** on the metric's
+- The unit picks; **`cable=sum`** or **`cable=mean`** on the metric's
   `!test` line says otherwise in the file, and the card's choice says it on
   the page (kept while the file reloads).
 
@@ -1894,7 +1894,7 @@ name does not say `duplex` or `bidir`; `bytes=` and `reply_bytes=` size a
 packet rate's requests and replies, in bytes of payload, so it loads the
 cables as a bit rate; `dir=in|out` says which way a flow metric ran — `in`
 from the peer to the target, a downlink — where its name does not say;
-`combine=sum|mean` says whether the flows across a cable
+`cable=sum|mean` says whether the flows across a cable
 [add up or are averaged](#any-metric-on-the-cables-added-up-or-averaged)
 there, where its unit does not.
 `min=`/`max=` must be numbers with `min` below `max`; anything else is

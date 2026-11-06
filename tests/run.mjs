@@ -1640,8 +1640,8 @@ const segsOf = (cache, net) => {
   eq([receivedFlow('uplink', 'in'), receivedFlow('downlink', 'out'), receivedFlow('downlink', 'IN')], [true, false, true],
      'dir= on the !test line wins over the name');
   const dirWarn = [];
-  parseResults('!test x dir=sideways combine=avg\nx a 1 peer=b\n', new Map(), dirWarn);
-  eq(dirWarn.length, 2, 'a dir= or combine= that is not one of its values is reported');
+  parseResults('!test x dir=sideways cable=avg\nx a 1 peer=b\n', new Map(), dirWarn);
+  eq(dirWarn.length, 2, 'a dir= or cable= that is not one of its values is reported');
 
   // The table as overlays on a layout, each metric its own way.
   const lay = parseLayout([
@@ -1681,9 +1681,9 @@ const segsOf = (cache, net) => {
   eq([loadUnit(byName.get('uplink/s')).toGbps, loadUnit(byName.get('downlink/s')).toGbps], [1, null],
      'a unit on its !test line sets it against gbps=; a column with none loads in its own terms');
   eq(loadUnit(byName.get('rtt')).combine, 'mean', 'a latency column is averaged');
-  const forced = bindOverlay([...parseResults('!test rtt unit=us combine=sum\nrtt a 1 peer=b\n').values()][0], lay);
+  const forced = bindOverlay([...parseResults('!test rtt unit=us cable=sum\nrtt a 1 peer=b\n').values()][0], lay);
   eq([forced.combine, loadUnit(forced).combine, loadUnit({ ...byName.get('uplink/s'), combine: 'mean' }).combine],
-     ['sum', 'sum', 'mean'], 'combine= says otherwise, either way');
+     ['sum', 'sum', 'mean'], 'cable= says otherwise, either way');
   const meanBits = loadUnit({ name: 'gbps', unit: 'Gb/s', combine: 'mean' });
   eq([meanBits.toGbps, meanBits.unit], [null, 'Gb/s'], 'an averaged bit rate is set against no capacity, and keeps its unit');
 

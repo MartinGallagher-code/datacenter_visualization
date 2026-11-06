@@ -134,7 +134,7 @@ export function loadUnit(overlay, kind = 'flows') {
  * rate, a volume, a count, a number with no unit -- is summed on each cable,
  * as traffic is. What does not -- a percentage, a latency, any other unit --
  * is averaged: each cable shows the mean of the flows across it. The
- * metric's `combine` (its !test line, or the card) says otherwise when
+ * metric's `cable=` (its !test line), or the card, says otherwise when
  * given. Averaged, nothing is set against a gbps=.
  */
 function flowUnit(overlay, unit, toGbps, named) {

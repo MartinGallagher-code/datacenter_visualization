@@ -187,7 +187,7 @@ at the top.
 | `agg` | the default aggregation | One of the list in §5. |
 | `decimals` | fixed decimal places, a whole number 0–10 | `0` for counts and packet rates. Omit and it is chosen from the range. |
 | `dir` | `in` or `out`: which way a per-pair metric ran | `in` for what the target received from its peer (a downlink). Omit it when the name already says `downlink`, `rx` or `received`. See §7. |
-| `combine` | `sum` or `mean`: how the flows across one cable make its figure | Omit it and the unit decides: rates, volumes and counts add up, percentages and latencies are averaged. See §7. |
+| `cable` | `sum` or `mean`: how the flows across one cable make its figure | Omit it and the unit decides: rates, volumes and counts add up, percentages and latencies are averaged. See §7. |
 
 **The viewer checks this table, in JSON as well as in text.** A `{"!test": …}`
 object and a `tests: {…}` block go through the same checks a `!test` line
@@ -247,7 +247,7 @@ timestamp	host	peer	uplink/s	downlink/s	rtt (us)
 
 **On the cables.** Any per-pair metric can be loaded onto the cables.
 Rates, volumes, counts and numbers with no unit add up on each cable;
-percentages and latencies are averaged there. `combine=sum` or `combine=mean`
+percentages and latencies are averaged there. `cable=sum` or `cable=mean`
 on the `!test` line says which where the unit does not.
 
 **A flow is not a cable.** A measurement between two servers in one rack

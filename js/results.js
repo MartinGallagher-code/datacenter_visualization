@@ -212,8 +212,9 @@ const TEST_KEYS = {
   dir: ['in', 'out'],
   // How the flows that cross one cable make its figure: `sum`, as traffic
   // adds up, or `mean`, for what does not -- a latency, a loss rate. Read
-  // from the unit when not given.
-  combine: ['sum', 'mean'],
+  // from the unit when not given. (Not `combine`: the card already calls
+  // the aggregation over a metric's samples that.)
+  cable: ['sum', 'mean'],
 };
 
 // The words a name says "received" in: a column of what each host took in
@@ -722,7 +723,7 @@ export function bindOverlay(overlay, model) {
     received: receivedFlow(overlay.name, meta.dir),
     // How a cable combines the flows across it, where the file says; the
     // unit decides otherwise (traffic.js loadUnit), and the card can choose.
-    combine: ['sum', 'mean'].includes(String(meta.combine || '').toLowerCase()) ? String(meta.combine).toLowerCase() : null,
+    combine: ['sum', 'mean'].includes(String(meta.cable || '').toLowerCase()) ? String(meta.cable).toLowerCase() : null,
     unit: meta.unit || '',
     numeric,
     numericByEl,

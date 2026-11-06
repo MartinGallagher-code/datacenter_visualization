@@ -38,7 +38,7 @@ A table of host-to-peer readings, any metric of it, on the cables (DV-007).
   fills, and the panel, its key, the tooltips and the inspector speak of
   averages; the load generator and a test flow are not drawn on top of one,
   and the panel says why. The card's new **on a cable: add up / average
-  the flows** choice, and `combine=sum|mean` on the `!test` line, overrule
+  the flows** choice, and `cable=sum|mean` on the `!test` line, overrule
   the unit.
 - **values on the cables**, in the Cable load panel, prints one figure on
   each cable -- what it carries the busier way, an average the higher way,

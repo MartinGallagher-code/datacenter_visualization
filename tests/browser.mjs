@@ -2226,7 +2226,7 @@ await test('why a metric cannot load the cables', async () => {
   await page.waitForTimeout(300);
   const flow = page.locator('#overlays label', { hasText: 'load the cables' }).last().locator('input');
   ok(await flow.isEnabled(), 'a loss in % between two hosts is offered');
-  eq(await page.locator('#overlays select.combine').last().inputValue(), 'mean', 'averaged, since a percentage does not add up');
+  eq(await page.locator('#overlays select.on-cable').last().inputValue(), 'mean', 'averaged, since a percentage does not add up');
 }, { url: '?layout=examples/dual-plane.dc' });
 
 // DV-007: a table written `timestamp host peer metric ...`, any metric of it
@@ -2270,7 +2270,7 @@ await test('a host-and-peer table on the cables', async () => {
 
   // A latency does not add up along a path: averaged on each cable.
   await show('rtt');
-  eq(await card('rtt').locator('select.combine').inputValue(), 'mean', 'a column in us is averaged by default');
+  eq(await card('rtt').locator('select.on-cable').inputValue(), 'mean', 'a column in us is averaged by default');
   const avg = await panel();
   ok(/the average of 16 flows/.test(avg) && /16 of 16 flows routed · averaged on each cable/.test(avg),
      `the panel says it is an average  (${avg.slice(0, 160).replace(/\n/g, ' | ')})`);
@@ -2283,10 +2283,10 @@ await test('a host-and-peer table on the cables', async () => {
   ok(Number((/([\d,]+) figures/.exec(await status()) || [0, '0'])[1]) > 0, 'its figures are printed too');
 
   // Chosen the other way, the same column adds up.
-  await card('rtt').locator('select.combine').selectOption('sum');
+  await card('rtt').locator('select.on-cable').selectOption('sum');
   await page.waitForTimeout(400);
   ok(/Busiest cables/.test(await panel()), 'added up instead, it is a load again');
-  await card('rtt').locator('select.combine').selectOption('mean');
+  await card('rtt').locator('select.on-cable').selectOption('mean');
   await page.waitForTimeout(400);
   ok(/Highest averages/.test(await panel()), 'and back');
 }, { url: '?layout=examples/dual-plane.dc&results=examples/dual-plane-peers.tsv' });
