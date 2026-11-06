@@ -11,6 +11,37 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.54.9 — 2026-11-06
+
+Tests, CI and docs only; the viewer, the tools and the package do not change
+(DV-006).
+
+- **`tests/run.mjs` parses every `js/*.js` as an ES module, `app.js`
+  included**, and a syntax error fails it with the file, the line and Node's
+  message. `app.js` is the one module the suite's imports never reach, so in
+  DV-005 a dropped `/**` there passed this suite and stopped the page from
+  loading. The check feeds each file to `node --input-type=module --check` on
+  stdin, because plain `node --check js/app.js` exits 0 on that broken file
+  (with no `package.json`, Node 22's module-type guess swallows the error).
+  Before the files are checked, the checker has to reject a module that does
+  not parse and one that only a module forbids, so a Node that turned lenient
+  fails the suite instead of passing everything.
+- **`tests/browser.mjs` loads the page once before any test and stops at once
+  if it does not come up**: if `app.js` did not run to its end, or anything
+  was thrown on the way, it prints the page's error with the file and line
+  and exits 1. With the same dropped `/**`, that takes 2 seconds, where the
+  suite used to run every test into a 30-second timeout and print the cause
+  only on its last lines (about 17 minutes, measured in DV-006's survey).
+  The location comes from Chromium over the DevTools protocol, because
+  Playwright's `pageerror` carries only the message.
+- **Anything the page throws during a test is printed when it is thrown**,
+  with where, as well as in the list of failures at the end.
+- **Every job in `.github/workflows/tests.yml` has a `timeout-minutes`**: 20
+  for the browser job, 10 for the others, instead of GitHub's default of six
+  hours. `tests/run.mjs` fails if a job is added without one.
+- The README's Tests section no longer quotes assertion counts (it said 1,003
+  and 109, against 2,219 and 407 now), and says what each suite checks.
+
 ## 1.54.8 — 2026-11-04
 
 - **The sentences a comparison reports move from `js/app.js` into

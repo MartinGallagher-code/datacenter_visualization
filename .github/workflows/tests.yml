@@ -10,6 +10,10 @@
 # missing so they still run on a machine without python3 or Playwright, and a
 # skip is exactly what CI must not accept: a green run that quietly tested
 # nothing looks identical to a green run that tested everything.
+#
+# Every job states a timeout-minutes, several times what it takes when
+# healthy, so a hang costs minutes rather than GitHub's default of six hours.
+# tests/run.mjs fails if a job is added without one.
 
 name: tests
 
@@ -34,6 +38,7 @@ jobs:
     name: version
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
       - name: The version moved past the base branch's
@@ -56,6 +61,7 @@ jobs:
   modules:
     name: module tests
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -72,6 +78,7 @@ jobs:
   browser:
     name: browser tests
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -90,6 +97,7 @@ jobs:
   package:
     name: package
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v5

@@ -216,9 +216,55 @@ const page = await browser.newPage();
 
 // Anything the page complains about is a failure of the test that caused it.
 // Several of the bugs below were silent in the UI and loud in the console.
+// It is all listed as failures at the end; an uncaught error is also said
+// the moment it is thrown, so a run that is going wrong says why while it
+// goes, not only on its last lines.
 const noise = [];
-page.on('pageerror', (e) => noise.push(`${current}: pageerror ${String(e).split('\n')[0]}`));
+const thrown = [];
+const said = (what) => {
+  thrown.push({ test: current, what });
+  console.error(`  page error  ${current || '(between tests)'}: ${what}`);
+};
+// Where it was thrown, too. Playwright's pageerror carries only the message
+// -- a module that does not parse arrives as "SyntaxError: Unexpected
+// identifier 'the'" with an empty stack, naming no file -- so the location
+// is asked of Chromium itself, over the DevTools protocol. If that session
+// will not open, pageerror says the bare message instead.
+let located = false;
+page.on('pageerror', (e) => {
+  noise.push(`${current}: pageerror ${String(e).split('\n')[0]}`);
+  if (!located) said(String(e).split('\n')[0]);
+});
 page.on('console', (m) => { if (m.type() === 'error') noise.push(`${current}: console ${m.text()}`); });
+try {
+  const cdp = await page.context().newCDPSession(page);
+  cdp.on('Runtime.exceptionThrown', ({ exceptionDetails: d }) => {
+    const top = (d.stackTrace && d.stackTrace.callFrames[0]) || d;
+    const what = (d.exception && (d.exception.description || d.exception.value)) || d.text;
+    // js/app.js, say, rather than the server's URL; the page's own inline
+    // script is index.html, whatever ?query it was opened with.
+    const file = top.url && top.url.startsWith(base) ? new URL(top.url).pathname.slice(1) || 'index.html' : top.url;
+    const where = file && Number.isInteger(top.lineNumber)
+      ? `  (at ${file}:${top.lineNumber + 1}:${top.columnNumber + 1})` : '';
+    said(`${String(what).split('\n')[0]}${where}`);
+  });
+  await cdp.send('Runtime.enable');
+  located = true;
+} catch { /* the bare message, from pageerror */ }
+
+async function finish() {
+  for (const line of noise) {
+    failures++;
+    count++;
+    console.error(`  FAIL  ${line}`);
+  }
+  await browser.close();
+  server.close();
+  console.log(failures
+    ? `${failures}/${count} browser tests FAILED`
+    : `all ${count} browser tests passed`);
+  process.exit(failures ? 1 : 0);
+}
 
 const LAYOUT = readFileSync(join(root, 'examples/small.dc'), 'utf8');
 const RESULTS = readFileSync(join(root, 'examples/small-results.tsv'), 'utf8');
@@ -240,6 +286,31 @@ async function test(name, fn, { url = '' } = {}) {
   }
   current = '';
 }
+
+// ------------------------------------------------------------------ the page comes up
+// Every test opens the page, so a page that does not come up fails all of
+// them, each after a 30-second timeout, each naming a symptom ("page.click:
+// Timeout 30000ms exceeded") rather than the cause. That is what a module
+// that does not parse looks like from here: when an edit in DV-005 dropped a
+// doc comment's `/**` from app.js, this suite would have taken about 17
+// minutes to get to the SyntaxError, on its last lines. So the page is
+// loaded once before any test. If app.js did not run to its last line --
+// which sets window.__dcLayoutViewer -- or anything was thrown on the way,
+// the run stops here, with what the page said.
+current = 'the page comes up';
+await page.goto(base, { waitUntil: 'networkidle' });
+{
+  const ready = await page.evaluate(() => window.__dcLayoutViewer === 'ready');
+  const errors = thrown.filter((t) => t.test === current).map((t) => t.what);
+  ok(ready && !errors.length, `app.js runs to its end and nothing is thrown${errors.length
+    ? `: ${errors.join('; ')}`
+    : ready ? '' : ': it stopped short without throwing'}`);
+  if (!ready || errors.length) {
+    console.error('  stopping: every test after this opens the same page, and could only time out');
+    await finish();
+  }
+}
+current = '';
 
 // ------------------------------------------------------------------ page helpers
 
@@ -2754,16 +2825,4 @@ await test('the About box shows the version', async () => {
 
 // ------------------------------------------------------------------ done
 
-for (const line of noise) {
-  failures++;
-  count++;
-  console.error(`  FAIL  ${line}`);
-}
-
-await browser.close();
-server.close();
-
-console.log(failures
-  ? `${failures}/${count} browser tests FAILED`
-  : `all ${count} browser tests passed`);
-process.exit(failures ? 1 : 0);
+await finish();
