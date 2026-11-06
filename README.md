@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.54.8** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.54.9** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -2705,9 +2705,25 @@ quietly left stale.
 ## Tests
 
 ```sh
-node tests/run.mjs        # 1,003 assertions over the modules
-node tests/browser.mjs    # 109 more, driving the page in Chromium
+node tests/run.mjs        # the modules, the tools and the version, no browser
+node tests/browser.mjs    # the page, driven in Chromium
 ```
+
+`tests/run.mjs` imports the viewer's modules and tests them directly, runs
+`dcadd` and `dcimport` against the fixtures in `tests/fixtures/` and `dcprobe`
+against the machine it is on, and checks that the version agrees everywhere it
+is written. It also parses
+every `js/*.js` as an ES module, `app.js` included (it is the page itself, so
+nothing in the suite imports it): a syntax error fails the suite with the file
+and line, instead of only stopping the page from loading.
+
+`tests/browser.mjs` serves the repository on loopback and drives the page:
+each test there is a bug that once shipped in the wiring between the modules
+and the page. It loads the page once before any test, and if the page does
+not come up it stops at once with the page's own error and where it was
+thrown, rather than running every test into a timeout. Anything the page
+throws during a test is printed as it happens, and any error the page reports
+fails the run.
 
 Both skip what they cannot run — `tests/run.mjs` needs python3 for the
 `dcadd`/`dcimport` sections, `tests/browser.mjs` needs Playwright — so either
@@ -2716,11 +2732,13 @@ passes: a green run that quietly tested nothing is indistinguishable from a
 green run that tested everything, and that is the one result a test suite must
 never give.
 
-GitHub Actions runs both on every push and pull request, plus a third job that
+GitHub Actions runs both on every push and pull request, plus a job that
 builds the Python package, installs the wheel into a clean environment and
 fetches a page from the server it provides — the wheel's layout is not the
 checkout's, so nothing else here would notice a package that installs and then
-serves nothing. Three jobs, so a red mark says which layer broke.
+serves nothing — and, on a pull request, one that checks the version moved.
+Separate jobs, so a red mark says which layer broke, and each with a time limit
+of its own, so a hang ends in minutes rather than hours.
 
 ## Repository layout
 

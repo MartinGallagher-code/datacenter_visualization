@@ -6096,6 +6096,71 @@ if (python.error) {
   eq(compareMtu(mtus, 1500).small, [], 'and none under a 1500 fabric');
 }
 
+// ---------------------------------------------------- every module parses
+// The imports at the top of this file reach every module in js/ but one,
+// directly or through another: app.js is the page itself and runs against a
+// DOM the moment it loads, so nothing here imports it, and a syntax error in
+// it passed this suite whole. DV-005 did exactly that -- an edit dropped a
+// doc comment's opening `/**` from app.js, this suite went green, and the
+// page never loaded. So every js/*.js is parsed here as the ES module
+// index.html loads it as, whether or not anything here imports it.
+//
+// Not with `node --check js/app.js`: with no package.json in the tree, Node
+// guesses each file's module type, and on Node 22 that guess swallows the
+// error -- the plain check exits 0 on the very file that broke the page.
+// The source goes in on stdin with --input-type=module instead, which really
+// fails. Node then calls the file [stdin], so the report puts its name back.
+{
+  const parses = (source) => {
+    const run = spawnSync(process.execPath, ['--input-type=module', '--check'], { input: source, encoding: 'utf8' });
+    return { ok: !run.error && run.status === 0, why: run.error ? run.error.message : (run.stderr || '') };
+  };
+  // Node's message up to and including the error itself: the location, the
+  // offending line with its caret, and "SyntaxError: ..." -- not the stack
+  // of Node's own checker under it.
+  const reason = (why, file) => {
+    const lines = why.replace(/\[stdin\]/g, `js/${file}`).split('\n');
+    const end = lines.findIndex((line) => /^\w*Error\b/.test(line));
+    return (end < 0 ? lines.slice(0, 3) : lines.slice(0, end + 1)).filter((line) => line.trim()).join('\n        ');
+  };
+
+  // First the checker itself. If a Node update made this way of checking
+  // lenient too, every file below would pass and prove nothing -- so it has
+  // to reject a module that is plainly broken, and one that only a module
+  // forbids (strict mode, which an ES module always is), before its word on
+  // the real files counts for anything.
+  ok(!parses('export const a = 1;\nfoo bar\n').ok,
+     'the module check rejects a module that does not parse  (if not, it is not checking, and nothing below means anything)');
+  ok(!parses('with (Math) max(1, 2);\n').ok,
+     'and parses as a module, not as a script  (`with` is a syntax error only in a module)');
+  ok(parses("import x from './x.js';\nexport const a = x;\n").ok,
+     'and accepts a good one, without resolving its imports');
+
+  const modules = readdirSync(join(root, 'js')).filter((f) => f.endsWith('.js')).sort();
+  ok(modules.includes('app.js'), `app.js, which nothing here imports, is among those checked  (${modules.length} in js/)`);
+  for (const file of modules) {
+    const result = parses(readFileSync(join(root, 'js', file), 'utf8'));
+    ok(result.ok, `js/${file} parses as an ES module${result.ok ? '' : `\n        ${reason(result.why, file)}`}`);
+  }
+}
+
+// ---------------------------------------------------- a hang costs minutes
+// A page that never loads sends the browser suite through every test into a
+// timeout, and a CI job with no timeout-minutes of its own gets GitHub's
+// default of six hours. Each job in tests.yml states a ceiling, so a hang
+// ends in minutes and the red mark says which job hung.
+{
+  const workflow = readFileSync(join(root, '.github/workflows/tests.yml'), 'utf8');
+  const jobs = workflow.slice(workflow.search(/^jobs:$/m)).split(/^ {2}(?=[\w-]+:$)/m).slice(1);
+  const names = jobs.map((job) => job.slice(0, job.indexOf(':')));
+  ok(['version', 'modules', 'browser', 'package'].every((name) => names.includes(name)),
+     `tests.yml's jobs are all found  (${names.join(', ')})`);
+  for (const [i, job] of jobs.entries()) {
+    const minutes = Number((job.match(/^ {4}timeout-minutes: (\d+)$/m) || [])[1]);
+    ok(minutes > 0, `the ${names[i]} job in tests.yml has a timeout-minutes  (${minutes || 'none'})`);
+  }
+}
+
 // ------------------------------------------------------------------ version
 // One number for the whole project, written in two places because no file is
 // readable from both a browser module graph and a Python interpreter. Two

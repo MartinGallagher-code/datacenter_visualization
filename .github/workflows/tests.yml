@@ -10,6 +10,10 @@
 # missing so they still run on a machine without python3 or Playwright, and a
 # skip is exactly what CI must not accept: a green run that quietly tested
 # nothing looks identical to a green run that tested everything.
+#
+# Every job states a timeout-minutes, several times what it takes when
+# healthy, so a hang costs minutes rather than GitHub's default of six hours.
+# tests/run.mjs fails if a job is added without one.
 
 name: tests
 
@@ -34,6 +38,7 @@ jobs:
     name: version
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
       - name: The version moved past the base branch's
@@ -56,6 +61,7 @@ jobs:
   modules:
     name: module tests
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -72,6 +78,10 @@ jobs:
   browser:
     name: browser tests
     runs-on: ubuntu-latest
+    # The job's ceiling has room for the install, whose apt step has taken
+    # anything from 19 seconds to 10 minutes on a slow mirror; the suite's
+    # own step below has a tighter one.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -85,11 +95,15 @@ jobs:
         run: |
           npm install -g playwright@1.56.1
           playwright install --with-deps chromium
+      # About 4 minutes when the page is healthy, and seconds when it does
+      # not come up (the suite stops at once), so 15 is only ever a hang.
       - run: node tests/browser.mjs --strict
+        timeout-minutes: 15
 
   package:
     name: package
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v5
