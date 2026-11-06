@@ -36,9 +36,13 @@ Tests, CI and docs only; the viewer, the tools and the package do not change
   Playwright's `pageerror` carries only the message.
 - **Anything the page throws during a test is printed when it is thrown**,
   with where, as well as in the list of failures at the end.
-- **Every job in `.github/workflows/tests.yml` has a `timeout-minutes`**: 20
-  for the browser job, 10 for the others, instead of GitHub's default of six
-  hours. `tests/run.mjs` fails if a job is added without one.
+- **Every job in `.github/workflows/tests.yml` has a `timeout-minutes`**,
+  instead of GitHub's default of six hours: 10 for the module, package and
+  version jobs, and 30 for the browser job, whose test step has 15 of its
+  own. The job's ceiling is the looser one because its Playwright install
+  varies: 19 seconds on 1.54.8's run, over 10 minutes on this one's first,
+  on a slow package mirror. `tests/run.mjs` fails if a job is added without
+  one.
 - The README's Tests section no longer quotes assertion counts (it said 1,003
   and 109, against 2,219 and 407 now), and says what each suite checks.
 

@@ -78,7 +78,10 @@ jobs:
   browser:
     name: browser tests
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # The job's ceiling has room for the install, whose apt step has taken
+    # anything from 19 seconds to 10 minutes on a slow mirror; the suite's
+    # own step below has a tighter one.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -92,7 +95,10 @@ jobs:
         run: |
           npm install -g playwright@1.56.1
           playwright install --with-deps chromium
+      # About 4 minutes when the page is healthy, and seconds when it does
+      # not come up (the suite stops at once), so 15 is only ever a hang.
       - run: node tests/browser.mjs --strict
+        timeout-minutes: 15
 
   package:
     name: package
