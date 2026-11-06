@@ -1,0 +1,55 @@
+# Host-to-peer readings for examples/dual-plane.dc, in the shape a monitoring
+# script writes them: a timestamp, the host, the peer it measured against,
+# and a column per metric. The third column is headed `peer`, so it names
+# each row's far end, and every metric after it is a flow from host to peer.
+#
+#   R01 <-> R03   every server in rack R01 sends 20 Gb/s (then 18) to its
+#                 namesake in R03, in the other pod, and gets 3 Gb/s back.
+#                 Both ends report it: R01's rows say uplink 20, downlink 3,
+#                 and R03's say uplink 3, downlink 20 -- so uplink/s and
+#                 downlink/s put the same traffic on the cables, the right
+#                 way round (downlink runs from the peer to the host).
+#   R01/s5        its round trips to R03/s5 take 48 us where the others take
+#                 about 12, and it retransmits: averaged on the cables, rtt
+#                 shows where that pair's traffic ran.
+#
+# Tick a metric, then "load the cables" on its card. uplink/s and
+# downlink/s add up on each cable; rtt is in us, which does not add up
+# along a path, so each cable shows the average of the flows across it.
+# "values on the cables" in the Cable load panel prints each cable's figure.
+!test	uplink/s	unit=Gb/s	label="Uplink"	short=UP
+!test	downlink/s	unit=Gb/s	label="Downlink"	short=DOWN
+!test	retransmits/s	label="Retransmits a second"	short=RTX
+timestamp	host	peer	uplink/s	downlink/s	rtt (us)	retransmits/s
+2026-11-06T12:00:00	R01/s1	R03/s1	20	3	11.7	2
+2026-11-06T12:00:00	R03/s1	R01/s1	3	20	11.7	0
+2026-11-06T12:00:00	R01/s2	R03/s2	20	3	11.8	2
+2026-11-06T12:00:00	R03/s2	R01/s2	3	20	11.8	0
+2026-11-06T12:00:00	R01/s3	R03/s3	20	3	11.9	2
+2026-11-06T12:00:00	R03/s3	R01/s3	3	20	11.9	0
+2026-11-06T12:00:00	R01/s4	R03/s4	20	3	12.0	2
+2026-11-06T12:00:00	R03/s4	R01/s4	3	20	12.0	0
+2026-11-06T12:00:00	R01/s5	R03/s5	20	3	48.0	40
+2026-11-06T12:00:00	R03/s5	R01/s5	3	20	48.0	0
+2026-11-06T12:00:00	R01/s6	R03/s6	20	3	12.2	2
+2026-11-06T12:00:00	R03/s6	R01/s6	3	20	12.2	0
+2026-11-06T12:00:00	R01/s7	R03/s7	20	3	12.3	2
+2026-11-06T12:00:00	R03/s7	R01/s7	3	20	12.3	0
+2026-11-06T12:00:00	R01/s8	R03/s8	20	3	12.4	2
+2026-11-06T12:00:00	R03/s8	R01/s8	3	20	12.4	0
+2026-11-06T12:00:10	R01/s1	R03/s1	18	3	11.7	2
+2026-11-06T12:00:10	R03/s1	R01/s1	3	18	11.7	0
+2026-11-06T12:00:10	R01/s2	R03/s2	18	3	11.8	2
+2026-11-06T12:00:10	R03/s2	R01/s2	3	18	11.8	0
+2026-11-06T12:00:10	R01/s3	R03/s3	18	3	11.9	2
+2026-11-06T12:00:10	R03/s3	R01/s3	3	18	11.9	0
+2026-11-06T12:00:10	R01/s4	R03/s4	18	3	12.0	2
+2026-11-06T12:00:10	R03/s4	R01/s4	3	18	12.0	0
+2026-11-06T12:00:10	R01/s5	R03/s5	18	3	48.0	40
+2026-11-06T12:00:10	R03/s5	R01/s5	3	18	48.0	0
+2026-11-06T12:00:10	R01/s6	R03/s6	18	3	12.2	2
+2026-11-06T12:00:10	R03/s6	R01/s6	3	18	12.2	0
+2026-11-06T12:00:10	R01/s7	R03/s7	18	3	12.3	2
+2026-11-06T12:00:10	R03/s7	R01/s7	3	18	12.3	0
+2026-11-06T12:00:10	R01/s8	R03/s8	18	3	12.4	2
+2026-11-06T12:00:10	R03/s8	R01/s8	3	18	12.4	0

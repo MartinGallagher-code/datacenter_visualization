@@ -17,7 +17,7 @@
 // file is only read as a wide table when it could not be one of those: see
 // looksLikeWideTsv below.
 //
-// Three things the format allows that the results format has no spelling for:
+// What the format allows that the results format has no spelling for:
 //
 //   * a header is optional -- unnamed columns are called A, B, C ...
 //   * a column may still carry a `!test` line, which is the results format's
@@ -27,6 +27,9 @@
 //     path between two machines rather than a property of one. The sample is
 //     filed against the first host with the second as its peer, which is what
 //     the viewer already draws as a flow and filters as `peer=`.
+//   * the far end may have a column of its own instead: a header reading
+//     `timestamp  host  peer  uplink/s ...` makes the third column each row's
+//     peer, exactly as the arrow does, and the metrics start at the fourth.
 //   * several files combine. Two files in one folder, one per host or one per
 //     metric, are one dashboard: a column of the same name in both is one
 //     overlay carrying the samples of both.
@@ -83,6 +86,16 @@ const splitRow = (line) => (line.includes(TAB)
   : line.replace(ARROW_GLUE, '->').trim().split(/\s+/));
 
 const TIME_COLUMNS = new Set(['timestamp', 'time', 'ts', 'date', 'datetime', 'when', 'epoch']);
+// A third heading that names each row's far end: the table is host-to-peer,
+// one row per pair, the way `timestamp host peer uplink/s downlink/s` is
+// written. Read like the host column's arrow, `host -> peer`.
+const PEER_COLUMNS = new Set(['peer', 'dst', 'dest', 'destination', 'remote', 'to']);
+
+/** Whether a header's heading names the peer column. */
+export function isPeerHeading(heading) {
+  if (heading === undefined || heading === null) return false;
+  return PEER_COLUMNS.has(String(heading).toLowerCase().replace(/[^a-z]/g, ''));
+}
 const HOST_COLUMNS = new Set([
   'host', 'hostname', 'node', 'target', 'device', 'server', 'machine', 'flow', 'pair', 'src',
 ]);
@@ -261,16 +274,32 @@ export function readWideTsv(text, emit, warnings = [], opts = {}) {
   let ragged = 0;
   let raggedAt = 0;
 
-  const columnAt = (index) => {
-    let col = columns[index - 2];
+  // A peer column: `timestamp  host  peer  uplink/s ...` names each row's far
+  // end in a column of its own, and the metrics start one column later. Only
+  // a header can say so -- a table with none has nothing to name it by, so
+  // its third column stays a metric, as it always was.
+  let twice = 0;
+  let twiceAt = 0;
+  const firstMetric = () => (header && isPeerHeading(header[2]) ? 3 : 2);
+
+  let columnsFirst = 2;
+  const columnAt = (index, first) => {
+    // Columns are cached by their place among the metrics, so a header that
+    // moves where the metrics start makes the cache mean something else.
+    if (first !== columnsFirst) {
+      columns.length = 0;
+      columnsFirst = first;
+    }
+    let col = columns[index - first];
     if (col) return col;
     // A row wider than its header is not an error: a script that grew a column
     // appends to the same file, and the new one is unnamed until the next
     // header. It gets a letter, like every other unnamed column.
-    const heading = header && header[index] !== undefined ? header[index] : columnLetter(index - 2);
-    const { name, unit } = splitUnit(heading || columnLetter(index - 2));
-    col = { name: name || columnLetter(index - 2), unit, slug: slugify(name), index };
-    columns[index - 2] = col;
+    const letter = columnLetter(index - first);
+    const heading = header && header[index] !== undefined ? header[index] : letter;
+    const { name, unit } = splitUnit(heading || letter);
+    col = { name: name || letter, unit, slug: slugify(name), index };
+    columns[index - first] = col;
     return col;
   };
 
@@ -319,10 +348,22 @@ export function readWideTsv(text, emit, warnings = [], opts = {}) {
     }
     if (header && fields.length !== header.length && !ragged++) raggedAt = n;
 
-    const { host, peer, via } = splitFlow(rawHost);
+    const flow = splitFlow(rawHost);
+    const { host, via } = flow;
+    let { peer } = flow;
     if (!host) {
       warnings.push(`${where} ${n}: "${truncate(rawHost)}" names no host -- skipped`);
       continue;
+    }
+    const first = firstMetric();
+    if (first === 3) {
+      // A blank peer cell is a reading of the host alone, as a row with no
+      // arrow is: blank is "not measured" here as everywhere else.
+      const cell = String(fields[2] == null ? '' : fields[2]).trim();
+      if (cell) {
+        if (peer && peer.toLowerCase() !== cell.toLowerCase() && !twice++) twiceAt = n;
+        peer = cell;
+      }
     }
     noteHost(host);
     if (peer) noteHost(peer);
@@ -330,12 +371,12 @@ export function readWideTsv(text, emit, warnings = [], opts = {}) {
     const at = timeValue(stamp);
     rows++;
 
-    for (let i = 2; i < fields.length; i++) {
+    for (let i = first; i < fields.length; i++) {
       const raw = fields[i];
       // Blank is "not measured", never zero: averaging a gap as zero is the
       // one mistake that makes every number on the floor look better than it is.
       if (isBlank(raw)) continue;
-      const col = columnAt(i);
+      const col = columnAt(i, first);
       const num = numberOf(raw);
       const meta = {};
       if (stamp) meta.time = stamp;
@@ -352,11 +393,15 @@ export function readWideTsv(text, emit, warnings = [], opts = {}) {
     }
   }
 
+  if (twice) {
+    warnings.push(`${where} ${twiceAt}: ${twice} row${twice === 1 ? '' : 's'} name${twice === 1 ? 's' : ''} one peer `
+      + 'with an arrow in the host column and another in the peer column -- the peer column is the one read');
+  }
   if (ragged) {
     warnings.push(`${where} ${raggedAt}: ${ragged} row${ragged === 1 ? '' : 's'} do not have as many `
       + `columns as the header -- the extra values are read as unnamed columns, and the missing ones as not measured`);
   }
-  return { columns: columns.filter(Boolean), rows, hosts: [...hosts.values()], header: !!header };
+  return { columns: columns.filter(Boolean), rows, hosts: [...hosts.values()], header: !!header, peer: firstMetric() === 3 };
 }
 
 const truncate = (line) => (line.length > 60 ? `${line.slice(0, 57)}…` : line);

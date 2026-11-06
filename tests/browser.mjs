@@ -2210,19 +2210,88 @@ await test('routing as a real fabric does it', async () => {
   eq(await page.locator('#cable-load input.connections').count(), 0, 'the ideal split has no connections to count');
 }, { url: '?layout=examples/dual-plane.dc' });
 
-// A metric that is not a rate cannot load the cables: greyed, it says why
-// on the page.
+// A per-host metric that is not a rate cannot load the cables: greyed, it
+// says why on the page. A flow metric of any unit can (DV-007): one that does
+// not add up is averaged on each cable instead of refused.
 await test('why a metric cannot load the cables', async () => {
-  await drop('loss.tsv', '!test loss_pct unit=% label="Loss"\nloss_pct\tR01/s1\t2\tpeer=R03/s1\n');
+  await drop('cpu.tsv', '!test cpu_pct unit=% label="CPU"\ncpu_pct\tR01/s1\t40\n');
   await page.waitForTimeout(500);
   await page.locator('#overlays .overlay-head input[type=checkbox]').last().check();
   await page.waitForTimeout(300);
   const box = page.locator('#overlays label', { hasText: 'load the cables' }).last().locator('input');
-  ok(await box.isDisabled(), 'a loss in % is greyed out');
+  ok(await box.isDisabled(), 'a per-host CPU in % is greyed out');
   const text = await page.evaluate(() => document.querySelector('#overlays').innerText);
-  ok(/can’t load the cables: % is not a rate or a volume, so it does not add up along a cable/.test(text),
+  ok(/can’t load the cables: % is not a rate/.test(text),
      `and says why where it can be read  (${(/can’t load.*/.exec(text) || [''])[0]})`);
+  await drop('loss.tsv', '!test loss_pct unit=% label="Loss"\nloss_pct\tR01/s1\t2\tpeer=R03/s1\n');
+  await page.waitForTimeout(500);
+  await page.locator('#overlays .overlay-head input[type=checkbox]').last().check();
+  await page.waitForTimeout(300);
+  const flow = page.locator('#overlays label', { hasText: 'load the cables' }).last().locator('input');
+  ok(await flow.isEnabled(), 'a loss in % between two hosts is offered');
+  eq(await page.locator('#overlays select.combine').last().inputValue(), 'mean', 'averaged, since a percentage does not add up');
 }, { url: '?layout=examples/dual-plane.dc' });
+
+// DV-007: a table written `timestamp host peer metric ...`, any metric of it
+// on the cables -- added up or averaged, each the way it ran -- and each
+// cable's figure printed on it.
+await test('a host-and-peer table on the cables', async () => {
+  const panel = () => page.evaluate(() => document.querySelector('#cable-load').innerText);
+  const card = (name) => page.locator('#overlays .overlay', { has: page.locator('.overlay-name', { hasText: new RegExp(`^${name}$`) }) });
+  const show = async (name) => {
+    await card(name).locator('.overlay-head input[type=checkbox]').check();
+    await page.waitForTimeout(200);
+    await card(name).locator('label', { hasText: 'load the cables' }).locator('input').check();
+    await page.waitForTimeout(400);
+  };
+  const busiest = () => page.evaluate(() => {
+    const list = document.querySelector('#cable-load .load-list');
+    return list ? [...list.querySelectorAll('.load-row')].map((r) => r.innerText.replace(/\s+/g, ' ').trim()) : [];
+  });
+
+  await show('Uplink');
+  await ideal();
+  const up = await panel();
+  ok(/16 of 16 flows routed/.test(up), `the peer column makes every row a flow  (${up.slice(0, 160).replace(/\n/g, ' | ')})`);
+  ok(/Busiest cables/.test(up), 'and an uplink adds up on the cables');
+  const upRows = await busiest();
+  ok(upRows.length > 0 && /^R01\/s\d → /.test(upRows[0]), `the busiest is out of R01, where the 19 Gb/s flows start  (${upRows[0]})`);
+
+  // The downlink is the same traffic, measured at the other end: drawn the
+  // way it ran, it lands exactly where the uplink did.
+  await show('Downlink');
+  const downRows = await busiest();
+  eq(downRows, upRows, 'a downlink runs from the peer to the host, so both ends’ readings agree on the cables');
+
+  // Values on the cables: off until asked for, then counted on the status line.
+  const status = () => page.evaluate(() => document.querySelector('#statusinfo').textContent);
+  ok(!/figures/.test(await status()), 'no figures are printed until asked for');
+  await page.locator('#cable-load label', { hasText: 'values on the cables' }).locator('input').check();
+  await page.waitForTimeout(400);
+  const printed = Number((/([\d,]+) figures/.exec(await status()) || [0, '0'])[1].replace(/,/g, ''));
+  ok(printed > 0, `asked for, each cable’s figure is printed  (${printed})`);
+
+  // A latency does not add up along a path: averaged on each cable.
+  await show('rtt');
+  eq(await card('rtt').locator('select.combine').inputValue(), 'mean', 'a column in us is averaged by default');
+  const avg = await panel();
+  ok(/the average of 16 flows/.test(avg) && /16 of 16 flows routed · averaged on each cable/.test(avg),
+     `the panel says it is an average  (${avg.slice(0, 160).replace(/\n/g, ' | ')})`);
+  ok(/Highest averages/.test(avg) && !/Busiest switches/.test(avg), 'with the highest averages, and no switch filling up');
+  const avgRows = await busiest();
+  ok(/48 us/.test(avgRows[0] || '') && /R01\/s5|R03\/s5/.test(avgRows[0] || ''),
+     `the highest is the slow pair’s own cable  (${avgRows[0]})`);
+  ok(/Colour: the average of the flows across each cable/.test(avg), 'and the key says what the colour is');
+  ok(Number((/([\d,]+) figures/.exec(await status()) || [0, '0'])[1]) > 0, 'its figures are printed too');
+
+  // Chosen the other way, the same column adds up.
+  await card('rtt').locator('select.combine').selectOption('sum');
+  await page.waitForTimeout(400);
+  ok(/Busiest cables/.test(await panel()), 'added up instead, it is a load again');
+  await card('rtt').locator('select.combine').selectOption('mean');
+  await page.waitForTimeout(400);
+  ok(/Highest averages/.test(await panel()), 'and back');
+}, { url: '?layout=examples/dual-plane.dc&results=examples/dual-plane-peers.tsv' });
 
 // A switch's buffer decides whether a burst it cannot send on at once is
 // held or dropped, and its latency what a packet's trip costs at least.

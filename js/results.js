@@ -205,7 +205,40 @@ const TEST_KEYS = {
   // bytes back`, which sets them for every pps metric in the file.
   bytes: num(1, 1e6, true),
   reply_bytes: num(0, 1e6, true),
+  // Which way a flow metric's readings went: `out` (the default), from the
+  // host to its peer, or `in`, from the peer to the host -- what the host
+  // received, a downlink. Read from the name (downlink, rx, received, ...)
+  // when not given.
+  dir: ['in', 'out'],
+  // How the flows that cross one cable make its figure: `sum`, as traffic
+  // adds up, or `mean`, for what does not -- a latency, a loss rate. Read
+  // from the unit when not given.
+  combine: ['sum', 'mean'],
 };
+
+// The words a name says "received" in: a column of what each host took in
+// from its peer runs from the peer to the host. Bare `in` and `out` are not
+// among them -- `iperf_mbps_in` has always loaded as written, and a word that
+// short turns up in names that mean something else.
+const RECEIVED_WORDS = new Set(['downlink', 'download', 'downloaded', 'rx', 'recv', 'receive', 'received',
+  'receiving', 'inbound', 'ingress', 'incoming']);
+const SENT_WORDS = new Set(['uplink', 'upload', 'uploaded', 'tx', 'send', 'sent', 'sending', 'outbound',
+  'egress', 'outgoing']);
+
+/**
+ * Whether a flow metric's readings run from the peer to the host: `dir=in`
+ * on its !test line, or failing that a name that says received and not
+ * sent -- `downlink/s`, `rx_gbps`, `bytesReceived`.
+ */
+export function receivedFlow(name, dir) {
+  if (dir !== undefined && dir !== null && String(dir).trim() !== '') return String(dir).trim().toLowerCase() === 'in';
+  const words = String(name || '')
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+  return words.some((w) => RECEIVED_WORDS.has(w)) && !words.some((w) => SENT_WORDS.has(w));
+}
 
 function checkNumberMeta(key, value, spec, name, where, warnings) {
   const at = `${where}: !test ${name}: ${key}=${value}`;
@@ -685,6 +718,11 @@ export function bindOverlay(overlay, model) {
       ? flagged(meta.duplex)
       : /duplex|bidir/i.test(`${overlay.name} ${meta.label || ''}`),
     wide: !!overlay.wide,
+    // A flow metric whose readings ran from the peer to the host.
+    received: receivedFlow(overlay.name, meta.dir),
+    // How a cable combines the flows across it, where the file says; the
+    // unit decides otherwise (traffic.js loadUnit), and the card can choose.
+    combine: ['sum', 'mean'].includes(String(meta.combine || '').toLowerCase()) ? String(meta.combine).toLowerCase() : null,
     unit: meta.unit || '',
     numeric,
     numericByEl,

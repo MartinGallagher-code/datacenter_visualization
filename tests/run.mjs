@@ -27,16 +27,16 @@ import {
   parseResults, bindOverlay, overlayValue, AGGREGATIONS, extent,
   recomputeStats, zScore, formatValue, unitFor, zRangeOf, paletteOf, invertedOf, overlayKey,
   valueWithUnit, NO_VALUE, recomputeDomain, readNumber, clearOverlayCache,
-  readingText, offScale, tailIsOdd, NORMAL_BEYOND_2SD,
+  readingText, offScale, tailIsOdd, NORMAL_BEYOND_2SD, receivedFlow,
 } from '../js/results.js';
 import { layout, U_PX } from '../js/layout.js';
 import { routesBetween } from '../js/paths.js';
 import {
-  Renderer, capacityWidth, changeColor, LOAD_COLORS, linkSummary, loadColor, sharesLineage, spliceSummary,
+  Renderer, capacityWidth, changeColor, labelFigure, LOAD_COLORS, linkSummary, loadColor, sharesLineage, spliceSummary,
 } from '../js/render.js';
 import {
   betweenPicks, biggestChanges, bitRate, burstRisk, busiest, cableKeys, cablesOf, compareLoads, countersOf, devicesOf,
-  adaptiveWeights, BUFFER_ALPHA, CONNECTION_LIMITS, EXPLAIN, explainResults, sendersOver, FRAMING_BYTES, IMIX_BYTES, PACKET_PICKS, contend, pathLatency, switchBuffer, switchLatency, switchPps, CONTEND_LIMITS, estimateFlows, findingKind, findingsOf, flowsOf, flowsOver, formatGbps, GEN_LIMITS,
+  adaptiveWeights, averageTraffic, cableFigure, BUFFER_ALPHA, CONNECTION_LIMITS, EXPLAIN, explainResults, sendersOver, FRAMING_BYTES, IMIX_BYTES, PACKET_PICKS, contend, pathLatency, switchBuffer, switchLatency, switchPps, CONTEND_LIMITS, estimateFlows, findingKind, findingsOf, flowsOf, flowsOver, formatGbps, GEN_LIMITS,
   generateFlows, hostCapacity, hostLimits, HOST_SPLITS, splitFiles, splitHosts, busyable, busyOf, layersOf, EXPLAIN_PATTERNS, pairedFlows, randomTakeouts, takeoutCandidates,
   counterparts, counterpartLevels,
   hostsFor, hostsOf, loadable, loadUnit, mergeResults, packetGb, reachKinds, readsAsLoad, routeEstimate, routeTraffic,
@@ -912,6 +912,7 @@ eq(commonDomain(['wr01r01u01', 'wr01r01u02']), '', 'and hosts with no dots have 
 // writing down.
 {
   const shouldBeWide = new Set([
+    'examples/dual-plane-peers.tsv',
     'examples/live/flows.tsv',
     'examples/live/room-wr01.tsv',
     'examples/live/room-wr02.tsv',
@@ -1433,8 +1434,14 @@ const segsOf = (cache, net) => {
   eq(loadUnit({ unit: '', name: 'Gb/s' }).toGbps, 1, 'or be the whole name, as a wide TSV column is');
   const pps = loadUnit({ unit: 'pps', name: 'mx_pps' });
   eq([pps.ok, pps.toGbps], [true, null], 'packets a second load the cables, but against no capacity');
-  ok(!loadUnit({ unit: '%', name: 'iperf_rel_median' }).ok, 'a percentage does not add up along a path');
-  ok(!loadUnit({ unit: 'us', name: 'rtt' }).ok, 'nor does a latency');
+  // Any flow metric goes on the cables (DV-007): what does not add up along
+  // a path is averaged there instead of refused.
+  const pctFlow = loadUnit({ unit: '%', name: 'iperf_rel_median' });
+  eq([pctFlow.ok, pctFlow.toGbps, pctFlow.combine], [true, null, 'mean'], 'a percentage does not add up along a path: it is averaged');
+  eq(loadUnit({ unit: 'us', name: 'rtt' }).combine, 'mean', 'and so is a latency');
+  eq([loadUnit({ unit: '', name: 'uplink/s' }).combine, loadUnit({ unit: 'pps', name: 'p' }).combine,
+    loadUnit({ unit: 'GB', name: 'v' }).combine], ['sum', 'sum', 'sum'], 'a number with no unit, a rate and a volume add up');
+  ok(!loadUnit({ unit: '%', name: 'cpu' }, 'hosts').ok, 'a per-host percentage still cannot be sent anywhere');
 
   const overlayOf = (results) => bindOverlay([...parseResults(results).values()][0], m);
   const ov = overlayOf([
@@ -1574,6 +1581,244 @@ const segsOf = (cache, net) => {
   const top = busiest(dr, 1, 3);
   eq(top.map((row) => Math.round(row.util * 100)), [160, 160, 80], 'the incast is 160% of the NICs it lands on');
   eq(top[0].link.b.path.endsWith('R02/s5') || top[0].link.a.path.endsWith('R02/s5'), true, 'at R02/s5');
+}
+
+// ------------------------------------------- host and peer, any metric (DV-007)
+// A table written `timestamp host peer metric ...` is flows; a column of what
+// each host received runs from the peer to the host; a metric that does not
+// add up is averaged on each cable; and each cable can print one figure.
+{
+  // The reader: the peer column, and the metrics after it.
+  const warnings = [];
+  const rows = [];
+  const read = readWideTsv([
+    'timestamp\thost\tpeer\tuplink/s\tdownlink/s\trtt (us)',
+    '2026-11-06T12:00:00\ta\tb\t40\t5\t180',
+    '2026-11-06T12:00:10\ta\tb\t38\t\t185',
+    '2026-11-06T12:00:00\tb\t\t7\t1\t',
+  ].join('\n'), (name, sample) => rows.push({ name, sample }), warnings);
+  eq(warnings, [], 'a host-and-peer table reads without a word');
+  eq(read.peer, true, 'its third column is the peer');
+  eq(read.columns.map((c) => [c.name, c.unit]), [['uplink/s', ''], ['downlink/s', ''], ['rtt', 'us']],
+     'and the metrics start after it, units and all');
+  eq(read.hosts, ['a', 'b'], 'a peer is a host too');
+  eq(rows.filter((r) => r.sample.meta.peer === 'b').map((r) => r.name),
+     ['uplink/s', 'downlink/s', 'rtt', 'uplink/s', 'rtt'], 'every reading of a row names its peer, and a blank cell is no reading');
+  eq(rows.filter((r) => r.sample.target === 'b').map((r) => [r.name, r.sample.meta.peer]),
+     [['uplink/s', undefined], ['downlink/s', undefined]], 'a blank peer cell is a reading of the host alone');
+  for (const heading of ['Peer', 'dst', 'Dest', 'destination', 'remote', 'to']) {
+    const seen = [];
+    readWideTsv(`Timestamp\thost\t${heading}\tx\n1\ta\tb\t5\n`, (name, sample) => seen.push([name, sample.meta.peer]), []);
+    eq(seen, [['x', 'b']], `a third column headed ${heading} is the peer`);
+  }
+  for (const heading of ['peers', 'pier', 'rtt']) {
+    const seen = [];
+    readWideTsv(`Timestamp\thost\t${heading}\tx\n1\ta\tb\t5\n`, (name) => seen.push(name), []);
+    eq(seen, [heading, 'x'], `one headed ${heading} is a metric, as it always was`);
+  }
+  const bare = [];
+  const bareRead = readWideTsv('1\ta\tb\t5\n', (name, sample) => bare.push([name, sample.value, sample.meta.peer]), []);
+  eq([bare, bareRead.peer], [[['A', 'b', undefined], ['B', 5, undefined]], false],
+     'with no header there is nothing to name a peer column: the third is a metric');
+  // A header adopted part-way moves where the metrics start: what was read
+  // before it must not lend its column to what comes after.
+  const moved = [];
+  readWideTsv('1\ta\t5\n# timestamp\thost\tpeer\tx\n2\ta\tb\t6\n', (name, sample) => moved.push([name, sample.value, sample.meta.peer]), []);
+  eq(moved, [['A', 5, undefined], ['x', 6, 'b']], 'a commented header that brings a peer column starts the metrics again');
+  const both = [];
+  const bothWarnings = [];
+  readWideTsv('Timestamp\thost\tpeer\tx\n1\ta -> c\tb\t5\n2\ta -> B\tb\t6\n',
+    (name, sample) => both.push(sample.meta.peer), bothWarnings);
+  eq(both, ['b', 'b'], 'an arrow and a peer column both: the peer column is the one read');
+  eq(bothWarnings.length, 1, 'and where they disagree, it says so once');
+  ok(/peer column is the one read/.test(bothWarnings[0] || ''), `in words  (${bothWarnings[0]})`);
+
+  // Which way a column ran.
+  eq(['downlink/s', 'rx_gbps', 'bytesReceived', 'Inbound Mb/s', 'download', 'iperf_mbps_in', 'uplink/s', 'tx_rx_ratio', 'rtt', 'login_ms']
+    .map((n) => receivedFlow(n)), [true, true, true, true, true, false, false, false, false, false],
+  'a name that says received runs peer to host; bare in, sent words, and anything else do not');
+  eq([receivedFlow('uplink', 'in'), receivedFlow('downlink', 'out'), receivedFlow('downlink', 'IN')], [true, false, true],
+     'dir= on the !test line wins over the name');
+  const dirWarn = [];
+  parseResults('!test x dir=sideways combine=avg\nx a 1 peer=b\n', new Map(), dirWarn);
+  eq(dirWarn.length, 2, 'a dir= or combine= that is not one of its values is reported');
+
+  // The table as overlays on a layout, each metric its own way.
+  const lay = parseLayout([
+    'dc D',
+    '  rack R1 u=10',
+    '    node tor role=tor +switch',
+    '    node a role=server',
+    '    node c role=server',
+    '  rack R2 u=10',
+    '    node tor role=tor +switch',
+    '    node b role=server',
+    '  rack SP u=10',
+    '    node spine[1..2] role=spine +switch',
+    'net data gbps=25',
+    'net up gbps=100',
+    'link data role=server role=tor scope=rack',
+    'link up role=tor role=spine',
+  ].join('\n'));
+  eq(lay.warnings, [], 'the little two-rack fabric parses clean');
+  layout(lay.root);
+  const table = [
+    '!test uplink/s unit=Gb/s',
+    'timestamp\thost\tpeer\tuplink/s\tdownlink/s\trtt (us)\tskew',
+    '2026-11-06T12:00:00\ta\tb\t20\t4\t180\t-5',
+    '2026-11-06T12:00:10\ta\tb\t20\t\t185\t-5',
+    '2026-11-06T12:00:00\tc\tb\t10\t2\t100\t5',
+  ].join('\n');
+  const byName = new Map([...parseResults(table).values()].map((o) => [o.name, bindOverlay(o, lay)]));
+  eq([...byName.keys()], ['uplink/s', 'downlink/s', 'rtt', 'skew'], 'one overlay a column, the peer column none');
+  eq([...byName.values()].map((o) => [o.hasFlows, o.received]),
+     [[true, false], [true, true], [true, false], [true, false]], 'every one is flows, and only the downlink was received');
+  const pairs = (o, opts) => flowsOf(o, lay, opts).flows.map((f) => [f.src.name, f.dst.name, f.value]);
+  eq(pairs(byName.get('uplink/s')), [['a', 'b', 20], ['c', 'b', 10]], 'an uplink runs host to peer');
+  eq(pairs(byName.get('downlink/s')), [['b', 'a', 4], ['b', 'c', 2]], 'a downlink runs peer to host: the peer sent it');
+  eq(pairs(byName.get('skew')), [['a', 'b', 0], ['c', 'b', 5]], 'traffic is never below nothing');
+  eq(pairs(byName.get('skew'), { signed: true }), [['a', 'b', -5], ['c', 'b', 5]], 'but an average may be of anything');
+  eq([loadUnit(byName.get('uplink/s')).toGbps, loadUnit(byName.get('downlink/s')).toGbps], [1, null],
+     'a unit on its !test line sets it against gbps=; a column with none loads in its own terms');
+  eq(loadUnit(byName.get('rtt')).combine, 'mean', 'a latency column is averaged');
+  const forced = bindOverlay([...parseResults('!test rtt unit=us combine=sum\nrtt a 1 peer=b\n').values()][0], lay);
+  eq([forced.combine, loadUnit(forced).combine, loadUnit({ ...byName.get('uplink/s'), combine: 'mean' }).combine],
+     ['sum', 'sum', 'mean'], 'combine= says otherwise, either way');
+  const meanBits = loadUnit({ name: 'gbps', unit: 'Gb/s', combine: 'mean' });
+  eq([meanBits.toGbps, meanBits.unit], [null, 'Gb/s'], 'an averaged bit rate is set against no capacity, and keeps its unit');
+
+  // Averaged on the cables: each cable the mean of the flows across it,
+  // each counted by the share of it that crosses.
+  const rtt = flowsOf(byName.get('rtt'), lay, { signed: true }).flows;
+  eq(rtt.map((f) => f.value), [182.5, 100], 'each pair its own aggregation first');
+  const avg = averageTraffic(lay, rtt, { split: 'even' });
+  ok(avg.averaged, 'an averaged routing says so');
+  const at = (r, link, from) => {
+    const l = r.loads.get(link) || [0, 0];
+    return link.a === from ? l[0] : l[1];
+  };
+  const nicOf = (name) => lay.resolve(name).links.find((l) => l.net === 'data');
+  const r1tor = lay.resolve('R1/tor');
+  const ups = r1tor.links.filter((l) => l.net === 'up');
+  eq(at(avg, nicOf('a'), lay.resolve('a')), 182.5, 'a cable only one flow crosses shows that flow');
+  eq(at(avg, nicOf('b'), lay.resolve('R2/tor')), 141.25, 'one both cross shows their mean');
+  eq(at(avg, nicOf('b'), lay.resolve('b')), 0, 'and the way nothing goes shows nothing');
+  eq(ups.map((l) => at(avg, l, r1tor)), [141.25, 141.25], 'split evenly over two uplinks, each half of each flow still averages to the mean');
+  eq(ups.map((l) => (avg.weights.get(l) || [0, 0])[l.a === r1tor ? 0 : 1]), [1, 1], 'and is over one flow’s worth each');
+  const sum = routeTraffic(lay, rtt, { split: 'even' });
+  eq(at(sum, nicOf('b'), lay.resolve('R2/tor')), 282.5, 'added up instead, the same cable reads their sum');
+  for (let seed = 1; seed <= 6; seed++) {
+    const hashed = averageTraffic(lay, rtt, { split: 'hashed', seed });
+    const seen = ups.map((l) => at(hashed, l, r1tor)).filter((v) => v > 0).sort((x, y) => x - y);
+    ok(JSON.stringify(seen) === JSON.stringify([141.25]) || JSON.stringify(seen) === JSON.stringify([100, 182.5]),
+       `hashed, seed ${seed}: an uplink is the mean of the flows it took  (${JSON.stringify(seen)})`);
+    eq(at(hashed, nicOf('b'), lay.resolve('R2/tor')), 141.25, `hashed, seed ${seed}: where they meet again, still their mean`);
+  }
+  const adaptive = averageTraffic(lay, rtt, { split: 'adaptive' });
+  eq(at(adaptive, nicOf('b'), lay.resolve('R2/tor')), 141.25, 'adaptive routing balances flows, not their values');
+  const signed = averageTraffic(lay, flowsOf(byName.get('skew'), lay, { signed: true }).flows, { split: 'even' });
+  eq(at(signed, nicOf('b'), lay.resolve('R2/tor')), 0, 'a mean of -5 and 5 is 0, not 2.5');
+
+  // The view of an average: width by the flows across, colour by the
+  // average, from the lowest to the highest.
+  const view = cableView({
+    view: 'model', views: ['model'], anyCapacity: true,
+    model: { loads: avg.loads, toGbps: null, unit: 'us', averaged: true, result: avg },
+  });
+  eq([view.colour, view.averaged, view.toGbps, view.low, view.high], ['average', true, null, 100, 182.5],
+     'an average is its own colouring, against no capacity, over its own range');
+  const aShare = view.share(nicOf('a'));
+  eq([Math.max(aShare[0], aShare[1]), aShare[2]], [1, 1], 'the highest average is the top of the range, over one flow');
+  eq([view.share(nicOf('c'))[2], view.share(nicOf('b'))[2]], [0, 0.5], 'the lowest the bottom, and the rest along it');
+  const v = view.value(nicOf('b'));
+  eq(Math.max(v[0], v[1]), 282.5, 'its value is the average times the flow behind it');
+
+  // Drawn: averages coloured along the range, and nothing grey for want of
+  // a capacity an average never had.
+  const draw = new Renderer({ getContext: () => null }, viewOf(lay));
+  draw.camera.scale = 4;
+  draw.rebuildLinkCache(0, null, null, view, false);
+  const avgStyles = [...draw.linkCache.nets.get('data').segs.keys()].filter((st) => !st.idle);
+  ok(avgStyles.length && avgStyles.every((st) => st.color !== LOAD_COLORS.unknown), 'an average is never the no-capacity grey');
+  ok(avgStyles.some((st) => st.color === ramp('plasma', 1)) && avgStyles.some((st) => st.color === ramp('plasma', 0.3)),
+     'the highest and lowest averages take the two ends of the ramp');
+  // A load that is not in bits, on a layout with gbps=: coloured against the
+  // busiest cable, as the key says, not grey (it used to be grey).
+  const counts = routeTraffic(lay, flowsOf(byName.get('downlink/s'), lay).flows, { split: 'even' });
+  draw.rebuildLinkCache(0, null, null, cableView({
+    view: 'model', views: ['model'], anyCapacity: true, model: { loads: counts.loads, toGbps: null, unit: '' },
+  }), false);
+  const countStyles = [...draw.linkCache.nets.get('data').segs.keys()].filter((st) => !st.idle);
+  eq([countStyles.length > 0, countStyles.some((st) => st.color === LOAD_COLORS.unknown)], [true, false],
+     'a load not in bits is coloured against the busiest cable even where cables have gbps=');
+
+  // The figure on a cable.
+  eq(labelFigure({ colour: 'average' }, { ab: 2, ba: 0, vab: 300, vba: 0 }), { amount: 150, change: false }, 'an average’s figure is its mean');
+  eq(labelFigure({ colour: 'average' }, { ab: 1, ba: 1, vab: 100, vba: 180 }), { amount: 180, change: false }, 'the higher way of the two');
+  eq(labelFigure({ colour: 'average' }, { ab: 0, ba: 0, vab: 0, vba: 0 }), null, 'and no flows, no figure');
+  eq(labelFigure({ colour: 'util' }, { ab: 5, ba: 7 }), { amount: 7, change: false }, 'a load’s is the busier way');
+  eq(labelFigure({ colour: 'util' }, { ab: 0, ba: 0 }), null, 'an idle cable has none');
+  eq(labelFigure({ compare: new Map() }, { ab: 5, ba: 7, delta: -3 }), { amount: -3, change: true }, 'comparing, the change');
+  eq(labelFigure({ compare: new Map() }, { ab: 5, ba: 7, delta: 0 }), null, 'and a cable that did not move has none');
+  eq([
+    cableFigure({ toGbps: 1 }, 12.4), cableFigure({ toGbps: 0.001 }, 40000), cableFigure({ toGbps: null, unit: 'us' }, 141.25),
+    cableFigure({ toGbps: null, unit: '' }, 0.0123), cableFigure({ toGbps: null, unit: 'pps' }, 12345),
+    cableFigure({ changeToGbps: 1 }, -3, true), cableFigure({ changeToGbps: null, changeUnit: '%' }, 2.5, true),
+    cableFigure({ toGbps: null, unit: 'ms' }, -0.5), cableFigure({ toGbps: 1 }, NaN),
+  ], ['12.4G', '40G', '141 us', '0.012', '12.3k pps', '−3G', '+2.5 %', '−0.5 ms', ''],
+  'a figure is short: Gb/s as a capacity is written, anything else in its own unit, a change signed');
+
+  // Printed: one figure a cable, where it fits, the biggest first, none on
+  // top of another -- through the renderer, with a stand-in for the canvas.
+  const printed = [];
+  const fakeCtx = {
+    save() {}, restore() {}, setLineDash() {}, fillRect() {},
+    measureText: (text) => ({ width: (text.length * 6) / draw.camera.scale }),
+    fillText: (text, x, y) => printed.push({ text, x, y }),
+  };
+  draw.ctx = fakeCtx;
+  draw.view = { x0: -1e6, y0: -1e6, x1: 1e6, y1: 1e6 };
+  draw.state.traffic = { labels: false };
+  draw.rebuildLinkCache(0, null, null, view, false);
+  draw.drawCableLabels();
+  eq(printed.length, 0, 'nothing is printed until asked for');
+  draw.state.traffic.labels = true;
+  // Close enough that even the short run from a server to the ToR beside it
+  // has room for its figure.
+  draw.camera.scale = 30;
+  draw.rebuildLinkCache(0, null, null, view, false);
+  draw.drawCableLabels();
+  ok(printed.length > 0 && printed.every((p) => /^\d+(\.\d+)? us$/.test(p.text)), `asked for, averages are printed in their unit  (${printed.map((p) => p.text).join(', ')})`);
+  ok(['183 us', '141 us', '100 us'].every((text) => printed.some((p) => p.text === text)),
+     `each cable its own figure  (${printed.map((p) => p.text).join(', ')})`);
+  eq(draw.stats.labels, printed.length, 'and the frame counts them');
+  printed.length = 0;
+  draw.camera.scale = 0.05;
+  draw.rebuildLinkCache(0, null, null, view, false);
+  draw.drawCableLabels();
+  eq(printed.length, 0, 'zoomed out until no figure fits along its cable, none is printed');
+
+  // The example, examples/dual-plane-peers.tsv over examples/dual-plane.dc:
+  // both ends report, so the uplink and the downlink are the same traffic.
+  const dual = parseLayout(readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8'));
+  const exWarnings = [];
+  const ex = new Map([...parseResults(readFileSync(join(root, 'examples/dual-plane-peers.tsv'), 'utf8'), new Map(), exWarnings).values()]
+    .map((o) => [o.name, bindOverlay(o, dual)]));
+  eq(exWarnings, [], 'the example reads without a word');
+  eq([...ex.keys()].sort(), ['downlink/s', 'retransmits/s', 'rtt', 'uplink/s'], 'a metric a column, after the peer');
+  eq([...ex.values()].map((o) => o.unresolved.length), [0, 0, 0, 0], 'every host and peer is on the floor plan');
+  const flowSet = (o) => flowsOf(o, dual).flows.map((f) => `${f.src.path}>${f.dst.path}=${f.value}`).sort();
+  eq(flowSet(ex.get('downlink/s')), flowSet(ex.get('uplink/s')), 'the downlink, turned round, is the uplink exactly');
+  eq(flowsOf(ex.get('uplink/s'), dual).flows.filter((f) => f.value === 19).length, 8, 'R01 sends each of R03 19 Gb/s, the mean of 20 and 18');
+  const exUp = routeTraffic(dual, flowsOf(ex.get('uplink/s'), dual).flows, { split: 'even' });
+  const exDown = routeTraffic(dual, flowsOf(ex.get('downlink/s'), dual).flows, { split: 'even' });
+  eq([...exDown.loads].map(([l, x]) => [l.a.path, l.b.path, x]), [...exUp.loads].map(([l, x]) => [l.a.path, l.b.path, x]),
+     'and they load every cable the same, each way');
+  const exRtt = averageTraffic(dual, flowsOf(ex.get('rtt'), dual, { signed: true }).flows, { split: 'even' });
+  const slow = dual.resolve('R01/s5');
+  const near = (v) => Math.round(v * 1e6) / 1e6;
+  eq(slow.links.map((l) => near(Math.max(...(exRtt.loads.get(l) || [0, 0])))), [48, 48], 'the slow pair’s own cables average 48 us');
+  ok([...exRtt.loads.values()].every(([x, y]) => near(x) <= 48 && near(y) <= 48), 'and nothing averages more than its slowest flow');
 }
 
 // ------------------------------------------- host totals, counters and what-if

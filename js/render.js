@@ -14,6 +14,7 @@ import { labelOf } from './layout.js';
 import { colorFor, contrastInk, ramp } from './palette.js';
 import { formatValue, isStandardized, overlayValue, zRangeOf, zScore } from './results.js';
 import { distanceTo, piecesOf, routeCables } from './route.js';
+import { cableFigure } from './traffic.js';
 
 // The two looks. THEME is whichever is in force, filled in place by
 // setTheme, so every draw reads the current one.
@@ -34,6 +35,9 @@ const THEMES = {
     hover: 'rgba(255,255,255,0.55)',
     hoverCable: '#ffffff',
     gaugeTrack: 'rgba(0,0,0,0.55)',
+    // A figure printed on a cable: light on a dark tab, over whatever runs under it.
+    cableLabelBg: 'rgba(13,17,23,0.82)',
+    cableLabelInk: '#f0f6fc',
     match: '#4fa3ff',
     emptyFill: 'rgba(255,255,255,0.04)',
   },
@@ -52,6 +56,8 @@ const THEMES = {
     hover: 'rgba(0,0,0,0.55)',
     hoverCable: '#000000',
     gaugeTrack: 'rgba(0,0,0,0.15)',
+    cableLabelBg: 'rgba(255,255,255,0.88)',
+    cableLabelInk: '#1f2328',
     match: '#0969da',
     emptyFill: 'rgba(0,0,0,0.04)',
   },
@@ -267,6 +273,7 @@ export class Renderer {
     ctx.textBaseline = 'middle';
     this.stats.drawn = 0;
     this.stats.flows = 0;
+    this.stats.labels = 0;
     // Endpoints of whatever connections are on screen, so the eye does not
     // have to trace a hairline to find where it lands. Only filled when the
     // set is a selective one -- see markEndpoint.
@@ -280,6 +287,7 @@ export class Renderer {
     this.drawTakenOut();
     this.drawFlows();
     this.drawEndpoints();
+    this.drawCableLabels();
     this.drawSelection();
   }
 
@@ -702,6 +710,69 @@ export class Renderer {
   }
 
   /**
+   * Values on the cables: one figure on each cable drawn by what it carries
+   * -- its load the busier way, an average the higher way, or the change --
+   * at the middle of its crossing (or its longest straight run), where the
+   * figure fits along it and clear of every other. The biggest go first, so
+   * where they crowd it is the small ones that give way. With "values on
+   * the cables" ticked in the Cable load panel.
+   */
+  drawCableLabels() {
+    const state = this.state;
+    if (!state.traffic || !state.traffic.labels) return;
+    const cache = this.linkCache;
+    if (!cache || !cache.load || !cache.ports) return;
+    const view = cache.load;
+    const items = [];
+    for (const net of cache.nets.values()) {
+      for (const cable of net.cables) {
+        const t = cable.members ? cable.t && cable.t.trunk : cable.t;
+        const fig = t ? labelFigure(view, t) : null;
+        if (fig) items.push({ cable, fig });
+      }
+    }
+    if (!items.length) return;
+    items.sort((x, y) => Math.abs(y.fig.amount) - Math.abs(x.fig.amount));
+    const ctx = this.ctx;
+    const scale = this.camera.scale;
+    const curved = state.curvedCables !== false && cache.total <= CURVE_LIMIT;
+    const px = CABLE_LABEL_PX / scale;
+    const pad = 3 / scale;
+    ctx.save();
+    ctx.setLineDash([]);
+    ctx.globalAlpha = 1;
+    ctx.font = `${px}px ui-sans-serif, system-ui, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const placed = [];
+    let shown = 0;
+    for (const { cable, fig } of items) {
+      if (shown >= CABLE_LABEL_MAX) break;
+      const spot = labelSpot(cable, cache.ports, curved);
+      if (!spot) continue;
+      const text = cableFigure(view, fig.amount, fig.change);
+      if (!text) continue;
+      const w = ctx.measureText(text).width + pad * 2;
+      const h = px + pad;
+      // Along a run shorter than the figure it would sit across other
+      // cables, saying nothing about this one. A run up a lane needs only
+      // the figure's height, twice over.
+      if (spot.len < (spot.upright ? h * 2 : w)) continue;
+      const box = { x0: spot.x - w / 2, y0: spot.y - h / 2, x1: spot.x + w / 2, y1: spot.y + h / 2 };
+      if (box.x1 < this.view.x0 || box.x0 > this.view.x1 || box.y1 < this.view.y0 || box.y0 > this.view.y1) continue;
+      if (placed.some((p) => p.x0 < box.x1 && box.x0 < p.x1 && p.y0 < box.y1 && box.y0 < p.y1)) continue;
+      placed.push(box);
+      shown++;
+      ctx.fillStyle = THEME.cableLabelBg;
+      ctx.fillRect(box.x0, box.y0, w, h);
+      ctx.fillStyle = THEME.cableLabelInk;
+      ctx.fillText(text, spot.x, spot.y);
+    }
+    ctx.restore();
+    this.stats.labels = shown;
+  }
+
+  /**
    * How full each switch on screen is, with load on the cables: a gauge
    * along the foot of its box, filled as far as it is busy and coloured the
    * way a cable that full is -- the contended colour when it is full and
@@ -1053,6 +1124,22 @@ export class Renderer {
     // The value kept along a piece is the one furthest from nothing: the
     // fullest cable, or the biggest change either way.
     const worse = (a, b) => (b === null ? a : a === null || Math.abs(b) > Math.abs(a) ? b : a);
+    // What the figure printed on a cable is made from, beside its width: an
+    // average's values times the flow behind them, to be divided by that
+    // flow once every cable drawn as one is in -- and, comparing, the
+    // change, signed.
+    const compare = load && load.compare;
+    const figures = (t, link, fwd) => {
+      if (load && load.value) {
+        const [vx, vy] = load.value(link);
+        t.vab += fwd ? vx : vy;
+        t.vba += fwd ? vy : vx;
+      }
+      if (compare) {
+        const c = compare.get(link);
+        if (c) t.delta += c.delta;
+      }
+    };
 
     // The block actually painted for an endpoint: its outermost collapsed
     // ancestor, or the container the LOD cutoff stopped recursing at.
@@ -1081,7 +1168,7 @@ export class Renderer {
         // The cables it stands for, for the tooltip: one is the common case.
         (edge.more || (edge.more = [])).push(link);
       } else {
-        edge = { net, a, b, count: 1, link, t: measured ? { ab: 0, ba: 0, worst: null } : undefined };
+        edge = { net, a, b, count: 1, link, t: measured ? { ab: 0, ba: 0, worst: null, vab: 0, vba: 0, delta: 0 } : undefined };
         seen.set(key, edge);
         edges.push(edge);
       }
@@ -1091,6 +1178,7 @@ export class Renderer {
       edge.t.ab += fwd ? x : y;
       edge.t.ba += fwd ? y : x;
       edge.t.worst = worse(edge.t.worst, u);
+      figures(edge.t, link, fwd);
     };
 
     // Spliced cables are gathered per splice first: whether one still draws
@@ -1135,9 +1223,10 @@ export class Renderer {
           // Each member's own cable into the marker, and the one trunk on from
           // it, which carries all of theirs.
           const ends = new Map();
-          const trunk = { ab: 0, ba: 0, worst: null };
+          const trunk = { ab: 0, ba: 0, worst: null, vab: 0, vba: 0, delta: 0 };
           for (const { link, member, toIsA } of links) {
             const [x, y, u] = share(link);
+            figures(trunk, link, !toIsA);
             const sent = toIsA ? y : x;
             const got = toIsA ? x : y;
             let end = ends.get(member);
@@ -1308,7 +1397,6 @@ function cableStyler(load, capacity) {
     if (!style) styles.set(key, (style = { width, color, idle, rank }));
     return style;
   };
-  const anyCapacity = !!(load && load.anyCapacity);
   const colour = load ? load.colour : 'capacity';
   // Shared out, nothing carries more than it can: a full cable is the
   // contended one, and takes the colour that past full has without it.
@@ -1320,6 +1408,13 @@ function cableStyler(load, capacity) {
     if (!(amount > 0) || !(max > 0)) return intern(1, null, true, -1);
     const f = Math.min(1, amount / max);
     const width = Math.round((MIN_LOAD_W + (MAX_LOAD_W - MIN_LOAD_W) * Math.sqrt(f)) * 2) / 2;
+    if (colour === 'average') {
+      // An average: the highest along the piece, up the range from the
+      // lowest anywhere to the highest.
+      if (worst === null) return intern(width, LOAD_COLORS.unknown, false, 0);
+      const v = Math.round(Math.max(0, Math.min(1, worst)) * 10) / 10;
+      return intern(width, ramp('plasma', 0.3 + 0.7 * v), false, v);
+    }
     if (colour === 'diff') {
       if (worst === null) return intern(width, LOAD_COLORS.unknown, false, 0);
       const v = Math.round(Math.max(-1, Math.min(1, worst / span)) * 20) / 20;
@@ -1329,7 +1424,10 @@ function cableStyler(load, capacity) {
       const u = worst > 1.0005 || (contended && worst >= 0.9995) ? 2 : Math.round(worst * 20) / 20;
       return intern(width, u > 1 ? LOAD_COLORS.over : ramp('health', u), false, u);
     }
-    if (anyCapacity) return intern(width, LOAD_COLORS.unknown, false, 0);
+    // Against a capacity, a cable with none is the grey that says so. A load
+    // that cannot be set against one -- not a bit rate, or an average -- is
+    // coloured against the busiest cable, gbps= or not, as its key says.
+    if (colour === 'util') return intern(width, LOAD_COLORS.unknown, false, 0);
     const step = Math.round(f * 10) / 10;
     return intern(width, ramp('plasma', 0.3 + 0.7 * step), false, step);
   };
@@ -1346,6 +1444,56 @@ const CURVE_LIMIT = 10000;
 // Segments per stroke() call. Big enough that a rack's lanes go in one,
 // small enough that rasterising a stroke stays cheap.
 const STROKE_BATCH = 512;
+// Figures on the cables: their size on screen, and the most one frame prints.
+const CABLE_LABEL_PX = 10;
+const CABLE_LABEL_MAX = 400;
+
+/**
+ * The figure a cable's label prints, from what it was drawn with: { amount,
+ * change } or null where there is nothing to say -- a cable carrying
+ * nothing, or one that did not move.
+ */
+export function labelFigure(view, t) {
+  if (view.compare) return t.delta ? { amount: t.delta, change: true } : null;
+  if (view.colour === 'average') {
+    // The average over every cable drawn as one, the higher way.
+    const ab = t.ab > 1e-12 ? t.vab / t.ab : null;
+    const ba = t.ba > 1e-12 ? t.vba / t.ba : null;
+    if (ab === null && ba === null) return null;
+    return { amount: ab === null ? ba : ba === null ? ab : Math.max(ab, ba), change: false };
+  }
+  const amount = Math.max(t.ab, t.ba);
+  return amount > 0 ? { amount, change: false } : null;
+}
+
+/**
+ * Where a cable's label goes: the middle of its crossing, or of its longest
+ * straight run, with how long that run is -- the room the label has.
+ */
+function labelSpot(cable, ports, curved) {
+  let best = null;
+  for (const piece of piecesOf(cable, ports, curved)) {
+    // A splice member's own stub, or the marker: the label is the trunk's.
+    if (piece.box || piece.member) continue;
+    if (piece.pts) {
+      const p = piece.pts;
+      const len = Math.hypot(p[6] - p[0], p[7] - p[1]);
+      const x = (p[0] + 3 * p[2] + 3 * p[4] + p[6]) / 8;
+      const y = (p[1] + 3 * p[3] + 3 * p[5] + p[7]) / 8;
+      // A crossing is where a cable is most its own: it wins at any length.
+      if (!best || !best.curve || len > best.len) best = { x, y, len, curve: true };
+      continue;
+    }
+    if (best && best.curve) continue;
+    const dx = Math.abs(piece.x1 - piece.x0);
+    const dy = Math.abs(piece.y1 - piece.y0);
+    const len = Math.hypot(dx, dy);
+    if (!best || len > best.len) {
+      best = { x: (piece.x0 + piece.x1) / 2, y: (piece.y0 + piece.y1) / 2, len, curve: false, upright: dy > dx };
+    }
+  }
+  return best;
+}
 
 // How far beside its boxes a cable's lanes can reach, for deciding whether
 // it is on screen. Lanes sit a few world units out; this is generous.
