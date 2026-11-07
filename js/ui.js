@@ -505,9 +505,13 @@ function overlayCard(state, overlay, actions) {
     lrow.title = !unit.ok
       ? `Not a metric that adds up along a path: ${unit.why}.`
       : {
-        flows: 'Route each flow over the shortest paths between its two hosts and add it to every '
-          + 'cable it crosses: each cable is then drawn by its load, and coloured by how full it is '
-          + 'where its capacity (gbps=) is known.',
+        flows: unit.combine === 'mean'
+          ? 'Route each flow over the shortest paths between its two hosts, and show on every cable the average '
+            + 'of the flows that cross it -- each counted by the share of it that crosses. For what does not add '
+            + 'up along a path: a latency, a loss rate.'
+          : 'Route each flow over the shortest paths between its two hosts and add it to every '
+            + 'cable it crosses: each cable is then drawn by its load, and coloured by how full it is '
+            + 'where its capacity (gbps=) is known.',
         hosts: 'A total per host says how much it sent, not to whom: send it to the other hosts '
           + 'measured, in proportion to their own totals (or evenly), route that over the fabric, '
           + 'and draw each cable by what lands on it. An estimate, and the panel says so.',
@@ -518,6 +522,27 @@ function overlayCard(state, overlay, actions) {
     body.append(lrow);
     // Greyed, it says why where it can be read, not only on hover.
     if (!unit.ok) body.append(el('div', 'muted why', `can’t load the cables: ${unit.why}`));
+    // Flows, of any unit: added up on a cable, as traffic is, or averaged,
+    // as a latency is. The unit picks; the file (cable=) or this can say.
+    if (kind === 'flows' && unit.ok) {
+      const crow = el('label', 'combine-row');
+      const pick = el('select', 'on-cable');
+      for (const [value, text] of [['sum', 'add up the flows'], ['mean', 'average the flows']]) {
+        const opt = el('option', null, text);
+        opt.value = value;
+        opt.selected = unit.combine === value;
+        pick.append(opt);
+      }
+      pick.addEventListener('change', () => actions.setOverlayCombine(overlay, pick.value));
+      crow.append(el('span', null, 'on a cable:'), pick);
+      crow.title = 'How the flows that cross one cable make its figure. Add up: what traffic does -- a rate, a '
+        + 'volume, a count. Average: what a latency or a loss rate does -- the cable shows the mean of the flows '
+        + 'across it, each counted by the share of it that crosses. '
+        + (unit.adds ? `${overlay.unit || 'A number with no unit'} adds up, so that is the default.`
+          : `${overlay.unit} does not add up, so averaging is the default.`)
+        + ' cable=sum or cable=mean on its !test line sets it in the file.';
+      body.append(crow);
+    }
   }
 
   const stats = el('div', 'overlay-stats');
@@ -1063,7 +1088,8 @@ export function switchTip(rec, view) {
  * numbers are the cables' own.
  */
 export function hostTip(state, node, view) {
-  if (!view || view.compare || !view.loads) return [];
+  // An average sends and receives nothing: a host has no total of it.
+  if (!view || view.compare || !view.loads || view.averaged) return [];
   const carries = (link) => {
     const net = state.model.nets.get(link.net);
     return !net || net.traffic !== false;
@@ -1179,6 +1205,19 @@ export function hostTip(state, node, view) {
 function renderHeadline(state, view, box) {
   const wrap = el('div', 'headline');
   const model = view.view === 'measured' || view.view === 'diff' ? null : view.model;
+  if (model && model.result && model.averaged) {
+    // An average has no total to give: the flows' own average, and how many.
+    const flows = model.flows || [];
+    const mean = flows.length ? flows.reduce((sum, flow) => sum + flow.metric, 0) / flows.length : NaN;
+    wrap.append(el('div', 'headline-big', formatLoad(model, mean)));
+    let sub = `the average of ${flows.length.toLocaleString()} flow${flows.length === 1 ? '' : 's'}`
+      + ' · each cable shows the average of the flows across it';
+    const missed = model.result.missed && model.result.missed.count;
+    if (missed) sub += ` · ${missed.toLocaleString()} not routed`;
+    wrap.append(el('div', 'muted', sub));
+    if (wrap.childNodes.length) box.append(wrap);
+    return;
+  }
   if (model && model.result) {
     const r = model.result;
     const c = r.contention;
@@ -1505,6 +1544,18 @@ export function renderCableLoad(state, host, actions) {
 
   renderLoadKey(view, box);
 
+  // One figure on each cable, where it fits.
+  const lab = el('label', 'chk cable-labels');
+  const labBox = el('input');
+  labBox.type = 'checkbox';
+  labBox.checked = !!state.traffic.labels;
+  labBox.addEventListener('change', () => actions.setCableLabels(labBox.checked));
+  lab.append(labBox, el('span', null, 'values on the cables'));
+  lab.title = 'Print each cable’s figure on it: what it carries the busier way (an average: the higher way; '
+    + 'comparing: the change), where the figure fits along it at this zoom. The biggest go first; where they '
+    + 'crowd, the smaller give way. Hover a cable for both ways and the flows behind it.';
+  box.append(lab);
+
   const lines = el('div', 'cable-summary');
   if (model) {
     const r = model.result;
@@ -1561,6 +1612,15 @@ export function renderCableLoad(state, host, actions) {
           + (model.duplex
             ? 'Even halved as a duplex total: check the unit, or the cables’ gbps=.'
             : 'A measurement cannot: if it adds both directions, tick treat as duplex.')));
+      }
+    } else if (model.averaged) {
+      const own = model.own || r;
+      lines.append(el('div', null, model.between
+        ? `only the ${model.count} of ${model.total} flows between the picks, averaged on each cable`
+        : `${own.routed} of ${model.count} flows routed · averaged on each cable`));
+      if (model.held && model.held.length) {
+        lines.append(el('div', 'muted', `${model.held.join(' and ')} ${model.held.length === 1 ? 'is' : 'are'} not drawn: `
+          + `nothing adds to an average — set ${model.overlay.label} to add up its flows, or take it off the cables`));
       }
     } else {
       const own = model.own || r;
@@ -1703,7 +1763,7 @@ export function renderCableLoad(state, host, actions) {
     const all = busiest(view.loads, view.toGbps, Infinity);
     const top = all.slice(0, shown);
     if (top.length) {
-      box.append(el('div', 'load-title', 'Busiest cables'));
+      box.append(el('div', 'load-title', view.averaged ? 'Highest averages' : 'Busiest cables'));
       const list = el('div', 'load-list');
       for (const row of top) {
         const { link, load: l, util } = row;
@@ -1714,9 +1774,11 @@ export function renderCableLoad(state, host, actions) {
         item.append(dot);
         item.append(el('span', 'load-ends', `${shortPath(from)} → ${shortPath(to)}`));
         const held = heldBy(view, link);
-        item.append(el('span', 'val', `${loadAgainst(view, row.peak, link.gbps, util)}${held ? ` · ${held} held` : ''}`));
+        // An average is set against no capacity: no /25G beside it.
+        item.append(el('span', 'val', `${view.averaged ? formatLoad(view, row.peak) : loadAgainst(view, row.peak, link.gbps, util)}`
+          + `${held ? ` · ${held} held` : ''}`));
         item.title = `${link.net}: ${from.path} → ${to.path}\n`
-          + `${formatLoad(view, Math.max(l[0], l[1]))} the busier way, ${formatLoad(view, Math.min(l[0], l[1]))} the other`
+          + `${formatLoad(view, Math.max(l[0], l[1]))} the ${view.averaged ? 'higher' : 'busier'} way, ${formatLoad(view, Math.min(l[0], l[1]))} the other`
           + `${held ? `\nFull: holding back ${held} flow${held === 1 ? '' : 's'} crossing it` : ''}`
           + '\nClick to select its sending end';
         item.addEventListener('click', () => { actions.select(from); actions.focus(from); });
@@ -3011,6 +3073,26 @@ export function cableTip(state, hit, view, flows) {
     each.forEach(([name], k) => {
       lines.push(`${name}: ${was[0]}${amount(after[k])}${was[1]}${amount(before[k])}${was[2]}`);
     });
+  } else if (view.averaged && view.value) {
+    // The average over every cable hit, each way: their values times the
+    // flow behind each, over that flow.
+    const v = [0, 0];
+    const w = [0, 0];
+    for (const link of links) {
+      const fwd = fromSide(link);
+      const [wx, wy] = view.share(link);
+      const [vx, vy] = view.value(link);
+      w[0] += fwd ? wx : wy;
+      w[1] += fwd ? wy : wx;
+      v[0] += fwd ? vx : vy;
+      v[1] += fwd ? vy : vx;
+    }
+    if (!(w[0] > 1e-12 || w[1] > 1e-12)) lines.push('no flows cross it');
+    else {
+      directions(parts, side, sideName).forEach(([name], k) => {
+        lines.push(`${name}: ${w[k] > 1e-12 ? `the flows average ${formatLoad(view, v[k] / w[k])}` : 'no flows'}`);
+      });
+    }
   } else {
     const load = [0, 0];
     // Shared out: what the flows offered each way, and how many are held back.
@@ -3070,7 +3152,16 @@ export function cableTip(state, hit, view, flows) {
     if (!flows.count) lines.push('no flows cross it');
     else {
       lines.push(`flows over it: ${flows.count}`);
-      for (const { flow, amount } of flows.flows.slice(0, TIP_FLOWS)) {
+      // Averaged, the highest first: the reason to look is usually one bad flow.
+      const listed = view.averaged ? [...flows.flows].sort((x, y) => (y.flow.metric ?? 0) - (x.flow.metric ?? 0)) : flows.flows;
+      for (const { flow, amount } of listed.slice(0, TIP_FLOWS)) {
+        if (view.averaged && flow.metric !== undefined) {
+          // Each its own value, and how much of it crosses here: that share
+          // is what it counts for in the average.
+          lines.push(`  ${shortPath(flow.src)} → ${shortPath(flow.dst)}  ${formatLoad(model, flow.metric)}`
+            + `${amount < 1 - 1e-9 ? ` · ${pct(amount)} of it here` : ''}`);
+          continue;
+        }
         const tag = flow.test ? '  (test flow)' : flow.estimate ? '  (estimated)' : '';
         // Held back somewhere on its way: what it carries here, of what it offered.
         const wanted = flow.wanted > flow.value * (1 + 1e-9) && flow.value > 0
@@ -3099,6 +3190,15 @@ function directions(parts, side, sideName) {
 /** What colour and width mean, for the view shown. */
 function renderLoadKey(view, box) {
   const key = el('div', 'load-key');
+  if (view.colour === 'average') {
+    const bar = el('span', 'load-ramp');
+    bar.style.background = `linear-gradient(90deg, ${[0, 0.25, 0.5, 0.75, 1].map((v) => ramp('plasma', 0.3 + 0.7 * v)).join(', ')})`;
+    key.append(el('span', null, formatLoad(view, view.low)), bar, el('span', null, formatLoad(view, view.high)));
+    box.append(key);
+    box.append(el('p', 'muted cable-note', 'Colour: the average of the flows across each cable, the higher way, from the '
+      + 'lowest anywhere to the highest. Width: how many flows cross it. An average is not traffic: nothing reads as full.'));
+    return;
+  }
   if (view.colour === 'diff') {
     const bar = el('span', 'load-ramp');
     bar.style.background = `linear-gradient(90deg, ${[-1, -0.5, 0, 0.5, 1].map((v) => changeColor(v)).join(', ')})`;
@@ -3272,6 +3372,15 @@ function meanNets(maps) {
 function renderElementLoad(state, host, node, actions) {
   const view = state.cableView ? state.cableView() : null;
   if (!view) return;
+  if (view.averaged) {
+    // Averages do not add up over an element's cables.
+    if (!cablesOf(node).size) return;
+    host.append(el('h2', null, 'Cable load'));
+    host.append(el('p', 'muted', `${view.model.overlay ? view.model.overlay.label : 'This metric'} is averaged on each `
+      + 'cable, not added up, so an element has no total of it: hover a cable for the average of the flows across '
+      + 'it, each way, and which flows they are.'));
+    return;
+  }
   const byNet = cablesOf(node, view.loads, view.toGbps);
   if (!byNet.size) return;
   const before = view.before ? cablesOf(node, view.before.loads, view.before.toGbps) : null;
@@ -3500,6 +3609,13 @@ function renderPickTraffic(state, box, actions) {
     wrap.append(row);
   }
 
+  // An average has nothing for a test flow to add to.
+  const view = state.cableView ? state.cableView() : null;
+  if (view && view.averaged) {
+    wrap.append(el('div', 'muted', `no test flow: ${metric.label} is averaged on each cable, and nothing adds to an average`));
+    box.append(wrap);
+    return;
+  }
   const send = el('div', 'test-flow');
   send.append(el('span', null, 'test flow'));
   const amount = el('input');
@@ -3742,7 +3858,8 @@ function renderFlows(state, host, node) {
       const dot = el('span', 'dot');
       dot.style.background = colorFor(overlay, { numeric: flow.numeric, value: flow.value }) || '#444';
       row.append(dot);
-      const name = el('span', 'flowpeer', `→ ${flow.peerEl ? flow.peerEl.name : flow.peer}`);
+      // A metric of what the host received (dir=in, a downlink) came from the peer.
+      const name = el('span', 'flowpeer', `${overlay.received ? '←' : '→'} ${flow.peerEl ? flow.peerEl.name : flow.peer}`);
       if (!flow.peerEl) name.title = `${flow.peer} is not an element in this layout`;
       row.append(name);
       row.append(el('span', 'val', readingText(overlay, flow.value)));

@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.54.9** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.55.0** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -494,10 +494,14 @@ Where the capacity shows:
 ### Cable load: where a flow metric lands
 
 A flow metric (samples tagged `peer=` — what `iperf_orchestrator`, `mx export
---peers` and any `a -> b` table write) says how much one host sent to another.
-Tick **load the cables** on its card and the viewer works out which cables
-that traffic crossed and draws each one by what it carries. (Greyed out, it
-says why under it: a percentage or a latency does not add up along a path.)
+--peers`, any `a -> b` table and any table with a [peer
+column](#a-table-you-already-have) write) says how much one host sent to
+another. Tick **load the cables** on its card and the viewer works out which
+cables that traffic crossed and draws each one by what it carries. Any flow
+metric can go on the cables, whatever its unit: one that does not add up
+along a path — a latency, a loss rate — is
+[averaged](#any-metric-on-the-cables-added-up-or-averaged) on each cable
+instead.
 
 - **Width** is the traffic through that piece of cable. A rack's lane
   thickens on its way to the ToR, as it gathers its servers' cables.
@@ -506,8 +510,9 @@ says why under it: a percentage or a latency does not add up along a path.)
   for a full cable** — one holding back the flows that cross it (see
   [Contention](#contention-a-full-cable-shares-itself-out)). Cables carrying
   traffic with no `gbps=` are grey; idle ones stay, faint, in their net's
-  colour. With no capacity anywhere, colour is the load against the busiest
-  cable.
+  colour. With no capacity anywhere, or a load that is not in bits (`pps`,
+  a count, a number with no unit), colour is the load against the busiest
+  cable — `gbps=` or not.
 - **The panel** names the busiest cables (`R02/torb → R02/s5 25G/25G · 100%
   · 8 held`; click one to go to it) — **Show more** lists more of them, 25 at
   a time, and **Show all** every one (up to 10,000; past that it says so) —
@@ -515,6 +520,12 @@ says why under it: a percentage or a latency does not add up along a path.)
   that could not be and why. **The inspector** gives the selected element's
   traffic out and in against its capacity, per net — for a rack, over its
   uplinks — and its busiest cables.
+- **values on the cables**, in the panel, prints each cable's figure on it:
+  what it carries the busier way (`19G`, `12.3k pps`), an average the
+  higher way, or — comparing — the change, signed (`+40G`). A figure goes
+  where it fits along its cable at the zoom, the biggest first, and none on
+  top of another, so zooming in shows more of them; the status line counts
+  them. Hovering a cable still gives both ways and the flows behind it.
 - **Expected**, ticked in the inspector's Cable load, shows in place of the
   selected element's own figures the average of every element of its class
   that sits where it does, in every rack, row, room … (the kinds of
@@ -529,7 +540,12 @@ How a flow is routed, which is a model, not a measurement — the measurement
 is end to end, and only switch counters see the cables themselves:
 
 - Each flow takes the **shortest routes**, in hops, from the sample's target
-  to its peer: the target is the sender. Over `examples/dual-plane.dc` that is
+  to its peer: the target is the sender — unless the metric is of what the
+  target **received**, a downlink: `dir=in` on its `!test` line, or a name
+  that says so (`downlink`, `download`, `rx`, `recv`, `received`,
+  `inbound`, `ingress`, `incoming`), runs it from the peer to the target.
+  `dir=out` says the opposite where the name misleads. Bare `in` and `out`
+  in a name are not read: `iperf_mbps_in` loads as it always has. Over `examples/dual-plane.dc` that is
   NIC, ToR, spine, plane and back down.
 - **Only switches forward.** A server with two NICs is not a path between its
   two ToRs. Switches are the elements tagged `+switch`; a layout that tags
@@ -617,7 +633,8 @@ is end to end, and only switch counters see the cables themselves:
   run's passes, by default). The metric must be a rate (`unit=Gb/s`, `Mb/s`,
   `MB/s`, `pps`, … — or a name like `iperf_mbps_out`) or a volume; a bit or
   byte rate is set against capacity, anything else loads without one. A
-  percentage or a latency does not add up along a path, and is not offered.
+  percentage or a latency does not add up along a path, and is averaged
+  (below).
 - Loads are kept per direction: a cable is full duplex, so 20 Gb/s each way
   on a 25G cable is 80%, not 160%.
 
@@ -626,6 +643,45 @@ servers sending 40 Gb/s each across the planes — 80% of their NICs and their
 rack's uplinks — and an incast of eight servers into one, 160% of the two
 NICs it lands on. Hashed, each 40 Gb/s flow takes one NIC, not two; under
 the even split it is shared over both.
+
+#### Any metric on the cables: added up or averaged
+
+Any flow metric loads the cables, whatever its unit, and its card says how
+the flows that cross one cable make its figure — **on a cable: add up the
+flows** or **average the flows**:
+
+- **Added up**, as traffic does: a rate (`Gb/s`, `MB/s`, `pps`), a volume, a
+  count, or a number with no unit at all. This is everything above.
+- **Averaged**, for what does not add up along a path: a percentage, a
+  latency (`us`, `ms`), any other unit. Each cable shows the average of the
+  flows that cross it, each way, every flow counted by the share of it that
+  crosses — half of a flow split over two uplinks counts half on each. A
+  slow pair's round trips then show on the cables its traffic ran over, and
+  a cable that only slow flows cross stands out from one they share with
+  fast ones.
+- The unit picks; **`cable=sum`** or **`cable=mean`** on the metric's
+  `!test` line says otherwise in the file, and the card's choice says it on
+  the page (kept while the file reloads).
+
+An average is drawn differently from a load, because it is not one:
+
+- **Colour** is the average, the higher way, from the lowest anywhere (the
+  key prints it) to the highest. **Width** is how many flows cross — that
+  adds up along a lane, where an average does not.
+- Nothing is set against `gbps=`, nothing is shared out, and no switch
+  gauge fills. The panel gives the flows' own average and the **Highest
+  averages**; hovering a cable gives the average each way and each flow
+  across it, its own value and how much of it crosses there. The
+  inspector gives an element no total, since averages do not add up over
+  its cables.
+- Nothing adds to an average: while one is on the cables, the load
+  generator and a test flow are not drawn, and the panel says so. Set the
+  metric to add up, or take it off the cables, to see them.
+
+`examples/dual-plane-peers.tsv` beside `examples/dual-plane.dc` has both
+kinds: `uplink/s` and `downlink/s` add up (and, both ends reporting, land on
+the same cables the same way round), and `rtt (us)` is averaged, with one
+slow pair.
 
 #### Contention: a full cable shares itself out
 
@@ -1836,7 +1892,11 @@ list, where its name does not — and `finding=no` that it reports none;
 `duplex=yes|no` says whether a per-host rate adds both directions, where its
 name does not say `duplex` or `bidir`; `bytes=` and `reply_bytes=` size a
 packet rate's requests and replies, in bytes of payload, so it loads the
-cables as a bit rate.
+cables as a bit rate; `dir=in|out` says which way a flow metric ran — `in`
+from the peer to the target, a downlink — where its name does not say;
+`cable=sum|mean` says whether the flows across a cable
+[add up or are averaged](#any-metric-on-the-cables-added-up-or-averaged)
+there, where its unit does not.
 `min=`/`max=` must be numbers with `min` below `max`; anything else is
 reported in the load report and ignored rather than quietly applied.)
 
@@ -2313,6 +2373,21 @@ http://localhost:8000/?build=1&results=examples/live/room-wr01.tsv
   the host it started at, with the far end as its `peer=`, which is what the
   viewer already draws as a [measured flow](#the-viewer) and filters with
   `peer=`. `->`, `=>` and `→` all work, and `a -> b -> c` keeps its hops.
+- **Or the peer has a column of its own.** A header whose third heading is
+  `peer` (or `dst`, `dest`, `destination`, `remote`, `to`) makes that column
+  each row's far end, and the metrics start at the fourth:
+
+  ```
+  timestamp             host          peer          uplink/s   downlink/s   rtt (us)
+  2026-11-06T12:00:00   wr01r01u05    wr01r02u09    20         3            11.7
+  ```
+
+  Every metric of the row is then a flow from the host to its peer, ready to
+  [load the cables](#cable-load-where-a-flow-metric-lands); a column of what
+  the host **received** — `downlink/s`, `rx_gbps` — runs from the peer to
+  the host. A blank peer cell is a reading of the host alone. Only a header
+  can name the column, so a table with none reads its third column as a
+  metric, as it always has.
 - **A column can still be given display metadata.** A table may carry the
   results format's own `!test` lines, checked exactly as they are there, so a
   column gets a unit, a palette, a range or a short name without a second
@@ -2674,7 +2749,8 @@ quietly left stale.
   sample per *flow*, tagged `peer=`. Those overlays offer **draw measured
   flows**, which paints each measured pair as a dashed curve coloured by its
   own value, and the inspector lists a host's flows per peer (worst first)
-  rather than only the aggregate that hides them. `peer=wr01r01u02` in the
+  rather than only the aggregate that hides them — `→ peer` for what it
+  sent, `← peer` for a metric of what it received. `peer=wr01r01u02` in the
   filter bar selects the hosts that measured a flow to that host, globs
   included. **A flow is not a cable**: mx and iperf measure end to end, so a
   flow between two servers in one rack really crossed server → ToR → server,
@@ -2759,6 +2835,9 @@ examples/dual-plane-counters.tsv  switch port counters for the same run, as
 examples/dual-plane-hosts.tsv  per-server totals, for the estimated load
 examples/dual-plane-health.tsv  drops, soft lockups, an EDAC error and verdicts,
                           for the findings beside the flows
+examples/dual-plane-peers.tsv  a table of timestamp, host, peer and metrics:
+                          an uplink and a downlink that add up, and a round
+                          trip averaged on the cables
 examples/iperf/          a floor plan using every layout feature, with a real
                          export-overlay run painted over it (see its README)
 examples/hostnames-results.tsv  results addressed by flat name

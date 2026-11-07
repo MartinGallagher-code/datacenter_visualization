@@ -105,26 +105,47 @@ const NAME_TOKENS = /[\s_()[\],;]+/;
 export function loadUnit(overlay, kind = 'flows') {
   const unit = String(overlay.unit || '').trim();
   let toGbps = bitRate(unit);
+  let named = '';
   if (toGbps === null && !unit) {
     const name = String(overlay.name || '');
     for (const token of [name, ...name.split(NAME_TOKENS)]) {
       toGbps = bitRate(token);
-      if (toGbps !== null) break;
+      if (toGbps !== null) { named = token.trim(); break; }
     }
   }
-  if (toGbps !== null) return { ok: true, toGbps, unit: unit || 'Gb/s', why: '' };
+  if (kind === 'flows') return flowUnit(overlay, unit, toGbps, named);
+  if (toGbps !== null) return { ok: true, toGbps, unit: unit || 'Gb/s', why: '', combine: 'sum' };
   if (kind === 'hosts') {
-    if (OTHER_RATE.test(unit)) return { ok: true, toGbps: null, unit, why: '' };
+    if (OTHER_RATE.test(unit)) return { ok: true, toGbps: null, unit, why: '', combine: 'sum' };
     return {
       ok: false, toGbps: null, unit,
       why: unit ? `${unit} is not a rate` : 'a per-host number with no rate unit (unit=Gb/s, pps, …)',
     };
   }
-  if (!unit || OTHER_RATE.test(unit) || VOLUME.test(unit)) return { ok: true, toGbps: null, unit, why: '' };
+  if (!unit || OTHER_RATE.test(unit) || VOLUME.test(unit)) return { ok: true, toGbps: null, unit, why: '', combine: 'sum' };
   return {
     ok: false, toGbps: null, unit,
     why: `${unit} is not a rate or a volume, so it does not add up along a cable`,
   };
+}
+
+/**
+ * A flow metric, any unit, on the cables. What adds up along a path -- a
+ * rate, a volume, a count, a number with no unit -- is summed on each cable,
+ * as traffic is. What does not -- a percentage, a latency, any other unit --
+ * is averaged: each cable shows the mean of the flows across it. The
+ * metric's `cable=` (its !test line), or the card, says otherwise when
+ * given. Averaged, nothing is set against a gbps=.
+ */
+function flowUnit(overlay, unit, toGbps, named) {
+  const adds = toGbps !== null || !unit || OTHER_RATE.test(unit) || VOLUME.test(unit);
+  const combine = overlay.combine === 'sum' || overlay.combine === 'mean' ? overlay.combine : adds ? 'sum' : 'mean';
+  if (combine === 'mean') {
+    // Its own unit, to print beside the averages: a bit rate's as written.
+    return { ok: true, toGbps: null, unit: unit || named, why: '', combine, adds };
+  }
+  if (toGbps !== null) return { ok: true, toGbps, unit: unit || 'Gb/s', why: '', combine, adds };
+  return { ok: true, toGbps: null, unit, why: '', combine, adds };
 }
 
 /**
@@ -158,27 +179,98 @@ const byKeys = (x, y) => (x.src.key < y.src.key ? -1 : x.src.key > y.src.key ? 1
  *          one parse to the next. unresolved counts samples whose peer is not
  *          in the layout.
  */
-export function flowsOf(overlay, model) {
+export function flowsOf(overlay, model, opts = {}) {
   const reduce = reducerOf(overlay);
   const pairs = new Map();
   let unresolved = 0;
+  // A metric of what each host received from its peer (dir=in, a downlink)
+  // ran from the peer to the host: the host measured it, the peer sent it.
+  const received = !!overlay.received;
   for (const [key, list] of overlay.flowsByEl) {
-    const src = model.byKey.get(key);
-    if (!src) continue;
+    const host = model.byKey.get(key);
+    if (!host) continue;
     for (const f of list) {
       if (!f.numeric || !Number.isFinite(f.value)) continue;
       if (!f.peerEl) { unresolved++; continue; }
-      const pk = `${src.key}\u0000${f.peerEl.key}`;
+      const [src, dst] = received ? [f.peerEl, host] : [host, f.peerEl];
+      const pk = `${src.key}\u0000${dst.key}`;
       let rec = pairs.get(pk);
-      if (!rec) pairs.set(pk, (rec = { src, dst: f.peerEl, values: [] }));
+      if (!rec) pairs.set(pk, (rec = { src, dst, values: [] }));
       rec.values.push(f.value);
     }
   }
+  // Traffic is never less than none; an average may be of anything, a
+  // clock's offset either side of zero included.
+  const floor = opts.signed ? (v) => v : (v) => Math.max(0, v);
   const flows = [...pairs.values()]
     .sort(byKeys)
-    .map((rec, id) => ({ id, src: rec.src, dst: rec.dst, value: Math.max(0, reduce(rec.values)) }));
+    .map((rec, id) => ({ id, src: rec.src, dst: rec.dst, value: floor(reduce(rec.values)) }))
+    .filter((flow) => Number.isFinite(flow.value));
   return { flows, unresolved };
 }
+
+/**
+ * A metric that does not add up, on the cables: each cable's average over
+ * the flows across it, each way, every flow counted by the share of it that
+ * crosses -- half of a flow split over two uplinks counts half on each.
+ * Two routings of the same flows, so the same paths, hashed or not: one of
+ * their values and one of a unit each, and the first over the second is the
+ * average. Nothing is shared out: an average fills no cable.
+ *
+ * @param flows  [{ id, src, dst, value }], as flowsOf returns them
+ * @param opts   as routeTraffic takes them
+ * @returns      routeTraffic's result, with `loads` the averages each way,
+ *               `weights` how much flow each way they are over (the flows'
+ *               shares added up) and `averaged` set
+ */
+export function averageTraffic(model, flows, opts = {}) {
+  const ones = flows.map((flow) => ({ ...flow, value: 1 }));
+  // Adaptive routing leans on what is busy, and an average is not traffic:
+  // what each flow is, is one flow.
+  const how = { ...opts };
+  if (!how.weights && opts.split === 'adaptive') how.weights = adaptiveWeights(model, ones, opts);
+  const sum = routeTraffic(model, flows, how);
+  const count = routeTraffic(model, ones, how);
+  const loads = new Map();
+  for (const [link, w] of count.loads) {
+    const v = sum.loads.get(link) || [0, 0];
+    loads.set(link, [w[0] > 1e-12 ? v[0] / w[0] : 0, w[1] > 1e-12 ? v[1] / w[1] : 0]);
+  }
+  return { ...sum, loads, weights: count.loads, averaged: true };
+}
+
+/**
+ * The one figure printed on a cable: what its width is drawn from, the
+ * busier way -- in Gb/s where the view is in bits, else in its own unit --
+ * or, comparing, the change, signed. Short enough to sit on a cable.
+ *
+ * @param view    viewOf's result
+ * @param amount  the cable's figure: a load (or average), or a change
+ * @param change  whether it is a change, to be signed
+ */
+export function cableFigure(view, amount, change = false) {
+  if (!Number.isFinite(amount)) return '';
+  const sign = change ? (amount > 0 ? '+' : amount < 0 ? '−' : '') : amount < 0 ? '−' : '';
+  const size = Math.abs(amount);
+  const bits = change ? view.changeToGbps : view.toGbps;
+  const unit = change ? view.changeUnit : view.unit;
+  if (bits !== null && bits !== undefined) return `${sign}${formatGbps(size * bits)}`;
+  return `${sign}${shortNum(size)}${unit ? ` ${unit}` : ''}`;
+}
+
+// 0.0123, 1.23, 12.3, 123, 1.2k, 12k, 1.2M: three figures at most.
+function shortNum(v) {
+  if (!Number.isFinite(v)) return '';
+  if (v >= 1e9) return `${trimTo(v / 1e9)}G`;
+  if (v >= 1e6) return `${trimTo(v / 1e6)}M`;
+  if (v >= 1e4) return `${trimTo(v / 1e3)}k`;
+  if (v >= 100) return String(Math.round(v));
+  if (v >= 10) return String(Math.round(v * 10) / 10);
+  if (v >= 1) return String(Math.round(v * 100) / 100);
+  if (v === 0) return '0';
+  return String(Number(v.toPrecision(2)));
+}
+const trimTo = (v) => String(v >= 100 ? Math.round(v) : Math.round(v * 10) / 10);
 
 /**
  * The hosts a per-host total was measured on: devices with cables, each with
@@ -3144,7 +3236,10 @@ const ZERO = [0, 0, null];
  */
 export function viewOf(s) {
   const { view, anyCapacity } = s;
-  const base = { ...s };
+  // A metric averaged on each cable: the model, and its change since taking
+  // something out, are averages rather than loads.
+  const averaged = !!(s.model && s.model.averaged) && (view === 'model' || view === 'change');
+  const base = { ...s, averaged };
   if (view === 'explain') {
     // What the cables must have carried for the results to be true, each
     // suspect against the capacity the results give it -- so it reads full.
@@ -3159,6 +3254,53 @@ export function viewOf(s) {
         if (!l) return ZERO;
         const c = capacity.get(link);
         return [l[0], l[1], c ? Math.max(l[0], l[1]) / c : utilOf(link, l, 1)];
+      },
+    };
+  }
+  if (view === 'model' && averaged && s.model.result && s.model.result.weights) {
+    // An average on each cable: drawn as wide as the flows across it are
+    // many -- that adds up along a lane, where averages do not -- and
+    // coloured by the average, against the lowest and highest anywhere.
+    const src = s.model;
+    const { loads } = src;
+    const { weights } = src.result;
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (const [link, l] of loads) {
+      const w = weights.get(link) || [0, 0];
+      for (let k = 0; k < 2; k++) {
+        if (!(w[k] > 1e-12)) continue;
+        lo = Math.min(lo, l[k]);
+        hi = Math.max(hi, l[k]);
+      }
+    }
+    if (!(hi >= lo)) { lo = 0; hi = 0; }
+    const place = (v) => (hi > lo ? (v - lo) / (hi - lo) : 0.5);
+    return {
+      ...base,
+      colour: 'average', loads, toGbps: null, unit: src.unit, compare: null, span: 1, after: src, before: null,
+      contention: null, low: lo, high: hi,
+      // How far up the range an average sits, 0 at the lowest and 1 at the
+      // highest: what its colour is drawn from.
+      place,
+      share(link) {
+        const w = weights.get(link);
+        const l = loads.get(link);
+        if (!w || !l) return ZERO;
+        const ab = w[0] > 1e-12 ? l[0] : null;
+        const ba = w[1] > 1e-12 ? l[1] : null;
+        const higher = ab === null ? ba : ba === null ? ab : Math.max(ab, ba);
+        // Where the higher way sits in the range, 0 to 1: never below
+        // nothing, so the highest along a piece is the one kept.
+        return [w[0], w[1], higher === null ? null : place(higher)];
+      },
+      // The averages times the flow that crossed, each way: added up over
+      // several cables drawn as one and divided by what share() gave, the
+      // average over all of them.
+      value(link) {
+        const w = weights.get(link);
+        const l = loads.get(link);
+        return w && l ? [l[0] * w[0], l[1] * w[1]] : [0, 0];
       },
     };
   }

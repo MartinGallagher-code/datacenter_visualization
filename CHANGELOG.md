@@ -11,6 +11,47 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.55.0 — 2026-11-06
+
+A table of host-to-peer readings, any metric of it, on the cables (DV-007).
+
+- **A table may name each row's peer in a column of its own.** A header
+  whose third heading is `peer` (or `dst`, `dest`, `destination`, `remote`,
+  `to`) makes that column each row's far end, as `host -> peer` in the host
+  column does, and the metrics start at the fourth: `timestamp  host  peer
+  uplink/s  downlink/s ...` is a flow per row and metric. A blank peer cell
+  is a reading of the host alone; a table with no header reads its third
+  column as a metric, as before. Where a row names a peer both ways and they
+  differ, the peer column is read and the load report says so.
+- **A flow metric can say it ran the other way.** `dir=in` on its `!test`
+  line, or a name that says received (`downlink`, `download`, `rx`, `recv`,
+  `received`, `inbound`, `ingress`, `incoming`), runs a reading from the
+  peer to the host: what the host took in, which the peer sent. `dir=out`
+  overrules the name. Bare `in` and `out` are not read, so `iperf_mbps_in`
+  loads as it did. The inspector marks such a metric's peers `←`.
+- **Any flow metric loads the cables, whatever its unit.** One that does not
+  add up along a path -- a percentage, a latency -- used to be greyed out;
+  it is now **averaged**: each cable shows the mean of the flows across it,
+  each way, every flow counted by the share of it that crosses. Colour is
+  the average against the lowest and highest anywhere, width how many flows
+  cross. Nothing is set against `gbps=` or shared out, no switch gauge
+  fills, and the panel, its key, the tooltips and the inspector speak of
+  averages; the load generator and a test flow are not drawn on top of one,
+  and the panel says why. The card's new **on a cable: add up / average
+  the flows** choice, and `cable=sum|mean` on the `!test` line, overrule
+  the unit.
+- **values on the cables**, in the Cable load panel, prints one figure on
+  each cable -- what it carries the busier way, an average the higher way,
+  or the signed change when comparing -- where it fits along the cable at
+  the zoom, the biggest first and none on top of another. The status line
+  counts them. Off by default.
+- **A load that is not in bits is coloured against the busiest cable on a
+  layout with `gbps=` too.** It drew grey there -- the colour for a cable
+  with no capacity -- although the key already said otherwise.
+- `examples/dual-plane-peers.tsv`: the new table shape over
+  `examples/dual-plane.dc`, with an uplink and a downlink both ends report
+  (they land on the cables identically) and a round trip with one slow pair.
+
 ## 1.54.9 — 2026-11-06
 
 Tests, CI and docs only; the viewer, the tools and the package do not change

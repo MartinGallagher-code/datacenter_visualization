@@ -22,7 +22,7 @@ import { attachHints, renderReference } from './hints.js';
 import { layoutFromHosts, matchesPattern, recordsSince, tailRecords } from './tsv.js';
 import { routesBetween } from './paths.js';
 import {
-  adaptiveWeights, betweenPicks, busyable, busyOf, randomTakeouts, TAKEOUT_KINDS, explainResults, pathLatency, bitRate, cableKeys, CONNECTION_LIMITS, CORE_LIMIT, contend, countersOf, estimateFlows, flowsOf, flowsOver, GEN_LIMITS,
+  adaptiveWeights, averageTraffic, betweenPicks, busyable, busyOf, randomTakeouts, TAKEOUT_KINDS, explainResults, pathLatency, bitRate, cableKeys, CONNECTION_LIMITS, CORE_LIMIT, contend, countersOf, estimateFlows, flowsOf, flowsOver, GEN_LIMITS,
   findingsOf, GEN_IDS, generateFlows, hostCapacity, hostLimits, hostsFor, hostsOf, pairedFlows, TARGETED, loadable, loadUnit, mergeResults, packetGb, readsAsLoad, REPLY_IDS, routeEstimate,
   routeTraffic, splitFiles, splitHosts, switchLoads, testFlows, trafficKind, viewOf,
 } from './traffic.js';
@@ -134,6 +134,8 @@ const state = {
     // how long one lasts, in microseconds: what a switch's buffer must hold.
     burst: 1,
     burstUs: 100,
+    // Print each cable's figure on it, where it fits: off until asked for.
+    labels: false,
     // Read a per-server metric backwards: what the network would have to be
     // for every server's result to follow from the same load (explainResults).
     explain: false,
@@ -382,6 +384,8 @@ const state = {
   switchLoads() {
     const view = state.cableView();
     if (!view) return null;
+    // An average passes through no switch: nothing to fill a gauge with.
+    if (view.averaged) return null;
     const c = state.trafficCache.switches;
     if (c && c.view === view) return c.value;
     const value = switchLoads(state.model, view.loads, view.toGbps, view.contention);
@@ -521,14 +525,19 @@ function modelSource(withDown) {
   const overlay = t.key ? state.overlays.get(t.key) : null;
   const kind = overlay ? trafficKind(overlay) : null;
   const metric = overlay && overlay.enabled && kind !== 'cables' && loadable(overlay) ? overlay : null;
+  // A metric that does not add up -- a latency, a loss rate -- is averaged
+  // on each cable, not loaded onto it: nothing generated or sent as a test
+  // can add to an average, so neither rides on it, and the panel says so.
+  const averaged = !!(metric && kind === 'flows' && metricUnit(metric, kind).combine === 'mean');
   // With two or more picks, a test flow from the first to the second, and the
   // metric's own flows narrowed to the ones between the picks.
   const picks = state.picked.length >= 2 ? state.picked : null;
-  const test = picks && t.test.on && t.test.value > 0 ? t.test : null;
+  const test = picks && t.test.on && t.test.value > 0 && !averaged ? t.test : null;
   const between = !!(picks && metric && t.betweenOnly);
   // The generator's load: every area of it at once, each on hosts of its
   // own -- `gen` is the area the panel shows.
-  const gen = t.gen.on ? t.gen : null;
+  const gen = t.gen.on && !averaged ? t.gen : null;
+  const held = averaged ? [t.gen.on && 'the load generator', picks && t.test.on && 'the test flow'].filter(Boolean) : [];
   const areas = gen ? t.areas : [];
   if (!metric && !test && !gen) return null;
   const out = withDown ? state.takenOut() : { els: [], links: [], size: 0 };
@@ -548,7 +557,7 @@ function modelSource(withDown) {
   const froms = areas.map((a) => (a.from ? genSource(a) : null));
   const from = froms.find(Boolean) || null;
   const duplexKey = metric && kind === 'hosts' ? duplexOf(metric) : null;
-  const packets = metric ? packetsOf(metric) : null;
+  const packets = metric && !averaged ? packetsOf(metric) : null;
   const packetKey = packets ? `${packets.bytes}\u0001${packets.reply}` : '';
   const busy = busySource();
   // The load generator's cores per server holds for the run it makes.
@@ -556,7 +565,8 @@ function modelSource(withDown) {
   const pairingKey = JSON.stringify([t.explainLayers, t.explainSeed]);
   const slot = withDown ? 'model' : 'base';
   const c = state.trafficCache[slot];
-  if (c && c.overlay === metric && c.layout === state.model && c.agg === (metric && metric.agg)
+  if (c && c.overlay === metric && c.layout === state.model && c.agg === (metric && metric.agg) && c.averaged === averaged
+      && c.combine === (metric && metric.combine) && c.held === held.join()
       && c.split === t.split && c.connections === t.connections && c.seed === t.seed && c.spread === t.spread && c.down === downKey
       && c.picks === pickKey && c.test === testKey && c.between === between && c.gen === genKey
       && c.froms && c.froms.length === froms.length && froms.every((f, i) => sameSource(c.froms[i], f))
@@ -588,7 +598,8 @@ function modelSource(withDown) {
   let metricFlows = [];
   let hosts = null;
   if (metric && kind === 'flows') {
-    const f = flowsOf(metric, state.model);
+    // An average may be of anything, a value below zero included.
+    const f = flowsOf(metric, state.model, { signed: averaged });
     metricFlows = only ? f.flows.filter((flow) => only(flow.src, flow.dst)) : f.flows;
     count = metricFlows.length;
     total = f.flows.length;
@@ -722,14 +733,15 @@ function modelSource(withDown) {
   // Adaptive routing settles on everything at once, since its switches see
   // all of it in their queues: worked out once, and used by every pass --
   // the hover's flows over a cable included.
-  if (t.split === 'adaptive') opts.weights = adaptiveWeights(state.model, [...metricFlows, ...genFlows, ...testFlowsNow], opts);
+  if (t.split === 'adaptive' && !averaged) opts.weights = adaptiveWeights(state.model, [...metricFlows, ...genFlows, ...testFlowsNow], opts);
 
   // Contention: everything routed together, since it all shares the cables,
   // and every full cable shared out. Only a bit rate fills a gbps=.
   let contended = null;
   let contentionWhy = '';
   if (t.contention) {
-    if (unit.toGbps === null) contentionWhy = `${unit.unit || 'this unit'} cannot fill a cable’s gbps=, so nothing is shared out`;
+    if (averaged) contentionWhy = 'an average fills no cable, so nothing is shared out';
+    else if (unit.toGbps === null) contentionWhy = `${unit.unit || 'this unit'} cannot fill a cable’s gbps=, so nothing is shared out`;
     else if (!state.model.links.some((link) => link.gbps)) contentionWhy = 'no cable has a gbps= to fill, so nothing is shared out';
     else {
       const pairs = hosts ? pairUp(hosts) : [];
@@ -757,10 +769,13 @@ function modelSource(withDown) {
       own = { routed: mine.filter((flow) => !flow.reply).length, delivered: mine.reduce((sum, flow) => sum + flow.value, 0) };
     }
   } else {
-    routed = [...metricFlows];
+    // Averaged, a cable's flows are each one flow, counted by the share of
+    // it that crosses: what the hover lists, each beside its own value.
+    routed = averaged ? metricFlows.map((flow) => ({ ...flow, value: 1, metric: flow.value })) : [...metricFlows];
     result = null;
     if (metric) {
-      result = !hosts ? routeTraffic(state.model, metricFlows, opts)
+      result = averaged ? averageTraffic(state.model, metricFlows, opts)
+        : !hosts ? routeTraffic(state.model, metricFlows, opts)
         : byPeers ? { ...routeTraffic(state.model, pairUp(hosts), opts), estimated: true, hosts: hosts.length }
           : routeEstimate(state.model, hosts, { ...opts, only });
       // The metric's own count, before anything is added on top of it.
@@ -784,8 +799,11 @@ function modelSource(withDown) {
     // whether by choice or because every pair was too many.
     pairedBy: byPeers ? (t.spread === 'peers' ? 'choice' : 'size') : null, allPairs,
     packets: packetRun || (genRun && genRun.packets) || null,
+    // A metric averaged on each cable, and what is not drawn on top of it.
+    averaged, held,
   };
   state.trafficCache[slot] = {
+    averaged, combine: metric && metric.combine, held: held.join(),
     overlay: metric, layout: state.model, agg: metric && metric.agg, split: t.split, connections: t.connections, seed: t.seed, spread: t.spread,
     down: downKey, picks: pickKey, test: testKey, between, gen: genKey, froms, contention: t.contention, duplex: duplexKey,
     packets: packetKey, busy, cores, pairing: pairingKey, value,
@@ -801,7 +819,7 @@ function modelSource(withDown) {
 function genUnit(g = state.traffic.gen) {
   const t = state.traffic;
   const overlay = t.key ? state.overlays.get(t.key) : null;
-  const metric = overlay && overlay.enabled && trafficKind(overlay) !== 'cables' && loadable(overlay) ? overlay : null;
+  const metric = addingMetric(overlay);
   const base = metric ? metricUnit(metric, trafficKind(metric)) : null;
   if (base && base.toGbps === null) return base.unit;
   // Read off a metric, a load is in Gb/s.
@@ -821,8 +839,19 @@ const genBase = (unit) => (unit === '%' || (unit === 'pps' && genSized()) ? 'Gb/
 function genSized(g = state.traffic.gen) {
   if (g.from || !(g.bytes > 0) || genUnit(g) !== 'pps') return false;
   const overlay = state.traffic.key ? state.overlays.get(state.traffic.key) : null;
-  const metric = overlay && overlay.enabled && trafficKind(overlay) !== 'cables' && loadable(overlay) ? overlay : null;
+  const metric = addingMetric(overlay);
   return !metric || metricUnit(metric, trafficKind(metric)).toGbps !== null;
+}
+
+/**
+ * The metric on the cables that a generated load or a test flow adds to:
+ * one loaded and ticked, and not averaged -- an average has nothing to add
+ * a load to, so the generator keeps its own unit beside one.
+ */
+function addingMetric(overlay) {
+  if (!overlay || !overlay.enabled || trafficKind(overlay) === 'cables' || !loadable(overlay)) return null;
+  const kind = trafficKind(overlay);
+  return kind === 'flows' && metricUnit(overlay, kind).combine === 'mean' ? null : overlay;
 }
 
 /**
@@ -961,7 +990,7 @@ function packetsOf(overlay) {
 /** What a metric loads the cables in: its own unit, or Gb/s once its packets are sized. */
 function metricUnit(overlay, kind) {
   const p = packetsOf(overlay);
-  if (p && p.bytes > 0) return { ok: true, toGbps: 1, unit: 'Gb/s', why: '', packets: p };
+  if (p && p.bytes > 0 && overlay.combine !== 'mean') return { ok: true, toGbps: 1, unit: 'Gb/s', why: '', packets: p };
   return loadUnit(overlay, kind);
 }
 
@@ -1126,6 +1155,15 @@ const actions = {
     // Its cable load goes too, for the same reason.
     if (!enabled && state.traffic.key === overlay.key) state.traffic.key = null;
     if (!enabled && state.traffic.counters === overlay.key) state.traffic.counters = null;
+    refreshPanels();
+    invalidate();
+  },
+
+  // How a flow metric's flows combine on a cable: added up, as traffic, or
+  // averaged, as a latency. Kept across a reload of the file, as agg= is.
+  setOverlayCombine(overlay, combine) {
+    overlay.combine = combine === 'mean' ? 'mean' : 'sum';
+    overlay.combineSet = true;
     refreshPanels();
     invalidate();
   },
@@ -1764,6 +1802,13 @@ const actions = {
     invalidate();
   },
 
+  // Each cable's figure printed on it, or not.
+  setCableLabels(on) {
+    state.traffic.labels = !!on;
+    refreshPanels();
+    invalidate();
+  },
+
   // Whether full cables share out what they carry, or the cables show what
   // the flows offer.
   setContention(on) {
@@ -2266,6 +2311,8 @@ function rebindOverlays() {
       Object.assign(bound, {
         enabled: old.enabled,
         agg: old.agg,
+        // How its flows combine on a cable, where the card chose it.
+        ...(old.combineSet ? { combine: old.combine, combineSet: true } : {}),
         palette: old.palette,
         invert: old.invert,
         autoDomain: old.autoDomain,
@@ -3910,6 +3957,8 @@ function frame() {
       `${state.model.all.length.toLocaleString()} elements · ${renderer.stats.drawn.toLocaleString()} drawn · ` +
       `${renderer.stats.links.toLocaleString()} links · ` +
       (renderer.stats.flows ? `${renderer.stats.flows.toLocaleString()} flows · ` : '') +
+      // How many cables have their figure printed, while that is asked for.
+      (state.traffic.labels ? `${renderer.stats.labels.toLocaleString()} figures · ` : '') +
       `zoom ${renderer.camera.scale.toFixed(2)}× · ` +
       'drag pan · wheel zoom · dbl-click collapse · / filter · f fit';
   }

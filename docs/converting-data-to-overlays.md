@@ -186,6 +186,8 @@ at the top.
 | `invert` | `yes` / `no` | Flips the ramp; `higher=good` already does this. Any spelling of yes works (`yes` `y` `on` `1` `true`). |
 | `agg` | the default aggregation | One of the list in §5. |
 | `decimals` | fixed decimal places, a whole number 0–10 | `0` for counts and packet rates. Omit and it is chosen from the range. |
+| `dir` | `in` or `out`: which way a per-pair metric ran | `in` for what the target received from its peer (a downlink). Omit it when the name already says `downlink`, `rx` or `received`. See §7. |
+| `cable` | `sum` or `mean`: how the flows across one cable make its figure | Omit it and the unit decides: rates, volumes and counts add up, percentages and latencies are averaged. See §7. |
 
 **The viewer checks this table, in JSON as well as in text.** A `{"!test": …}`
 object and a `tests: {…}` block go through the same checks a `!test` line
@@ -224,6 +226,29 @@ inspector's per-peer breakdown, and the `peer=host` filter term. Emit it
 whenever the measurement is of a pair. Any other `key=value` you add is kept as
 sample metadata and is harmless — `run=`, `ts=` and the like are useful for
 your own traceability.
+
+**Which way it ran.** A flow sample is the target sending to its peer. A
+reading of what the target *received* from the peer — a downlink, an `rx`
+counter — ran the other way: say so with `dir=in` on its `!test` line
+(`!test downlink_gbps unit=Gb/s dir=in`). A name with `downlink`, `download`,
+`rx`, `recv`, `received`, `inbound`, `ingress` or `incoming` in it is read as
+`dir=in` already; `dir=out` overrules a name that misleads. Get it wrong and
+**load the cables** draws the traffic the wrong way round, which looks
+exactly like a measurement.
+
+**As a table.** A per-pair table needs no conversion at all: a header of
+`timestamp  host  peer  metric …` makes the third column the peer of every
+row (README, "A table you already have"):
+
+```
+timestamp	host	peer	uplink/s	downlink/s	rtt (us)
+2026-11-06T12:00:00	wr01r01u05	wr01r02u09	20	3	11.7
+```
+
+**On the cables.** Any per-pair metric can be loaded onto the cables.
+Rates, volumes, counts and numbers with no unit add up on each cable;
+percentages and latencies are averaged there. `cable=sum` or `cable=mean`
+on the `!test` line says which where the unit does not.
 
 **A flow is not a cable.** A measurement between two servers in one rack
 crossed server → ToR → server, and nothing in the data says how the traffic
