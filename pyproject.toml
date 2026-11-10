@@ -5,7 +5,7 @@
 # reason: a browser will not load ES modules from a `file://` URL, so the
 # viewer needs *something* to serve its directory, and the README has always
 # answered that with `python3 -m http.server`. Packaging it makes
-# `pip install` a complete install: the server, the two overlay tools and the
+# `pip install` a complete install: the server, the tools and the
 # viewer's files arrive together and `dcviz serve` opens it.
 #
 # `dependencies` is empty and stays empty. Building needs hatchling; running
@@ -57,6 +57,7 @@ Issues = "https://github.com/MartinGallagher-code/datacenter_visualization/issue
 dcviz = "dcviz.cli:main"
 dcadd = "dcviz.dcadd:main"
 dcimport = "dcviz.dcimport:main"
+dcfabric = "dcviz.dcfabric:main"
 dcprobe = "dcviz.dcprobe:main"
 
 # One version for the whole project, read rather than restated. The other

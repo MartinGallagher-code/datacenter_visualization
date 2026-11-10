@@ -1248,6 +1248,26 @@ await test('counters, the model, and taking a spine out', async () => {
   ok(!/What-if/.test(await panel()), 'and Put all back does');
 }, { url: '?layout=examples/dual-plane.dc&results=examples/dual-plane-flows.tsv,examples/dual-plane-counters.tsv' });
 
+// A fabric dcfabric read out of a neighbour table, and the per-port rates it
+// turned into counters (BN-003): it loads with nothing to report, every
+// counter lands on its cable, and each pair of parallel cables carries what
+// its ports sent added up -- leaf4's two uplinks to spine1 sent 60 each.
+await test('a fabric from a neighbour table, with its port rates on the cables', async () => {
+  const panel = () => page.evaluate(() => document.querySelector('#cable-load').innerText);
+  ok(await page.evaluate(() => document.querySelector('#notices').hidden), 'the layout and the counters load with no warning');
+  await page.locator('#overlays .overlay-head input[type=checkbox]').first().check();
+  await page.waitForTimeout(200);
+  await page.locator('#overlays label', { hasText: 'draw on the cables' }).locator('input').check();
+  await page.waitForTimeout(400);
+  const text = await panel();
+  ok(/20 cables measured by Switch port counters/.test(text), `every cable is measured  (${text.slice(0, 120).replace(/\n/g, ' | ')})`);
+  ok(/Busiest cables\s+leaf\/leaf4 → spine\/spine[12]\s+60G\/100G · 60%/.test(text), 'and the busiest are leaf4\u2019s uplinks, at 60 of 100G');
+  await page.locator('#cable-load label', { hasText: 'values on the cables' }).locator('input').check();
+  await page.waitForTimeout(400);
+  const printed = Number((/([\d,]+) figures/.exec(await page.evaluate(() => document.querySelector('#statusinfo').textContent)) || [0, '0'])[1]);
+  ok(printed > 0, `values on the cables prints their figures  (${printed})`);
+}, { url: '?layout=examples/fabric/fabric.dc&results=examples/fabric/counters.tsv' });
+
 await test('per-host totals load the cables as an estimate', async () => {
   await page.locator('#overlays .overlay-head input[type=checkbox]').first().check();
   await page.waitForTimeout(200);

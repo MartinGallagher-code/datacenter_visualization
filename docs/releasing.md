@@ -10,7 +10,7 @@ Two, not one, because no single file is readable from both a browser's module
 graph and a Python interpreter — and two readers for one value is the shape of
 nearly every bug this repo has had. So it is guarded: the **version** section
 of `tests/run.mjs` fails if the two disagree, if either disagrees with what
-`dcadd --version`, `dcimport --version` or `dcviz --version` print, if the
+`dcadd --version`, `dcimport --version`, `dcfabric --version` or `dcviz --version` print, if the
 newest `CHANGELOG.md` heading is a different number, or if `pyproject.toml`
 stops reading the Python one and starts restating it.
 
@@ -19,7 +19,7 @@ Everything else derives:
 | Where | Reads from |
 |---|---|
 | `pyproject.toml` / PyPI | `python/dcviz/__init__.py` (`[tool.hatch.version]`) |
-| `dcadd`/`dcimport`/`dcviz --version` | the same, via `dcviz.version_notice()` |
+| `dcadd`/`dcimport`/`dcfabric`/`dcviz --version` | the same, via `dcviz.version_notice()` |
 | The About box in the left panel | `js/version.js`, written in by `js/app.js` |
 | The GitHub release notes | `CHANGELOG.md`: every section since the last version with a GitHub release (`.github/release_notes.py`) |
 | `README.md`'s "Current version" line | nothing — it is prose, and the only copy a tool cannot derive, so the test suite pins it instead |

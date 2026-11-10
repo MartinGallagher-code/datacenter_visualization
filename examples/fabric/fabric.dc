@@ -1,0 +1,29 @@
+# The fabric in neighbors.tsv, written by dcfabric:
+# 6 switches in 2 tiers, 20 cables between 10 pairs of switches.
+# Each link line joins one pair; count= is how many cables join them, and
+# the comment after it names their ports, first switch's port first.
+
+dc fabric name="Leaf-spine example" cols=1 align=center
+
+  tier spine name="spine* (2)" dir=x
+    node spine1 role=switch +switch
+    node spine2 role=switch +switch
+
+  tier leaf name="leaf* (4)" dir=x
+    node leaf1 role=switch +switch
+    node leaf2 role=switch +switch
+    node leaf3 role=switch +switch
+    node leaf4 role=switch +switch
+
+net data label="Cables from neighbors.tsv" gbps=100
+
+link data leaf1 leaf2 count=2  # Ethernet53 <-> Ethernet53, Ethernet54 <-> Ethernet54
+link data leaf1 spine1 count=2  # Ethernet49 <-> Ethernet1, Ethernet50 <-> Ethernet2
+link data leaf1 spine2 count=2  # Ethernet51 <-> Ethernet1, Ethernet52 <-> Ethernet2
+link data leaf2 spine1 count=2  # Ethernet49 <-> Ethernet3, Ethernet50 <-> Ethernet4
+link data leaf2 spine2 count=2  # Ethernet51 <-> Ethernet3, Ethernet52 <-> Ethernet4
+link data leaf3 leaf4 count=2  # Ethernet53 <-> Ethernet53, Ethernet54 <-> Ethernet54
+link data leaf3 spine1 count=2  # Ethernet49 <-> Ethernet5, Ethernet50 <-> Ethernet6
+link data leaf3 spine2 count=2  # Ethernet51 <-> Ethernet5, Ethernet52 <-> Ethernet6
+link data leaf4 spine1 count=2  # Ethernet49 <-> Ethernet7, Ethernet50 <-> Ethernet8
+link data leaf4 spine2 count=2  # Ethernet51 <-> Ethernet7, Ethernet52 <-> Ethernet8

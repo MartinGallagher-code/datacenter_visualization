@@ -5,13 +5,14 @@
 The viewer itself is static HTML, CSS and ES modules with no dependencies and
 no build step; this package exists because a browser will not load ES modules
 from a `file://` URL, so *something* has to serve the directory. `dcviz serve`
-is that something, out of the standard library, and it brings the two overlay
-tools along with it:
+is that something, out of the standard library, and it brings the tools
+along with it:
 
     pip install datacenter-layout-viewer
     dcviz serve                 # serves the bundled viewer, opens a browser
     dcadd results.tsv temp_c DH1/A/R01/u05 61.2
     dcimport --tidy netmesh-reports/ >> results.tsv
+    dcfabric layout neighbors.tsv > fabric.dc
 
 Installing nothing and serving the checkout yourself works exactly as well --
 `python3 -m http.server 8000` in a clone is the same viewer. The package is a
@@ -21,7 +22,7 @@ convenience, never a requirement, and it adds no runtime dependency.
 # One half of the project's version. The other is VERSION in js/version.js;
 # see the note there for why there are two and what keeps them equal.
 # pyproject.toml reads this attribute rather than restating it.
-__version__ = "1.55.2"
+__version__ = "1.56.0"
 
 
 def version_notice(prog):
