@@ -23,9 +23,10 @@ CI and docs only; the viewer, the tools and the package do not change
   the version is greater than what `main` had before the push, read the same
   way from `js/version.js`. `CLAUDE.md`, `docs/releasing.md` and README say
   so, and the ticket snippet in `CLAUDE.md` is the current one.
-- **The package job runs on `ubuntu-24.04`**: `ubuntu-latest` became 26.04 in
-  November 2026, where setup-python has no Python 3.9, so the job failed
-  before it built anything.
+- **The package and browser jobs run on `ubuntu-24.04`**: `ubuntu-latest`
+  became 26.04 in November 2026, where setup-python has no Python 3.9, so the
+  package job failed before it built anything, and the pinned Playwright
+  1.56.1 cannot install Chromium, so the browser job failed the same way.
 
 ## 1.55.0 — 2026-11-06
 

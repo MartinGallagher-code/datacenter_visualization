@@ -96,7 +96,11 @@ jobs:
 
   browser:
     name: browser tests
-    runs-on: ubuntu-latest
+    # ubuntu-latest became 26.04 in November 2026, and Playwright 1.56.1
+    # (pinned below) cannot install Chromium's dependencies there: "Playwright
+    # does not support chromium on ubuntu26.04-x64". 24.04 it supports. Moving
+    # off 24.04 means bumping Playwright first.
+    runs-on: ubuntu-24.04
     # The job's ceiling has room for the install, whose apt step has taken
     # anything from 19 seconds to 10 minutes on a slow mirror; the suite's
     # own step below has a tighter one.
