@@ -32,16 +32,17 @@ concurrency:
 jobs:
   # Every pull request moves the version (docs/releasing.md): one that leaves
   # it where its base branch has it fails here, so a change cannot reach main
-  # unnumbered. Only on pull requests -- a push to main has nothing to
-  # compare against but itself.
+  # unnumbered. A push to main is compared with what main was before the
+  # push: two pull requests that each took the same number pass their own
+  # checks, and are caught only there (shared_tools BN-002).
   version:
     name: version
-    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
       - name: The version moved past the base branch's
+        if: github.event_name == 'pull_request'
         env:
           BASE: ${{ github.base_ref }}
         run: |
@@ -55,6 +56,24 @@ jobs:
           fi
           if [ "$head" = "$base" ] || [ "$(printf '%s\n%s\n' "$base" "$head" | sort -V | tail -n1)" != "$head" ]; then
             echo "::error file=js/version.js::the version is $head, and $BASE has $base -- every change moves the version (docs/releasing.md)"
+            exit 1
+          fi
+      - name: The version moved past main's before this push
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          case "$BEFORE" in ''|0000000000000000000000000000000000000000) exit 0 ;; esac
+          git fetch --depth=1 origin "$BEFORE"
+          read_version() { sed -n "s/^export const VERSION = '\(.*\)';$/\1/p"; }
+          head=$(read_version < js/version.js)
+          base=$(git show FETCH_HEAD:js/version.js | read_version)
+          echo "main before this push ($BEFORE): $base, after: $head"
+          if [ -z "$head" ] || [ -z "$base" ]; then
+            echo "::error file=js/version.js::could not read VERSION"; exit 1
+          fi
+          if [ "$head" = "$base" ] || [ "$(printf '%s\n%s\n' "$base" "$head" | sort -V | tail -n1)" != "$head" ]; then
+            echo "::error file=js/version.js::the version is $head, and main before this push had $base -- every change moves the version (docs/releasing.md)"
             exit 1
           fi
 
@@ -77,7 +96,11 @@ jobs:
 
   browser:
     name: browser tests
-    runs-on: ubuntu-latest
+    # ubuntu-latest became 26.04 in November 2026, and Playwright 1.56.1
+    # (pinned below) cannot install Chromium's dependencies there: "Playwright
+    # does not support chromium on ubuntu26.04-x64". 24.04 it supports. Moving
+    # off 24.04 means bumping Playwright first.
+    runs-on: ubuntu-24.04
     # The job's ceiling has room for the install, whose apt step has taken
     # anything from 19 seconds to 10 minutes on a slow mirror; the suite's
     # own step below has a tighter one.
@@ -102,7 +125,8 @@ jobs:
 
   package:
     name: package
-    runs-on: ubuntu-latest
+    # ubuntu-latest became 26.04 in November 2026, and setup-python has no 3.9 for it; 24.04 still has every version in the matrix (quarterdeck QD-014 did the same).
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5

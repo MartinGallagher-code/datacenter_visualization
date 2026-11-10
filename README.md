@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.55.0** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.55.1** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -2812,7 +2812,8 @@ GitHub Actions runs both on every push and pull request, plus a job that
 builds the Python package, installs the wheel into a clean environment and
 fetches a page from the server it provides — the wheel's layout is not the
 checkout's, so nothing else here would notice a package that installs and then
-serves nothing — and, on a pull request, one that checks the version moved.
+serves nothing — and one that checks the version moved: past the base
+branch's on a pull request, past what `main` had before on a push to `main`.
 Separate jobs, so a red mark says which layer broke, and each with a time limit
 of its own, so a hang ends in minutes rather than hours.
 

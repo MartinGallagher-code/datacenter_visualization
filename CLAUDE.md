@@ -23,6 +23,12 @@ which keeps every project's tickets as files and moves each one Backlog → In P
    <shared_tools clone>/scripts/ticket.py new datacenter_visualization "Imperative title" --request "the request, in the user's own words"
    ~~~
 
+**Every change moves the version**, however small: a pull request into `main` raises
+it in every place it is written and opens `CHANGELOG.md` with that version's own
+dated section, never an "Unreleased" heading left for later. CI fails a pull request
+whose version is not greater than its base branch's. This file's own section on the
+version says where it is written.
+
 The board: https://claude.ai/artifact/HrB3RpVpqGGQS7UZgZsMJm
 
 ## Every change moves the version
@@ -43,6 +49,9 @@ it.** A pull request into `main` carries its own bump and its own
   published on its own. That is fine, and 1.2.0's changelog entry says so.
 - The **version** job in `.github/workflows/tests.yml` fails a pull request
   whose version is not greater than its base branch's.
+- It also fails a push to `main` whose version is not greater than what `main`
+  had before it (two pull requests that took the same number): if `main` moves
+  while a pull request is open, rebase and bump again (shared_tools BN-002).
 - Publishing is still a person's call: **Actions → release → Run workflow**
   tags whatever `main` says and pushes it to PyPI.
 

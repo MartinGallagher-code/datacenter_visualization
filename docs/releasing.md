@@ -50,8 +50,11 @@ reached `main` while the About box, `--version` and PyPI all still said
 
 The **version** job in `.github/workflows/tests.yml` holds pull requests to
 it: it fails when the version in the pull request is not greater than the
-one on its base branch. A change that is only documentation or tests is
-still a change, and takes a patch.
+one on its base branch, and on a push to `main` when the version is not
+greater than what `main` had before the push — two pull requests that each
+took the same number pass their own checks and are caught there, so rebase
+and bump again when `main` moves under one. A change that is only
+documentation, tests or CI is still a change, and takes a patch.
 
 A number that is in `main` but not yet tagged is fine — several can pass
 before anyone runs the release workflow, which publishes whatever `main`
