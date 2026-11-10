@@ -11,6 +11,22 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.55.1 — 2026-11-10
+
+CI and docs only; the viewer, the tools and the package do not change
+(shared_tools BN-002).
+
+- **The version job also checks a push to `main`.** It compared a pull
+  request's version with its base branch's and did nothing on a push, so two
+  pull requests that each took the same number passed their own checks and
+  merged one after the other with it. On a push to `main` it now fails unless
+  the version is greater than what `main` had before the push, read the same
+  way from `js/version.js`. `CLAUDE.md`, `docs/releasing.md` and README say
+  so, and the ticket snippet in `CLAUDE.md` is the current one.
+- **The package job runs on `ubuntu-24.04`**: `ubuntu-latest` became 26.04 in
+  November 2026, where setup-python has no Python 3.9, so the job failed
+  before it built anything.
+
 ## 1.55.0 — 2026-11-06
 
 A table of host-to-peer readings, any metric of it, on the cables (DV-007).
