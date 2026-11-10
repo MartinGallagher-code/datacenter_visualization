@@ -11,6 +11,19 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.55.2 — 2026-11-10
+
+Docs only; the viewer, the tools and the package do not change (DV-008).
+
+- **`docs/feature-survey.md`: what comparable tools do, and what this viewer
+  should add.** 26 tools (open-source and commercial DCIM, network maps and
+  weathermaps, flow analytics, network modelling, a thermal twin) set beside
+  this one in a feature matrix, each claim quoted from the tool's own pages,
+  with where this viewer is ahead, level or behind. It ends with ten
+  recommended features, ranked, each sized and with the version bump it would
+  take, the ones found but not ranked, and the ones not recommended and why.
+  The README's repository layout lists it.
+
 ## 1.55.1 — 2026-11-10
 
 CI and docs only; the viewer, the tools and the package do not change
