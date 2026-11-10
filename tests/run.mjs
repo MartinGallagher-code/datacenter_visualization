@@ -913,6 +913,10 @@ eq(commonDomain(['wr01r01u01', 'wr01r01u02']), '', 'and hosts with no dots have 
 {
   const shouldBeWide = new Set([
     'examples/dual-plane-peers.tsv',
+    // dcfabric's input: timestamp, host, port and two rates, which is a
+    // table. (Its neighbour table beside it is no results file at all, and
+    // is read as one only in that it is not a table.)
+    'examples/fabric/rates.tsv',
     'examples/live/flows.tsv',
     'examples/live/room-wr01.tsv',
     'examples/live/room-wr02.tsv',
@@ -3873,6 +3877,316 @@ if (python.error) {
   ok(rackLoad.value > 0, 'and a rack sums the hosts beneath it');
 }
 
+// ----------------------------------------------------------------- dcfabric
+// A neighbour table -- host, port, neighbor, port, the shape LLDP gives --
+// becomes a .dc of switches and cables, and per-port rates become the switch
+// counters drawn on those cables (BN-003). Every check reads the tool's
+// output with the viewer's own parser, so what is pinned is what the viewer
+// does with the file, not how the file happens to look.
+if (python.error) {
+  skip('dcfabric', 'no python3');
+} else {
+  // Runs the package found under `pkg` -- the checkout's, or a mutated copy.
+  const runFabric = (args, pkg = join(root, 'python')) => {
+    const run = spawnSync('python3', ['-c',
+      'import sys; sys.path.insert(0, sys.argv.pop(1)); from dcviz.dcfabric import main; sys.exit(main())',
+      pkg, ...args], { encoding: 'utf8' });
+    return { out: run.stdout || '', err: run.stderr || '', code: run.status };
+  };
+  const work = mkdtempSync(join(tmpdir(), 'dcfabric-'));
+  let made = 0;
+  const file = (text, name = `t${++made}.tsv`) => {
+    const path = join(work, name);
+    writeFileSync(path, text);
+    return path;
+  };
+  const tsv = (...rows) => `${rows.map((r) => r.join('\t')).join('\n')}\n`;
+  const linkLines = (text) => text.split('\n').filter((l) => l.startsWith('link '));
+  const parsed = (text) => parseLayout(text);
+  const fabricOf = (rows, args = [], pkg) => runFabric(['layout', file(tsv(...rows)), ...args], pkg);
+  // Both checks the mutations below must break, written once.
+  const bothEnds = [['leaf1', 'Eth49', 'spine1', 'Eth1'], ['spine1', 'Eth1', 'leaf1', 'Eth49']];
+  const listedTwiceIsOne = (pkg) => {
+    const run = fabricOf(bothEnds, [], pkg);
+    return run.code === 0 && parsed(run.out).links.length === 1;
+  };
+  const parallel = [
+    ['leaf1', 'Eth49', 'spine1', 'Eth1'], ['leaf1', 'Eth50', 'spine1', 'Eth2'],
+    ['spine1', 'Eth1', 'leaf1', 'Eth49'], ['spine1', 'Eth2', 'leaf1', 'Eth50'],
+  ];
+  const parallelTable = file(tsv(...parallel), 'parallel.tsv');
+  const parallelRates = file(tsv(['timestamp', 'host', 'port', 'uplink', 'downlink'],
+    ['1', 'leaf1', 'Eth49', '10', '1'], ['1', 'leaf1', 'Eth50', '30', '2']), 'parallel-rates.tsv');
+  // The ticket's case: two ports from leaf1 to spine1 sent 10 and 30. Their
+  // cables must carry 40 between them -- one sample per port averages to 20.
+  const tenAndThirty = (pkg) => {
+    const layout = runFabric(['layout', parallelTable], pkg);
+    const counters = runFabric(['counters', parallelTable, parallelRates], pkg);
+    if (layout.code !== 0 || counters.code !== 0) return null;
+    const m = parsed(layout.out);
+    const bound = bindOverlay([...parseResults(counters.out).values()][0], m);
+    const loads = countersOf(bound, m).loads;
+    const leaf = m.resolve('leaf1');
+    let sent = 0;
+    for (const link of leaf.links) sent += (loads.get(link) || [0, 0])[link.a === leaf ? 0 : 1];
+    return sent;
+  };
+  const bracketRefused = (pkg) => {
+    const run = fabricOf([['leaf[1]', 'Eth49', 'spine1', 'Eth1']], [], pkg);
+    return run.code === 1 && run.out === '' && /line 1: switch name "leaf\[1\]".*"\[" reads as a range/.test(run.err);
+  };
+
+  // The worked example is exactly what the tool writes, so the files beside
+  // the README never drift from the tool that made them.
+  const ex = (name) => join(root, 'examples/fabric', name);
+  const exLayout = runFabric(['layout', ex('neighbors.tsv'), '--gbps', '100', '--name', 'Leaf-spine example']);
+  eq([exLayout.code, exLayout.out === readFileSync(ex('fabric.dc'), 'utf8')], [0, true],
+     'dcfabric layout writes examples/fabric/fabric.dc as it is checked in');
+  ok(/^dcfabric: 6 switches, 2 tiers and 20 cables from 40 rows$/m.test(exLayout.err),
+     `and says what it read  (${exLayout.err.trim()})`);
+  const exCounters = runFabric(['counters', ex('neighbors.tsv'), ex('rates.tsv')]);
+  eq([exCounters.code, exCounters.out === readFileSync(ex('counters.tsv'), 'utf8')], [0, true],
+     'dcfabric counters writes examples/fabric/counters.tsv as it is checked in');
+  eq(exCounters.err.trim(), 'dcfabric: 120 samples (60 sent, 60 received) at 3 times, from 120 rate rows',
+     'with nothing left out to report');
+
+  // The viewer loads the example with no warnings: every switch a +switch
+  // node, each port pair one cable, and both ends' rows one cable, not two.
+  const exModel = parsed(exLayout.out);
+  eq(exModel.warnings, [], 'the example fabric loads with no warnings');
+  eq(exModel.links.length, 20, 'one cable per port pair, though each is listed from both ends');
+  const nodes = exModel.all.filter((el) => el.kind === 'node');
+  eq([nodes.length, nodes.every((el) => el.tags.has('switch'))], [6, true], 'every host and neighbour is a +switch node');
+  eq(exModel.all.filter((el) => el.kind === 'tier').map((el) => el.path), ['fabric/spine', 'fabric/leaf'],
+     'spines drawn above the leaves they outnumber');
+  const exBound = bindOverlay([...parseResults(exCounters.out).values()][0], exModel);
+  eq([exBound.unresolved, exBound.ambiguous, exBound.unit], [[], [], 'Gb/s'], 'every counter names one switch, in the unit its headings give');
+  const exMeasured = countersOf(exBound, exModel);
+  eq([exMeasured.cables, exMeasured.unmatched.length, exMeasured.unresolved], [20, 0, 0], 'and lands on a cable');
+  const between = (a, b) => exModel.resolve(a).links.filter((l) => (l.a.id === b || l.b.id === b));
+  const fromTo = (a, b) => between(a, b).reduce((sum, l) => sum + exMeasured.loads.get(l)[l.a.id === a ? 0 : 1], 0);
+  eq([fromTo('leaf1', 'spine1'), fromTo('spine1', 'leaf1'), fromTo('leaf4', 'spine2')].map((x) => Math.round(x * 1e9) / 1e9),
+     [40, 24, 120], 'each pair of cables carries what its ports sent, added up and averaged over the three readings');
+
+  // The totals match the input: every port's rate is in exactly one sample.
+  {
+    const rows = readFileSync(ex('rates.tsv'), 'utf8').split('\n').filter((l) => l && !l.startsWith('#')).slice(1);
+    const input = rows.reduce((sum, l) => { const c = l.split('\t'); return sum + Number(c[3]) + Number(c[4]); }, 0);
+    const output = exCounters.out.split('\n').filter((l) => l.startsWith('port_rate\t'))
+      .reduce((sum, l) => sum + Number(l.split('\t')[2]), 0);
+    eq(Math.round(output * 1e6) / 1e6, Math.round(input * 1e6) / 1e6, 'the samples add up to every rate in the file');
+  }
+
+  // A cable listed from both ends is one cable; N port pairs are N cables.
+  ok(listedTwiceIsOne(), 'a cable both ends list is one cable');
+  eq(parsed(fabricOf([bothEnds[0]]).out).links.length, 1, 'as is one listed from one end');
+  const par = runFabric(['layout', parallelTable]);
+  eq(linkLines(par.out), ['link data leaf1 spine1 count=2  # Eth49 <-> Eth1, Eth50 <-> Eth2'],
+     'two port pairs between two switches: one rule, count=2, naming the ports');
+  eq(parsed(par.out).links.length, 2, 'which the viewer draws as two parallel cables');
+
+  // The same table with a header, without one, with blank lines and
+  // comments, and with CRLF line endings: the same cables.
+  {
+    const rows = [['leaf1', 'Ethernet1/49', 'spine1', 'Ethernet1/1'], ['leaf2', 'swp1', 'spine1', 'Ethernet1/2']];
+    const plain = linkLines(runFabric(['layout', file(tsv(...rows))]).out);
+    eq(plain.length, 2, 'a table with no header row');
+    for (const [label, text] of [
+      ['a header row', tsv(['host', 'port', 'neighbor', 'port'], ...rows)],
+      ['the request\'s own header, typo and all', tsv(['host', 'port', 'neighnor', 'port2'], ...rows)],
+      ['blank lines and comments', `# from lldpctl\n\n${tsv(...rows)}\n# end\n`],
+      ['CRLF line endings', tsv(['Host', 'Port', 'Neighbor', 'Port'], ...rows).replace(/\n/g, '\r\n')],
+      ['a byte-order mark', `\ufeff${tsv(...rows)}`],
+    ]) {
+      eq(linkLines(runFabric(['layout', file(text)]).out), plain, `the same cables from ${label}`);
+    }
+    const spaced = runFabric(['layout', file('leaf1  Eth1   spine1  Eth2\n')]);
+    eq(linkLines(spaced.out), ['link data leaf1 spine1  # Eth1 <-> Eth2'], 'a row with no tab splits at runs of spaces');
+    const tabbed = runFabric(['layout', file(tsv(['leaf1', 'TenGigabitEthernet 1/1', 'spine1', 'Ethernet 2']))]);
+    eq(linkLines(tabbed.out), ['link data leaf1 spine1  # TenGigabitEthernet 1/1 <-> Ethernet 2'],
+       'and a tab-separated row keeps a port name that has a space');
+  }
+
+  // Names: dots and dashes go through as they are; anything the grammar
+  // would read as something else is refused, naming it and its line.
+  {
+    const dotted = fabricOf([['sw-01.dc1', 'Eth1', 'core_a:1', 'Eth9']]);
+    const m = parsed(dotted.out);
+    eq([dotted.code, m.warnings, m.links.length], [0, [], 1], 'names with dots, dashes, underscores and colons load');
+    ok(m.resolve('sw-01.dc1') && m.resolve('core_a:1'), 'and are the switches results name');
+    for (const [name, says] of [
+      ['leaf[1]', '"\\[" reads as a range'], ['leaf{1}', '"\\{" reads as a placeholder'],
+      ['a|b', '"\\|" reads as a list of alternatives'], ['a,b', '"," reads as a separator'],
+      ['sw 1', 'a space reads as a separator'], ['r1..3', '"\\.\\." reads as a range'],
+      ['tor*', '"\\*" reads as a wildcard'], ['a=b', '"=" reads as a setting'], ['DC/r1', '"/" reads as a path'],
+    ]) {
+      const run = fabricOf([['leaf1', 'Eth1', 'spine1', 'Eth1'], ['spine1', 'Eth2', name, 'Eth3']]);
+      ok(run.code === 1 && run.out === '' && new RegExp(`line 2: switch name "${name.replace(/[[\]{}|.*]/g, '\\$&')}".*${says}`).test(run.err),
+         `"${name}" is refused, by name and line, and nothing is written  (${run.err.trim()})`);
+    }
+    ok(bracketRefused(), 'a bracketed name is refused rather than becoming a range of one');
+    const clash = fabricOf([['Leaf1', 'Eth1', 'spine1', 'Eth1'], ['spine1', 'Eth1', 'leaf1', 'Eth1']]);
+    ok(clash.code === 1 && /line 2: "leaf1" is "Leaf1" \(line 1\) in other letters/.test(clash.err),
+       'two spellings of one name are refused: the viewer would make them one switch');
+    const both = fabricOf([['leaf1', 'Eth1', 'spine1', 'Eth1'], ['leaf1.dc1', 'Eth1', 'spine1', 'Eth2']]);
+    ok(both.code === 0 && /"leaf1" and "leaf1.dc1" are both here, as two switches/.test(both.err),
+       'a short name beside its long one is drawn as two, and said');
+    // A switch called `fabric` cannot share the floor plan's id: a bare
+    // selector would match the container and everything in it.
+    const named = fabricOf([['fabric', 'Eth1', 'leaf', 'Eth1'], ['leaf', 'Eth2', 'leaf1', 'Eth2']]);
+    const nm = parsed(named.out);
+    eq([nm.warnings, nm.links.length, nm.resolve('fabric').kind, nm.resolve('leaf').kind], [[], 2, 'node', 'node'],
+       'a switch named like a container keeps its own name, and the container steps aside');
+  }
+
+  // Rows that contradict each other are reported by line, and the cables
+  // they disagree about are not drawn -- unless one is listed by both ends.
+  {
+    const stale = fabricOf([
+      ['leaf1', 'Eth1', 'spine1', 'Eth1'], ['spine1', 'Eth1', 'leaf1', 'Eth1'], ['leaf1', 'Eth1', 'spine2', 'Eth9'],
+    ]);
+    eq(linkLines(stale.out), ['link data leaf1 spine1  # Eth1 <-> Eth1'], 'a stale row loses to the cable both ends list');
+    ok(/leaf1 Eth1 is cabled to spine1 Eth1 \(lines 1 and 2\); spine2 Eth9 \(line 3\) -- drew spine1 Eth1, which both its ends list/.test(stale.err),
+       `and is named  (${stale.err.split('\n')[0]})`);
+    const twice = fabricOf([['leaf1', 'Eth1', 'spine1', 'Eth1'], ['leaf1', 'Eth1', 'spine2', 'Eth1']]);
+    eq([twice.code, linkLines(twice.out)], [0, []], 'one port against two neighbours, neither confirmed: neither drawn');
+    ok(/leaf1 Eth1 is cabled to spine1 Eth1 \(line 1\); spine2 Eth1 \(line 2\) -- none of them is drawn/.test(twice.err),
+       `and both rows are named  (${twice.err.split('\n')[0]})`);
+    const disagree = fabricOf([['leaf1', 'Eth1', 'spine1', 'Eth1'], ['spine1', 'Eth1', 'leaf1', 'Eth7']]);
+    eq(linkLines(disagree.out), [], 'the two ends naming different ports: not drawn');
+    ok(/spine1 Eth1 is cabled to leaf1 Eth1 \(line 1\); leaf1 Eth7 \(line 2\) -- none of them is drawn/.test(disagree.err),
+       `and both ends are named  (${disagree.err.split('\n')[0]})`);
+    const odd = fabricOf([
+      ['leaf1', 'Eth1', 'spine1', 'Eth1'], ['spine1', 'Eth2', 'leaf2', 'Eth1'], ['leaf2', 'Eth1', 'spine1', 'Eth2'],
+      ['leaf1', 'Eth2', 'leaf1', 'Eth3'], ['leaf3', 'Eth1', '', ''], ['leaf2', 'Eth1', 'spine1', 'Eth2'],
+    ]);
+    eq(linkLines(odd.out).length, 2, 'and what is not contradicted is drawn');
+    ok(/1 cable is listed by one end only, though the other end has rows of its own .*leaf1 Eth1 -- spine1 Eth1 \(line 1\)/.test(odd.err),
+       'a cable one end lists and the other, though it has rows, does not: drawn, and said');
+    ok(/1 row cables a switch to itself, which is not drawn: line 4/.test(odd.err), 'a switch cabled to itself is said');
+    ok(/1 row names no neighbour, so no cable: line 5/.test(odd.err), 'as is a row with no neighbour');
+    ok(/1 row repeats an earlier row of the same switch, and is one cable with it: line 6/.test(odd.err), 'and a repeated row');
+    const short = fabricOf([['leaf1', 'Eth1', 'spine1']]);
+    ok(short.code === 1 && /line 1: 3 columns, where a neighbour table has four/.test(short.err), 'a row with three columns is refused');
+  }
+
+  // Tiers: by kind of name, the most numerous at the bottom, and a tie
+  // broken by distance from it -- superspines above the spines that feed
+  // them, though there are as many of each. Servers go below the switches.
+  {
+    const rows = [];
+    for (let l = 1; l <= 8; l++) for (let s = 1; s <= 4; s++) rows.push([`leaf${l}`, `Eth${48 + s}`, `spine${s}`, `Eth${l}`]);
+    for (let s = 1; s <= 4; s++) for (let k = 0; k < 2; k++) rows.push([`spine${s}`, `Eth${33 + k}`, `ss${1 + ((s - 1) % 2) * 2 + k}`, `Eth${s}`]);
+    for (let i = 1; i <= 4; i++) rows.push(['leaf1', `Eth${i}`, `srv${i}`, 'eth0']);
+    const tiers = (run) => parsed(run.out).all.filter((el) => el.kind === 'tier').map((el) => el.id);
+    const clos = fabricOf(rows, ['--server', 'srv*']);
+    eq(tiers(clos), ['ss', 'spine', 'leaf', 'srv'], 'superspines, spines, leaves, and the servers below them');
+    const cm = parsed(clos.out);
+    eq([cm.resolve('srv1').attrs.role, cm.resolve('srv1').tags.has('switch'), cm.resolve('leaf1').tags.has('switch')],
+       ['server', false, true], '--server makes a server, which forwards no one else\'s traffic');
+    eq(tiers(fabricOf(rows, ['--tier', 'spine*,ss*', '--tier', 'leaf*'])), ['spine', 'leaf', 'other'],
+       '--tier sets the rows, top first, and the rest go in one more');
+    const wide = parsed(fabricOf(rows, ['--per-row', '3']).out).all.find((el) => el.id === 'leaf');
+    eq(wide.attrs.cols, '3', 'a row longer than --per-row wraps');
+    const gbps = fabricOf(rows, ['--gbps', '400', '--net', 'fabric']);
+    eq([...parsed(gbps.out).nets.values()].map((n) => [n.name, n.gbps]), [['fabric', 400]], '--gbps and --net set the net');
+    ok(fabricOf(rows, ['--net', 'a b']).code === 2, 'and a net name the grammar would misread is refused');
+  }
+
+  // Counters: what a port sent is link=, what it received dir=in; the ports
+  // facing one neighbour are added up per reading.
+  {
+    const run = runFabric(['counters', parallelTable, parallelRates]);
+    eq(run.out.split('\n').filter((l) => l.startsWith('port_rate')), [
+      'port_rate\tleaf1\t40\tlink=spine1\tnet=data\tts=1',
+      'port_rate\tleaf1\t3\tlink=spine1\tnet=data\tdir=in\tts=1',
+    ], 'sent is link=, received is dir=in, each the two ports added up');
+    eq(tenAndThirty(), 40, '10 and 30 Gb/s on two parallel cables draw 40 between them');
+    ok(/^!test port_rate unit=Gb\/s label="Switch port counters" short=PORT$/m.test(run.out), 'Gb/s when the headings give no unit');
+    ok(/the rate headings carry no unit: read as Gb\/s \(say --unit if not\)/.test(run.err), 'and says so');
+    const units = (head, extra = []) => {
+      const out = runFabric(['counters', parallelTable, file(tsv(['host', 'port', ...head],
+        ['leaf1', 'Eth49', '1', '2'], ['leaf1', 'Eth50', '1', '2'])), ...extra]).out;
+      return (/^!test port_rate unit=(\S+)/m.exec(out) || [])[1];
+    };
+    eq([units(['uplink (Mb/s)', 'downlink (Mb/s)']), units(['tx_gbps', 'rx_gbps']), units(['out', 'in'], ['--unit', 'bps'])],
+       ['Mb/s', 'gbps', 'bps'], 'the unit comes from the headings, or --unit, and is carried to !test');
+    const twoUnits = runFabric(['counters', parallelTable, file(tsv(['host', 'port', 'tx (Mb/s)', 'rx (Gb/s)'], ['leaf1', 'Eth49', '1', '2']))]);
+    ok(twoUnits.code === 1 && /two units/.test(twoUnits.err), 'two units in one file are refused');
+    const positional = runFabric(['counters', parallelTable, file('leaf1 Eth49 7 1\nleaf1 Eth50 3 1\n'), '--unit', 'Gb/s']);
+    eq(positional.out.split('\n').filter((l) => l.startsWith('port_rate')),
+       ['port_rate\tleaf1\t10\tlink=spine1\tnet=data', 'port_rate\tleaf1\t2\tlink=spine1\tnet=data\tdir=in'],
+       'with no header: host, port, uplink, downlink, and no timestamp');
+
+    // Not in the table, blank, not a number, negative, read twice: never
+    // drawn, never zero, and a sum missing a port is not written short.
+    const messy = runFabric(['counters', parallelTable, file(tsv(
+      ['time', 'switch', 'interface', 'uplink (Gb/s)', 'downlink (Gb/s)'],
+      ['1', 'leaf1', 'Eth49', '10', '1'], ['1', 'leaf1', 'Eth50', '', '2'],
+      ['2', 'leaf1', 'Eth49', '10', 'n/a'], ['2', 'leaf1', 'Eth50', '30', '-5'],
+      ['3', 'leaf1', 'Eth49', '10', '1'], ['3', 'leaf1', 'Eth49', '11', '1'], ['3', 'leaf1', 'Eth50', '30', '2'],
+      ['3', 'leaf9', 'Eth1', '5', '5'], ['3', 'LEAF1', 'eth50', '30', '2'],
+    ))]);
+    eq(messy.out.split('\n').filter((l) => l.startsWith('port_rate')), [
+      'port_rate\tleaf1\t3\tlink=spine1\tnet=data\tdir=in\tts=1',
+      'port_rate\tleaf1\t40\tlink=spine1\tnet=data\tts=2',
+    ], 'only the sums every port measured are written');
+    ok(/1 port in t\d+\.tsv is not in the neighbour table, so not drawn: leaf9 Eth1 \(line 9\)/.test(messy.err),
+       'a port the table does not have is counted and named');
+    ok(/3 sums not written, .*leaf1 to spine1 at 1: Eth50 not measured, leaf1 to spine1 at 3: Eth49 read twice and leaf1 from spine1 at 3: Eth49 read twice/.test(messy.err),
+       `a sum missing a port is said, not written short  (${messy.err.split('\n')[1]})`);
+    ok(!/from spine1 at 2/.test(messy.err), 'and a time at which none of them was measured is simply not a sum');
+    ok(/3 rates read as not measured, not as zero: 1 blank, 1 not a number, 1 negative/.test(messy.err),
+       'blank, text and negative rates are not measured, and counted');
+    ok(/1 port is read twice at one time with different values, so not used: leaf1 Eth49 at 3/.test(messy.err),
+       'two different readings of one port at one time are not used');
+    const nothing = runFabric(['counters', parallelTable, file(tsv(['leaf9', 'Eth1', '1', '1']))]);
+    ok(nothing.code === 1 && nothing.out === '' && /nothing to draw/.test(nothing.err), 'rates that land nowhere write nothing and fail');
+  }
+
+  // The mutations the ticket names: each one, made to a copy of the tool,
+  // has to make one of the checks above fail. A patch that no longer
+  // applies fails here too, rather than quietly testing nothing.
+  {
+    const source = readFileSync(join(root, 'python/dcviz/dcfabric.py'), 'utf8');
+    const mutant = (needle, patch) => {
+      const pkg = mkdtempSync(join(work, 'mutant-'));
+      mkdirSync(join(pkg, 'dcviz'));
+      for (const f of readdirSync(join(root, 'python/dcviz')).filter((n) => n.endsWith('.py'))) {
+        writeFileSync(join(pkg, 'dcviz', f), readFileSync(join(root, 'python/dcviz', f)));
+      }
+      const hits = source.split(needle).length - 1;
+      writeFileSync(join(pkg, 'dcviz/dcfabric.py'), source.replace(needle, patch));
+      return { pkg, hits };
+    };
+    const perPort = mutant(
+      '                out.append("\\t".join(fields))\n                written[d] += 1\n',
+      '                for v in values:\n                    fields[2] = trim(v)\n'
+      + '                    out.append("\\t".join(fields))\n                    written[d] += 1\n');
+    eq([perPort.hits, tenAndThirty(perPort.pkg) === 40], [1, false],
+       'mutation: one sample per port instead of their sum fails the 10 + 30 = 40 check');
+    const noDedupe = mutant('key = (near, far) if near < far else (far, near)', 'key = (near, far)');
+    eq([noDedupe.hits, listedTwiceIsOne(noDedupe.pkg)], [1, false],
+       'mutation: no dedupe of a cable listed from both ends fails the one-cable check');
+    const brackets = mutant('NAME_EXTRA = set("._:@-")', 'NAME_EXTRA = set("._:@-[]")');
+    eq([brackets.hits, bracketRefused(brackets.pkg)], [1, false],
+       'mutation: letting a bracketed name through fails the refusal check');
+  }
+
+  // --help says what it is and where to read more; -o writes a file.
+  {
+    const help = runFabric(['--help']);
+    ok(help.code === 0 && /neighbour table/.test(help.out) && /README's "dcfabric" section/.test(help.out), '--help says what it does');
+    eq(runFabric([]).code, 2, 'no command is a usage error');
+    const outPath = join(work, 'out.dc');
+    const wrote = runFabric(['layout', parallelTable, '-o', outPath, '-q']);
+    eq([wrote.code, wrote.out, wrote.err, linkLines(readFileSync(outPath, 'utf8')).length], [0, '', '', 1],
+       '-o writes the file, and -q leaves stderr quiet when there is nothing to report');
+    ok(runFabric(['layout', join(work, 'missing.tsv')]).code === 1, 'a table that is not there fails');
+  }
+  rmSync(work, { recursive: true, force: true });
+}
+
 // ------------------------------------------------------- dcprobe's hosts.txt
 {
   const m = parseLayout([
@@ -6514,7 +6828,7 @@ if (python.error) {
     // GNU convention puts the *package* version in that line, which is why
     // dcadd's own 1.0 and dcimport's 1.2 are gone: two components of one
     // tree reporting two numbers told a bug reporter nothing.
-    for (const tool of ['dcadd', 'dcimport']) {
+    for (const tool of ['dcadd', 'dcimport', 'dcfabric']) {
       const run = spawnSync(join(root, 'tools', tool), ['--version'], { encoding: 'utf8' });
       eq(run.status, 0, `tools/${tool} --version exits 0`);
       eq((run.stdout || '').split('\n')[0],

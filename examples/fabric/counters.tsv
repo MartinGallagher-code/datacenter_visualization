@@ -1,0 +1,124 @@
+# Switch counters from rates.tsv, on the cables of neighbors.tsv, written by dcfabric.
+# Each line adds up one switch's ports facing one neighbour, at one time:
+# link= is the neighbour, and dir=in what those ports received.
+!test port_rate unit=Gb/s label="Switch port counters" short=PORT
+port_rate	leaf1	4	link=leaf2	net=data	ts=2026-11-10T12:00:00
+port_rate	leaf1	2	link=leaf2	net=data	dir=in	ts=2026-11-10T12:00:00
+port_rate	leaf1	40	link=spine1	net=data	ts=2026-11-10T12:00:00
+port_rate	leaf1	24	link=spine1	net=data	dir=in	ts=2026-11-10T12:00:00
+port_rate	leaf1	40	link=spine2	net=data	ts=2026-11-10T12:00:00
+port_rate	leaf1	30	link=spine2	net=data	dir=in	ts=2026-11-10T12:00:00
+port_rate	leaf2	2	link=leaf1	net=data	ts=2026-11-10T12:00:00
+port_rate	leaf2	4	link=leaf1	net=data	dir=in	ts=2026-11-10T12:00:00
+port_rate	leaf2	50	link=spine1	net=data	ts=2026-11-10T12:00:00
+port_rate	leaf2	60	link=spine1	net=data	dir=in	ts=2026-11-10T12:00:00
+port_rate	leaf2	50	link=spine2	net=data	ts=2026-11-10T12:00:00
+port_rate	leaf2	60	link=spine2	net=data	dir=in	ts=2026-11-10T12:00:00
+port_rate	leaf3	8	link=leaf4	net=data	ts=2026-11-10T12:00:00
+port_rate	leaf3	6	link=leaf4	net=data	dir=in	ts=2026-11-10T12:00:00
+port_rate	leaf3	10	link=spine1	net=data	ts=2026-11-10T12:00:00
+port_rate	leaf3	16	link=spine1	net=data	dir=in	ts=2026-11-10T12:00:00
+port_rate	leaf3	10	link=spine2	net=data	ts=2026-11-10T12:00:00
+port_rate	leaf3	16	link=spine2	net=data	dir=in	ts=2026-11-10T12:00:00
+port_rate	leaf4	6	link=leaf3	net=data	ts=2026-11-10T12:00:00
+port_rate	leaf4	8	link=leaf3	net=data	dir=in	ts=2026-11-10T12:00:00
+port_rate	leaf4	120	link=spine1	net=data	ts=2026-11-10T12:00:00
+port_rate	leaf4	90	link=spine1	net=data	dir=in	ts=2026-11-10T12:00:00
+port_rate	leaf4	120	link=spine2	net=data	ts=2026-11-10T12:00:00
+port_rate	leaf4	80	link=spine2	net=data	dir=in	ts=2026-11-10T12:00:00
+port_rate	spine1	24	link=leaf1	net=data	ts=2026-11-10T12:00:00
+port_rate	spine1	40	link=leaf1	net=data	dir=in	ts=2026-11-10T12:00:00
+port_rate	spine1	60	link=leaf2	net=data	ts=2026-11-10T12:00:00
+port_rate	spine1	50	link=leaf2	net=data	dir=in	ts=2026-11-10T12:00:00
+port_rate	spine1	16	link=leaf3	net=data	ts=2026-11-10T12:00:00
+port_rate	spine1	10	link=leaf3	net=data	dir=in	ts=2026-11-10T12:00:00
+port_rate	spine1	90	link=leaf4	net=data	ts=2026-11-10T12:00:00
+port_rate	spine1	120	link=leaf4	net=data	dir=in	ts=2026-11-10T12:00:00
+port_rate	spine2	30	link=leaf1	net=data	ts=2026-11-10T12:00:00
+port_rate	spine2	40	link=leaf1	net=data	dir=in	ts=2026-11-10T12:00:00
+port_rate	spine2	60	link=leaf2	net=data	ts=2026-11-10T12:00:00
+port_rate	spine2	50	link=leaf2	net=data	dir=in	ts=2026-11-10T12:00:00
+port_rate	spine2	16	link=leaf3	net=data	ts=2026-11-10T12:00:00
+port_rate	spine2	10	link=leaf3	net=data	dir=in	ts=2026-11-10T12:00:00
+port_rate	spine2	80	link=leaf4	net=data	ts=2026-11-10T12:00:00
+port_rate	spine2	120	link=leaf4	net=data	dir=in	ts=2026-11-10T12:00:00
+port_rate	leaf1	4.8	link=leaf2	net=data	ts=2026-11-10T12:00:10
+port_rate	leaf1	2.4	link=leaf2	net=data	dir=in	ts=2026-11-10T12:00:10
+port_rate	leaf1	48	link=spine1	net=data	ts=2026-11-10T12:00:10
+port_rate	leaf1	28.8	link=spine1	net=data	dir=in	ts=2026-11-10T12:00:10
+port_rate	leaf1	48	link=spine2	net=data	ts=2026-11-10T12:00:10
+port_rate	leaf1	36	link=spine2	net=data	dir=in	ts=2026-11-10T12:00:10
+port_rate	leaf2	2.4	link=leaf1	net=data	ts=2026-11-10T12:00:10
+port_rate	leaf2	4.8	link=leaf1	net=data	dir=in	ts=2026-11-10T12:00:10
+port_rate	leaf2	60	link=spine1	net=data	ts=2026-11-10T12:00:10
+port_rate	leaf2	72	link=spine1	net=data	dir=in	ts=2026-11-10T12:00:10
+port_rate	leaf2	60	link=spine2	net=data	ts=2026-11-10T12:00:10
+port_rate	leaf2	72	link=spine2	net=data	dir=in	ts=2026-11-10T12:00:10
+port_rate	leaf3	9.6	link=leaf4	net=data	ts=2026-11-10T12:00:10
+port_rate	leaf3	7.2	link=leaf4	net=data	dir=in	ts=2026-11-10T12:00:10
+port_rate	leaf3	12	link=spine1	net=data	ts=2026-11-10T12:00:10
+port_rate	leaf3	19.2	link=spine1	net=data	dir=in	ts=2026-11-10T12:00:10
+port_rate	leaf3	12	link=spine2	net=data	ts=2026-11-10T12:00:10
+port_rate	leaf3	19.2	link=spine2	net=data	dir=in	ts=2026-11-10T12:00:10
+port_rate	leaf4	7.2	link=leaf3	net=data	ts=2026-11-10T12:00:10
+port_rate	leaf4	9.6	link=leaf3	net=data	dir=in	ts=2026-11-10T12:00:10
+port_rate	leaf4	144	link=spine1	net=data	ts=2026-11-10T12:00:10
+port_rate	leaf4	108	link=spine1	net=data	dir=in	ts=2026-11-10T12:00:10
+port_rate	leaf4	144	link=spine2	net=data	ts=2026-11-10T12:00:10
+port_rate	leaf4	96	link=spine2	net=data	dir=in	ts=2026-11-10T12:00:10
+port_rate	spine1	28.8	link=leaf1	net=data	ts=2026-11-10T12:00:10
+port_rate	spine1	48	link=leaf1	net=data	dir=in	ts=2026-11-10T12:00:10
+port_rate	spine1	72	link=leaf2	net=data	ts=2026-11-10T12:00:10
+port_rate	spine1	60	link=leaf2	net=data	dir=in	ts=2026-11-10T12:00:10
+port_rate	spine1	19.2	link=leaf3	net=data	ts=2026-11-10T12:00:10
+port_rate	spine1	12	link=leaf3	net=data	dir=in	ts=2026-11-10T12:00:10
+port_rate	spine1	108	link=leaf4	net=data	ts=2026-11-10T12:00:10
+port_rate	spine1	144	link=leaf4	net=data	dir=in	ts=2026-11-10T12:00:10
+port_rate	spine2	36	link=leaf1	net=data	ts=2026-11-10T12:00:10
+port_rate	spine2	48	link=leaf1	net=data	dir=in	ts=2026-11-10T12:00:10
+port_rate	spine2	72	link=leaf2	net=data	ts=2026-11-10T12:00:10
+port_rate	spine2	60	link=leaf2	net=data	dir=in	ts=2026-11-10T12:00:10
+port_rate	spine2	19.2	link=leaf3	net=data	ts=2026-11-10T12:00:10
+port_rate	spine2	12	link=leaf3	net=data	dir=in	ts=2026-11-10T12:00:10
+port_rate	spine2	96	link=leaf4	net=data	ts=2026-11-10T12:00:10
+port_rate	spine2	144	link=leaf4	net=data	dir=in	ts=2026-11-10T12:00:10
+port_rate	leaf1	3.2	link=leaf2	net=data	ts=2026-11-10T12:00:20
+port_rate	leaf1	1.6	link=leaf2	net=data	dir=in	ts=2026-11-10T12:00:20
+port_rate	leaf1	32	link=spine1	net=data	ts=2026-11-10T12:00:20
+port_rate	leaf1	19.2	link=spine1	net=data	dir=in	ts=2026-11-10T12:00:20
+port_rate	leaf1	32	link=spine2	net=data	ts=2026-11-10T12:00:20
+port_rate	leaf1	24	link=spine2	net=data	dir=in	ts=2026-11-10T12:00:20
+port_rate	leaf2	1.6	link=leaf1	net=data	ts=2026-11-10T12:00:20
+port_rate	leaf2	3.2	link=leaf1	net=data	dir=in	ts=2026-11-10T12:00:20
+port_rate	leaf2	40	link=spine1	net=data	ts=2026-11-10T12:00:20
+port_rate	leaf2	48	link=spine1	net=data	dir=in	ts=2026-11-10T12:00:20
+port_rate	leaf2	40	link=spine2	net=data	ts=2026-11-10T12:00:20
+port_rate	leaf2	48	link=spine2	net=data	dir=in	ts=2026-11-10T12:00:20
+port_rate	leaf3	6.4	link=leaf4	net=data	ts=2026-11-10T12:00:20
+port_rate	leaf3	4.8	link=leaf4	net=data	dir=in	ts=2026-11-10T12:00:20
+port_rate	leaf3	8	link=spine1	net=data	ts=2026-11-10T12:00:20
+port_rate	leaf3	12.8	link=spine1	net=data	dir=in	ts=2026-11-10T12:00:20
+port_rate	leaf3	8	link=spine2	net=data	ts=2026-11-10T12:00:20
+port_rate	leaf3	12.8	link=spine2	net=data	dir=in	ts=2026-11-10T12:00:20
+port_rate	leaf4	4.8	link=leaf3	net=data	ts=2026-11-10T12:00:20
+port_rate	leaf4	6.4	link=leaf3	net=data	dir=in	ts=2026-11-10T12:00:20
+port_rate	leaf4	96	link=spine1	net=data	ts=2026-11-10T12:00:20
+port_rate	leaf4	72	link=spine1	net=data	dir=in	ts=2026-11-10T12:00:20
+port_rate	leaf4	96	link=spine2	net=data	ts=2026-11-10T12:00:20
+port_rate	leaf4	64	link=spine2	net=data	dir=in	ts=2026-11-10T12:00:20
+port_rate	spine1	19.2	link=leaf1	net=data	ts=2026-11-10T12:00:20
+port_rate	spine1	32	link=leaf1	net=data	dir=in	ts=2026-11-10T12:00:20
+port_rate	spine1	48	link=leaf2	net=data	ts=2026-11-10T12:00:20
+port_rate	spine1	40	link=leaf2	net=data	dir=in	ts=2026-11-10T12:00:20
+port_rate	spine1	12.8	link=leaf3	net=data	ts=2026-11-10T12:00:20
+port_rate	spine1	8	link=leaf3	net=data	dir=in	ts=2026-11-10T12:00:20
+port_rate	spine1	72	link=leaf4	net=data	ts=2026-11-10T12:00:20
+port_rate	spine1	96	link=leaf4	net=data	dir=in	ts=2026-11-10T12:00:20
+port_rate	spine2	24	link=leaf1	net=data	ts=2026-11-10T12:00:20
+port_rate	spine2	32	link=leaf1	net=data	dir=in	ts=2026-11-10T12:00:20
+port_rate	spine2	48	link=leaf2	net=data	ts=2026-11-10T12:00:20
+port_rate	spine2	40	link=leaf2	net=data	dir=in	ts=2026-11-10T12:00:20
+port_rate	spine2	12.8	link=leaf3	net=data	ts=2026-11-10T12:00:20
+port_rate	spine2	8	link=leaf3	net=data	dir=in	ts=2026-11-10T12:00:20
+port_rate	spine2	64	link=leaf4	net=data	ts=2026-11-10T12:00:20
+port_rate	spine2	96	link=leaf4	net=data	dir=in	ts=2026-11-10T12:00:20

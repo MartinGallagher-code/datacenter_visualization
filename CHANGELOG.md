@@ -1,15 +1,56 @@
 # Changelog
 
 The version is one number for the whole project: the viewer, the `.dc` and
-results formats, `dcadd`, `dcimport` and the `datacenter-layout-viewer`
-package all ship together and all report it. `dcviz --version`, `dcadd
---version` and the About box in the left panel print the same string.
+results formats, `dcadd`, `dcimport`, `dcfabric` and the
+`datacenter-layout-viewer` package all ship together and all report it.
+`dcviz --version`, `dcadd --version` and the About box in the left panel
+print the same string.
 
 Versions follow [semantic versioning](https://semver.org/) against two public
 contracts — **the file formats** (`.dc` layouts, `.tsv`/JSON results) and **the
 command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
+
+## 1.56.0 — 2026-11-10
+
+A fabric from an LLDP neighbour table, and its per-port rates on the cables
+(binnacle BN-003).
+
+- **`dcfabric layout`** turns a neighbour table — `host  port  neighbor
+  port`, tab-separated, one row per cabled port — into a `.dc` of the
+  fabric: every host and neighbour a `+switch` node, every connected port
+  pair one cable, and a cable both ends list one cable, not two. N port
+  pairs between two switches are one `link` rule with `count=N`, its ports
+  named in a comment. The switches stand in rows by kind of name (`leaf*`,
+  `spine*`), the most numerous at the bottom; `--tier` sets the rows
+  instead, `--server` marks names that are servers, `--gbps` gives the
+  cables their capacity.
+- **Rows that contradict each other are reported by line**, and the cables
+  they disagree about are not drawn — one port against two neighbours, or
+  two ends naming different ports — unless one of them is listed by both
+  of its ends, which is then the cable. A name the `.dc` grammar would read
+  as something else (`leaf[1]`, `a,b`, `sw 1`, `tor*`) is refused, and so
+  are two spellings of one name, since the viewer matches names whatever
+  their case.
+- **`dcfabric counters`** turns per-port rates — timestamp, switch, port,
+  uplink, downlink — into the viewer's switch counters on those cables:
+  what a port sent as `link=<neighbour>`, what it received as `dir=in`, and
+  each reading's ports towards one neighbour added up first, so two uplinks
+  of 10 and 30 Gb/s put 40 on their pair of cables rather than the 20 their
+  average would. A blank, non-numeric or negative rate is not measured,
+  never zero; a time at which only some of the ports towards a neighbour
+  were measured writes no sum rather than a short one; a port the table does
+  not have is counted and named, never drawn.
+- `examples/fabric/` is a small leaf-spine fabric made this way, and the
+  suite checks the files there are exactly what the tool writes, that the
+  viewer loads them with no warning, and that every rate in the input is in
+  exactly one sample. Three mutations of the tool (a sample per port, no
+  dedupe of a cable listed twice, a bracketed name let through) each fail a
+  check.
+- Still to come: a cable in a `.dc` has no port, so the viewer shares a
+  pair's total between parallel cables by capacity, and one hot member of a
+  bundle does not show on its own.
 
 ## 1.55.2 — 2026-11-10
 

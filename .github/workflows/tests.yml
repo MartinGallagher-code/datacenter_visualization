@@ -86,7 +86,7 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: '22'
-      # tools/dcadd, tools/dcimport and tools/dcprobe are python3, stdlib
+      # tools/dcadd, tools/dcimport, tools/dcfabric and tools/dcprobe are python3, stdlib
       # only, and ~100 of the assertions run them -- against the fixtures
       # under tests/fixtures/, and dcprobe against this runner's own /proc.
       - uses: actions/setup-python@v5
@@ -160,6 +160,7 @@ jobs:
           /tmp/env/bin/dcviz --version
           /tmp/env/bin/dcadd --version
           /tmp/env/bin/dcimport --version
+          /tmp/env/bin/dcfabric --version
           /tmp/env/bin/dcprobe --version
           for f in index.html js/app.js js/version.js js/probe.js css/app.css examples/small.dc; do
             test -f "$(/tmp/env/bin/dcviz path)/$f" || { echo "missing from the wheel: $f"; exit 1; }

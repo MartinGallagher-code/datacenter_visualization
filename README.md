@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.55.2** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.56.0** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -33,7 +33,7 @@ python3 -m http.server 8000        # in the clone
 # open http://localhost:8000/
 ```
 
-Or install it, and get the server and the two overlay tools with it:
+Or install it, and get the server and the tools with it:
 
 ```sh
 pip install datacenter-layout-viewer
@@ -1721,6 +1721,10 @@ port_gbps  R01/torb   40  link=R01/s3      net=nicb    dir=in    # received from
 - Samples over time reduce by the card's aggregation, as everywhere.
 - A counter naming two elements with no cable between them is listed in the
   panel rather than drawn somewhere wrong.
+- From a switch's own numbers: [`dcfabric`](#dcfabric--switches-and-cables-from-a-neighbour-table)
+  writes these samples from a table of per-port rates, and the cables
+  themselves from an LLDP neighbour table, adding up each switch's ports
+  towards one neighbour first.
 
 The card offers **draw on the cables**: the counters, measured rather than
 routed, drawn in the same colours and widths as the model. With a routed
@@ -2314,6 +2318,113 @@ manifest floor.dc 'room[1]' | netmesh gen --servers -
 netmesh run --for 60 && dcimport results.tsv --tidy reports/
 ```
 
+### `dcfabric` — switches and cables from a neighbour table
+
+A switch's LLDP table says which of its ports faces which port of which
+neighbour. `dcfabric` turns such a table into a floor plan of the fabric,
+and the switches' per-port rates into
+[switch counters](#switch-counters-measured-on-the-cable) on its cables:
+
+```sh
+dcfabric layout   neighbors.tsv --gbps 100 > fabric.dc
+dcfabric counters neighbors.tsv rates.tsv  > counters.tsv
+tools/dcfabric layout neighbors.tsv > fabric.dc    # ... or straight from a clone
+```
+
+Load both, tick **draw on the cables** on the metric's card, and **values on
+the cables** to print each cable's figure. `examples/fabric/` is a small
+leaf-spine fabric made this way: `neighbors.tsv` and `rates.tsv` are the
+input, and `fabric.dc` and `counters.tsv` are what the two commands write
+(`?layout=examples/fabric/fabric.dc&results=examples/fabric/counters.tsv`).
+
+**The neighbour table** is four tab-separated columns, one row per cabled
+port: the switch, its port, the neighbour, and the neighbour's port.
+
+```
+host     port         neighbor   port
+leaf1    Ethernet49   spine1     Ethernet1
+spine1   Ethernet1    leaf1      Ethernet49
+```
+
+- The header row is optional: a first row whose port columns hold no digit,
+  or whose third column is a heading like `neighbor`, `neighbour`, `remote`
+  or `peer`, is one. Blank lines and `#` comments are skipped, CRLF line
+  endings are fine, and columns after the fourth are ignored. A row with no
+  tab splits at runs of spaces; a tab-separated row keeps a port name that
+  has a space in it.
+- **Every host and every neighbour is a switch**: `node NAME role=switch
+  +switch`. `--server GLOB` makes the names it matches servers instead —
+  `role=server` and no `+switch`, so the
+  [cable-load model](#cable-load-where-a-flow-metric-lands) routes no one
+  else's traffic through them — for when the table comes to include them.
+- **Every connected port pair is one cable.** A cable both ends list, as LLDP
+  on both switches gives it, is one cable, not two. N port pairs between the
+  same two switches are N parallel cables: one `link` rule with `count=N`,
+  and a comment after it naming the ports. One rule per pair, rather than
+  one per cable, keeps a big fabric quick to load.
+- **Rows that contradict each other are reported** on stderr with their line
+  numbers, and the cables they disagree about are not drawn: one port listed
+  against two neighbours, or the two ends of a cable naming different ports.
+  The exception is a cable that both of its ends list, against rivals only
+  one end lists: that one is the cable, and the others are stale. A cable
+  only one end lists, though the other end has rows of its own, is drawn and
+  reported. Ports are compared as written but for letter case, so `Eth1/1`
+  and `Ethernet1/1` are two ports, and reported as the ends disagreeing.
+- **A name the `.dc` grammar would read as something else is refused**,
+  naming it and its line, and nothing is written: `leaf[1]` is a range,
+  `a,b` and `sw 1` are two things, `tor*` is a wildcard. A name may hold
+  letters, digits and `. _ : @ -`, so `sw-01.dc1` goes through as it is. Two
+  spellings of one name (`Leaf1`, `leaf1`) are refused too, since the viewer
+  matches names whatever their case; a short name beside its long one
+  (`leaf1`, `leaf1.dc1`) is drawn as two switches, and said.
+- **The switches stand in rows, one per kind of name**: `leaf01` and `leaf12`
+  are both `leaf*`. The most numerous kind is at the bottom, and a tie goes
+  to the kind nearer it by cable, so spines sit between the leaves and the
+  superspines they feed; `--server` names go below every switch.
+  `--tier GLOB[,GLOB]`, repeated, sets the rows instead, top first, with
+  whatever none matches in one more. A row longer than `--per-row` (32)
+  wraps.
+- `--gbps N` gives every cable its capacity (`gbps=` on the net), so each is
+  coloured against what it can carry, and `--net NAME` names the net
+  (`data`).
+
+**The rates** are a timestamp, the switch, the port, what the port sent and
+what it received:
+
+```
+timestamp             host    port         uplink (Gb/s)   downlink (Gb/s)
+2026-11-10T12:00:00   leaf1   Ethernet49   10              12
+```
+
+- With a header, the columns are found by their headings, in any order:
+  `timestamp`/`time`/`ts`, `host`/`switch`/`device`, `port`/`interface`,
+  `uplink`/`tx`/`out`/`sent` and `downlink`/`rx`/`in`/`received`. Without
+  one they are `timestamp host port uplink downlink`, or the same with no
+  timestamp.
+- **Uplink is what the port sent**, written as `link=<neighbour>`, and
+  **downlink what it received**, as `link=<neighbour> dir=in`.
+- **Each reading's ports towards one neighbour are added up** first: one
+  sample per switch, neighbour and time, keeping the time as `ts=`. The
+  viewer reduces all of one switch's readings towards one neighbour with the
+  card's aggregation, so a sample per port would put the mean of two
+  uplinks where their total belongs. Over the run, `mean` (the default) is
+  the average load and `max` the busiest moment.
+- The unit is the headings' (`uplink (Gb/s)`, `tx_mbps`), or `--unit`, or
+  else Gb/s, and goes on the `!test` line.
+- **A blank cell is "not measured"**, never zero, and so are text that is not
+  a number and a negative rate (a counter that wrapped). A time at which some
+  of the ports towards a neighbour were measured and some were not writes no
+  sum for them rather than a short one, and says so. A port read twice at
+  one time with different values is not used.
+- **A port the neighbour table does not have is counted and named, not
+  drawn**, as is one on a cable the table contradicts itself about.
+
+**What it cannot show yet:** a cable in a `.dc` has no port, so the viewer
+shares a pair's total between its parallel cables by their capacity. The
+total is right, but one hot member of a bundle — 10 and 30 Gb/s on two
+uplinks to one spine — draws as 20 and 20. Each member's own load needs the
+viewer to know which port each cable is on.
+
 ## A table you already have
 
 Most monitoring already writes a wide table: a timestamp, a host, and a column
@@ -2786,7 +2897,8 @@ node tests/browser.mjs    # the page, driven in Chromium
 ```
 
 `tests/run.mjs` imports the viewer's modules and tests them directly, runs
-`dcadd` and `dcimport` against the fixtures in `tests/fixtures/` and `dcprobe`
+`dcadd`, `dcimport` and `dcfabric` against the fixtures in `tests/fixtures/`
+and `examples/fabric/` and `dcprobe`
 against the machine it is on, and checks that the version agrees everywhere it
 is written. It also parses
 every `js/*.js` as an ES module, `app.js` included (it is the page itself, so
@@ -2802,7 +2914,7 @@ throws during a test is printed as it happens, and any error the page reports
 fails the run.
 
 Both skip what they cannot run — `tests/run.mjs` needs python3 for the
-`dcadd`/`dcimport` sections, `tests/browser.mjs` needs Playwright — so either
+`dcadd`/`dcimport`/`dcfabric` sections, `tests/browser.mjs` needs Playwright — so either
 runs anywhere. **`--strict` turns every skip into a failure**, which is what CI
 passes: a green run that quietly tested nothing is indistinguishable from a
 green run that tested everything, and that is the one result a test suite must
@@ -2839,6 +2951,10 @@ examples/dual-plane-health.tsv  drops, soft lockups, an EDAC error and verdicts,
 examples/dual-plane-peers.tsv  a table of timestamp, host, peer and metrics:
                           an uplink and a downlink that add up, and a round
                           trip averaged on the cables
+examples/fabric/         a leaf-spine fabric read out of an LLDP neighbour
+                          table by dcfabric, with its per-port rates as
+                          switch counters (neighbors.tsv and rates.tsv in,
+                          fabric.dc and counters.tsv out)
 examples/iperf/          a floor plan using every layout feature, with a real
                          export-overlay run painted over it (see its README)
 examples/hostnames-results.tsv  results addressed by flat name
@@ -2862,9 +2978,10 @@ js/tsv.js                 the wide-table reader: detection, the arrow that
                           read out of hostnames
 js/version.js             the project's version; python/dcviz/__init__.py
                           carries the other half and tests/run.mjs pins them
-python/dcviz/             the Python side: dcadd, dcimport and `dcviz serve`,
-                          which is what `pip install` ships. Stdlib only.
-tools/dcadd, tools/dcimport
+python/dcviz/             the Python side: dcadd, dcimport, dcfabric, dcprobe
+                          and `dcviz serve`, which is what `pip install`
+                          ships. Stdlib only.
+tools/dcadd, tools/dcimport, tools/dcfabric, tools/dcprobe
                           two-line shims that run those from a clone with
                           nothing installed, so the copy that ships and the
                           copy that runs are one file
