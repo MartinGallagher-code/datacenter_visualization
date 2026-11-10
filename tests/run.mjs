@@ -47,6 +47,7 @@ import { compileQuery, applyFilter } from '../js/filter.js';
 import { ramp, categoricalColor, colorFor, contrastInk } from '../js/palette.js';
 import { referenceSnippets, suggestionsFor } from '../js/hints.js';
 import { VERSION } from '../js/version.js';
+import { compactLayout, rangeSpec, reportLines, sameDrawing } from '../js/compact.js';
 import {
   classify, formatSize, matchesFilter, namedAsData, pathLabel, readable, sortEntries, treeFromFiles,
 } from '../js/browse.js';
@@ -6655,6 +6656,303 @@ if (python.error) {
   eq(compareMtu(mtus, 1500).small, [], 'and none under a 1500 fabric');
 }
 
+// ------------------------------------------------------- compaction (DV-009)
+// A generated layout lists everything a line at a time; dccompact and the
+// editor's Compact button write it shorter. Nothing it writes is trusted:
+// the result is parsed again and compared with the original, and these
+// tests hold it to that -- each shape a range can take, the lines it must
+// leave alone, every example, every generator, and the check itself, which
+// has to fail when the floor plan does change.
+{
+  const compactOf = (text, opts) => compactLayout(text, opts);
+  const same = (a, b) => sameDrawing(a, b) === null;
+
+  // The range writer is expand.js run backwards: each shape it reads.
+  const nums = (lo, hi, pad = 0, step = 1) => {
+    const out = [];
+    for (let v = lo; v <= hi; v += step) out.push(String(v).padStart(pad, '0'));
+    return out;
+  };
+  eq(rangeSpec(nums(1, 40, 2).map((v) => `u${v}`)), 'u[01..40]', 'range: padded numbers');
+  eq(rangeSpec(nums(1, 42).map((v) => `u${v}`)), 'u[1..42]', 'range: unpadded, across a change of width');
+  eq(rangeSpec(nums(1, 39, 0, 2)), '[1..39x2]', 'range: a step');
+  eq(rangeSpec(['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']), '[A..H]', 'range: letters');
+  eq(rangeSpec(['R1', 'R2', 'R3', 'R4', 'R7', 'R8', 'R9', 'R10']), 'R[1..4,7..10]', 'range: numbers with a gap');
+  eq(rangeSpec(['web', 'db', 'cache']), '[web|db|cache]', 'range: alternatives');
+  eq(rangeSpec(['r10', 'r20', 'r30']), 'r[10..30x10]', 'range: digits beside the varying part belong to it');
+  eq(rangeSpec(['5', '4', '3']), '[5..3]', 'range: counting down');
+  eq(rangeSpec(['1', '3', '4', '5']), '[1,3..5]', 'range: a pair that would start a longer run is not a range of its own');
+  eq(rangeSpec(['u9', 'u010']), null, 'range: numbers not padded alike are no range');
+  eq(rangeSpec(['a', 'a']), null, 'range: an id twice is no range');
+  eq(rangeSpec(['a[1]', 'b']), null, 'range: an id holding range syntax is no range');
+  eq(rangeSpec(['x..y', 'z']), null, 'range: nor one holding ..');
+  for (const ids of [nums(1, 40, 2), nums(7, 15, 0, 2).concat(nums(25, 31, 0, 2)), ['A', 'C', 'E'], ['web', 'db'], ['n-1', 'n-2', 'n-10']]) {
+    const spec = rangeSpec(ids);
+    eq(spec === null ? null : expand(spec), ids, `range: ${spec} expands back to exactly its ids`);
+  }
+
+  // Each shape, as lines of a layout.
+  const shapes = [
+    ['padded', ['u01', 'u02', 'u03'], 'node u[01..03] role=server'],
+    ['unpadded', ['u8', 'u9', 'u10'], 'node u[8..10] role=server'],
+    ['stepped', ['u1', 'u3', 'u5', 'u7'], 'node u[1..7x2] role=server'],
+    ['letters', ['A', 'B', 'C'], 'node [A..C] role=server'],
+    ['gaps', ['R1', 'R2', 'R4', 'R5'], 'node R[1..2,4..5] role=server'],
+    ['alternatives', ['web', 'db', 'cache'], 'node [web|db|cache] role=server'],
+  ];
+  for (const [what, ids, want] of shapes) {
+    const text = `dc D\n  rack r u=42\n${ids.map((id) => `    node ${id} role=server`).join('\n')}\n`;
+    const out = compactOf(text);
+    ok(out.changed && out.text.split('\n').includes(`    ${want}`), `compact: ${what} ids become one line  (${out.text.split('\n')[2]})`);
+    ok(same(text, out.text), `compact: and the ${what} range draws the same`);
+  }
+
+  // Siblings that hold the same are written once, under a range.
+  {
+    const text = 'dc D\n  row A\n    rack r01 u=8\n      node u01\n      node u02\n    rack r02 u=8\n      node u01\n      node u02\n';
+    const out = compactOf(text);
+    eq(out.text, 'dc D\n  row A\n    rack r[01..02] u=8\n      node u[01..02]\n', 'compact: two racks that hold the same are one, written once');
+  }
+
+  // What must be left as it is.
+  const kept = [
+    ['numbers padded differently', 'dc D\n  node u9\n  node u010\n', /not padded alike/],
+    ['an attribute that differs', 'dc D\n  node u1 role=a\n  node u2 role=b\n', null],
+    ['a tag that differs', 'dc D\n  node u1 +a\n  node u2 +b\n', null],
+    ['a child that differs', 'dc D\n  rack r1\n    node a\n  rack r2\n    node b\n', null],
+    ['a comment between', 'dc D\n  node u1\n  # the next one is spare\n  node u2\n', null],
+    ['{i}', 'dc D\n  node u1 name=x{i}\n  node u2 name=x{i}\n', /\{i\}/],
+    ['{n}', 'dc D\n  node u1 label={n}\n  node u2 label={n}\n', /\{n\}/],
+    ['{seq} below', 'dc D\n  rack r1\n    node [1..2] id=s{seq}\n  rack r2\n    node [1..2] id=s{seq}\n', /\{seq\}/],
+    ['an id written twice', 'dc D\n  node u1\n  node u1\n', /twice/],
+    ['no id', 'dc D\n  node role=x\n  node role=x\n', /no id/],
+    ['a placeholder in the id', 'dc D\n  rack r1\n    node {rack}a\n    node {rack}b\n', /placeholder/],
+  ];
+  for (const [what, text, why] of kept) {
+    const out = compactOf(text);
+    eq(out.text, text, `compact leaves it as written: ${what}`);
+    if (why) ok(out.report.left.some((l) => why.test(l.why)), `and says why: ${what}  (${JSON.stringify(out.report.left)})`);
+  }
+  // A line between two others keeps them apart: only neighbours merge.
+  {
+    const text = 'dc D\n  node u1\n  rack x\n  node u2\n';
+    eq(compactOf(text).text, text, 'compact: only neighbouring lines merge, so the order never changes');
+    eq(compactOf('dc D\n  node u1\n  node x\n  node u2\n').text, 'dc D\n  node [u1|x|u2]\n',
+       'compact: and lines that do merge keep their order in the range');
+  }
+
+  // The lines that are left alone unless the result checks out: these do.
+  {
+    const text = 'dc D\n  row [A..B]\n    rack r1 if={row}=A\n    rack r2 if={row}=A\n    rack r3 id=R{seq}\n    rack r4 id=R{seq}\n';
+    const out = compactOf(text);
+    ok(out.text.includes('rack r[1..2] if={row}=A') && out.text.includes('rack r[3..4] id=R{seq}'),
+       `compact: if= and {seq} on the line itself merge  (${out.text.split('\n').slice(2).join(' | ')})`);
+    ok(same(text, out.text), 'compact: and draw the same, which the check confirms');
+  }
+
+  // Comments on merged lines: kept above, with the id they were on, or dropped.
+  {
+    const text = 'dc D\n  node u1  # spare\n  node u2\n  node u3  # bad fan\n';
+    eq(compactOf(text).text, 'dc D\n  # u1: spare\n  # u3: bad fan\n  node u[1..3]\n', 'compact: comments go above the merged line');
+    eq(compactOf(text, { comments: 'drop' }).text, 'dc D\n  node u[1..3]\n', 'compact: or are dropped when asked');
+    const one = 'dc D\n  node u1  # spare\n  node u2  # spare\n';
+    eq(compactOf(one).text, 'dc D\n  node u[1..2]  # spare\n', 'compact: a comment every line shares stays on the line');
+  }
+
+  // Placeholders: the names Build from data writes become one template.
+  {
+    const plan = layoutFromHosts(readFileSync(join(root, 'examples/live/room-wr01.tsv'), 'utf8').split('\n')
+      .filter((l) => /^\d{4}-/.test(l)).map((l) => l.split('\t')[1]));
+    const out = compactOf(plan);
+    const body = out.text.slice(out.text.indexOf('dc DATA'));
+    eq(body, 'dc DATA name="Hosts in the data" +generated\n\n  room wr01\n    row A\n'
+      + '      rack r[01..02] u=8\n        node u[01..08] name={room}{rack}{id} +generated\n',
+       'compact: Build from data for room-wr01 is the five lines it says');
+    ok(same(plan, out.text), 'compact: and draws the same: 21 elements with the same names');
+    const ranges = compactOf(plan, { placeholders: false });
+    ok(!ranges.text.includes('{') && ranges.text.split('\n').length === plan.split('\n').length,
+       'compact: with no placeholders, names that differ keep their lines');
+  }
+
+  // Every generated plan, from every live example.
+  for (const file of readdirSync(join(root, 'examples/live')).filter((f) => f.endsWith('.tsv'))) {
+    const hosts = [];
+    for (const line of readFileSync(join(root, 'examples/live', file), 'utf8').split('\n')) {
+      if (!/^\d{4}-/.test(line)) continue;
+      const cell = line.split('\t')[1];
+      for (const host of cell.split('->')) hosts.push(host.trim());
+    }
+    const plan = layoutFromHosts(hosts);
+    const out = compactOf(plan);
+    ok(out.changed && out.report.linesAfter < out.report.linesBefore,
+       `compact: the plan built from ${file} is shorter  (${out.report.linesBefore} → ${out.report.linesAfter})`);
+    ok(same(plan, out.text), `compact: and draws the same as the plan built from ${file}`);
+    eq(compactOf(out.text).text, out.text, `compact: and compacting it again changes nothing  (${file})`);
+  }
+
+  // Every example: checked, no longer than it was, and a fixed point.
+  for (const file of ['examples', 'examples/fabric', 'examples/iperf', 'examples/mx']
+    .flatMap((dir) => readdirSync(join(root, dir)).filter((f) => f.endsWith('.dc')).map((f) => `${dir}/${f}`))) {
+    const text = readFileSync(join(root, file), 'utf8');
+    const t0 = Date.now();
+    const out = compactOf(text);
+    const ms = Date.now() - t0;
+    ok(out.report.linesAfter <= out.report.linesBefore, `compact: ${file} is no longer than it was`);
+    if (!out.changed) {
+      eq(out.text, text, `compact: ${file} has nothing to compact, and comes back as it was`);
+    } else {
+      ok(same(text, out.text), `compact: ${file} draws the same compacted`);
+      eq(compactOf(out.text).text, out.text, `compact: and compacting ${file} again changes nothing`);
+    }
+    // mega.dc is 256,000 elements and 561,000 cables: the README says how
+    // long that takes, and this is the ceiling nobody should see.
+    if (file === 'examples/mega.dc') ok(ms < 60000, `compact: mega.dc in ${ms}ms`);
+  }
+
+  // dcfabric's fabric: switches into ranges, and link lines into two rules
+  // whose selectors pick out exactly the switches. The bare `leaf*` would
+  // also take the tier called leaf and the dc named "Leaf-spine example",
+  // and make 42 cables rather than 20.
+  {
+    const text = readFileSync(join(root, 'examples/fabric/fabric.dc'), 'utf8');
+    const out = compactOf(text, { comments: 'drop' });
+    ok(out.text.includes('node leaf[1..4] role=switch +switch') && out.text.includes('node spine[1..2] role=switch +switch'),
+       'compact: the fabric’s switches are two ranges');
+    ok(out.text.includes('link data kind=node,id=leaf* mode=pair count=2')
+       && out.text.includes('link data kind=node,id=leaf* kind=node,id=spine* count=2'),
+       `compact: and its ten link lines two rules  (${out.text.split('\n').filter((l) => l.startsWith('link')).join(' | ')})`);
+    ok(same(text, out.text), 'compact: the same 9 elements and 20 cables');
+    eq(parseLayout(`${text.replace(/^link data .*$/gm, '')}\nlink data leaf* mode=pair count=2\nlink data leaf* spine* count=2\n`)
+      .links.length, 42, 'compact: (the bare glob really does make 42 cables)');
+    ok(!/^link \S+ (?:[^ ]+ )?(?:leaf|spine)\*/m.test(out.text), 'compact: and no bare glob is written');
+    const kept = compactOf(text);
+    ok(kept.text.includes('# leaf1 spine1: Ethernet49 <-> Ethernet1, Ethernet50 <-> Ethernet2'),
+       'compact: by default each folded line’s port comment is kept, with the pair it named');
+    eq(kept.report.commentsKept, 10, 'compact: all ten of them');
+  }
+
+  // A pair written twice is two cables, which no one rule makes.
+  {
+    const text = 'dc D\n  node a[1..2]\n  node b[1..2]\nlink n a1 b1\nlink n a1 b1\nlink n a2 b2\n';
+    const out = compactOf(text);
+    ok(same(text, out.text) && out.text.includes('link n a1 b1\nlink n a1 b1'), 'compact: a pair written twice stays twice');
+  }
+
+  // A fully listed floor -- every element a line, every cable a line --
+  // compacts back to about the size it was written at.
+  {
+    const listed = (model, text) => {
+      const out = [];
+      for (const el of model.all) {
+        const attrs = Object.entries(el.attrs).map(([k, v]) => ` ${k}=${/[\s"'#]/.test(v) ? `"${v}"` : v}`).join('');
+        out.push(`${'  '.repeat(el.depth)}${el.kind} ${el.id}${attrs}${[...el.tags].map((t) => ` +${t}`).join('')}`);
+      }
+      for (const line of text.split('\n')) if (/^net\s/.test(line)) out.push(line);
+      const pairs = new Map();
+      for (const l of model.links) {
+        const k = `${l.net} path=${l.a.path} path=${l.b.path}`;
+        pairs.set(k, (pairs.get(k) || 0) + 1);
+      }
+      for (const [k, n] of pairs) out.push(`link ${k}${n > 1 ? ` count=${n}` : ''}`);
+      return `${out.join('\n')}\n`;
+    };
+    const written = readFileSync(join(root, 'examples/small.dc'), 'utf8');
+    const full = listed(parseLayout(written), written);
+    const out = compactOf(full);
+    ok(full.split('\n').length > 4900, `compact: small.dc fully listed is ${full.split('\n').length} lines`);
+    ok(out.report.linesAfter <= written.split('\n').length,
+       `compact: and compacts back to no more than the ${written.split('\n').length} it is written in  (${out.report.linesAfter})`);
+    ok(same(full, out.text), 'compact: drawing the same 1,157 elements and 3,832 cables');
+    ok(out.text.includes('row [A..D] +compute') && out.text.includes('link data id=tor id=u* scope=rack'),
+       'compact: rows written once, and scope= found for the cables in each rack');
+  }
+
+  // A rewrite that does not read back the same is undone, line for line.
+  // Two switches of one port each, two cables each: as two lines the parser
+  // warns about each; as one line it warns once for both, which is not the
+  // same report -- so they stay two lines, and the hosts still merge.
+  {
+    const text = 'dc D\n  node sw1 ports=1x100\n  node sw2 ports=1x100\n  node h1\n  node h2\nlink n id=h* id=sw*\n';
+    const out = compactOf(text);
+    ok(out.text.includes('  node sw1 ports=1x100\n  node sw2 ports=1x100\n') && out.text.includes('node h[1..2]'),
+       `compact: a merge that changes what the parser reports is undone, and only that one  (${out.text.replace(/\n/g, ' | ')})`);
+    ok(out.report.reverted.length === 1 && /warning/.test(out.report.reverted[0].why),
+       `compact: and the report says which and why  (${JSON.stringify(out.report.reverted)})`);
+    ok(same(text, out.text), 'compact: what is written draws the same');
+  }
+
+  // The check has to be able to fail. Each mutation of a compacted fabric
+  // changes something on the floor plan, and each must be caught.
+  {
+    const text = readFileSync(join(root, 'examples/fabric/fabric.dc'), 'utf8');
+    const short = compactOf(text, { comments: 'drop' }).text;
+    const mutants = [
+      ['an attribute', short.replace('node leaf[1..4] role=switch', 'node leaf[1..4] role=server')],
+      ['a tag', short.replace('node spine[1..2] role=switch +switch', 'node spine[1..2] role=switch +switch +core')],
+      ['a cable', short.replace('mode=pair count=2', 'mode=pair count=3')],
+      ['which pairs are wired', short.replace('mode=pair count=2', 'mode=chain count=2')],
+      ['the order of two siblings', short.replace('node leaf[1..4]', 'node leaf[2,1,3..4]')],
+      ['a size', short.replace('dc fabric name="Leaf-spine example" cols=1', 'dc fabric name="Leaf-spine example" cols=2')],
+      ['the title', short.replace('Leaf-spine example', 'Leaf and spine')],
+      ['a net', short.replace('gbps=100', 'gbps=40')],
+    ];
+    for (const [what, mutant] of mutants) {
+      ok(mutant !== short, `check: the ${what} mutation applies`);
+      ok(sameDrawing(text, mutant) !== null, `check: changing ${what} is caught  (${sameDrawing(text, mutant)})`);
+    }
+    ok(sameDrawing(text, short) === null, 'check: and the compacted fabric itself passes');
+  }
+
+  // The report.
+  {
+    const out = compactOf(readFileSync(join(root, 'examples/fabric/fabric.dc'), 'utf8'));
+    const lines = reportLines(out.report);
+    eq(lines[0], '29 lines → 27 lines; the same 9 elements and 20 cables, checked', 'report: lines, elements and cables');
+    ok(lines.includes('6 lines merged into 2 ranges') && lines.includes('10 link lines folded into 2 rules'),
+       `report: what was merged  (${lines.join(' | ')})`);
+    eq(reportLines(compactOf('dc D\n  node a\n').report)[0], '2 lines, 2 elements and 0 cables: nothing to compact',
+       'report: and when there is nothing to do');
+  }
+
+  // dccompact: the command. Node, so no python3 is needed to run it.
+  {
+    const tool = (args, input) => spawnSync(process.execPath, [join(root, 'tools', 'dccompact'), ...args],
+      { encoding: 'utf8', input });
+    const help = tool(['--help']);
+    eq(help.status, 0, 'dccompact --help exits 0');
+    ok(help.stdout.startsWith('usage: dccompact') && help.stdout.includes('--drop-comments'), 'and prints the usage and its options');
+    const fabricText = readFileSync(join(root, 'examples/fabric/fabric.dc'), 'utf8');
+    const piped = tool([], fabricText);
+    eq(piped.status, 0, 'dccompact reads standard input');
+    eq(piped.stdout, compactLayout(fabricText).text, 'and writes the compacted layout to standard output');
+    ok(/^dccompact: standard input: 29 lines → 27 lines/.test(piped.stderr), `with the report on standard error  (${piped.stderr.split('\n')[0]})`);
+    eq(tool(['-q', '-'], fabricText).stderr, '', '-q says nothing');
+    eq(tool(['--drop-comments', join(root, 'examples/fabric/fabric.dc')]).stdout,
+       compactLayout(fabricText, { comments: 'drop' }).text, '--drop-comments, from a file');
+    const dir = mkdtempSync(join(tmpdir(), 'dccompact-'));
+    try {
+      const into = join(dir, 'short.dc');
+      const wrote = tool(['-o', into, join(root, 'examples/fabric/fabric.dc')]);
+      eq([wrote.status, wrote.stdout], [0, ''], '-o writes a file and nothing to standard output');
+      eq(readFileSync(into, 'utf8'), compactLayout(fabricText).text, 'and the file holds the compacted layout');
+      const missing = tool([join(dir, 'nope.dc')]);
+      eq(missing.status, 1, 'a file that is not there exits 1');
+      ok(/nope\.dc: no such file/.test(missing.stderr), `and says so  (${missing.stderr.trim()})`);
+      eq(tool([dir]).status, 1, 'a directory exits 1');
+      writeFileSync(join(dir, 'bin.dc'), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 1, 2]));
+      const binary = tool([join(dir, 'bin.dc')]);
+      ok(binary.status === 1 && /not a text file/.test(binary.stderr), 'a file that is not text exits 1');
+      const empty = tool([], '# nothing here\nnet data\n');
+      ok(empty.status === 1 && /no elements/.test(empty.stderr), 'a file with no floor plan in it exits 1');
+      eq(tool(['--frobnicate']).status, 2, 'an option it does not know exits 2');
+      eq(tool(['a.dc', 'b.dc']).status, 2, 'and so do two files');
+      eq(tool(['-o']).status, 2, 'and -o with no file');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+}
+
 // ---------------------------------------------------- every module parses
 // The imports at the top of this file reach every module in js/ but one,
 // directly or through another: app.js is the page itself and runs against a
@@ -6821,6 +7119,17 @@ if (python.error) {
   ok(/<span id="version"/.test(html), 'index.html has a slot for the version');
   ok(!html.includes(VERSION), 'and no hard-coded copy of the number');
 
+  // dccompact is Node, and runs wherever this suite does.
+  {
+    const run = spawnSync(process.execPath, [join(root, 'tools', 'dccompact'), '--version'], { encoding: 'utf8' });
+    eq(run.status, 0, 'tools/dccompact --version exits 0');
+    eq((run.stdout || '').split('\n')[0], `dccompact ${VERSION}`, 'tools/dccompact reports the project version');
+    ok((run.stdout || '').includes('License: GPL-3.0-or-later'), 'tools/dccompact --version states the licence');
+    ok((run.stdout || '').includes('Copyright (C) 2026 Martin J. Gallagher'), 'tools/dccompact --version names the copyright holder');
+    const pyproject = readFileSync(join(root, 'pyproject.toml'), 'utf8');
+    ok(/^dccompact = "dcviz\.dccompact:main"$/m.test(pyproject), 'pyproject installs dccompact');
+  }
+
   if (python.error) {
     skip('version: the tools', 'no python3');
   } else {
@@ -6839,6 +7148,22 @@ if (python.error) {
       ok((run.stdout || '').includes('Copyright (C) 2026 Martin J. Gallagher'),
          `tools/${tool} --version names the copyright holder`);
     }
+
+    // dccompact installed with pip is a Python command that runs the Node
+    // one; its --version needs no Node, and its work is the Node tool's.
+    const env0 = { ...process.env, PYTHONPATH: join(root, 'python'), PYTHONDONTWRITEBYTECODE: '1' };
+    const wrapped = spawnSync('python3', ['-m', 'dcviz.dccompact', '--version'], { encoding: 'utf8', env: env0 });
+    eq((wrapped.stdout || '').split('\n')[0], `dccompact ${VERSION}`, 'the pip dccompact reports the project version');
+    const viaPython = spawnSync('python3', ['-m', 'dcviz.dccompact', '-q', join(root, 'examples/fabric/fabric.dc')],
+      { encoding: 'utf8', env: { ...env0, PATH: `${dirname(process.execPath)}:${process.env.PATH || ''}` } });
+    eq(viaPython.status, 0, 'and compacts with the Node it finds on PATH');
+    eq(viaPython.stdout, compactLayout(readFileSync(join(root, 'examples/fabric/fabric.dc'), 'utf8')).text,
+       'writing what the Node tool writes');
+    // An empty PATH, so no node; python3 itself by its full path.
+    const python3 = spawnSync('python3', ['-c', 'import sys; print(sys.executable)'], { encoding: 'utf8' }).stdout.trim();
+    const noNode = spawnSync(python3, ['-m', 'dcviz.dccompact', join(root, 'examples/fabric/fabric.dc')],
+      { encoding: 'utf8', env: { ...env0, PATH: '/nonexistent' } });
+    ok(noNode.status === 1 && /needs Node\.js/.test(noNode.stderr), 'and with no Node, says what it needs and exits 1');
 
     // The dcviz CLI only exists once something is installed, so it is run out
     // of the source tree the way the wheel will import it.

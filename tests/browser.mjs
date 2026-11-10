@@ -2887,6 +2887,68 @@ await test('the editor resizes', async () => {
   ok(await page.locator('#editor-resize').isHidden(), 'the bar goes with the editor');
 }, { url: '?layout=examples/small.dc' });
 
+// DV-009: Compact in the layout editor. A generated layout lists a line per
+// switch and a line per pair of them; Compact writes it shorter, and the
+// floor plan it draws -- elements, nets and cables -- is the same one.
+await test('Compact writes the layout shorter and draws the same', async () => {
+  await openLayout(readFileSync(join(root, 'examples/fabric/fabric.dc'), 'utf8'));
+  await page.click('#btn-edit');
+  await page.waitForTimeout(300);
+  const read = () => page.evaluate(() => ({
+    text: document.querySelector('#editor-text').value,
+    summary: document.querySelector('#editor-summary').textContent,
+    count: document.querySelector('#filter-count').textContent,
+    note: document.querySelector('#editor-note').hidden ? null : document.querySelector('#editor-note').textContent,
+  }));
+  const before = await read();
+  ok(/20 cables/.test(before.summary), `the fabric is loaded  (${before.summary})`);
+  await page.click('#editor-compact');
+  await page.waitForTimeout(900);
+  const after = await read();
+  ok(after.text.split('\n').length < before.text.split('\n').length,
+     `the editor text is shorter  (${before.text.split('\n').length} → ${after.text.split('\n').length} lines)`);
+  ok(after.text.includes('node leaf[1..4] role=switch +switch'), 'neighbouring lines became a range');
+  ok(after.text.includes('link data kind=node,id=leaf* kind=node,id=spine* count=2'), 'and link lines a rule');
+  eq(after.summary, before.summary, 'the floor plan has the same elements, nets and cables');
+  eq(after.count, before.count, 'and the same element count');
+  ok(after.note && /^Compacted: 29 lines → 27 lines; the same 9 elements and 20 cables, checked/.test(after.note),
+     `and it says what it did  (${after.note})`);
+  await page.click('#editor-compact');
+  await page.waitForTimeout(600);
+  const again = await read();
+  eq(again.text, after.text, 'a second Compact changes nothing');
+  ok(/nothing to compact/.test(again.note || ''), `and says so  (${again.note})`);
+  // One undo puts back what was there before Compact, which the README
+  // promises: a replace that cannot be undone is a rewrite you must trust.
+  await page.focus('#editor-text');
+  await page.keyboard.press('Control+z');
+  await page.waitForTimeout(600);
+  const undone = await read();
+  eq(undone.text, before.text, 'one undo puts the text back as it was');
+  eq(undone.summary, before.summary, 'and the floor plan with it');
+  ok(undone.note === null, 'and the note goes, since it was about the compacted text');
+});
+
+// The plan Build from data writes is the case Compact is for: a node line
+// per host, each named in full. Compacted, every host still answers to its
+// own name, so the readings land where they did.
+await test('Compact on a plan built from the data', async () => {
+  await drop('live/room.tsv', WIDE);
+  await page.waitForTimeout(700);
+  await buildPlan();
+  await page.click('#btn-edit');
+  await page.waitForTimeout(300);
+  const count = () => page.evaluate(() => document.querySelector('#filter-count').textContent);
+  const before = await count();
+  await page.click('#editor-compact');
+  await page.waitForTimeout(900);
+  const text = await page.evaluate(() => document.querySelector('#editor-text').value);
+  ok(text.includes('node u[01..08] name={room}{rack}{id} +generated') || /node u\[0?1\.\.\d+\] name=\{room\}\{rack\}\{id\}/.test(text),
+     `the hosts are one line, named by placeholders  (${text.split('\n').filter((l) => l.includes('node')).join(' | ')})`);
+  eq(await count(), before, 'with the same elements on the floor');
+  eq((await cardNames()).length, 3, 'and the data still loaded on them');
+});
+
 // module tests can prove the two source files agree; only this can prove the
 // number reaches the screen.
 await test('the About box shows the version', async () => {

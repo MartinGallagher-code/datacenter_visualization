@@ -1,7 +1,7 @@
 # Changelog
 
 The version is one number for the whole project: the viewer, the `.dc` and
-results formats, `dcadd`, `dcimport`, `dcfabric` and the
+results formats, `dcadd`, `dcimport`, `dcfabric`, `dccompact` and the
 `datacenter-layout-viewer` package all ship together and all report it.
 `dcviz --version`, `dcadd --version` and the About box in the left panel
 print the same string.
@@ -11,6 +11,46 @@ contracts — **the file formats** (`.dc` layouts, `.tsv`/JSON results) and **th
 command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
+
+## 1.57.0 — 2026-11-10
+
+A layout written shorter, checked to draw the same (DV-009).
+
+- **`dccompact`** — and **Compact** in the layout editor — rewrites a `.dc`
+  file where a range would do: neighbouring lines that differ only in their
+  ids become one ranged line, in every shape a range takes (`u[01..40]`,
+  `[1..39x2]`, `[A..H]`, `R[1..4,7..10]`, `[web|db|cache]`); racks or rows
+  that hold the same become one, with what they hold written once; values
+  that only repeat the ids around them become placeholders
+  (`name={room}{rack}{id}`); and `link` lines that each join one pair become
+  a few rules (`link data kind=node,id=leaf* kind=node,id=spine* count=2`,
+  with `mode=` and `scope=` where they make exactly those cables). Build
+  from data's 18 rack and node lines for `examples/live/room-wr01.tsv` are
+  two; `examples/small.dc` written out a line per element and per cable
+  (4,992 lines) comes back as 28.
+- **Every result is checked** with the viewer's own parser: the same
+  elements in the same order with the same paths, names, attributes, tags
+  and rack slots; the same nets, cables, device models, title, warnings and
+  floor-plan boxes. A rewrite that does not come back the same is undone,
+  line for line, and the report says which and why. Lines whose meaning
+  depends on which line they are (`{i}`, `{n}`, `{seq}` below them, no id)
+  are left as written, and only neighbouring lines merge, never across a
+  comment.
+- **Selectors are tried, not guessed**: a bare `leaf*` also takes the tier
+  called leaf and the dc named "Leaf-spine example", so it is never
+  written; every selector is tried against the whole floor in its rule
+  before it is kept.
+- A merged line's own comment is kept above it with the id it was on
+  (`--drop-comments` leaves it out). Compacting a compacted file changes
+  nothing.
+- `dccompact` is Node, since the viewer's parser is what "the same" means:
+  `tools/dccompact` from a clone, and `dccompact` installed with pip runs the
+  viewer's own copy with the `node` on `PATH`. `--help`, `--version`, stdin
+  to stdout, `-o`, `-q`; exit 1 for a file that cannot be read or holds no
+  floor plan, 2 for a usage error.
+- A compacted layout is a different file, so a run made on the long one says
+  it was made on another layout; its paths are the same, so its readings
+  land where they did.
 
 ## 1.56.0 — 2026-11-10
 
