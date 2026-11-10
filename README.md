@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.55.1** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.55.2** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -2871,6 +2871,8 @@ tools/dcadd, tools/dcimport
 pyproject.toml            packaging (hatchling; no runtime dependencies)
 CHANGELOG.md              what changed, per version
 docs/releasing.md         how a release is cut, and the one manual PyPI step
+docs/feature-survey.md    26 comparable tools set beside this one, feature by
+                          feature, and ten features worth adding, ranked
 docs/                     the results-format guide for converting data in
 tests/fixtures/           real tool output, as the contract the suite checks
 tests/run.mjs             headless test suite (node tests/run.mjs)
