@@ -685,6 +685,19 @@ body.resizing-rows { cursor: row-resize; user-select: none; }
 }
 #editor-summary .bad { color: var(--warn); }
 
+/* What Compact did, until the text is next edited. */
+#editor-note {
+  flex: none;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--accent);
+}
+#editor-note[hidden] { display: none; }
+
 #editor-keys {
   flex: none;
   font-family: var(--mono);

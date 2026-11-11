@@ -19,6 +19,7 @@ import {
   droppedLayoutsNotice, layoutNotice, plural, prefixed, resultsFileNotice,
 } from './report.js';
 import { attachHints, renderReference } from './hints.js';
+import { compactLayout, reportLines } from './compact.js';
 import { layoutFromHosts, matchesPattern, recordsSince, tailRecords } from './tsv.js';
 import { routesBetween } from './paths.js';
 import {
@@ -3240,6 +3241,9 @@ $('editor-close').addEventListener('click', () => toggleEditor(false));
 
 $('editor-text').addEventListener('input', () => {
   $('editor-template').hidden = $('editor-text').value.trim() !== '';
+  // What Compact said is about the text it wrote; an edit after it makes
+  // that a statement about some other text.
+  if ($('editor-text').value !== compacted.text) $('editor-note').hidden = true;
   applyEditor();
 });
 
@@ -3418,6 +3422,56 @@ function saveText(name, text, type = 'text/plain') {
   a.click();
   URL.revokeObjectURL(url);
 }
+
+// Compact: the same floor plan, written shorter. compact.js checks its own
+// work with the parser this page draws with, and undoes any rewrite that
+// does not come back the same, so what lands in the editor draws the same
+// elements, cables and boxes as what was there. One undo puts the old text
+// back, where the browser keeps an undo history for a replaced selection.
+const compacted = { text: null };
+
+function showCompactNote(head, lines) {
+  const box = $('editor-note');
+  box.textContent = head;
+  box.title = lines.join('\n');
+  box.hidden = false;
+}
+
+$('editor-compact').addEventListener('click', () => {
+  const text = $('editor-text');
+  if (!text.value.trim()) {
+    showCompactNote('Compact: nothing to compact -- the editor is empty', []);
+    return;
+  }
+  const button = $('editor-compact');
+  button.disabled = true;
+  button.textContent = 'Compacting…';
+  // A floor of a few hundred thousand elements is parsed twice, which takes
+  // seconds: let the button say so before the page is busy.
+  setTimeout(() => {
+    try {
+      const result = compactLayout(text.value);
+      const lines = reportLines(result.report);
+      if (result.changed) {
+        compacted.text = result.text;
+        text.focus();
+        text.select();
+        let replaced = false;
+        try { replaced = document.execCommand('insertText', false, result.text); } catch { replaced = false; }
+        if (!replaced || text.value !== result.text) text.value = result.text;
+        text.setSelectionRange(0, 0);
+        text.scrollTop = 0;
+        text.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+      showCompactNote(`${result.changed ? 'Compacted' : 'Compact'}: ${lines[0]}`, lines);
+    } catch (err) {
+      showCompactNote(`Compact failed: ${err.message}`, [String(err.stack || err)]);
+    } finally {
+      button.disabled = false;
+      button.textContent = 'Compact';
+    }
+  }, 30);
+});
 
 $('editor-download').addEventListener('click', () => {
   const text = $('editor').hidden ? state.layoutText : $('editor-text').value;

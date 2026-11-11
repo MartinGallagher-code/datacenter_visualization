@@ -59,6 +59,7 @@ dcadd = "dcviz.dcadd:main"
 dcimport = "dcviz.dcimport:main"
 dcfabric = "dcviz.dcfabric:main"
 dcprobe = "dcviz.dcprobe:main"
+dccompact = "dcviz.dccompact:main"
 
 # One version for the whole project, read rather than restated. The other
 # half of the pair is VERSION in js/version.js; tests/run.mjs fails if they

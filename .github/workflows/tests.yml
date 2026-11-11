@@ -136,6 +136,10 @@ jobs:
       # 3.9 is the floor pyproject claims. Claiming it and never running it
       # is how a f-string or a match statement gets into a tool that a RHEL
       # box is then told it can install.
+      # The installed dccompact runs the wheel's js/ with the node on PATH.
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
 
       - name: Build
         run: |
@@ -162,7 +166,11 @@ jobs:
           /tmp/env/bin/dcimport --version
           /tmp/env/bin/dcfabric --version
           /tmp/env/bin/dcprobe --version
-          for f in index.html js/app.js js/version.js js/probe.js css/app.css examples/small.dc; do
+          /tmp/env/bin/dccompact --version
+          # dccompact runs the wheel's own js/ with Node: compact a layout
+          # through it, so a wheel missing js/dccompact.mjs fails here.
+          /tmp/env/bin/dccompact -q examples/fabric/fabric.dc | grep -q 'node leaf\[1\.\.4\]'
+          for f in index.html js/app.js js/version.js js/probe.js js/compact.js js/dccompact.mjs css/app.css examples/small.dc; do
             test -f "$(/tmp/env/bin/dcviz path)/$f" || { echo "missing from the wheel: $f"; exit 1; }
           done
 

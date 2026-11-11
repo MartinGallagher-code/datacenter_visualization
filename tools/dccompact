@@ -1,0 +1,28 @@
+#!/usr/bin/env node
+// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Martin J. Gallagher
+
+// Run dccompact straight from a checkout, with nothing installed.
+//
+// The tool itself is js/dccompact.mjs, beside the parser it checks its work
+// with, so that the copy `pip install` ships and the copy this runs are the
+// same file. This file is written so Node reads it the same way whatever it
+// guesses a file with no extension is: a dynamic import works in both.
+
+'use strict';
+
+const { join } = require('node:path');
+const { pathToFileURL } = require('node:url');
+
+process.stdout.on('error', (err) => {
+  // `dccompact big.dc | head` closes the pipe early; that is not an error.
+  if (err.code === 'EPIPE') process.exit(0);
+  throw err;
+});
+
+import(pathToFileURL(join(__dirname, '..', 'js', 'dccompact.mjs')).href)
+  .then((tool) => { process.exitCode = tool.main(process.argv.slice(2)); })
+  .catch((err) => {
+    process.stderr.write(`dccompact: ${err && err.stack ? err.stack : err}\n`);
+    process.exitCode = 1;
+  });

@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.56.0** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.57.0** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -62,7 +62,10 @@ campus with ~560,000 cables, described in 45 lines.
 Or write a layout from nothing: **Edit layout** opens an editor under the
 canvas that re-parses on every keystroke, so the floor plan, a per-kind tally
 (`3 rows · 24 racks · 216 nodes`) and any warnings follow the line being
-written. **Insert template** drops in a commented skeleton to start from, and
+written. **Insert template** drops in a commented skeleton to start from,
+**Compact** writes what is there shorter — ranges for lines that differ only
+in their ids, checked to draw the same
+([`dccompact`](#dccompact--the-same-floor-plan-written-shorter)) — and
 **Download .dc** saves the result as a file. The same editor works on a loaded
 file, which makes it the quickest way to learn what a line expands to. Drag
 the bar along its top edge to make it taller or shorter; double-click the bar
@@ -2425,6 +2428,104 @@ total is right, but one hot member of a bundle — 10 and 30 Gb/s on two
 uplinks to one spine — draws as 20 and 20. Each member's own load needs the
 viewer to know which port each cable is on.
 
+### `dccompact` — the same floor plan, written shorter
+
+A generator writes what it sees, a line at a time: **Build from data** a
+`node` line per host, `dcfabric` a `link` line per pair of switches. Where a
+person would have written a range, `dccompact` writes one — and checks that
+the file it writes draws exactly what the file it read did:
+
+```sh
+dccompact fabric.dc > short.dc
+dccompact --drop-comments fabric.dc -o short.dc
+tools/dccompact floor.dc > short.dc          # ... or straight from a clone
+```
+
+In the viewer, **Compact** in the layout editor does the same to the text
+being edited, and says what it did beside the button (hover it for the
+details). One undo puts the old text back.
+
+What it rewrites:
+
+| Written | Compacted |
+|---|---|
+| `node u01` … `node u40`, otherwise alike | `node u[01..40]` — and `[1..39x2]`, `[A..H]`, `R[1..4,7..10]`, `[web\|db\|cache]`: every shape a range can take |
+| `rack r01` and `rack r02`, each holding the same | `rack r[01..02]`, what they hold written once |
+| `name=wr01r01u01`, `name=wr01r01u02`, … | `name={room}{rack}{id}`: a value that only repeats the line's own id and its ancestors' becomes [placeholders](#placeholders) |
+| a `link` line per pair of switches | a few rules: `link data kind=node,id=leaf* kind=node,id=spine* count=2`, with `mode=pair`, `mode=chain`, `scope=rack` and the like where they make exactly those cables |
+
+Build from data's plan for `examples/live/room-wr01.tsv` is 18 rack and
+node lines; compacted it is
+
+```
+dc DATA name="Hosts in the data" +generated
+
+  room wr01
+    row A
+      rack r[01..02] u=8
+        node u[01..08] name={room}{rack}{id} +generated
+```
+
+**Nothing it writes is trusted.** The result is read back with the viewer's
+own parser and compared with the original: the same elements in the same
+order, with the same paths, kinds, ids, names, own attributes, tags and rack
+slots; the same nets, the same cables (net, both ends, capacity, weight and
+splice — compared as a set, since rules that are merged may draw them in a
+different order), the same device models and title; the same boxes on the
+floor plan; and the same warnings, by what they say rather than the line
+they name. A rewrite that does not come back the same is undone, line for
+line, and the report says which line and why. So is anything it cannot be
+sure of before it tries:
+
+- **Only neighbouring lines merge**, so the order of elements — which fills
+  rack slots and places rows — never changes; and **never across a comment
+  line**.
+- A line using `{i}`, `{i0}` or `{n}` is left as written: those count within
+  one line, and merging lines changes the count. So is one whose lines below
+  it use `{seq}` without a `seq=` of their own, since each line's block
+  counts on its own. (`{seq}`, `seq=` and `if=` on the line itself merge,
+  and the check confirms it.)
+- A line with **no id** — its id is its kind and its place — is left alone,
+  as are ids that **no one width pads** (`u9` beside `u010`) and an id
+  written twice.
+- **A link line is folded only when it joins exactly one element to exactly
+  one other**, and the rules that replace it are tried against the whole
+  floor first. A bare `leaf*` also takes a tier called `leaf` and anything
+  named `Leaf…`, so `link data leaf* spine* count=2` over the switches in
+  `examples/fabric/fabric.dc` makes 36 cables where there were 20: the
+  selectors it writes are `kind=`, `id=` and `path=`, and none is kept
+  unless its rule makes exactly the cables the lines did. A pair written
+  twice is two cables, which no one rule makes, and stays twice.
+- **A merged line's own comment** is kept above it with the id it was on —
+  `# leaf1 spine1: Ethernet49 <-> Ethernet1, Ethernet50 <-> Ethernet2` — or
+  left out with
+  `--drop-comments`. Comments that differ inside the lines being merged keep
+  them apart.
+
+Compacting a compacted file changes nothing. The report, on standard error
+(`-q` for none), gives the lines before and after, says the elements and
+cables are the same, and lists what was left as written and why. The exit
+status is 0 when the layout is written, compacted or not; 1 when the file
+cannot be read or holds no floor plan; 2 for a mistake on the command line.
+
+`dccompact` is Node rather than Python like the other tools, because the
+viewer's parser is what "draws the same" is measured by, and a second parser
+would be a second answer. Installed with `pip`, the `dccompact` command runs
+the viewer's own copy with the `node` on `PATH` (Node 18 or later), and says
+so if there is none; the editor's **Compact** needs nothing at all.
+
+**Time:** it parses the layout twice, so it takes about as long as loading
+it twice. `examples/mega.dc` — 256,000 elements and 561,000 cables, with
+nothing to compact — takes about 4 seconds; `examples/small.dc` written out a
+line per element and per cable (4,992 lines) compacts back to 28 lines in
+about a second.
+
+**One thing that does change:** a run's files carry the sha256 of the layout
+they were made on ([the run carries its layout](#the-run-carries-its-layout)),
+and a compacted layout is a different file, so a run made on the long one
+says it was made on another layout. Every path is the same, so its readings
+still land on the elements they were measured on.
+
 ## A table you already have
 
 Most monitoring already writes a wide table: a timestamp, a host, and a column
@@ -2544,7 +2645,9 @@ with no separator is split at its letter-and-digit runs, which is what makes
 twelve, so a flat fleet is a floor plan rather than one very long line.
 
 - It is an **ordinary layout**: `dc DATA … +generated`, which **Edit layout**
-  opens and **Download .dc** saves to correct by hand.
+  opens and **Download .dc** saves to correct by hand. It lists a line per
+  host; **Compact** in the editor writes it as ranges and placeholders, and
+  every host still answers to its name.
 - While it is the floor plan it **follows the data** — a host that starts
   reporting gets a place without being asked for again — and **Clear** takes
   it away, leaving the data loaded.
@@ -2898,7 +3001,8 @@ node tests/browser.mjs    # the page, driven in Chromium
 
 `tests/run.mjs` imports the viewer's modules and tests them directly, runs
 `dcadd`, `dcimport` and `dcfabric` against the fixtures in `tests/fixtures/`
-and `examples/fabric/` and `dcprobe`
+and `examples/fabric/`, `dccompact` against every example and every plan Build
+from data makes from `examples/live/`, and `dcprobe`
 against the machine it is on, and checks that the version agrees everywhere it
 is written. It also parses
 every `js/*.js` as an ES module, `app.js` included (it is the page itself, so
@@ -2976,15 +3080,19 @@ js/keep.js                what the viewer keeps, forgets and calls things:
 js/tsv.js                 the wide-table reader: detection, the arrow that
                           makes a host a flow, tail -n, and the floor plan
                           read out of hostnames
+js/compact.js             the same layout written shorter, and the check that
+                          it draws the same: Compact in the editor, and
+                          dccompact (js/dccompact.mjs is its command line)
 js/version.js             the project's version; python/dcviz/__init__.py
                           carries the other half and tests/run.mjs pins them
 python/dcviz/             the Python side: dcadd, dcimport, dcfabric, dcprobe
                           and `dcviz serve`, which is what `pip install`
-                          ships. Stdlib only.
-tools/dcadd, tools/dcimport, tools/dcfabric, tools/dcprobe
+                          ships. Stdlib only. Its dccompact runs
+                          js/dccompact.mjs with Node.
+tools/dcadd, tools/dcimport, tools/dcfabric, tools/dcprobe, tools/dccompact
                           two-line shims that run those from a clone with
                           nothing installed, so the copy that ships and the
-                          copy that runs are one file
+                          copy that runs are one file (dccompact's is Node)
 pyproject.toml            packaging (hatchling; no runtime dependencies)
 CHANGELOG.md              what changed, per version
 docs/releasing.md         how a release is cut, and the one manual PyPI step
