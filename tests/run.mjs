@@ -13,7 +13,9 @@
 // Headless test suite: node tests/run.mjs
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -47,7 +49,8 @@ import { compileQuery, applyFilter } from '../js/filter.js';
 import { ramp, categoricalColor, colorFor, contrastInk } from '../js/palette.js';
 import { referenceSnippets, suggestionsFor } from '../js/hints.js';
 import { VERSION } from '../js/version.js';
-import { compactLayout, rangeSpec, reportLines, sameDrawing } from '../js/compact.js';
+import { compactLayout, drawingOf, rangeSpec, reportLines, sameDrawing } from '../js/compact.js';
+import { checkAdded, resolveNames, unsafePath } from '../js/dclinks.mjs';
 import {
   classify, formatSize, matchesFilter, namedAsData, pathLabel, readable, sortEntries, treeFromFiles,
 } from '../js/browse.js';
@@ -3878,6 +3881,61 @@ if (python.error) {
   ok(rackLoad.value > 0, 'and a rack sums the hosts beneath it');
 }
 
+// ----------------------------------------------------------------- dclinks
+// The viewer's side of `dcfabric links` (DV-010): which element each name
+// is, and the check that the .dc written is the old one plus exactly the
+// cables added. The check is the safety net under everything dcfabric
+// writes, so it is tested here on its own, with what it must refuse.
+{
+  eq([unsafePath('hall/r1/leaf1'), unsafePath('d/r/a b'), unsafePath('d/sw?1'), unsafePath('d/sw*1'), unsafePath('a,b'), unsafePath('a|b'), unsafePath('p#2')],
+     [null, 'a space', 'a "?"', 'a "*"', 'a comma', 'a "|"', null], 'a path= selector cannot carry a space, a wildcard, a comma or a "|"');
+  const text = 'dc d\n  rack r1\n    node tor +switch\n    node a name=Alpha\n  rack r2\n    node tor +switch\n    node b\nlink data a b\n';
+  const res = resolveNames({ text, net: 'data', names: ['alpha', 'TOR', 'r2/b', 'r1', 'nope'], pairs: [['alpha', 'r2/b'], ['alpha', 'TOR']] });
+  eq([res.names.alpha.path, res.names['r2/b'].path, res.names.r1.children, res.names.nope.found], ['d/r1/a', 'd/r2/b', 2, false],
+     'resolve: by name=, by a tail, a container, and not there');
+  eq([res.names.TOR.count, res.names.TOR.some], [2, ['d/r1/tor', 'd/r2/tor']], 'an ambiguous name, with the elements it could be');
+  eq(res.existing, [['alpha', 'r2/b', 1]], 'the cables already there between two named devices');
+  eq(res.nets, { data: { line: null, gbps: null } }, 'and the nets, a net with no net line having no line');
+  eq(resolveNames({ text: '# nothing\n', names: ['a'] }).elements, 0, 'no elements: said, not guessed at');
+
+  const base = 'dc d\n  rack r\n    node a\n    node b\n    node c\nnet data gbps=10\n';
+  const check = (after, added) => checkAdded({ before: base, after, net: 'data', added });
+  eq(check(`${base}link data path=d/r/a path=d/r/b count=2\n`, [['d/r/a', 'd/r/b', 2, null]]).problem, null, 'check: exactly the cables meant is fine');
+  ok(/3 cables were meant .* and it has 2/.test(check(`${base}link data path=d/r/a path=d/r/b count=2\n`, [['d/r/a', 'd/r/b', 3, null]]).problem),
+     'one cable short is refused');
+  ok(/cable 1/.test(check(`${base}link data path=d/r/a path=d/r/c\n`, [['d/r/a', 'd/r/b', 1, null]]).problem || ''),
+     'a cable to the wrong device is refused');
+  ok(/cable/.test(check(`${base}link data d/r/a r\n`, [['d/r/a', 'd/r/b', 1, null]]).problem || ''),
+     'a bare selector that wires the rack as well is refused');
+  ok(/new warning/.test(check(`${base}link data path=d/r/a path=d/r/b\nlink data nothing-here d/r/c\n`, [['d/r/a', 'd/r/b', 1, null]]).problem || ''),
+     'a new warning is refused');
+  ok(/5 elements became 6/.test(check(`${base.replace('    node c\n', '    node c\n    node z\n')}link data path=d/r/a path=d/r/b\n`, [['d/r/a', 'd/r/b', 1, null]]).problem || ''),
+     'an element more is refused');
+  ok(/net data is drawn differently/.test(check(`${base}net data gbps=20\nlink data path=d/r/a path=d/r/b\n`, [['d/r/a', 'd/r/b', 1, null]]).problem || ''),
+     'a second net line, which silently replaces the first one\'s settings, is refused');
+  ok(/became/.test(check(`${base}link data path=d/r/a path=d/r/b gbps=5\n`, [['d/r/a', 'd/r/b', 1, null]]).problem || ''),
+     'a cable carrying other than what was meant is refused');
+  const tight = 'dc d\n  rack r\n    node a ports=1x100\n    node b\n    node c\n';
+  const ports = checkAdded({ before: tight, after: `${tight}link data path=d/r/a path=d/r/b\nlink data path=d/r/a path=d/r/c\n`, net: 'data',
+    added: [['d/r/a', 'd/r/b', 1, null], ['d/r/a', 'd/r/c', 1, null]] });
+  eq([ports.problem, ports.ports.length], [null, 1], 'a ports= overflow is not refused, and is handed back to be said');
+
+  // A rule of two exact path= selectors is looked up rather than tested
+  // against every element. It has to wire exactly what testing every
+  // element does: `path=X,path=X` selects the same and is not looked up.
+  const floor = 'dc d\n  row w\n    rack r[1..3]\n      node u[1..3]\n  rack R1\n    node u1\n  rack r1 scope=x\n';
+  const rules = [
+    'link a path=d/w/r1/u1 path=d/w/r2/u2', 'link a path=D/W/R3/U3 path=d/w/r1/u1 count=2', 'link a path=d/R1/u1 path=d/w/r1/u2',
+    'link a path=d/w/r1/u1 path=d/nowhere', 'link a path=d/w/r2/u1', 'link a path=d/w/r1/u3 path=d/w/r2/u3 scope=row',
+    'link a path=d/w/r1/u3 path=d/w/r2/u3 scope=rack', 'link a path=d/w/r1 path=d/w/r2/u1 mode=chain', 'link a path=d/w/r1/u1 path=d/w/r1/u1',
+    'link a path=d/r1 path=d/w/r3/u3',
+  ];
+  const wire = (text) => { const m = parseLayout(text); return [m.links.map((l) => `${l.net} ${l.a.path} ${l.b.path}`), m.warnings.map((w) => w.replace(/"[^"]*"/g, '"…"'))]; };
+  const slow = rules.map((r) => r.replace(/path=(\S+)/g, 'path=$1,path=$1'));
+  eq(wire(`${floor}${rules.join('\n')}\n`), wire(`${floor}${slow.join('\n')}\n`),
+     'a rule of exact paths, looked up, wires what testing every element wires: case, two of a path, none, scope, a container');
+}
+
 // ----------------------------------------------------------------- dcfabric
 // A neighbour table -- host, port, neighbor, port, the shape LLDP gives --
 // becomes a .dc of switches and cables, and per-port rates become the switch
@@ -4184,6 +4242,306 @@ if (python.error) {
     eq([wrote.code, wrote.out, wrote.err, linkLines(readFileSync(outPath, 'utf8')).length], [0, '', '', 1],
        '-o writes the file, and -q leaves stderr quiet when there is nothing to report');
     ok(runFabric(['layout', join(work, 'missing.tsv')]).code === 1, 'a table that is not there fails');
+  }
+
+  // ------------------------------------------------------ dcfabric links
+  // The table's cables added to a .dc you already have, between its devices
+  // (DV-010). The .dc side is the viewer's own parser, run with Node, so
+  // Node is put on PATH the way an install would have it.
+  {
+    const nodePATH = `${dirname(process.execPath)}:${process.env.PATH || ''}`;
+    const runLinks = (args, pkg = join(root, 'python'), env = {}) => {
+      const run = spawnSync('python3', ['-c',
+        'import sys; sys.path.insert(0, sys.argv.pop(1)); from dcviz.dcfabric import main; sys.exit(main())',
+        pkg, 'links', ...args], { encoding: 'utf8', env: { ...process.env, PATH: nodePATH, ...env } });
+      return { out: run.stdout || '', err: run.stderr || '', code: run.status };
+    };
+    const exl = (name) => join(root, 'examples/fabric-links', name);
+    const floorText = readFileSync(exl('floor.dc'), 'utf8');
+    const wiredText = readFileSync(exl('wired.dc'), 'utf8');
+    // The cables a run added: the links after the input's own, by pair.
+    const addedBy = (beforeText, afterText) => {
+      const n = parseLayout(beforeText).links.length;
+      const tally = new Map();
+      for (const l of parseLayout(afterText).links.slice(n)) {
+        const k = `${l.net} ${[l.a.path, l.b.path].sort().join(' ↔ ')}`;
+        tally.set(k, (tally.get(k) || 0) + 1);
+      }
+      return Object.fromEntries([...tally].sort());
+    };
+
+    // The worked example is exactly what the tool writes.
+    const exRun = runLinks([exl('neighbors.tsv'), exl('floor.dc')]);
+    eq([exRun.code, exRun.out === wiredText], [0, true], 'dcfabric links writes examples/fabric-links/wired.dc as it is checked in');
+    eq(exRun.err.trim().split('\n'), [
+      'dcfabric: 5 rows (5 cables) have an end that is not in floor.dc, so not drawn -- 3 names are not there: b2u05, core1 and core2',
+      'dcfabric: 16 pairs the table lists are already joined on net data in floor.dc, so nothing is added for them (--add-wired adds the table\'s cables anyway): leaf1 -- a1u01 (1 there, 1 in the table), leaf1 -- a1u02 (1 there, 1 in the table), leaf1 -- a1u03 (1 there, 1 in the table), leaf1 -- a1u04 (1 there, 1 in the table), leaf2 -- a2u01 (1 there, 1 in the table) and 11 more',
+      'dcfabric: 20 cables between 10 pairs of devices added to floor.dc on net data, from 61 rows; 22 of 25 names in neighbors.tsv are devices there',
+    ], 'and says on stderr what it left out and what it added, exactly');
+    ok(wiredText.startsWith(floorText), 'the .dc it read is the start of the file it writes, byte for byte');
+
+    // Read back: every element, net and device model of the input as it
+    // was, every cable it had, and the 20 added between the right switches.
+    {
+      const before = parseLayout(floorText);
+      const after = parseLayout(wiredText);
+      eq([before.warnings, after.warnings], [[], []], 'the floor plan loads with no warnings, before and after');
+      const db = drawingOf(before);
+      const da = drawingOf(after);
+      eq([da.title, da.elements, da.nets, da.models], [db.title, db.elements, db.nets, db.models],
+         'every element (path, attributes, tags and box), net and device model of the input, unchanged');
+      const left = new Map();
+      for (const c of da.cables) left.set(c, (left.get(c) || 0) + 1);
+      ok(db.cables.every((c) => { const n = left.get(c) || 0; left.set(c, n - 1); return n > 0; }),
+         'every cable the input had is still there');
+      const pairs = addedBy(floorText, wiredText);
+      eq(Object.keys(pairs).length, 10, 'cables added between ten pairs of devices');
+      ok(Object.values(pairs).every((n) => n === 2), 'two port pairs each, so two cables each');
+      eq([pairs['data hall/a/a1/leaf1 ↔ hall/net/n1/spine1'], pairs['data hall/a/a1/leaf1 ↔ hall/a/a2/leaf2']], [2, 2],
+         'leaf1 to spine1 where they stand, and leaf1 to leaf2 across their racks');
+      ok(after.links.slice(before.links.length).every((l) => l.a.tags.has('switch') && l.b.tags.has('switch') && l.gbps === 100),
+         'switch to switch only, each carrying the gbps= of the .dc\'s own net data');
+      ok(wiredText.includes('link data path=hall/a/a1/leaf1 path=hall/net/n1/spine1 count=2  # Ethernet49 <-> Ethernet1, Ethernet50 <-> Ethernet2'),
+         'each rule selects its two devices by path, and names their ports, first device\'s port first');
+      eq(wiredText.split('\n').filter((l) => /^net data\b/.test(l)).length, 1, 'and net data is the .dc\'s own line, not declared twice');
+    }
+
+    // Run again on what it wrote: the block is replaced, not added again --
+    // with --add-wired too, which would otherwise add every cable twice.
+    const twiceAddWired = (pkg) => {
+      const first = runLinks([exl('neighbors.tsv'), exl('floor.dc'), '--add-wired'], pkg);
+      const second = runLinks([exl('neighbors.tsv'), file(first.out, `first${++made}.dc`), '--add-wired'], pkg);
+      return first.code === 0 && second.code === 0 && second.out === first.out;
+    };
+    {
+      const again = runLinks([exl('neighbors.tsv'), exl('wired.dc')]);
+      eq([again.code, again.out === wiredText], [0, true], 'run on its own output, it writes the same file: no cable doubled');
+      ok(/replaced the cables an earlier run added on net data \(from neighbors\.tsv\)/.test(again.err), 'and says it replaced them');
+      ok(twiceAddWired(), 'and with --add-wired, a second run still writes the same file');
+    }
+
+    // The counters the same table makes land on cables of the wired .dc.
+    {
+      const counters = runFabric(['counters', exl('neighbors.tsv'), join(root, 'examples/fabric/rates.tsv')]);
+      eq([counters.code, counters.out === readFileSync(join(root, 'examples/fabric/counters.tsv'), 'utf8')], [0, true],
+         'dcfabric counters with the same table writes examples/fabric/counters.tsv');
+      const wired = parseLayout(wiredText);
+      const bound = bindOverlay([...parseResults(counters.out).values()][0], wired);
+      eq([bound.unresolved, bound.ambiguous], [[], []], 'every counter names one device of the wired .dc');
+      const measured = countersOf(bound, wired);
+      eq([measured.cables, measured.unmatched.length, measured.unresolved], [20, 0, 0],
+         'and every sample draws on a cable, with no unmatched counters');
+    }
+
+    // Names are found the way the viewer finds a results file's target.
+    const hallText = [
+      'dc hall', '  row r1', '    rack ra u=42', '      node tor role=tor +switch', '      node leaf1 +switch',
+      '      node s1 role=server name=Server-One', '    rack rb u=42', '      node tor role=tor +switch',
+      '      node spine1 +switch', '    rack leafy u=42', '      node pdu1', '  row r2', '    rack x u=42',
+      '      node spine2 +switch', '',
+    ].join('\n');
+    const hall = file(hallText, 'hall.dc');
+    {
+      const run = runLinks([file(tsv(
+        ['leaf1', 'Eth1', 'hall/r2/x/spine2', 'Eth1'], ['rb/spine1', 'Eth2', 'SERVER-ONE', 'eth0'],
+        ['tor', 'Eth3', 'rb/spine1', 'Eth3'], ['leafy', 'Eth4', 'leaf1', 'Eth4'],
+      ), 'names.tsv'), hall]);
+      eq(addedBy(hallText, run.out), {
+        'data hall/r1/ra/leaf1 ↔ hall/r2/x/spine2': 1, 'data hall/r1/ra/s1 ↔ hall/r1/rb/spine1': 1,
+      }, 'a bare id, a full path, a unique tail and a name= (in other letters) each find their device');
+      ok(/1 name is more than one element in hall\.dc, so not wired -- name one by its path: tor \(2: hall\/r1\/ra\/tor, hall\/r1\/rb\/tor\)/.test(run.err),
+         `a name two racks each have is refused, and both are named  (${run.err.split('\n').find((l) => /tor/.test(l))})`);
+      ok(/1 name is a container in hall\.dc, not a device, so not wired: leafy \(rack hall\/r1\/leafy\)/.test(run.err),
+         'a name that is a rack\'s id is not wired as that rack');
+      ok(!parseLayout(run.out).links.some((l) => /leafy|tor/.test(l.a.path + l.b.path)), 'and no cable touches the rack, what it holds, or a tor');
+      ok(/2 cables are not drawn, for a name not wired/.test(run.err), 'the cables of the names not wired are counted');
+      ok(/: 2 cables between 2 pairs of devices added to hall\.dc on net data, from 4 rows; 4 of 6 names in names\.tsv are devices there$/m.test(run.err),
+         `and the summary says how many names were devices  (${run.err.trim().split('\n').pop()})`);
+      const pathed = run.out.split('\n').filter((l) => l.startsWith('link '));
+      ok(pathed.length === 2 && pathed.every((l) => /^link data path=\S+ path=\S+  # /.test(l)), 'every rule selects by path=, never by a bare name');
+    }
+    {
+      const run = runLinks([file(tsv(['leaf1', 'Eth1', 'spine1', 'Eth1'], ['ra/leaf1', 'Eth2', 'spine1', 'Eth2'])), hall]);
+      ok(/two names for one device in hall\.dc, so neither is wired -- make the table name it one way: leaf1 and ra\/leaf1 \(hall\/r1\/ra\/leaf1\)/.test(run.err),
+         'two names for one device: neither is wired, and both are said');
+      eq([run.code, run.out], [0, hallText], 'and with nothing to add, the .dc is written as it was');
+    }
+    {
+      // path= reads * and ? as wildcards and splits at a space, and compares
+      // whatever the case: a path it cannot select exactly is refused.
+      const oddText = 'dc d\n  rack r\n    node "a b"\n    node sw?1\n    node ok\n  rack A\n    node x\n  rack a\n    node x\n';
+      const run = runLinks([file(tsv(['a b', 'Eth1', 'ok', 'Eth1'], ['sw?1', 'Eth2', 'ok', 'Eth2'], ['d/A/x', 'Eth3', 'ok', 'Eth3'])), file(oddText, 'odd.dc')]);
+      ok(/3 names are a path a link rule cannot select exactly, so not wired: a b \(d\/r\/a b: a space\), d\/A\/x \(d\/a\/x: 2 elements have that path but for letter case\) and sw\?1 \(d\/r\/sw\?1: a "\?"\)/.test(run.err),
+         `a path with a space or a wildcard, or two paths but for case, is refused  (${run.err.split('\n')[0]})`);
+      eq(parseLayout(run.out).links.length, 0, 'and nothing is wired for them');
+    }
+
+    // Rows with an end outside the .dc: counted, the missing names named.
+    {
+      const rows = [['leaf1', 'Eth1', 'spine1', 'Eth1']];
+      for (let i = 1; i <= 12; i++) rows.push(['spine1', `Eth${10 + i}`, `core${i}`, 'xe-0/0/0']);
+      rows.push(['srv9', 'eth0', 'srv10', 'eth0']);
+      const run = runLinks([file(tsv(...rows)), hall]);
+      ok(/13 rows \(13 cables\) have an end that is not in hall\.dc, so not drawn -- 14 names are not there: core1, core2, core3, core4, core5, core6, core7, core8 and 6 more/.test(run.err),
+         `one end or neither in the .dc: not drawn, counted, and the first few names given  (${run.err.split('\n')[0]})`);
+      eq(addedBy(hallText, run.out), { 'data hall/r1/ra/leaf1 ↔ hall/r1/rb/spine1': 1 }, 'the row with both ends there is drawn');
+      const proto = runLinks([file(tsv(['__proto__', 'Eth1', 'leaf1', 'Eth1'], ['constructor', 'Eth2', 'leaf1', 'Eth2'])), hall]);
+      ok(proto.code === 0 && /2 names are not there: __proto__ and constructor/.test(proto.err),
+         `a switch called __proto__ or constructor is a name like any other  (${proto.err.split('\n')[0]})`);
+    }
+
+    // Both ends' rows are one cable; N port pairs are N cables, at most
+    // 1000 to a rule (count= takes 1..1000).
+    {
+      const both = runLinks([file(tsv(['leaf1', 'Eth49', 'spine1', 'Eth1'], ['spine1', 'Eth1', 'leaf1', 'Eth49'])), hall]);
+      eq(addedBy(hallText, both.out), { 'data hall/r1/ra/leaf1 ↔ hall/r1/rb/spine1': 1 }, 'a cable both ends list is one cable');
+      const rows = [];
+      for (let i = 1; i <= 1001; i++) rows.push(['leaf1', `Eth${i}`, 'spine2', `Eth${i}`]);
+      const many = runLinks([file(tsv(...rows)), hall]);
+      eq(addedBy(hallText, many.out), { 'data hall/r1/ra/leaf1 ↔ hall/r2/x/spine2': 1001 }, '1001 port pairs are 1001 cables');
+      eq(many.out.split('\n').filter((l) => l.startsWith('link ')).map((l) => (/count=(\d+)/.exec(l.split('#')[0]) || [0, '1'])[1]),
+         ['1000', '1'], 'in two rules, since count= stops at 1000');
+    }
+
+    // Contradictions: the same reader as layout, so the same lines, and the
+    // same cables left out.
+    {
+      const table = file(tsv(['leaf1', 'Eth1', 'spine1', 'Eth1'], ['spine1', 'Eth1', 'leaf1', 'Eth1'], ['leaf1', 'Eth1', 'spine2', 'Eth9'],
+        ['leaf1', 'Eth2', 'spine1', 'Eth2'], ['leaf1', 'Eth2', 'spine2', 'Eth2']));
+      const said = (run) => run.err.split('\n').filter((l) => /is cabled to/.test(l));
+      const viaLayout = runFabric(['layout', table]);
+      const viaLinks = runLinks([table, hall]);
+      eq(said(viaLinks), said(viaLayout), 'contradictions are reported with the same lines layout reports');
+      eq(said(viaLinks).length, 2, 'both of them');
+      eq(addedBy(hallText, viaLinks.out), { 'data hall/r1/ra/leaf1 ↔ hall/r1/rb/spine1': 1 },
+         'and the same cables are left out: only the one both its ends list is drawn');
+    }
+
+    // Pairs the .dc already joins on the net: said, left as they are, and
+    // added beside the ones there only when asked.
+    {
+      const wiredHall = `${hallText}link data leaf1 spine2\n`;
+      const dc = file(wiredHall, 'wired-hall.dc');
+      const table = file(tsv(['leaf1', 'Eth1', 'spine2', 'Eth1'], ['leaf1', 'Eth2', 'spine2', 'Eth2'], ['leaf1', 'Eth3', 'spine1', 'Eth3']));
+      const run = runLinks([table, dc]);
+      eq(addedBy(wiredHall, run.out), { 'data hall/r1/ra/leaf1 ↔ hall/r1/rb/spine1': 1 }, 'a pair the .dc already wires gets nothing added');
+      ok(/1 pair the table lists is already joined on net data in wired-hall\.dc, so nothing is added for it \(--add-wired adds the table's cables anyway\): leaf1 -- spine2 \(1 there, 2 in the table\)/.test(run.err),
+         `and is said, with both counts  (${run.err.split('\n')[0]})`);
+      const anyway = runLinks([table, dc, '--add-wired']);
+      eq(addedBy(wiredHall, anyway.out), { 'data hall/r1/ra/leaf1 ↔ hall/r1/rb/spine1': 1, 'data hall/r1/ra/leaf1 ↔ hall/r2/x/spine2': 2 },
+         '--add-wired adds the table\'s cables beside it');
+      ok(/--add-wired: the table's cables are added beside the ones wired-hall\.dc already has: leaf1 -- spine2 \(1 there, 2 in the table\)/.test(anyway.err), 'and says so');
+      const otherNet = runLinks([table, dc, '--net', 'oob']);
+      eq(Object.values(addedBy(wiredHall, otherNet.out)).reduce((a, b) => a + b, 0), 3, 'a cable on another net is no reason to leave a pair out');
+    }
+
+    // The net: the .dc's own is used and never declared twice; a new one is
+    // declared with --gbps; and none is declared where that would recolour
+    // the nets only link rules name.
+    {
+      const withNet = `${hallText}net data label=Fabric gbps=40\n`;
+      const own = runLinks([file(tsv(['leaf1', 'Eth1', 'spine2', 'Eth1'])), file(withNet, 'own-net.dc')]);
+      eq(own.out.split('\n').filter((l) => /^net /.test(l)), ['net data label=Fabric gbps=40'], 'an existing net line is used, not declared again');
+      eq(parseLayout(own.out).links.map((l) => l.gbps), [40], 'and its cables carry its gbps=');
+      const faster = runLinks([file(tsv(['leaf1', 'Eth1', 'spine2', 'Eth1'])), file(withNet, 'own-net.dc'), '--gbps', '100']);
+      eq([parseLayout(faster.out).nets.get('data').gbps, parseLayout(faster.out).links.map((l) => l.gbps)], [40, [100]],
+         '--gbps on a net the .dc has goes on the rules: the net stays 40, the cables added carry 100');
+      const fresh = runLinks([file(tsv(['leaf1', 'Eth1', 'spine2', 'Eth1']), 'fresh.tsv'), hall, '--gbps', '25']);
+      eq(fresh.out.split('\n').filter((l) => /^net /.test(l)), ['net data label="Cables from fresh.tsv" gbps=25'], 'a net the .dc lacks is declared, with --gbps');
+      const implicit = `${hallText}link mgmt leaf1 spine1\n`;
+      const quiet = runLinks([file(tsv(['leaf1', 'Eth1', 'spine2', 'Eth1'])), file(implicit, 'implicit.dc'), '--gbps', '25']);
+      const qm = parseLayout(quiet.out);
+      eq([quiet.out.split('\n').filter((l) => /^net /.test(l)), qm.links.map((l) => [l.net, l.gbps])], [[], [['mgmt', null], ['data', 25]]],
+         'beside a net with no net line, none is declared: --gbps goes on the rules');
+      eq(qm.nets.get('mgmt').color, parseLayout(implicit).nets.get('mgmt').color, 'so mgmt keeps its colour');
+      ok(/net data gets no net line: implicit\.dc's net mgmt has none either/.test(quiet.err), 'and says why');
+    }
+
+    // ports= is a real finding about the floor plan: said, not refused.
+    {
+      const tight = hallText.replace('node leaf1 +switch', 'node leaf1 +switch ports=1x100');
+      const run = runLinks([file(tsv(['leaf1', 'Eth1', 'spine1', 'Eth1'], ['leaf1', 'Eth2', 'spine2', 'Eth2'])), file(tight, 'tight.dc')]);
+      eq(run.code, 0, 'cables past a device\'s ports= are still added');
+      ok(/with the cables added, the viewer says: line 5: leaf1's 2 cables need 2 ports, breakout included, and it has 1 \(ports=1x100\)/.test(run.err),
+         `and the viewer's warning is passed on  (${run.err.split('\n')[0]})`);
+    }
+
+    // The text: CRLF stays CRLF, a missing last newline is added, a byte-order
+    // mark stays, and the block is found again in each.
+    {
+      const table = file(tsv(['leaf1', 'Eth1', 'spine2', 'Eth1']));
+      for (const [label, text] of [
+        ['CRLF line endings', hallText.replace(/\n/g, '\r\n')],
+        ['no newline at the end', hallText.replace(/\n$/, '')],
+        ['a byte-order mark', `﻿${hallText}`],
+      ]) {
+        const dc = file(text, `text${++made}.dc`);
+        const once = runLinks([table, dc]);
+        ok(once.code === 0 && once.out.startsWith(text) && Object.keys(addedBy(text.replace(/^﻿/, ''), once.out.replace(/^﻿/, ''))).length === 1,
+           `${label}: the .dc as it was, then the cable`);
+        if (label === 'CRLF line endings') ok(!/[^\r]\n/.test(once.out), 'and the block is written with CRLF too');
+        const out = file(once.out, `again${made}.dc`);
+        eq(runLinks([table, out]).out, once.out, `${label}: a second run writes the same file`);
+      }
+    }
+
+    // What fails writes nothing, and says why, naming the file.
+    {
+      const table = file(tsv(['leaf1', 'Eth1', 'spine2', 'Eth1']));
+      const target = join(work, 'never-written.dc');
+      const failed = (run, re) => run.code === 1 && run.out === '' && re.test(run.err);
+      const python3 = spawnSync('python3', ['-c', 'import sys; print(sys.executable)'], { encoding: 'utf8' }).stdout.trim();
+      const noNode = spawnSync(python3, ['-c',
+        'import sys; sys.path.insert(0, sys.argv.pop(1)); from dcviz.dcfabric import main; sys.exit(main())',
+        join(root, 'python'), 'links', table, hall, '-o', target], { encoding: 'utf8', env: { ...process.env, PATH: '/nonexistent' } });
+      ok(noNode.status === 1 && /dcfabric: needs Node\.js 18 or later for links/.test(noNode.stderr) && !existsSync(target),
+         `with no Node, links says what it needs, exits 1 and writes nothing  (${(noNode.stderr || '').split('\n')[0]})`);
+      for (const command of [['layout', table], ['counters', parallelTable, parallelRates]]) {
+        const run = spawnSync(python3, ['-c',
+          'import sys; sys.path.insert(0, sys.argv.pop(1)); from dcviz.dcfabric import main; sys.exit(main())',
+          join(root, 'python'), ...command], { encoding: 'utf8', env: { ...process.env, PATH: '/nonexistent' } });
+        eq(run.status, 0, `${command[0]} needs no Node`);
+      }
+      ok(failed(runLinks([table, join(work, 'missing.dc'), '-o', target]), /cannot read .*missing\.dc: No such file/) && !existsSync(target),
+         'a .dc that is not there is named, and nothing is written');
+      writeFileSync(join(work, 'latin.dc'), Buffer.from([0x64, 0x63, 0x20, 0xff, 0x0a]));
+      ok(failed(runLinks([table, join(work, 'latin.dc')]), /latin\.dc is not UTF-8 text/), 'a .dc that is not UTF-8 is named');
+      ok(failed(runLinks([table, file('# nothing here\n', 'empty.dc')]), /empty\.dc: no elements -- not a \.dc layout/), 'a .dc with no elements is named');
+      ok(failed(runLinks([file('# just a comment\n', 'empty.tsv'), hall]), /empty\.tsv: no cables -- every row was blank, a comment or a header/),
+         'an empty table is named');
+      ok(failed(runLinks([table, file(`${hallText}\n# ---- dcfabric links: net data, from t.tsv ----\nlink data leaf1 spine1\n`, 'open.dc')]),
+                /open\.dc: line 16 opens the cables an earlier dcfabric links added on net data, and nothing closes them/),
+         'a block whose end line is gone is refused rather than guessed at');
+      const help = runFabric(['links', '--help']);
+      ok(help.code === 0 && /needs Node\.js/.test(help.out) && /README's\s+"dcfabric" section/.test(help.out) && /--add-wired/.test(help.out),
+         'links --help says what it does, that it needs Node, and where to read more');
+      ok(/dcfabric links\s+neighbors\.tsv floor\.dc/.test(runFabric(['--help']).out), 'and dcfabric --help lists it');
+    }
+
+    // The mutations: each, made to a copy of the tool, has to make one of
+    // the checks above fail.
+    {
+      const source = readFileSync(join(root, 'python/dcviz/dcfabric.py'), 'utf8');
+      const mutant = (needle, patch) => {
+        const pkg = mkdtempSync(join(work, 'mutant-'));
+        mkdirSync(join(pkg, 'dcviz'));
+        for (const f of readdirSync(join(root, 'python/dcviz')).filter((n) => n.endsWith('.py'))) {
+          writeFileSync(join(pkg, 'dcviz', f), readFileSync(join(root, 'python/dcviz', f)));
+        }
+        // The viewer's files, where an installed package keeps them.
+        symlinkSync(root, join(pkg, 'dcviz', 'static'));
+        const hits = source.split(needle).length - 1;
+        writeFileSync(join(pkg, 'dcviz/dcfabric.py'), source.replace(needle, patch));
+        return { pkg, hits };
+      };
+      const doubles = mutant('        tables.append(begin.group(2))\n', '        out.append(lines[i])\n        i += 1\n        continue\n');
+      eq([doubles.hits, twiceAddWired(doubles.pkg)], [1, false],
+         'mutation: keeping the earlier block fails the run-it-twice check');
+      const racks = mutant('        elif r["children"]:\n', '        elif False:\n');
+      const rack = racks.hits === 1 && runLinks([file(tsv(['leafy', 'Eth4', 'leaf1', 'Eth4'])), hall], racks.pkg);
+      eq([racks.hits, rack && !parseLayout(rack.out).links.some((l) => /leafy/.test(l.a.path + l.b.path))], [1, false],
+         'mutation: not refusing a container fails the a-rack-is-not-a-device check');
+    }
   }
   rmSync(work, { recursive: true, force: true });
 }

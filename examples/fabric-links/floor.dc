@@ -1,0 +1,38 @@
+# A small hall with its switches where they actually stand: a row of
+# network racks holding the two spines, and two rows of racks, each rack
+# with its leaf at the top and four servers below it.
+#
+# The servers' cables to their leaf are written here, by rule. The
+# switches' cables are not: `dcfabric links neighbors.tsv floor.dc` adds
+# them from the switches' own LLDP table, which is wired.dc.
+
+dc hall name="Example hall" cols=1
+
+  row net name="Network row" dir=x
+    rack n1 u=42
+      node spine1 at=40 u=2 role=spine +switch
+    rack n2 u=42
+      node spine2 at=40 u=2 role=spine +switch
+
+  row a name="Row A" dir=x
+    rack a1 u=42
+      node leaf1 at=42 role=leaf +switch
+      node u[01..04] role=server name={rack}{id}
+    rack a2 u=42
+      node leaf2 at=42 role=leaf +switch
+      node u[01..04] role=server name={rack}{id}
+
+  row b name="Row B" dir=x
+    rack b1 u=42
+      node leaf3 at=42 role=leaf +switch
+      node u[01..04] role=server name={rack}{id}
+    rack b2 u=42
+      node leaf4 at=42 role=leaf +switch
+      node u[01..04] role=server name={rack}{id}
+
+net data label="Data" gbps=100
+net mgmt label="Out-of-band mgmt" color=#8b93a7 style=dashed
+
+# Every server reaches the leaf in its own rack.
+link data role=server role=leaf scope=rack
+link mgmt role=server role=leaf scope=rack
