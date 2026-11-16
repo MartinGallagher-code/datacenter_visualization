@@ -170,7 +170,10 @@ jobs:
           # dccompact runs the wheel's own js/ with Node: compact a layout
           # through it, so a wheel missing js/dccompact.mjs fails here.
           /tmp/env/bin/dccompact -q examples/fabric/fabric.dc | grep -q 'node leaf\[1\.\.4\]'
-          for f in index.html js/app.js js/version.js js/probe.js js/compact.js js/dccompact.mjs css/app.css examples/small.dc; do
+          # dcfabric links runs the wheel's js/dclinks.mjs the same way: wire
+          # the example through it, so a wheel missing that file fails here.
+          /tmp/env/bin/dcfabric links -q examples/fabric-links/neighbors.tsv examples/fabric-links/floor.dc 2>/dev/null | cmp - examples/fabric-links/wired.dc
+          for f in index.html js/app.js js/version.js js/probe.js js/compact.js js/dccompact.mjs js/dclinks.mjs css/app.css examples/small.dc; do
             test -f "$(/tmp/env/bin/dcviz path)/$f" || { echo "missing from the wheel: $f"; exit 1; }
           done
 

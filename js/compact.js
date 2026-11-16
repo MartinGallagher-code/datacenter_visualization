@@ -1127,7 +1127,7 @@ const box = (el) => (el.box ? `${el.box.x},${el.box.y},${el.box.w},${el.box.h}` 
 
 // A warning names the line it is about and quotes what was written there,
 // and both change when lines are merged. What it says is what is compared.
-const normalWarning = (w) => String(w)
+export const normalWarning = (w) => String(w)
   .replace(/\bline \d+(: )?/g, 'line #$1')
   .replace(/\(from line \d+\)/g, '(from line #)')
   .replace(/"[^"]*"/g, '"…"');

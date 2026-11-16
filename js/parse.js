@@ -841,6 +841,14 @@ function spliceRuns(els, size) {
   return runs;
 }
 
+// A selector that is one exact path= -- no wildcard, no AND, no OR -- picks
+// the elements with that path, whatever its case: one, or the few that
+// differ only in case. A rule of two of them looks those up instead of
+// testing every element. dcfabric links writes one such rule per pair of
+// devices, and tens of thousands of rules each testing a quarter of a
+// million elements took minutes to load; looked up, it takes a moment.
+const EXACT_PATH = /^path=([^,|*?]*)$/i;
+
 function buildLinks(rules, model) {
   const seen = new Set();
   const links = [];
@@ -848,6 +856,24 @@ function buildLinks(rules, model) {
   model.splices = splices;
   model.all.forEach((el, i) => { el.n = i; });
   let netIndex = 0;
+
+  let byLowerPath = null;
+  // The elements an exact path= selects, in floor-plan order; null when the
+  // selector is anything else.
+  const exactPath = (selector) => {
+    const m = EXACT_PATH.exec(String(selector).trim());
+    if (!m) return null;
+    if (!byLowerPath) {
+      byLowerPath = new Map();
+      for (const el of model.all) {
+        const k = el.path.toLowerCase();
+        const list = byLowerPath.get(k);
+        if (list) list.push(el);
+        else byLowerPath.set(k, [el]);
+      }
+    }
+    return byLowerPath.get(m[1].toLowerCase()) || [];
+  };
 
   for (const rule of rules) {
     netIndex++;
@@ -898,10 +924,19 @@ function buildLinks(rules, model) {
     const matchA = compileSelector(rule.selA);
     const matchB = rule.selB ? compileSelector(rule.selB) : null;
 
+    // Every element, or only those two exact path= selectors name: no other
+    // element matches either, so testing them would change nothing.
+    let candidates = model.all;
+    const onlyA = exactPath(rule.selA);
+    const onlyB = rule.selB ? exactPath(rule.selB) : [];
+    if (onlyA && onlyB) {
+      candidates = onlyB.length ? [...new Set([...onlyA, ...onlyB])].sort((x, y) => x.n - y.n) : onlyA;
+    }
+
     const groups = new Map();
     let firstA = null;
     let firstB = null;
-    for (const el of model.all) {
+    for (const el of candidates) {
       const a = matchA(el);
       const b = matchB ? matchB(el) : false;
       if (!a && !b) continue;
@@ -1140,6 +1175,10 @@ const truthy = (value) => {
           bond: child.attrs.bond || null,
           balance,
           enabled,
+          // Where the net line is (the later one, when there are two): a net
+          // only link rules name has none, which is how dcfabric links tells
+          // a net it may not declare from one that is the layout's own.
+          line: child.line,
         });
       } else if (child.kind === 'link') {
         const positional = [];
@@ -1225,6 +1264,7 @@ const truthy = (value) => {
         gbps: null,
         traffic: true,
         enabled: null,
+        line: null,
       });
     }
   }

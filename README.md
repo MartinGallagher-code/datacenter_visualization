@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.57.0** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.58.0** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -2325,11 +2325,13 @@ netmesh run --for 60 && dcimport results.tsv --tidy reports/
 
 A switch's LLDP table says which of its ports faces which port of which
 neighbour. `dcfabric` turns such a table into a floor plan of the fabric,
-and the switches' per-port rates into
-[switch counters](#switch-counters-measured-on-the-cable) on its cables:
+or into cables on a floor plan you already have, and the switches' per-port
+rates into [switch counters](#switch-counters-measured-on-the-cable) on
+those cables:
 
 ```sh
 dcfabric layout   neighbors.tsv --gbps 100 > fabric.dc
+dcfabric links    neighbors.tsv floor.dc   > wired.dc
 dcfabric counters neighbors.tsv rates.tsv  > counters.tsv
 tools/dcfabric layout neighbors.tsv > fabric.dc    # ... or straight from a clone
 ```
@@ -2390,6 +2392,63 @@ spine1   Ethernet1    leaf1      Ethernet49
 - `--gbps N` gives every cable its capacity (`gbps=` on the net), so each is
   coloured against what it can carry, and `--net NAME` names the net
   (`data`).
+
+**Wiring a floor plan you already have.** `layout` draws only the switches,
+in rows it works out from their names. Where you have a `.dc` with the
+rooms, rows and racks the switches actually stand in, `dcfabric links`
+adds the table's cables to it instead, and leaves everything else as it is.
+`examples/fabric-links/` is a hall of racks wired this way
+(`?layout=examples/fabric-links/wired.dc&results=examples/fabric/counters.tsv`).
+
+- **It needs Node.js**, which `layout` and `counters` do not: the `.dc` is
+  read, and the file written is checked, with the viewer's own parser
+  (`js/dclinks.mjs`). Without Node it says so and writes nothing.
+- **Each name is found the way the viewer finds a results file's target**:
+  its full path, a tail of one that only one element has (`a1/leaf1`), or
+  its `name=`, whatever the case. So the table may name a device by path,
+  and its names need not pass the rules `layout` has for the ids it writes.
+- **A name is wired only when it is one device**, an element holding
+  nothing. A name that is several elements (two racks that each have a
+  `tor`), a container (a rack whose id the table uses), or a device another
+  of the table's names is too, is said and not wired. Nothing is guessed.
+- **Every port pair between two of those devices is one cable**, read
+  exactly as `layout` reads the table: a cable both ends list is one, N port
+  pairs are N cables, and the same contradictions are reported and left out.
+  Each pair is one rule, `link data path=hall/a/a1/leaf1
+  path=hall/net/n1/spine1 count=2  # Ethernet49 <-> Ethernet1, ...`: by path,
+  so it selects its two devices and nothing else, with their ports in the
+  comment, first device's port first.
+- **Rows with an end the `.dc` does not have are not drawn** — an upstream
+  router, a server it does not show — and are counted, naming the first few
+  names it lacks.
+- **A pair the `.dc` already joins on the net is left as it is**, and said
+  with both counts: the table's cables would draw beside the ones there.
+  `--add-wired` adds them anyway. A cable on another net is no reason.
+- **The net is the `.dc`'s own** when it has one, and is never declared
+  again, since a second `net` line silently replaces the first one's
+  settings; `--gbps` then goes on each rule. A net it lacks is declared,
+  with `--gbps` as its `gbps=`, unless the `.dc` has nets only `link` rules
+  name: a `net` line before those would change their colours, so then
+  there is none.
+- **The cables go in one block at the end**, between two marker comments
+  naming the net and the table. A second run on the same net replaces that
+  block, wherever it is, rather than adding another, so running it again
+  after the table changes never doubles a cable. The text above it is the
+  `.dc` as it was, byte for byte (CRLF stays CRLF, and a last line with no
+  newline gets one).
+- **Before writing anything**, it reads the result back with the viewer's
+  parser: every element, box, net and device model as they were, every
+  cable there was, and exactly the cables it says it added, each between
+  its two devices, with no warning the `.dc` did not already have. A device
+  whose new cables overflow its `ports=` is the one exception: that is a
+  finding about the floor plan, and is said rather than refused.
+- `counters` needs nothing new: its samples name the table's switches,
+  which the viewer finds in the wired `.dc` the same way.
+- **Big tables stay quick**: every name is looked up in one pass, and the
+  viewer finds a rule of two exact paths by index rather than by testing
+  every element. 100,000 rows against `examples/mega.dc` (a quarter of a
+  million elements) take about 20 seconds, and the result opens in the
+  viewer about a second slower than the floor plan alone.
 
 **The rates** are a timestamp, the switch, the port, what the port sent and
 what it received:
@@ -3000,8 +3059,8 @@ node tests/browser.mjs    # the page, driven in Chromium
 ```
 
 `tests/run.mjs` imports the viewer's modules and tests them directly, runs
-`dcadd`, `dcimport` and `dcfabric` against the fixtures in `tests/fixtures/`
-and `examples/fabric/`, `dccompact` against every example and every plan Build
+`dcadd`, `dcimport` and `dcfabric` against the fixtures in `tests/fixtures/`,
+`examples/fabric/` and `examples/fabric-links/`, `dccompact` against every example and every plan Build
 from data makes from `examples/live/`, and `dcprobe`
 against the machine it is on, and checks that the version agrees everywhere it
 is written. It also parses
@@ -3059,6 +3118,9 @@ examples/fabric/         a leaf-spine fabric read out of an LLDP neighbour
                           table by dcfabric, with its per-port rates as
                           switch counters (neighbors.tsv and rates.tsv in,
                           fabric.dc and counters.tsv out)
+examples/fabric-links/   a hall of racks, wired from its switches' LLDP table
+                          by dcfabric links (floor.dc and neighbors.tsv in,
+                          wired.dc out)
 examples/iperf/          a floor plan using every layout feature, with a real
                          export-overlay run painted over it (see its README)
 examples/hostnames-results.tsv  results addressed by flat name
@@ -3083,12 +3145,16 @@ js/tsv.js                 the wide-table reader: detection, the arrow that
 js/compact.js             the same layout written shorter, and the check that
                           it draws the same: Compact in the editor, and
                           dccompact (js/dccompact.mjs is its command line)
+js/dclinks.mjs            the .dc half of dcfabric links: each table name
+                          found with the viewer's parser, and the check that
+                          the file written is the old one plus its cables
 js/version.js             the project's version; python/dcviz/__init__.py
                           carries the other half and tests/run.mjs pins them
 python/dcviz/             the Python side: dcadd, dcimport, dcfabric, dcprobe
                           and `dcviz serve`, which is what `pip install`
                           ships. Stdlib only. Its dccompact runs
-                          js/dccompact.mjs with Node.
+                          js/dccompact.mjs with Node, and dcfabric links
+                          js/dclinks.mjs.
 tools/dcadd, tools/dcimport, tools/dcfabric, tools/dcprobe, tools/dccompact
                           two-line shims that run those from a clone with
                           nothing installed, so the copy that ships and the

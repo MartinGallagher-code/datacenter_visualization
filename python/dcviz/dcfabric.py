@@ -3,6 +3,7 @@
 """Turn a neighbour table into a fabric, and per-port rates into its load.
 
     dcfabric layout   neighbors.tsv             > fabric.dc
+    dcfabric links    neighbors.tsv floor.dc    > wired.dc
     dcfabric counters neighbors.tsv rates.tsv   > counters.tsv
 
 A neighbour table has one row per cabled port -- the shape LLDP gives -- with
@@ -21,6 +22,15 @@ and the cables they disagree about are not drawn (unless exactly one of them
 is listed by both of its ends: that one is). A name the .dc grammar would
 read as something else (`leaf[1]`, `a,b`, `sw 1`) is refused, never changed.
 
+`links` reads a .dc you already have -- its rooms, rows and racks -- and
+adds the table's cables to it: each name is looked up the way the viewer
+finds a results file's target, and every port pair between two of its
+devices is one cable, written by path in a block at the end. Rows with an
+end the .dc does not have, a name that is several elements or a container,
+and a pair the .dc already joins on the net are said, not wired. The .dc is
+read, and the file written checked, with the viewer's own parser
+(js/dclinks.mjs), so `links` needs Node.
+
 `counters` reads a second table of per-port rates -- a timestamp, the
 switch, the port, what the port sent (uplink) and what it received
 (downlink) -- and writes the viewer's switch counters onto the cables
@@ -37,8 +47,11 @@ The README's "dcfabric" section has the details.
 import argparse
 import fnmatch
 import io
+import json
 import os
 import re
+import shutil
+import subprocess
 import sys
 
 from . import version_notice
@@ -226,10 +239,14 @@ def is_table_header(cells):
     return re.sub(r"[^a-z]", "", cells[2].lower()) in NEIGHBOUR_HEADINGS
 
 
-def read_table(path):
+def read_table(path, check_names=True):
     """The Fabric a neighbour table describes. Raises Fail on anything that
     cannot be written into a .dc -- a bad name, two spellings of one name, a
-    row with too few columns -- naming every line at fault."""
+    row with too few columns -- naming every line at fault.
+
+    `check_names=False` is for `links`, which looks names up in a .dc rather
+    than writing them into one, so a path (`row1/leaf1`) is a name it can
+    find; everything else is read exactly as for `layout`."""
     rows = read_lines(path)
     fab = Fabric(path)
     errors = []
@@ -258,7 +275,7 @@ def read_table(path):
             continue
         fine = True
         for name in (host, nbr):
-            why = name_problem(name, "switch name")
+            why = name_problem(name, "switch name") if check_names else None
             if why:
                 errors.append("line %d: %s" % (line, why))
                 fine = False
@@ -519,19 +536,29 @@ def layout_text(fab, args, notes):
         net += " gbps=%s" % trim(args.gbps)
     out.append(net)
     out.append("")
+    out.extend(link_rules(args.net, pairs, lambda low: fab.names[low]))
+    return "\n".join(out) + "\n", "%s, %s and %s from %s" % (
+        plural(len(fab.names), "switch", "switches"), plural(len(tiers), "tier"),
+        plural(len(fab.cables), "cable"), plural(fab.rows, "row"))
+
+
+def link_rules(net, pairs, write, extra=""):
+    """One `link` rule per pair, `count=` its cables and a comment naming
+    their ports, first end's port first. `pairs` maps (a, b) to that pair's
+    (port of a, port of b); `write` gives the selector for an end, and
+    `extra` anything every rule carries (` gbps=100`)."""
+    out = []
     for (a, b) in sorted(pairs, key=lambda p: (natural_key(p[0]), natural_key(p[1]))):
         ports = sorted(pairs[(a, b)], key=lambda p: (natural_key(p[0]), natural_key(p[1])))
         # count= takes up to 1000 cables a rule; past that, another rule
         # for the same pair adds the rest, since each rule wires its own.
         for at in range(0, len(ports), 1000):
             chunk = ports[at:at + 1000]
-            rule = "link %s %s %s" % (args.net, fab.names[a], fab.names[b])
+            rule = "link %s %s %s" % (net, write(a), write(b))
             if len(chunk) > 1:
                 rule += " count=%d" % len(chunk)
-            out.append("%s  # %s" % (rule, ", ".join("%s <-> %s" % p for p in chunk)))
-    return "\n".join(out) + "\n", "%s, %s and %s from %s" % (
-        plural(len(fab.names), "switch", "switches"), plural(len(tiers), "tier"),
-        plural(len(fab.cables), "cable"), plural(fab.rows, "row"))
+            out.append("%s%s  # %s" % (rule, extra, ", ".join("%s <-> %s" % p for p in chunk)))
+    return out
 
 
 def trim(value):
@@ -789,6 +816,277 @@ def cable_port(fab, end):
     return cable.spelt[end]
 
 
+# --------------------------------------------------------------------- links
+#
+# The .dc side goes through the viewer's own parser, run with Node by
+# js/dclinks.mjs: which element a name is, and whether the file written
+# draws exactly the old one plus the cables added, are questions only that
+# parser can answer. A second parser here would be a second answer.
+
+BLOCK_BEGIN = re.compile(r"^# ---- dcfabric links: net (\S+), from (.*) ----\r?$")
+BLOCK_END = re.compile(r"^# ---- dcfabric links: end of net (\S+) ----\r?$")
+
+NO_NODE = """\
+needs Node.js 18 or later for links, and there is no `node` on PATH.
+It finds each name in the .dc, and checks the file it writes, with the
+viewer's own parser, which is JavaScript. Install Node from
+https://nodejs.org/ or your package manager. (layout and counters need no
+Node.)"""
+
+
+def find_node():
+    return shutil.which("node") or shutil.which("nodejs")
+
+
+def ask_viewer(node, command, request):
+    """What js/dclinks.mjs answers: one Node run, the whole table at once."""
+    from .serve import static_root
+    script = static_root() / "js" / "dclinks.mjs"
+    try:
+        run = subprocess.run([node, str(script), command], input=json.dumps(request).encode("utf-8"),
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    except OSError as err:
+        raise Fail("cannot run %s: %s" % (node, err.strerror or err))
+    if run.returncode != 0:
+        raise Fail("the viewer's parser (%s %s) failed: %s"
+                   % (script.name, command, run.stderr.decode("utf-8", "replace").strip()))
+    return json.loads(run.stdout.decode("utf-8"))
+
+
+def read_dc(path):
+    """The .dc's text, exactly: it is written back byte for byte."""
+    try:
+        with open(path, "rb") as fh:
+            data = fh.read()
+    except (IOError, OSError) as err:
+        raise Fail("cannot read %s: %s" % (path, err.strerror or err))
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        raise Fail("%s is not UTF-8 text" % path)
+    if "\x00" in text:
+        raise Fail("%s: not a text file, so not a .dc layout" % path)
+    return text
+
+
+def strip_blocks(text, net, path):
+    """The .dc without the block an earlier run wrote for this net, and the
+    tables those blocks came from. A run writes one block per net, and
+    replaces it on the next, so running twice never doubles a cable."""
+    lines = re.findall(r"[^\n]*\n|[^\n]+$", text)
+    out = []
+    tables = []
+    i = 0
+    while i < len(lines):
+        begin = BLOCK_BEGIN.match(lines[i].rstrip("\n"))
+        if not begin or begin.group(1) != net:
+            out.append(lines[i])
+            i += 1
+            continue
+        for j in range(i + 1, len(lines)):
+            end = BLOCK_END.match(lines[j].rstrip("\n"))
+            if end and end.group(1) == net:
+                break
+        else:
+            raise Fail("%s: line %d opens the cables an earlier dcfabric links added on net %s, "
+                       "and nothing closes them: put back the block's last line (# ---- dcfabric "
+                       "links: end of net %s ----), or delete the block" % (path, i + 1, net, net))
+        tables.append(begin.group(2))
+        # The blank line the run put before its block goes with it.
+        if out and not out[-1].strip():
+            out.pop()
+        i = j + 1
+    return "".join(out), tables
+
+
+def links_text(fab, args, notes, node):
+    """The .dc with the table's cables between its devices added, and the
+    summary line. Everything above the block is the .dc as it was read."""
+    source = os.path.basename(fab.path)
+    floor = os.path.basename(args.dc)
+    if not fab.names:
+        raise Fail("%s: no cables -- every row was blank, a comment or a header" % fab.path)
+    if not fab.cables:
+        raise Fail(notes + ["nothing to add: %s lists no cable that can be drawn" % fab.path])
+    text = read_dc(args.dc)
+    bom = "\ufeff" if text.startswith("\ufeff") else ""
+    base, replaced = strip_blocks(text[len(bom):], args.net, args.dc)
+
+    spelt = lambda end: fab.names[end[0]]
+    pairs = sorted(set((spelt(c.a), spelt(c.b)) for c in fab.cables))
+    names = sorted(fab.names.values(), key=natural_key)
+    res = ask_viewer(node, "resolve", {"text": base, "net": args.net, "names": names,
+                                       "pairs": [list(p) for p in pairs]})
+    if not res["elements"]:
+        raise Fail("%s: no elements -- not a .dc layout, or one with nothing in it" % args.dc)
+
+    # Which names are one device each. Nothing is guessed: a name that is
+    # several elements, or a container, or one device another name is too,
+    # is said and not wired.
+    found = res["names"]
+    missing, several, container, unsafe, aliases = [], [], [], [], []
+    device = {}
+    for name in names:
+        r = found[name]
+        if not r["found"]:
+            missing.append(name)
+        elif r["count"] > 1:
+            some = r.get("some") or []
+            several.append("%s (%d: %s%s)" % (name, r["count"], ", ".join(some),
+                                              ", ..." if r["count"] > len(some) else ""))
+        elif r["children"]:
+            container.append("%s (%s %s)" % (name, r["kind"], r["path"]))
+        elif r["unsafe"]:
+            unsafe.append("%s (%s: %s)" % (name, r["path"], r["unsafe"]))
+        elif r["samePath"] > 1:
+            unsafe.append("%s (%s: %d elements have that path but for letter case)"
+                          % (name, r["path"], r["samePath"]))
+        else:
+            device[name] = r["path"]
+    by_path = {}
+    for name, path in device.items():
+        by_path.setdefault(path, []).append(name)
+    for path in sorted(by_path, key=natural_key):
+        if len(by_path[path]) > 1:
+            aliases.append("%s (%s)" % (listing(by_path[path]), path))
+            for name in by_path[path]:
+                del device[name]
+
+    # Each port pair between two devices is a cable; the rest are said.
+    groups = {}
+    outside_rows = outside = refused = 0
+    for cable in fab.cables:
+        a, b = spelt(cable.a), spelt(cable.b)
+        if a not in device or b not in device:
+            if not found[a]["found"] or not found[b]["found"]:
+                outside += 1
+                outside_rows += len(cable.lines)
+            else:
+                refused += 1
+            continue
+        ends = sorted([(device[a], cable.spelt[cable.a]), (device[b], cable.spelt[cable.b])],
+                      key=lambda end: natural_key(end[0]))
+        groups.setdefault((ends[0][0], ends[1][0]), []).append((ends[0][1], ends[1][1]))
+
+    # What the .dc already wires on this net between two of the devices.
+    named = dict((path, name) for name, path in device.items())
+    wired = {}
+    for a, b, count in res["existing"]:
+        if a in device and b in device:
+            key = tuple(sorted((device[a], device[b]), key=natural_key))
+            wired[key] = count
+    kept_out = []
+    alongside = []
+    for key in sorted(groups, key=lambda k: (natural_key(k[0]), natural_key(k[1]))):
+        if key not in wired:
+            continue
+        said = "%s -- %s (%d there, %d in the table)" % (named[key[0]], named[key[1]], wired[key],
+                                                         len(groups[key]))
+        if args.add_wired:
+            alongside.append(said)
+        else:
+            kept_out.append(said)
+            del groups[key]
+
+    # The net: the .dc's own when it has one, never declared twice -- a
+    # second net line silently replaces the first one's settings.
+    nets = res["nets"]
+    have = nets.get(args.net)
+    undeclared = sorted((n for n, v in nets.items() if v["line"] is None and n != args.net),
+                        key=natural_key)
+    declare = have is None and not undeclared
+    extra = ""
+    if args.gbps is not None and not declare and (have is None or have["gbps"] != args.gbps):
+        extra = " gbps=%s" % trim(args.gbps)
+
+    added = sum(len(ports) for ports in groups.values())
+    nl = "\r\n" if "\r\n" in base else "\n"
+    block = []
+    if groups:
+        block = [
+            "# ---- dcfabric links: net %s, from %s ----" % (args.net, source),
+            "# %s between %s, from %s." % (
+                plural(added, "cable"), plural(len(groups), "pair") + " of devices", source),
+            "# Each link line joins two devices by path; count= is how many cables join",
+            "# them, and the comment after it names their ports, first device's port first.",
+            "# Running dcfabric links again replaces this block, down to its end line.",
+        ]
+        if declare:
+            net = 'net %s label="%s"' % (args.net, display("Cables from %s" % source))
+            if args.gbps is not None:
+                net += " gbps=%s" % trim(args.gbps)
+            block.append(net)
+        block.extend(link_rules(args.net, groups, lambda path: "path=" + path, extra))
+        block.append("# ---- dcfabric links: end of net %s ----" % args.net)
+    out = base
+    if block:
+        if out and not out.endswith("\n"):
+            out += nl
+        if out:
+            out += nl
+        out += nl.join(block) + nl
+
+    check = ask_viewer(node, "check", {
+        "before": base, "after": out, "net": args.net,
+        "added": [[a, b, len(ports), float(args.gbps) if extra else None]
+                  for (a, b), ports in sorted(groups.items())],
+    })
+    if check["problem"]:
+        raise Fail(notes + ["read back with the viewer's parser, the .dc written would not be %s "
+                            "with just these cables added -- %s -- so nothing is written. That is "
+                            "a bug in dcfabric: please report it with the two files"
+                            % (floor, check["problem"])])
+
+    if replaced:
+        notes.append("replaced the cables an earlier run added on net %s (from %s)"
+                     % (args.net, listing(replaced)))
+    if outside:
+        notes.append("%s (%s) %s an end that is not in %s, so not drawn -- %s not there: %s"
+                     % (plural(outside_rows, "row"), plural(outside, "cable"),
+                        "has" if outside_rows == 1 else "have", floor,
+                        plural(len(missing), "name is", "names are"), listing(missing)))
+    for items, what in (
+            (several, "more than one element in %s, so not wired -- name one by its path" % floor),
+            (container, "a container in %s, not a device, so not wired" % floor),
+            (unsafe, "a path a link rule cannot select exactly, so not wired")):
+        if items:
+            notes.append("%s %s: %s" % (plural(len(items), "name is", "names are"), what,
+                                        listing(items)))
+    if aliases:
+        notes.append("two names for one device in %s, so neither is wired -- make the table "
+                     "name it one way: %s" % (floor, "; ".join(aliases[:8]) + (
+                         "; and %d more" % (len(aliases) - 8) if len(aliases) > 8 else "")))
+    if refused:
+        notes.append("%s not drawn, for a name not wired" % plural(refused, "cable is", "cables are"))
+    if kept_out:
+        notes.append("%s the table lists %s already joined on net %s in %s, so nothing is added "
+                     "for %s (--add-wired adds the table's cables anyway): %s"
+                     % (plural(len(kept_out), "pair"), "is" if len(kept_out) == 1 else "are",
+                        args.net, floor, "it" if len(kept_out) == 1 else "them", listing(kept_out, 5)))
+    if alongside:
+        notes.append("--add-wired: the table's cables are added beside the ones %s already has: %s"
+                     % (floor, listing(alongside, 5)))
+    if groups and not declare and have is None:
+        notes.append("net %s gets no net line: %s's %s %s none either, and one more net line "
+                     "would change the colours %s drawn in"
+                     % (args.net, floor, "net" if len(undeclared) == 1 else "nets",
+                        listing(undeclared) + (" has" if len(undeclared) == 1 else " have"),
+                        "it is" if len(undeclared) == 1 else "they are"))
+    for warning in check["ports"]:
+        notes.append("with the cables added, the viewer says: %s" % warning)
+    if check["unticked"]:
+        notes.append("%s cables in all is more than the viewer ticks a net for on its own, so %s "
+                     "now start%s unticked: tick %s in the left panel"
+                     % (check["cables"], listing(check["unticked"]),
+                        "s" if len(check["unticked"]) == 1 else "",
+                        "it" if len(check["unticked"]) == 1 else "them"))
+    summary = "%s between %s added to %s on net %s, from %s; %d of %s in %s %s there" % (
+        plural(added, "cable"), plural(len(groups), "pair") + " of devices", floor, args.net,
+        plural(fab.rows, "row"), len(device), plural(len(names), "name"), source,
+        "is a device" if len(device) == 1 else "are devices")
+    return bom + out, summary
+
+
 # ---------------------------------------------------------------------- main
 
 def positive(low, high, kind=float):
@@ -816,9 +1114,11 @@ def build_parser():
     ap = argparse.ArgumentParser(
         prog=PROG,
         description="Turn a neighbour table (host, port, neighbor, port) into a .dc "
-                    "fabric, and per-port rates into the switch counters drawn on it.",
+                    "fabric, or into cables on a .dc you have, and per-port rates into the "
+                    "switch counters drawn on them.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="  dcfabric layout   neighbors.tsv            > fabric.dc\n"
+               "  dcfabric links    neighbors.tsv floor.dc   > wired.dc\n"
                "  dcfabric counters neighbors.tsv rates.tsv  > counters.tsv\n\n"
                "Load both in the viewer and tick \"draw on the cables\". "
                "The README's \"dcfabric\" section has the details.")
@@ -870,6 +1170,32 @@ def build_parser():
                      help="the metric's name (default: port_rate)")
     cnt.add_argument("--label", default="Switch port counters",
                      help="the metric's label (default: Switch port counters)")
+
+    lnk = sub.add_parser(
+        "links", help="add a neighbour table's cables to a .dc you have, between its devices",
+        description="Add the cables a neighbour table lists to a .dc you already have: every\n"
+                    "port pair between two of its devices is one cable, written by path, and\n"
+                    "everything else in the .dc stays as it is. Names are found the way the\n"
+                    "viewer finds a results file's target: full path, a unique tail of one, or\n"
+                    "name=, whatever the case. The .dc is read, and the file written checked,\n"
+                    "with the viewer's own parser, so links needs Node.js. The README's\n"
+                    "\"dcfabric\" section has the details.",
+        epilog="  dcfabric links neighbors.tsv floor.dc > wired.dc\n"
+               "  dcfabric links neighbors.tsv floor.dc -o floor.dc    # in place\n\n"
+               "The cables go in one block at the end, between two marker comments; a\n"
+               "second run on the same net replaces that block rather than adding another.",
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    lnk.add_argument("table", metavar="NEIGHBORS.TSV",
+                     help="host, port, neighbor, port: one row per cabled port")
+    lnk.add_argument("dc", metavar="FLOOR.DC", help="the floor plan to wire")
+    common(lnk)
+    lnk.add_argument("--gbps", type=positive(0.001, 1000000),
+                     help="what each cable added carries, in Gb/s (gbps= on the net it adds, "
+                          "or on each link rule when the net is the .dc's own)")
+    lnk.add_argument("--add-wired", action="store_true",
+                     help="add the table's cables between two devices the .dc already joins on "
+                          "the net, beside the ones it has (default: leave that pair as it is, "
+                          "and say so)")
     return ap
 
 
@@ -880,11 +1206,19 @@ def main(argv=None):
         ap.print_help(sys.stderr)
         return 2
     notes = []
+    node = None
+    if args.command == "links":
+        node = find_node()
+        if not node:
+            sys.stderr.write("%s: %s\n" % (PROG, NO_NODE))
+            return 1
     try:
-        fab = read_table(args.table)
+        fab = read_table(args.table, check_names=args.command != "links")
         notes.extend(fab.notes)
         if args.command == "layout":
             text, summary = layout_text(fab, args, notes)
+        elif args.command == "links":
+            text, summary = links_text(fab, args, notes, node)
         else:
             text, summary = counters_text(fab, args.rates, args, notes)
     except Fail as err:

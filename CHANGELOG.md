@@ -12,6 +12,51 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.58.0 — 2026-11-16
+
+The cables a neighbour table lists, added to a floor plan you already have
+(DV-010).
+
+- **`dcfabric links NEIGHBORS.TSV FLOOR.DC`** reads the same neighbour table
+  as `layout` (host, port, neighbor, port) and a `.dc` you already have — its
+  rooms, rows and racks — and writes that `.dc` with the table's cables
+  between its devices added, and everything else as it was. `layout` drew
+  only the switches, in rows of its own; this draws their cables where the
+  switches actually stand. `examples/fabric-links/` is a hall wired this way.
+- **Names are found the way the viewer finds a results file's target** —
+  full path, a unique tail of one, or `name=`, whatever the case — using the
+  viewer's own parser, run with Node (`js/dclinks.mjs`): there is no second
+  `.dc` parser in Python. A name that is several elements, a container, or
+  one device another name is too, is said and not wired.
+- **One cable per port pair**, read exactly as `layout` reads the table,
+  with each pair's ports in a comment beside its rule, first device's port
+  first. Every rule selects its two devices by `path=`, so a rack that
+  shares a switch's name is never wired as the rack.
+- **Rows with an end the `.dc` does not have** (an upstream router, a server
+  it does not show) are not drawn, and are counted with the missing names.
+  **A pair the `.dc` already joins on the net** is left as it is and said,
+  with both counts; `--add-wired` adds the table's cables beside it.
+- **The `.dc`'s own net is used, never declared twice.** `--gbps` goes on
+  the net it adds, or on each rule when the net is the `.dc`'s.
+- **The cables go in one marked block at the end**, which a second run on the
+  same net replaces: running it twice writes the same file. The text above it
+  is the `.dc` byte for byte.
+- **Checked before anything is written**: read back with the viewer's parser,
+  the result has every element, box, net and device model of the input, every
+  cable it had, and exactly the cables added, with no new warning but a
+  device whose new cables overflow its `ports=`, which is said. Without Node,
+  `links` says so and writes nothing; `layout` and `counters` need no Node,
+  and `counters` with the same table lands every sample on the wired `.dc`.
+- **The viewer loads a rule of two exact `path=` selectors by index** rather
+  than testing every element, which is what wires the same cables with no
+  file changing: 100,000 rows against the quarter-million-element
+  `examples/mega.dc` take about 20 seconds to wire, where testing every
+  element for each of its 50,000 rules took minutes, in the tool and in the
+  viewer alike.
+- Ports still live only in a comment, so the parallel cables between two
+  devices still share their pair's load evenly in the viewer (README,
+  "What it cannot show yet").
+
 ## 1.57.0 — 2026-11-10
 
 A layout written shorter, checked to draw the same (DV-009).

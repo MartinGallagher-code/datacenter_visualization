@@ -1268,6 +1268,39 @@ await test('a fabric from a neighbour table, with its port rates on the cables',
   ok(printed > 0, `values on the cables prints their figures  (${printed})`);
 }, { url: '?layout=examples/fabric/fabric.dc&results=examples/fabric/counters.tsv' });
 
+// The same switches, standing in the racks of a floor plan someone already
+// had, wired from their neighbour table by dcfabric links (DV-010): it loads
+// with nothing to report, the cables added draw on the floor plan's own net,
+// a cable between two racks is the right two switches, and the counters
+// made for the fabric on its own land on these cables just the same.
+await test('a floor plan wired from a neighbour table', async () => {
+  ok(await page.evaluate(() => document.querySelector('#notices').hidden), 'the wired floor plan and the counters load with no warning');
+  const status = await page.evaluate(() => document.querySelector('#statusinfo').textContent);
+  ok(/· 42 links ·/.test(status), `the servers' 32 cables are drawn, and the 10 pairs of switches the 20 added join  (${status.slice(0, 80)})`);
+  const sweep = (want) => page.evaluate((want) => {
+    const c = document.querySelector('#view');
+    const r = c.getBoundingClientRect();
+    const re = new RegExp(want);
+    for (let y = 10; y < r.height; y += 5) {
+      for (let x = 4; x < r.width; x += 2) {
+        c.dispatchEvent(new PointerEvent('pointermove', { clientX: r.left + x, clientY: r.top + y, bubbles: true }));
+        const tip = document.querySelector('#tooltip');
+        if (!tip.hidden && re.test(tip.textContent)) return tip.textContent;
+      }
+    }
+    return null;
+  }, want);
+  const uplink = await sweep('^Data: (a1/leaf1 ↔ n1/spine1|n1/spine1 ↔ a1/leaf1)\\n');
+  ok(!!uplink, 'a cable added runs from leaf1 in rack a1 to spine1 in rack n1, on the floor plan\u2019s own net');
+  ok(uplink && /2 cables · 100G/.test(uplink), `two of them, at the net\u2019s 100G  (${(uplink || '').replace(/\n/g, ' | ')})`);
+  await page.locator('#overlays .overlay-head input[type=checkbox]').first().check();
+  await page.waitForTimeout(200);
+  await page.locator('#overlays label', { hasText: 'draw on the cables' }).locator('input').check();
+  await page.waitForTimeout(400);
+  const text = await page.evaluate(() => document.querySelector('#cable-load').innerText);
+  ok(/20 cables measured by Switch port counters/.test(text), `every cable added is measured  (${text.slice(0, 120).replace(/\n/g, ' | ')})`);
+}, { url: '?layout=examples/fabric-links/wired.dc&results=examples/fabric/counters.tsv' });
+
 await test('per-host totals load the cables as an estimate', async () => {
   await page.locator('#overlays .overlay-head input[type=checkbox]').first().check();
   await page.waitForTimeout(200);
