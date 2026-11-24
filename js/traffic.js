@@ -50,7 +50,9 @@
 // carries less on every other cable along its path too.
 
 import { readBytes, readDuration, readShare } from './parse.js';
-import { AGGREGATIONS, DEFAULT_AGG, overlayValue } from './results.js';
+import {
+  AGGREGATIONS, DEFAULT_AGG, invertedOf, isStandardized, overlayValue, paletteOf, zRangeOf,
+} from './results.js';
 
 // The ways a fabric shares a flow out where several cables continue its
 // route, in the order the panel offers them: what real switches do first,
@@ -245,11 +247,15 @@ export function averageTraffic(model, flows, opts = {}) {
  * or, comparing, the change, signed. Short enough to sit on a cable.
  *
  * @param view    viewOf's result
- * @param amount  the cable's figure: a load (or average), or a change
+ * @param amount  the cable's figure: a load (or average), a change, or a
+ *                z-score
  * @param change  whether it is a change, to be signed
+ * @param sigma   whether it is a z-score ("values as z-score" on the card)
  */
-export function cableFigure(view, amount, change = false) {
+export function cableFigure(view, amount, change = false, sigma = false) {
   if (!Number.isFinite(amount)) return '';
+  // A z-score, as the card prints one, signed.
+  if (sigma) return `${amount < 0 ? '−' : '+'}${Math.abs(amount).toFixed(2)}σ`;
   const sign = change ? (amount > 0 ? '+' : amount < 0 ? '−' : '') : amount < 0 ? '−' : '';
   const size = Math.abs(amount);
   const bits = change ? view.changeToGbps : view.toGbps;
@@ -3213,6 +3219,93 @@ async function explainAt(model, readings, target, opts) {
 export const VIEWS = ['model', 'change', 'measured', 'diff', 'explain'];
 const ZERO = [0, 0, null];
 
+// The palette cables take where nothing on a card sets one -- the load
+// generator or a test flow on their own: what a card starts with.
+const CABLE_PALETTE = 'viridis';
+
+/**
+ * How the card a metric is drawn from colours its values, read once, so the
+ * cables are drawn the way its switches are: its palette and direction
+ * (`higher=bad` green to red, `higher=good` turned round), and set to
+ * z-score, how (`colour` or `values`) and the σ at each end -- the panel's
+ * shared z scale where it shares one, as palette.js colours the switches.
+ *
+ * @param overlay  the card, or null where the load is no card's
+ * @returns { palette, invert, std: 'off'|'colour'|'values', zRange, card,
+ *            shared } -- card: whether a card set them; shared: whether
+ *            the panel's shared z scale did
+ */
+export function cardScale(overlay) {
+  if (!overlay) return { palette: CABLE_PALETTE, invert: false, std: 'off', zRange: 3, card: false, shared: false };
+  const std = isStandardized(overlay) ? overlay.stdMode : 'off';
+  return {
+    palette: paletteOf(overlay) || CABLE_PALETTE, invert: !!invertedOf(overlay), std,
+    zRange: zRangeOf(overlay), card: true, shared: std !== 'off' && !!overlay.zShared,
+  };
+}
+
+/**
+ * Each cable's own value, the busier way, and where it sits among the
+ * others: what the cables are coloured by when nothing says how full they
+ * are, or when the card is set to z-score. Worked out once for a view.
+ *
+ * The population is every cable with a value -- a counter read on it, or
+ * traffic routed over it -- one value each, its busier direction: the
+ * cables, not the card's switches, whose totals set the card's own range
+ * and spread. A counter that read zero is a value, and counts.
+ *
+ * @param loads  Map(link -> [a to b, b to a])
+ * @param card   cardScale's
+ * @returns the card's settings and { low, high, mean, sd, n, off, worst,
+ *          tone(v) } -- tone is what a cable's colour is drawn from: its
+ *          z-score set to z-score, else how far up from the lowest cable to
+ *          the highest it sits, 0 to 1 (the middle when they are all one).
+ *          off counts the cables past ±zRange σ, worst is the furthest out,
+ *          signed.
+ */
+export function valueScale(loads, card) {
+  let n = 0;
+  let sum = 0;
+  let low = Infinity;
+  let high = -Infinity;
+  for (const l of loads.values()) {
+    const v = Math.max(l[0], l[1]);
+    if (!Number.isFinite(v)) continue;
+    n++;
+    sum += v;
+    if (v < low) low = v;
+    if (v > high) high = v;
+  }
+  if (!n) { low = 0; high = 0; }
+  const mean = n ? sum / n : 0;
+  let sq = 0;
+  for (const l of loads.values()) {
+    const v = Math.max(l[0], l[1]);
+    if (Number.isFinite(v)) sq += (v - mean) * (v - mean);
+  }
+  // Over the whole population, as the card measures its own spread.
+  const sd = n ? Math.sqrt(sq / n) : 0;
+  // Spread too small to tell from rounding is none: every cable is average.
+  const spread = sd > 1e-12 * Math.max(1, Math.abs(mean)) ? sd : 0;
+  const z = card.std !== 'off';
+  const zOf = (v) => (spread ? (v - mean) / spread : 0);
+  let off = 0;
+  let worst = 0;
+  if (z && spread) {
+    for (const l of loads.values()) {
+      const v = Math.max(l[0], l[1]);
+      if (!Number.isFinite(v)) continue;
+      const k = zOf(v);
+      if (Math.abs(k) > card.zRange) off++;
+      if (Math.abs(k) > Math.abs(worst)) worst = k;
+    }
+  }
+  return {
+    ...card, low, high, mean, sd: spread, n, off, worst,
+    tone: z ? zOf : (v) => (high > low ? (v - low) / (high - low) : 0.5),
+  };
+}
+
 /**
  * What the cables show, from the sources there are:
  *
@@ -3225,12 +3318,14 @@ const ZERO = [0, 0, null];
  *
  * @param s  { view, views, model, base, counters, anyCapacity } -- model,
  *           base and counters are { loads, toGbps, unit } or null
- * @returns  { view, views, colour: 'util'|'load'|'diff', loads, toGbps,
- *             unit, share(link) -> [ab, ba, colour value], compare, span,
- *             contention } -- contention is contend()'s, where the cables
- *             show traffic shared out, else null
+ * @returns  { view, views, colour: 'util'|'value'|'average'|'diff', loads,
+ *             toGbps, unit, share(link) -> [ab, ba, colour value], compare,
+ *             span, contention, scale } -- contention is contend()'s, where
+ *             the cables show traffic shared out, else null; scale is
+ *             valueScale's, for 'value'
  *           where share gives what is drawn: the load each way (the width)
- *           and the value the colour comes from -- a utilization, or a
+ *           and the value the colour comes from -- a utilization, the
+ *           cable's own value on the card's scale (valueScale's tone), or a
  *           signed change, as a fraction of the cable's capacity (or of the
  *           biggest change, where capacities are unknown).
  */
@@ -3307,14 +3402,36 @@ export function viewOf(s) {
   if (view === 'model' || view === 'measured') {
     const src = view === 'measured' ? s.counters : s.model;
     const { loads, toGbps } = src;
-    return {
+    const drawn = {
       ...base,
-      colour: anyCapacity && toGbps !== null ? 'util' : 'load',
       loads, toGbps, unit: src.unit, compare: null, span: 1, after: src, before: null,
       contention: (src.result && src.result.contention) || null,
+    };
+    // The card the load is from: set to z-score, the cables are too, gbps=
+    // or not.
+    const card = cardScale(src.overlay || null);
+    if (anyCapacity && toGbps !== null && card.std === 'off') {
+      return {
+        ...drawn,
+        colour: 'util',
+        share(link) {
+          const l = loads.get(link);
+          return l ? [l[0], l[1], utilOf(link, l, toGbps)] : ZERO;
+        },
+      };
+    }
+    // Nothing says how full a cable is -- no gbps=, or not a bit rate -- or
+    // the card asks for z-scores: each cable by its own value, the busier
+    // way, on the card's palette. Not by the lane it runs along: a lane
+    // adds up every cable on it, which painted one cable as a small share of
+    // the busiest lane and nearly every cable the same.
+    const scale = valueScale(loads, card);
+    return {
+      ...drawn,
+      colour: 'value', scale,
       share(link) {
         const l = loads.get(link);
-        return l ? [l[0], l[1], utilOf(link, l, toGbps)] : ZERO;
+        return l ? [l[0], l[1], scale.tone(Math.max(l[0], l[1]))] : ZERO;
       },
     };
   }

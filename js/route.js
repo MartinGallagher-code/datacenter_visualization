@@ -56,7 +56,9 @@ const isBus = (block) => !!(block && block.attrs && block.attrs.cables === 'bus'
  * @param order    (net name) => its position among the enabled nets
  * @param widthOf  (net name, count, trunk) => line width in screen pixels
  * @param styleOf  optional (load, worst, max) => style object, for drawing by
- *                 traffic: each edge then carries t = { ab, ba, worst } (load
+ *                 traffic (styleOf.signed: the worst values are signed, and
+ *                 the one kept is the furthest from nothing, everywhere):
+ *                 each edge then carries t = { ab, ba, worst } (load
  *                 from a to b, from b to a, the busiest cable's utilization or
  *                 null) and each splice t = { members: Map(block -> { out,
  *                 in, worst }), trunk: { ab, ba, worst } }, and segs and
@@ -126,7 +128,7 @@ export function routeCables(edges, splices, order, widthOf, styleOf = null) {
     if (!o) {
       nets.set(net, (o = {
         h: [], v: new Map(), free: [], buses: [], markers: [], cables: [], curves: null,
-        traffic, tstubs: [], tv: new Map(), tsegs: [], tstubsegs: [], tcurves: [],
+        traffic, signed: !!(styleOf && styleOf.signed), tstubs: [], tv: new Map(), tsegs: [], tstubsegs: [], tcurves: [],
       }));
     }
     return o;
@@ -399,7 +401,10 @@ function fanOut(o) {
       const t = cable.t;
       sent += cable.P === port ? t.ab : t.ba;
       got += cable.P === port ? t.ba : t.ab;
-      if (t.worst !== null && (worst === null || t.worst > worst)) worst = t.worst;
+      // The highest -- or, where the values are signed z-scores, the
+      // furthest from nothing either way.
+      if (o.signed) worst = worse(worst, t.worst);
+      else if (t.worst !== null && (worst === null || t.worst > worst)) worst = t.worst;
     }
     o.tsegs.push(x, port.y - spread / 2, x, port.y + spread / 2, Math.max(sent, got), worst);
   }

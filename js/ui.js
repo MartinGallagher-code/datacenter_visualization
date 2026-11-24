@@ -13,6 +13,7 @@ import {
 } from './results.js';
 import {
   capacityWidth, changeColor, countDescendants, FINDING_COLORS, LOAD_COLORS, loadColor, linkSummary, spliceSummary,
+  valueColor,
 } from './render.js';
 import {
   biggestChanges, burstRisk, busiest, busyable, cablesOf, counterparts, counterpartLevels, EXPLAIN_PATTERNS, takeoutCandidates, TAKEOUT_KINDS, formatGbps, formatPps, formatTime, hostLimits, CORE_LIMIT, GEN_UNITS, HOST_SPLITS, HOST_SPLIT_LABELS, SPLIT_LIMIT, hostsFor, loadable, loadUnit, PATTERNS, reachKinds, TARGETED,
@@ -1552,7 +1553,8 @@ export function renderCableLoad(state, host, actions) {
   labBox.addEventListener('change', () => actions.setCableLabels(labBox.checked));
   lab.append(labBox, el('span', null, 'values on the cables'));
   lab.title = 'Print each cable’s figure on it: what it carries the busier way (an average: the higher way; '
-    + 'comparing: the change), where the figure fits along it at this zoom. The biggest go first; where they '
+    + 'comparing: the change; with the card on "values as z-score", its z-score against the other cables), '
+    + 'where the figure fits along it at this zoom. The biggest go first; where they '
     + 'crowd, the smaller give way. Hover a cable for both ways and the flows behind it.';
   box.append(lab);
 
@@ -3122,6 +3124,20 @@ export function cableTip(state, hit, view, flows) {
         lines.push(`${name}: ${formatLoad(view, load[k])}${wanted}`);
       });
     }
+    // By z-score, how unusual it is among the cables: what its colour says.
+    const sc = view.colour === 'value' ? view.scale : null;
+    if (sc && sc.std !== 'off') {
+      let far = null;
+      for (const link of links) {
+        const l = view.loads.get(link);
+        if (!l) continue;
+        const z = sc.tone(Math.max(l[0], l[1]));
+        if (far === null || Math.abs(z) > Math.abs(far)) far = z;
+      }
+      if (far !== null) {
+        lines.push(`${links.length > 1 ? 'the most unusual is ' : ''}${sigmaText(far)} against the other cables, the busier way`);
+      }
+    }
     if (worst !== null && c && held) {
       lines.push(`${links.length > 1 ? 'the fullest is ' : ''}full — holding back ${held} flow${held === 1 ? '' : 's'} crossing it`);
     } else if (worst !== null) {
@@ -3187,9 +3203,61 @@ function directions(parts, side, sideName) {
   return [['one way'], ['the other']];
 }
 
+// A z-score as the cables print it, signed.
+const sigmaText = (z) => `${z < 0 ? '−' : '+'}${Math.abs(z).toFixed(2)}σ`;
+
+/**
+ * The key for cables coloured by their own value: the two ends of the bar,
+ * and what the colour means, in plain words -- from the lowest cable to the
+ * highest on the card's palette, or by z-score against the other cables.
+ *
+ * @param view  viewOf's, with colour 'value'
+ * @returns { ends: [low, high], notes: [sentence, ...] }
+ */
+export function valueKey(view) {
+  const sc = view.scale;
+  const many = (n, one) => `${n.toLocaleString()} ${one}${n === 1 ? '' : 's'}`;
+  const notes = [];
+  if (sc.std !== 'off') {
+    const r = trimNum(sc.zRange);
+    const whose = sc.shared ? 'the shared z scale’s' : 'the card’s';
+    notes.push(`Colour: each cable’s own value, the busier way, as a z-score against the other cables `
+      + `(${many(sc.n, 'cable')}, mean ${formatLoad(view, sc.mean)} ± ${formatLoad(view, sc.sd)}), on ${whose} `
+      + `±${r}σ: the middle is the mean. A lane is the colour of its most unusual cable. `
+      + 'Width: the load, against the busiest cable.');
+    if (sc.n && !sc.sd) notes.push('Every cable carries the same, so every one is at the mean: the middle colour.');
+    if (sc.off) {
+      notes.push(`${many(sc.off, 'cable')} past ±${r}σ, the furthest at ${sigmaText(sc.worst)}: past the ends `
+        + 'a cable is the end colour, so widen the σ range to tell them apart.');
+    }
+    if (view.anyCapacity && view.toGbps !== null) {
+      notes.push('The card is set to z-score, so the cables are too. Set it back to off to see how full each '
+        + 'cable is against its gbps=.');
+    }
+    return { ends: [`≤ −${r}σ`, `≥ +${r}σ`], notes };
+  }
+  const which = sc.card ? 'the card’s palette' : `the ${sc.palette} palette`;
+  notes.push(`Colour: each cable’s own value, the busier way, on ${which}, from the lowest cable to the highest. `
+    + 'A lane is the colour of its highest cable. Width: the load, against the busiest cable.');
+  notes.push(view.toGbps === null
+    ? `${view.unit || 'These values'} cannot be set against a capacity in Gb/s, so nothing reads as full.`
+    : 'No cable has a gbps=, so nothing reads as full.');
+  if (sc.n && sc.high === sc.low) notes.push('Every cable carries the same, so every one is the middle colour.');
+  return { ends: [formatLoad(view, sc.low), formatLoad(view, sc.high)], notes };
+}
+
 /** What colour and width mean, for the view shown. */
 function renderLoadKey(view, box) {
   const key = el('div', 'load-key');
+  if (view.colour === 'value') {
+    const { ends, notes } = valueKey(view);
+    const bar = el('span', 'load-ramp');
+    bar.style.background = `linear-gradient(90deg, ${[0, 0.25, 0.5, 0.75, 1].map((t) => valueColor(view.scale, t)).join(', ')})`;
+    key.append(el('span', null, ends[0]), bar, el('span', null, ends[1]));
+    box.append(key);
+    for (const note of notes) box.append(el('p', 'muted cable-note', note));
+    return;
+  }
   if (view.colour === 'average') {
     const bar = el('span', 'load-ramp');
     bar.style.background = `linear-gradient(90deg, ${[0, 0.25, 0.5, 0.75, 1].map((v) => ramp('plasma', 0.3 + 0.7 * v)).join(', ')})`;
@@ -3235,10 +3303,6 @@ function renderLoadKey(view, box) {
         + 'Width: what the flows offer there — without contention, it can be more than the cable carries.'));
     return;
   }
-  box.append(el('p', 'muted cable-note', view.toGbps === null
-    ? `Width and colour: the load, against the busiest cable. ${view.unit || 'These values'} `
-      + 'cannot be set against a capacity in Gb/s, so nothing reads as full.'
-    : 'Width and colour: the load, against the busiest cable. No cable has a gbps=, so nothing reads as full.'));
 }
 
 /**

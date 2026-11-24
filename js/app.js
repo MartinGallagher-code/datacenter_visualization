@@ -299,15 +299,20 @@ const state = {
     const explain = state.explainSource();
     if (explain && explain.suspects) views.push('explain');
     const view = views.includes(state.traffic.view) ? state.traffic.view : views[0];
+    // The cables are coloured as the card they come from colours: a new
+    // palette, z-score setting or σ range there is a new view, and the
+    // renderer, keyed on the view, lays the cables out again on the next
+    // frame.
+    const cards = `${cardKey(model && model.overlay)}\u0001${cardKey(counters && counters.overlay)}`;
     const c = state.trafficCache.view;
     if (c && c.model === model && c.base === base && c.counters === counters && c.view === view
-        && c.layout === state.model && c.explain === explain) {
+        && c.layout === state.model && c.explain === explain && c.cards === cards) {
       return c.value;
     }
     let anyCapacity = false;
     for (const link of state.model.links) if (link.gbps) { anyCapacity = true; break; }
     const value = viewOf({ view, views, model, base, counters, anyCapacity, explain });
-    state.trafficCache.view = { model, base, counters, view, layout: state.model, explain, value };
+    state.trafficCache.view = { model, base, counters, view, layout: state.model, explain, cards, value };
     return value;
   },
 
@@ -506,6 +511,18 @@ const invalidate = () => { needsDraw = true; };
 const EXPLAIN_WORKING = { working: true };
 
 const sharedZScale = () => (state.zShared ? { palette: state.zPalette, zRange: state.zSpread } : null);
+
+/**
+ * What the cables take from a card: its palette and direction, its z-score
+ * setting and σ range, and the panel's shared z scale -- everything
+ * cardScale reads, as one string to key the cable view on.
+ */
+function cardKey(overlay) {
+  if (!overlay) return '';
+  const shared = overlay.zShared;
+  return JSON.stringify([overlay.palette, !!overlay.invert, overlay.stdMode, overlay.zRange,
+    shared ? shared.palette : null, shared ? shared.zRange : null]);
+}
 
 /** Mirror the panel's shared z scale onto every overlay, or take it away. */
 function applyZScale() {

@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.58.0** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.59.0** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -514,8 +514,9 @@ instead.
   [Contention](#contention-a-full-cable-shares-itself-out)). Cables carrying
   traffic with no `gbps=` are grey; idle ones stay, faint, in their net's
   colour. With no capacity anywhere, or a load that is not in bits (`pps`,
-  a count, a number with no unit), colour is the load against the busiest
-  cable — `gbps=` or not.
+  a count, a number with no unit), or with the card set to z-score, each
+  cable is coloured by [its own value](#each-cable-by-its-own-value) on the
+  card's colours instead.
 - **The panel** names the busiest cables (`R02/torb → R02/s5 25G/25G · 100%
   · 8 held`; click one to go to it) — **Show more** lists more of them, 25 at
   a time, and **Show all** every one (up to 10,000; past that it says so) —
@@ -525,7 +526,8 @@ instead.
   uplinks — and its busiest cables.
 - **values on the cables**, in the panel, prints each cable's figure on it:
   what it carries the busier way (`19G`, `12.3k pps`), an average the
-  higher way, or — comparing — the change, signed (`+40G`). A figure goes
+  higher way, or — comparing — the change, signed (`+40G`); with the card on
+  **values as z-score**, its z-score against the other cables (`+1.64σ`). A figure goes
   where it fits along its cable at the zoom, the biggest first, and none on
   top of another, so zooming in shows more of them; the status line counts
   them. Hovering a cable still gives both ways and the flows behind it.
@@ -646,6 +648,44 @@ servers sending 40 Gb/s each across the planes — 80% of their NICs and their
 rack's uplinks — and an incast of eight servers into one, 160% of the two
 NICs it lands on. Hashed, each 40 Gb/s flow takes one NIC, not two; under
 the even split it is shared over both.
+
+#### Each cable by its own value
+
+Where nothing says how full a cable is — no `gbps=` on any cable, or a
+metric that is not a bit rate — each cable drawn from a card (**load the
+cables**, or **draw on the cables** for counters) is coloured by **its own
+value**: its busier direction, set against the other cables, in the colours
+the card gives its switches.
+
+- **On the card's palette, from the lowest cable to the highest.** The key
+  prints the two ends (`2Gb/s` … `60Gb/s`). The card's own range is not used:
+  it is set by the switches' totals, and a switch's total is many cables'.
+  `higher=bad` (green to red) keeps its direction on the cables, and
+  `higher=good` turns it round, as on the switches. Change the card's palette
+  and the cables follow it at once.
+- **A cable's colour is its own**, whatever lane it runs along: a quiet
+  cable beside nine busy ones is as quiet as it is alone. Where several are
+  drawn as one — a lane, a ToR's stub — the piece takes its highest cable.
+  **Width** is unchanged: what the piece carries, all its cables together,
+  against the busiest piece.
+- **Colour by z-score** on the card colours each cable by how far its value
+  sits from **the mean of the cables**, in their own standard deviations —
+  not the card's, which are its switches'. The ends are the card's ±σ, or
+  the panel's **one scale** while it shares one (its palette and spread); a
+  cable at the mean is the middle. A piece of several cables takes the one
+  furthest from the mean either way, and a counter that read zero is a value
+  like any other: below the mean, coloured, at the narrowest width. Past the
+  ends a cable clamps to the end colour, and the key counts them (`4 cables
+  past ±1σ, the furthest at +1.64σ`); widen the σ range to tell them apart.
+  Cables that all carry the same are all the middle colour, and the key says
+  so. **values as z-score** prints each cable's σ on it, and hovering a cable
+  says how unusual it is.
+- **With `gbps=`**, how full (green to red against the capacity, magenta past
+  it) stays the default. Setting the card to z-score colours the cables by
+  z-score instead, and the key says how to get how full back.
+
+The comparison views, the what-if's change, the averages below and the
+explanation are coloured as they were.
 
 #### Any metric on the cables: added up or averaged
 
@@ -1730,7 +1770,9 @@ port_gbps  R01/torb   40  link=R01/s3      net=nicb    dir=in    # received from
   towards one neighbour first.
 
 The card offers **draw on the cables**: the counters, measured rather than
-routed, drawn in the same colours and widths as the model. With a routed
+routed, drawn in the same colours and widths as the model — with no `gbps=`,
+each cable [by its own value](#each-cable-by-its-own-value), on the card's
+palette or by z-score against the other cables. With a routed
 metric loaded too, the panel's **Show** choice offers the model, the
 counters, and **measured − model**: each cable coloured by how far the
 measurement is from what the model said — red where it carried more, blue
@@ -1855,7 +1897,9 @@ colours.
 
 The mean and spread are measured over **one aggregated value per measured
 element** — the devices being compared, not the raw sample rows, which repeat
-per run — so changing the aggregation re-measures them. The overlay card shows
+per run — so changing the aggregation re-measures them. A metric drawn on the
+cables is standardized there against the cables' own mean and spread, one
+value per cable (see [Each cable by its own value](#each-cable-by-its-own-value)). The overlay card shows
 what they came out as (`mean 40.5C ± 8.73C over 480`), the ramp ends default to
 ±3σ and are adjustable, and a metric with no spread at all reads 0σ everywhere
 rather than dividing by zero.
