@@ -12,6 +12,36 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.60.0 — 2026-11-24
+
+Each cable its own speed in `dcfabric` (DV-012, for arista_tools AT-009).
+
+- **A speed column in the neighbour table.** A column after the fourth
+  whose heading names Gb/s (`gbps`, `speed_gbps`, `Speed (Gb/s)`) gives
+  each cable its speed: `dcfabric layout` and `dcfabric links` put it on
+  the cable's own `link` rule as `gbps=`, and a pair of switches joined at
+  two speeds gets a rule for each. So "how full" colours a mix of 10, 100
+  and 400 Gb/s cables each against its own capacity, with no `--gbps`.
+  arista-tools writes this column from each port's speed in CloudVision.
+- **Two ends at two speeds**: the cable gets the lower one, and stderr names
+  it with both speeds and their lines. A blank cell is no speed; a cell
+  that is not a number from 0.001 to 1000000 is not used, and its lines are
+  named.
+- **`--gbps` covers only the cables with no speed of their own**: on the net
+  in `layout`, on the rule or the net in `links`, as before. Stderr names
+  the cables left with none, and the summary line says how many have one.
+- **Nothing changes without the heading.** Columns after the fourth are
+  still ignored unless one is headed as a speed, so a table with something
+  else there, or with no header row, writes what 1.59.0 wrote, byte for
+  byte. No change to the `.dc` format or the viewer: a `link` rule's
+  `gbps=` already overrode its net's, and `links`' read-back check already
+  took a speed per group of cables.
+- Tests: speeds as the viewer reads them, mixed speeds between one pair,
+  ends that disagree, bad and blank cells, `--gbps` alongside, other
+  headings and no header, `links` onto a `.dc` with and without its own net,
+  and two mutations (the speed left off the rule; the higher end taken)
+  that each make a check fail.
+
 ## 1.59.0 — 2026-11-24
 
 Each cable coloured by its own value, in its card's colours, z-score

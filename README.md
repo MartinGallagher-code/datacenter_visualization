@@ -19,7 +19,7 @@ hostnames on request.
 
 No build step, no dependencies, no server-side anything. Static files only.
 
-Current version **1.59.0** — see [CHANGELOG.md](CHANGELOG.md). One number
+Current version **1.60.0** — see [CHANGELOG.md](CHANGELOG.md). One number
 covers the viewer, the file formats and the tools; the formats are the
 compatibility promise, so a file that loads today loads on every later 1.x
 ([how a release is cut](docs/releasing.md)).
@@ -2398,9 +2398,9 @@ spine1   Ethernet1    leaf1      Ethernet49
 - The header row is optional: a first row whose port columns hold no digit,
   or whose third column is a heading like `neighbor`, `neighbour`, `remote`
   or `peer`, is one. Blank lines and `#` comments are skipped, CRLF line
-  endings are fine, and columns after the fourth are ignored. A row with no
-  tab splits at runs of spaces; a tab-separated row keeps a port name that
-  has a space in it.
+  endings are fine, and columns after the fourth are ignored — but for a
+  speed column (below). A row with no tab splits at runs of spaces; a
+  tab-separated row keeps a port name that has a space in it.
 - **Every host and every neighbour is a switch**: `node NAME role=switch
   +switch`. `--server GLOB` makes the names it matches servers instead —
   `role=server` and no `+switch`, so the
@@ -2436,6 +2436,26 @@ spine1   Ethernet1    leaf1      Ethernet49
 - `--gbps N` gives every cable its capacity (`gbps=` on the net), so each is
   coloured against what it can carry, and `--net NAME` names the net
   (`data`).
+- **Each cable's own speed** comes from a column after the fourth whose
+  heading names Gb/s — `gbps`, `speed_gbps`, `Speed (Gb/s)` — in Gb/s, from
+  0.001 to 1000000. Each cable carries the speed its rows give as `gbps=` on
+  its own `link` rule, so a mix of 10, 100 and 400 Gb/s cables each reads
+  "how full" against its own capacity. A pair of switches joined at two
+  speeds gets a rule for each, slower first.
+
+  ```
+  host     port         neighbor   port         gbps
+  leaf1    Ethernet49   spine1     Ethernet1    100
+  leaf1    Ethernet50   spine1     Ethernet2    400
+  ```
+
+  A blank cell is no speed. A cell that is not a speed (text, a negative)
+  is not used, and its lines are said. A cable both ends list at two
+  speeds gets the lower one — a link runs at its slower end — and is said
+  with both. `--gbps` then covers only the cables with no speed of their
+  own, and those are named. Without such a heading — or with no header row
+  at all — columns after the fourth are not read, so a table that has
+  something else there writes exactly what it did.
 
 **Wiring a floor plan you already have.** `layout` draws only the switches,
 in rows it works out from their names. Where you have a `.dc` with the
@@ -2474,6 +2494,10 @@ adds the table's cables to it instead, and leaves everything else as it is.
   with `--gbps` as its `gbps=`, unless the `.dc` has nets only `link` rules
   name: a `net` line before those would change their colours, so then
   there is none.
+- **A speed column gives each cable its own `gbps=`**, as it does for
+  `layout`: on its rule, a rule per speed for a pair at two, and `--gbps`
+  (or the net's `gbps=`) only for the cables without one. The read-back
+  check holds each cable to the speed it was given.
 - **The cables go in one block at the end**, between two marker comments
   naming the net and the table. A second run on the same net replaces that
   block, wherever it is, rather than adding another, so running it again

@@ -12,6 +12,12 @@ four columns, tab-separated, and an optional header row:
     host    port         neighbor  port
     leaf1   Ethernet49   spine1    Ethernet1
 
+A column after the fourth whose heading names Gb/s (`gbps`, `speed (Gb/s)`)
+is each cable's speed: `layout` and `links` put it on the cable's own `link`
+rule as `gbps=`, one rule per speed where a pair of switches is joined at
+two, and `--gbps` then covers only the cables without one. Two ends of a
+cable that give two speeds give it the lower one, and say so.
+
 `layout` writes a floor plan holding only the fabric: every host and every
 neighbour is a switch (`node NAME role=switch +switch`), and every connected
 port pair is one cable. A cable both ends list is one cable, not two, and N
@@ -201,6 +207,7 @@ class Fabric(object):
         self.ends = {}         # (switch, port), lower-case -> (Cable, far end)
         self.left_out = set()  # ends whose only cables were left out
         self.notes = []        # what was not drawn, and why
+        self.speed_heading = None  # the heading of the speed column, if it has one
 
 
 class Cable(object):
@@ -212,6 +219,8 @@ class Cable(object):
         self.spelt = {}
         self.lines = []
         self.seen_from = set()   # the switches whose own rows list it
+        self.speeds = []         # (Gb/s, line) from each row that gives one
+        self.gbps = None         # its speed: the lowest its rows give, or None
 
     def far(self, end):
         return self.b if end == self.a else self.a
@@ -239,6 +248,33 @@ def is_table_header(cells):
     return re.sub(r"[^a-z]", "", cells[2].lower()) in NEIGHBOUR_HEADINGS
 
 
+# A cable's speed, in Gb/s: the range the viewer reads gbps= in (GBPS_RANGE
+# in js/parse.js).
+SPEED_RANGE = (0.001, 1000000)
+
+
+def is_speed_heading(cell):
+    """A heading that names a speed in Gb/s: `gbps`, `speed_gbps`, `Speed
+    (Gb/s)`. Only such a column is read; any other after the fourth is not."""
+    letters = re.sub(r"[^a-z]", "", cell.lower())
+    return letters.endswith("gbps") or letters.endswith("gbs")
+
+
+def read_speed(cell):
+    """A speed cell as Gb/s: None when it is blank, False when it is not a
+    number in SPEED_RANGE (text, a negative, nan)."""
+    cell = cell.strip()
+    if not cell:
+        return None
+    try:
+        value = float(cell)
+    except ValueError:
+        return False
+    if not SPEED_RANGE[0] <= value <= SPEED_RANGE[1]:
+        return False
+    return value
+
+
 def read_table(path, check_names=True):
     """The Fabric a neighbour table describes. Raises Fail on anything that
     cannot be written into a .dc -- a bad name, two spellings of one name, a
@@ -246,12 +282,23 @@ def read_table(path, check_names=True):
 
     `check_names=False` is for `links`, which looks names up in a .dc rather
     than writing them into one, so a path (`row1/leaf1`) is a name it can
-    find; everything else is read exactly as for `layout`."""
+    find; everything else is read exactly as for `layout`.
+
+    A header naming a speed column after the fourth (is_speed_heading)
+    gives each cable the speed its rows give (Cable.gbps), the lower one
+    where its two ends differ; without one, columns after the fourth are
+    not read."""
     rows = read_lines(path)
     fab = Fabric(path)
     errors = []
+    speed_at = None
     if rows and is_table_header(rows[0][1]):
         fab.header = rows[0][0]
+        for at, cell in enumerate(rows[0][1][4:], 4):
+            if is_speed_heading(cell):
+                speed_at = at
+                fab.speed_heading = cell
+                break
         rows = rows[1:]
 
     first_line = {}
@@ -259,6 +306,7 @@ def read_table(path, check_names=True):
     no_neighbour = []
     to_itself = []
     repeated = []
+    bad_speed = []
     cables = {}
     order = []
     for line, cells in rows:
@@ -316,6 +364,12 @@ def read_table(path, check_names=True):
         # neighbour heard: the near end is written as its owner writes it.
         cable.spelt[near] = port
         cable.spelt.setdefault(far, nport)
+        if speed_at is not None:
+            speed = read_speed(cells[speed_at] if len(cells) > speed_at else "")
+            if speed is False:
+                bad_speed.append(line)
+            elif speed is not None:
+                cable.speeds.append((speed, line))
 
     if errors:
         if len(errors) > 25:
@@ -323,6 +377,7 @@ def read_table(path, check_names=True):
         raise Fail(["%s: %s" % (path, e) for e in errors])
 
     settle(fab, [cables[k] for k in order])
+    settle_speeds(fab, bad_speed)
 
     if no_neighbour:
         fab.notes.append("%s no neighbour, so no cable: %s"
@@ -403,6 +458,56 @@ def settle(fab, candidates):
                          "own (a stale entry, or LLDP off on that port); drawn: %s"
                          % (plural(len(one_sided), "cable is", "cables are"),
                             listing(one_sided, 5)))
+
+
+def settle_speeds(fab, bad_lines):
+    """Each drawn cable's speed: the one its rows give, or the lowest where
+    they give more than one -- a link runs at its slower end -- said with
+    the lines that disagree. Cells that are not a speed are said too."""
+    if fab.speed_heading is None:
+        return
+    differ = []
+    for cable in fab.cables:
+        if not cable.speeds:
+            continue
+        cable.gbps = min(speed for speed, _ in cable.speeds)
+        given = sorted(set(speed for speed, _ in cable.speeds))
+        if len(given) > 1:
+            differ.append("%s %s -- %s %s (%s Gb/s, %s)" % (
+                fab.names[cable.a[0]], cable.spelt[cable.a], fab.names[cable.b[0]],
+                cable.spelt[cable.b], listing([trim(v) for v in given]),
+                lines_text(sorted(line for _, line in cable.speeds))))
+    if bad_lines:
+        fab.notes.append('%s a "%s" cell that is not a speed in Gb/s (a number from %s to %s), '
+                         "so it is not used: %s"
+                         % (plural(len(bad_lines), "row has", "rows have"), fab.speed_heading,
+                            trim(SPEED_RANGE[0]), trim(SPEED_RANGE[1]), lines_text(bad_lines)))
+    if differ:
+        fab.notes.append("%s given two speeds by %s rows, so %s the lower one: %s"
+                         % (plural(len(differ), "cable is", "cables are"),
+                            "its" if len(differ) == 1 else "their",
+                            "it has" if len(differ) == 1 else "each has", listing(differ, 5)))
+
+
+def speed_note(fab, cables, what, rest):
+    """What a speed column gave `cables`: None when every one has a speed
+    of its own, else a note naming those without one. `what` is ("has",
+    "have") for the verb, `rest` (one, many) for what they carry instead."""
+    bare = [c for c in cables if c.gbps is None]
+    if fab.speed_heading is None or not bare:
+        return None
+    shown = ["%s %s -- %s %s" % (fab.names[c.a[0]], c.spelt[c.a], fab.names[c.b[0]], c.spelt[c.b])
+             for c in bare]
+    one = len(bare) == 1
+    return '%s %s no speed in the "%s" column, so %s: %s' % (
+        plural(len(bare), "cable"), what[0 if one else 1], fab.speed_heading,
+        rest[0 if one else 1], listing(shown, 5))
+
+
+def speeds_said(own):
+    """The summary's word on the speed column: how many cables it gave a speed."""
+    return "; %s" % plural(own, "cable has a speed of its own",
+                           "cables have a speed of their own")
 
 
 # -------------------------------------------------------------------- layout
@@ -503,17 +608,26 @@ def layout_text(fab, args, notes):
     taken = set(fab.names)
     source = os.path.basename(fab.path)
     pairs = {}
+    switch_pairs = set()
     for cable in fab.cables:
         a, b = sorted((cable.a, cable.b), key=lambda end: natural_key(end[0]))
-        pairs.setdefault((a[0], b[0]), []).append((cable.spelt[a], cable.spelt[b]))
+        switch_pairs.add((a[0], b[0]))
+        pairs.setdefault((a[0], b[0], cable.gbps), []).append((cable.spelt[a], cable.spelt[b]))
+    own = sum(1 for cable in fab.cables if cable.gbps is not None)
 
     out = [
         "# The fabric in %s, written by dcfabric:" % source,
         "# %s in %s, %s between %s." % (
             plural(len(fab.names), "switch", "switches"), plural(len(tiers), "tier"),
-            plural(len(fab.cables), "cable"), plural(len(pairs), "pair") + " of switches"),
+            plural(len(fab.cables), "cable"), plural(len(switch_pairs), "pair") + " of switches"),
         "# Each link line joins one pair; count= is how many cables join them, and",
         "# the comment after it names their ports, first switch's port first.",
+    ]
+    if own:
+        out.append("# gbps= on a link line is what each of its cables carries, from the table's")
+        out.append('# "%s" column: a pair joined at two speeds has a line for each.'
+                   % display(fab.speed_heading))
+    out += [
         "",
         'dc %s name="%s" cols=1 align=center'
         % (unique_id("fabric", taken), display(args.name or "Fabric from %s" % source)),
@@ -537,19 +651,42 @@ def layout_text(fab, args, notes):
     out.append(net)
     out.append("")
     out.extend(link_rules(args.net, pairs, lambda low: fab.names[low]))
-    return "\n".join(out) + "\n", "%s, %s and %s from %s" % (
+    if args.gbps is not None:
+        rest = ("it carries the net's gbps=%s (--gbps)" % trim(args.gbps),
+                "they carry the net's gbps=%s (--gbps)" % trim(args.gbps))
+    else:
+        rest = ("it has no capacity, and the viewer cannot say how full it is",
+                "they have no capacity, and the viewer cannot say how full they are")
+    note = speed_note(fab, fab.cables, ("has", "have"), rest)
+    if note:
+        notes.append(note)
+    summary = "%s, %s and %s from %s" % (
         plural(len(fab.names), "switch", "switches"), plural(len(tiers), "tier"),
         plural(len(fab.cables), "cable"), plural(fab.rows, "row"))
+    if fab.speed_heading is not None:
+        summary += speeds_said(own)
+    return "\n".join(out) + "\n", summary
 
 
 def link_rules(net, pairs, write, extra=""):
     """One `link` rule per pair, `count=` its cables and a comment naming
     their ports, first end's port first. `pairs` maps (a, b) to that pair's
-    (port of a, port of b); `write` gives the selector for an end, and
-    `extra` anything every rule carries (` gbps=100`)."""
+    (port of a, port of b) -- or (a, b, gbps), where those cables carry a
+    speed of their own (None for none): each speed of a pair is a rule of
+    its own, with `gbps=` on it. `write` gives the selector for an end, and
+    `extra` anything a rule with no speed of its own carries (` gbps=100`)."""
+    def speed(key):
+        return key[2] if len(key) > 2 else None
+
+    def order(key):
+        return (natural_key(key[0]), natural_key(key[1]),
+                -1 if speed(key) is None else speed(key))
+
     out = []
-    for (a, b) in sorted(pairs, key=lambda p: (natural_key(p[0]), natural_key(p[1]))):
-        ports = sorted(pairs[(a, b)], key=lambda p: (natural_key(p[0]), natural_key(p[1])))
+    for key in sorted(pairs, key=order):
+        a, b, gbps = key[0], key[1], speed(key)
+        tail = extra if gbps is None else " gbps=%s" % trim(gbps)
+        ports = sorted(pairs[key], key=lambda p: (natural_key(p[0]), natural_key(p[1])))
         # count= takes up to 1000 cables a rule; past that, another rule
         # for the same pair adds the rest, since each rule wires its own.
         for at in range(0, len(ports), 1000):
@@ -557,7 +694,7 @@ def link_rules(net, pairs, write, extra=""):
             rule = "link %s %s %s" % (net, write(a), write(b))
             if len(chunk) > 1:
                 rule += " count=%d" % len(chunk)
-            out.append("%s%s  # %s" % (rule, extra, ", ".join("%s <-> %s" % p for p in chunk)))
+            out.append("%s%s  # %s" % (rule, tail, ", ".join("%s <-> %s" % p for p in chunk)))
     return out
 
 
@@ -966,7 +1103,7 @@ def links_text(fab, args, notes, node):
             continue
         ends = sorted([(device[a], cable.spelt[cable.a]), (device[b], cable.spelt[cable.b])],
                       key=lambda end: natural_key(end[0]))
-        groups.setdefault((ends[0][0], ends[1][0]), []).append((ends[0][1], ends[1][1]))
+        groups.setdefault((ends[0][0], ends[1][0]), []).append((ends[0][1], ends[1][1], cable))
 
     # What the .dc already wires on this net between two of the devices.
     named = dict((path, name) for name, path in device.items())
@@ -1000,6 +1137,11 @@ def links_text(fab, args, notes, node):
         extra = " gbps=%s" % trim(args.gbps)
 
     added = sum(len(ports) for ports in groups.values())
+    # Each pair's cables, a rule for each speed they carry (link_rules).
+    rules = {}
+    for (a, b), ports in groups.items():
+        for port_a, port_b, cable in ports:
+            rules.setdefault((a, b, cable.gbps), []).append((port_a, port_b))
     nl = "\r\n" if "\r\n" in base else "\n"
     block = []
     if groups:
@@ -1016,7 +1158,7 @@ def links_text(fab, args, notes, node):
             if args.gbps is not None:
                 net += " gbps=%s" % trim(args.gbps)
             block.append(net)
-        block.extend(link_rules(args.net, groups, lambda path: "path=" + path, extra))
+        block.extend(link_rules(args.net, rules, lambda path: "path=" + path, extra))
         block.append("# ---- dcfabric links: end of net %s ----" % args.net)
     out = base
     if block:
@@ -1028,8 +1170,10 @@ def links_text(fab, args, notes, node):
 
     check = ask_viewer(node, "check", {
         "before": base, "after": out, "net": args.net,
-        "added": [[a, b, len(ports), float(args.gbps) if extra else None]
-                  for (a, b), ports in sorted(groups.items())],
+        "added": [[a, b, len(ports),
+                   gbps if gbps is not None else float(args.gbps) if extra else None]
+                  for (a, b, gbps), ports in sorted(
+                      rules.items(), key=lambda kv: (kv[0][0], kv[0][1], kv[0][2] or -1))],
     })
     if check["problem"]:
         raise Fail(notes + ["read back with the viewer's parser, the .dc written would not be %s "
@@ -1080,10 +1224,26 @@ def links_text(fab, args, notes, node):
                      % (check["cables"], listing(check["unticked"]),
                         "s" if len(check["unticked"]) == 1 else "",
                         "it" if len(check["unticked"]) == 1 else "them"))
+    if args.gbps is not None:
+        rest = ("it carries --gbps (%s)" % trim(args.gbps),
+                "they carry --gbps (%s)" % trim(args.gbps))
+    elif have is not None and have["gbps"] is not None:
+        rest = ("it carries net %s's gbps=%s" % (args.net, trim(have["gbps"])),
+                "they carry net %s's gbps=%s" % (args.net, trim(have["gbps"])))
+    else:
+        rest = ("it has no capacity, and the viewer cannot say how full it is",
+                "they have no capacity, and the viewer cannot say how full they are")
+    note = speed_note(fab, [cable for ports in groups.values() for _, _, cable in ports],
+                      ("added has", "added have"), rest)
+    if note:
+        notes.append(note)
     summary = "%s between %s added to %s on net %s, from %s; %d of %s in %s %s there" % (
         plural(added, "cable"), plural(len(groups), "pair") + " of devices", floor, args.net,
         plural(fab.rows, "row"), len(device), plural(len(names), "name"), source,
         "is a device" if len(device) == 1 else "are devices")
+    if fab.speed_heading is not None:
+        summary += speeds_said(sum(1 for ports in groups.values() for _, _, cable in ports
+                                   if cable.gbps is not None))
     return bom + out, summary
 
 
@@ -1139,10 +1299,12 @@ def build_parser():
         description="Write a .dc of the switches and cables a neighbour table describes: "
                     "every host and neighbour a switch, every connected port pair a cable.")
     lay.add_argument("table", metavar="NEIGHBORS.TSV",
-                     help="host, port, neighbor, port: one row per cabled port")
+                     help="host, port, neighbor, port: one row per cabled port, and "
+                          "optionally a column headed gbps: each cable's own speed")
     common(lay)
     lay.add_argument("--gbps", type=positive(0.001, 1000000),
-                     help="what every cable carries, in Gb/s (gbps= on the net)")
+                     help="what every cable carries, in Gb/s (gbps= on the net); a cable "
+                          "the table's gbps column gives a speed carries that instead")
     lay.add_argument("--name", help="the floor plan's name (default: Fabric from NEIGHBORS.TSV)")
     lay.add_argument("--tier", action="append", default=[], metavar="GLOB[,GLOB]",
                      help="a row of switches, matched by name; repeat it, top row first "
@@ -1186,12 +1348,14 @@ def build_parser():
                "second run on the same net replaces that block rather than adding another.",
         formatter_class=argparse.RawDescriptionHelpFormatter)
     lnk.add_argument("table", metavar="NEIGHBORS.TSV",
-                     help="host, port, neighbor, port: one row per cabled port")
+                     help="host, port, neighbor, port: one row per cabled port, and "
+                          "optionally a column headed gbps: each cable's own speed")
     lnk.add_argument("dc", metavar="FLOOR.DC", help="the floor plan to wire")
     common(lnk)
     lnk.add_argument("--gbps", type=positive(0.001, 1000000),
                      help="what each cable added carries, in Gb/s (gbps= on the net it adds, "
-                          "or on each link rule when the net is the .dc's own)")
+                          "or on each link rule when the net is the .dc's own); a cable the "
+                          "table's gbps column gives a speed carries that instead")
     lnk.add_argument("--add-wired", action="store_true",
                      help="add the table's cables between two devices the .dc already joins on "
                           "the net, beside the ones it has (default: leave that pair as it is, "
