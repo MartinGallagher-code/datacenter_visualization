@@ -4533,6 +4533,101 @@ if (python.error) {
     ok(runFabric(['layout', join(work, 'missing.tsv')]).code === 1, 'a table that is not there fails');
   }
 
+  // Each cable's own speed, from a column headed gbps (DV-012, for
+  // arista_tools AT-009): gbps= on its own link rule, a rule per speed, the
+  // lower of two ends that differ, and --gbps only for the cables without.
+  {
+    const head = ['host', 'port', 'neighbor', 'port', 'gbps'];
+    const speeds = (text) => parsed(text).links.map((l) => l.gbps).sort((x, y) => (x ?? -1) - (y ?? -1));
+    const mixed = [head,
+      ['leaf1', 'Eth49', 'spine1', 'Eth1', '100'], ['leaf1', 'Eth50', 'spine1', 'Eth2', '400'],
+      ['spine1', 'Eth1', 'leaf1', 'Eth49', '100'], ['spine1', 'Eth2', 'leaf1', 'Eth50', '400'],
+      ['leaf2', 'Eth49', 'spine1', 'Eth3', '10']];
+    const mixedSpeeds = (pkg) => {
+      const run = fabricOf(mixed, [], pkg);
+      return run.code === 0 ? speeds(run.out) : null;
+    };
+    const disagree = [head, ['leaf1', 'Eth49', 'spine1', 'Eth1', '100'], ['spine1', 'Eth1', 'leaf1', 'Eth49', '40']];
+    const lowerWins = (pkg) => {
+      const run = fabricOf(disagree, [], pkg);
+      return run.code === 0 && speeds(run.out).join() === '40';
+    };
+    {
+      const run = fabricOf(mixed);
+      eq([run.code, speeds(run.out)], [0, [10, 100, 400]], 'every cable carries the speed its rows give, as the viewer reads it');
+      eq(linkLines(run.out), [
+        'link data leaf1 spine1 gbps=100  # Eth49 <-> Eth1',
+        'link data leaf1 spine1 gbps=400  # Eth50 <-> Eth2',
+        'link data leaf2 spine1 gbps=10  # Eth49 <-> Eth3',
+      ], 'a pair joined at two speeds gets a rule for each, slower first');
+      ok(/^# 3 switches in 2 tiers, 3 cables between 2 pairs of switches\.$/m.test(run.out)
+         && /^# "gbps" column: a pair joined at two speeds has a line for each\.$/m.test(run.out),
+      'the header still counts pairs of switches, and says where gbps= came from');
+      ok(/^dcfabric: 3 switches, 2 tiers and 3 cables from 5 rows; 3 cables have a speed of their own$/m.test(run.err)
+         && !/no speed/.test(run.err), `and the summary says how many  (${run.err.trim()})`);
+      eq(speeds(fabricOf(mixed, ['--gbps', '25']).out), [10, 100, 400], '--gbps does not touch a cable with a speed of its own');
+    }
+    {
+      const run = fabricOf(disagree);
+      eq(speeds(run.out), [40], 'two ends that give two speeds: the lower one');
+      ok(/1 cable is given two speeds by its rows, so it has the lower one: leaf1 Eth49 -- spine1 Eth1 \(40 and 100 Gb\/s, lines 2 and 3\)/.test(run.err),
+         `and it is said, with both speeds and their lines  (${run.err.split('\n')[0]})`);
+      const one = fabricOf([head, ['leaf1', 'Eth49', 'spine1', 'Eth1', ''], ['spine1', 'Eth1', 'leaf1', 'Eth49', '100']]);
+      eq([speeds(one.out), /two speeds/.test(one.err)], [[100], false], 'one end blank and one with a speed: that speed, and nothing to say');
+    }
+    {
+      const odd = [head, ['leaf1', 'Eth49', 'spine1', 'Eth1', 'fast'], ['leaf2', 'Eth49', 'spine1', 'Eth2', ''],
+        ['leaf3', 'Eth49', 'spine1', 'Eth3', '-5'], ['leaf4', 'Eth49', 'spine1', 'Eth4', 'nan'], ['leaf5', 'Eth49', 'spine1', 'Eth5']];
+      const run = fabricOf(odd);
+      eq([run.code, speeds(run.out)], [0, [null, null, null, null, null]], 'text, a negative, nan, a blank and a missing cell are no speed');
+      ok(/3 rows have a "gbps" cell that is not a speed in Gb\/s \(a number from 0\.001 to 1000000\), so it is not used: lines 2, 4 and 5/.test(run.err),
+         `the cells that are not a speed are named  (${run.err.split('\n')[0]})`);
+      ok(/5 cables have no speed in the "gbps" column, so they have no capacity, and the viewer cannot say how full they are: leaf1 Eth49 -- spine1 Eth1/.test(run.err),
+         'and the cables left with no speed are said');
+      const filled = fabricOf(odd, ['--gbps', '25']);
+      eq([speeds(filled.out), linkLines(filled.out).some((l) => /gbps=/.test(l))], [[25, 25, 25, 25, 25], false],
+         'with --gbps they carry the net\'s, and no rule carries a gbps= of its own');
+      ok(/5 cables have no speed in the "gbps" column, so they carry the net's gbps=25 \(--gbps\)/.test(filled.err), 'which is said');
+      const part = fabricOf([head, ['leaf1', 'Eth49', 'spine1', 'Eth1', '100'], ['leaf2', 'Eth49', 'spine1', 'Eth2', '']], ['--gbps', '25']);
+      eq(speeds(part.out), [25, 100], 'a speed of its own wins over --gbps, which fills the gap');
+      ok(/1 cable has no speed in the "gbps" column, so it carries the net's gbps=25 \(--gbps\): leaf2 Eth49 -- spine1 Eth2/.test(part.err), 'one cable is said as one');
+    }
+    {
+      // Only a heading that names Gb/s makes a column a speed: a fifth
+      // column of anything else, or with no header, is ignored as before.
+      const plain = [['host', 'port', 'neighbor', 'port'], ['leaf1', 'Eth49', 'spine1', 'Eth1'], ['leaf2', 'Eth49', 'spine1', 'Eth2']];
+      const base = runFabric(['layout', file(tsv(...plain), 'same.tsv')]);
+      const other = runFabric(['layout', file(tsv(['host', 'port', 'neighbor', 'port', 'cable'], ['leaf1', 'Eth49', 'spine1', 'Eth1', '7'],
+        ['leaf2', 'Eth49', 'spine1', 'Eth2', '8']), 'same.tsv')]);
+      const bare = runFabric(['layout', file(tsv(['leaf1', 'Eth49', 'spine1', 'Eth1', '100'], ['leaf2', 'Eth49', 'spine1', 'Eth2', '40']), 'same.tsv')]);
+      eq([other.out, other.err, bare.out, bare.err], [base.out, base.err, base.out, base.err],
+         'a fifth column headed otherwise, or with no header, changes nothing, byte for byte');
+      const named = ['speed_gbps', 'Speed (Gb/s)', 'GBPS'].map((h) => speeds(runFabric(['layout', file(tsv(['host', 'port', 'neighbor', 'port', 'note', h],
+        ['leaf1', 'Eth49', 'spine1', 'Eth1', 'x', '40']))]).out));
+      eq(named, [[40], [40], [40]], 'speed_gbps, Speed (Gb/s) and GBPS each name it, after another column too');
+    }
+    {
+      // The mutations: each one, made to a copy of the tool, has to make
+      // one of the checks above fail.
+      const source = readFileSync(join(root, 'python/dcviz/dcfabric.py'), 'utf8');
+      const mutant = (needle, patch) => {
+        const pkg = mkdtempSync(join(work, 'mutant-'));
+        mkdirSync(join(pkg, 'dcviz'));
+        for (const f of readdirSync(join(root, 'python/dcviz')).filter((n) => n.endsWith('.py'))) {
+          writeFileSync(join(pkg, 'dcviz', f), readFileSync(join(root, 'python/dcviz', f)));
+        }
+        writeFileSync(join(pkg, 'dcviz/dcfabric.py'), source.replace(needle, patch));
+        return { pkg, hits: source.split(needle).length - 1 };
+      };
+      eq([mixedSpeeds(), lowerWins()], [[10, 100, 400], true], 'the two checks the mutations must break pass on the tool itself');
+      const noSpeed = mutant('tail = extra if gbps is None else " gbps=%s" % trim(gbps)', 'tail = extra');
+      eq([noSpeed.hits, JSON.stringify(mixedSpeeds(noSpeed.pkg)) === '[10,100,400]'], [1, false],
+         'mutation: leaving the speed off the rule fails the own-speed check');
+      const higher = mutant('cable.gbps = min(speed for speed, _ in cable.speeds)', 'cable.gbps = max(speed for speed, _ in cable.speeds)');
+      eq([higher.hits, lowerWins(higher.pkg)], [1, false], 'mutation: taking the higher of two ends fails the lower-one check');
+    }
+  }
+
   // ------------------------------------------------------ dcfabric links
   // The table's cables added to a .dc you already have, between its devices
   // (DV-010). The .dc side is the viewer's own parser, run with Node, so
@@ -4753,6 +4848,41 @@ if (python.error) {
       eq(run.code, 0, 'cables past a device\'s ports= are still added');
       ok(/with the cables added, the viewer says: line 5: leaf1's 2 cables need 2 ports, breakout included, and it has 1 \(ports=1x100\)/.test(run.err),
          `and the viewer's warning is passed on  (${run.err.split('\n')[0]})`);
+    }
+
+    // Each cable's own speed (DV-012): on its rule, by path, a rule per
+    // speed, checked by the viewer's read-back like every other cable.
+    {
+      const withSpeeds = readFileSync(exl('neighbors.tsv'), 'utf8').split('\n').map((line) => {
+        if (!line || line.startsWith('#')) return line;
+        if (line.startsWith('host\t')) return `${line}\tgbps`;
+        return `${line}\t${/Ethernet50\b/.test(line) ? 400 : 100}`;
+      }).join('\n');
+      const table = file(withSpeeds, 'speeds.tsv');
+      const run = runLinks([table, exl('floor.dc')]);
+      const added = parseLayout(run.out).links.slice(parseLayout(floorText).links.length);
+      eq([run.code, added.length], [0, 20], 'the same 20 cables are added, and the read-back check passes');
+      eq([added.filter((l) => l.gbps === 400).length, added.filter((l) => l.gbps === 100).length], [4, 16],
+         'each carries the speed its rows give: 400 on the Ethernet50 cables, 100 on the rest');
+      ok(run.out.split('\n').filter((l) => / gbps=400 /.test(l)).every((l) => /Ethernet50\b/.test(l)), 'and the 400s are the Ethernet50 ones');
+      ok(run.out.includes('link data path=hall/a/a1/leaf1 path=hall/net/n1/spine1 gbps=100  # Ethernet49 <-> Ethernet1\n'
+        + 'link data path=hall/a/a1/leaf1 path=hall/net/n1/spine1 gbps=400  # Ethernet50 <-> Ethernet2\n'),
+      'a pair at two speeds is a rule for each, by path');
+      ok(/; 20 cables have a speed of their own$/m.test(run.err), 'and the summary says how many');
+      eq(run.out.split('\n').filter((l) => /^net data\b/.test(l)).length, 1, 'the .dc\'s own net is still not declared twice');
+
+      const some = file(tsv(['host', 'port', 'neighbor', 'port', 'gbps'], ['leaf1', 'Eth1', 'spine2', 'Eth1', '400'], ['leaf1', 'Eth2', 'spine1', 'Eth2', '']), 'some.tsv');
+      const fresh = runLinks([some, hall, '--gbps', '25']);
+      const fm = parseLayout(fresh.out);
+      eq([fresh.code, fm.nets.get('data')?.gbps, fm.links.map((l) => l.gbps).sort((x, y) => x - y)], [0, 25, [25, 400]],
+         'a net it declares carries --gbps, for the cable with no speed; the other carries its own');
+      ok(/1 cable added has no speed in the "gbps" column, so it carries --gbps \(25\): leaf1 Eth2 -- spine1 Eth2/.test(fresh.err), 'which is said');
+      const withNet = file(`${hallText}net data label=Fabric gbps=40\n`, 'speed-net.dc');
+      const own = runLinks([some, withNet]);
+      eq(parseLayout(own.out).links.map((l) => l.gbps).sort((x, y) => x - y), [40, 400], 'on the .dc\'s own net, the cable with no speed carries the net\'s');
+      ok(/so it carries net data's gbps=40/.test(own.err), 'and that is said');
+      const none = runLinks([some, hall]);
+      ok(/so it has no capacity, and the viewer cannot say how full it is/.test(none.err), 'with no speed anywhere, that is said too');
     }
 
     // The text: CRLF stays CRLF, a missing last newline is added, a byte-order
