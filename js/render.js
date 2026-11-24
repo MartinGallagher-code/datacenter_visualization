@@ -750,7 +750,7 @@ export class Renderer {
       if (shown >= CABLE_LABEL_MAX) break;
       const spot = labelSpot(cable, cache.ports, curved);
       if (!spot) continue;
-      const text = cableFigure(view, fig.amount, fig.change);
+      const text = cableFigure(view, fig.amount, fig.change, fig.sigma);
       if (!text) continue;
       const w = ctx.measureText(text).width + pad * 2;
       const h = px + pad;
@@ -1361,14 +1361,31 @@ const TIE = 1e-6;
 // is its own colour, since demand above what the cable carries is a different
 // finding from a cable that is merely full. With contention, nothing is past
 // full, and the colour marks the cables that are full and holding flows back. Loaded cables with no gbps= are
-// grey, beside ones that have one; with no capacity anywhere, the colour is
-// the load against the busiest piece instead.
+// grey, beside ones that have one; with no capacity anywhere (or a load that
+// is not in bits, or a card set to z-score), each cable is its own value on
+// the card's palette instead: valueStep and valueColor.
 export const LOAD_COLORS = { over: '#ff40ff', unknown: '#9aa4b2' };
 const TAKEN_OUT = '#ff5c5c';
 export const loadColor = (util) => (util > 1.0005 ? LOAD_COLORS.over : ramp('health', util));
 // A change, -1..1 of the scale: red where more is carried than before (or
 // than the model said), blue where less, pale where nothing moved.
 export const changeColor = (v) => ramp('rdbu', 0.5 - Math.max(-1, Math.min(1, v)) / 2);
+
+/**
+ * Where a cable's own value sits along its card's palette, 0 to 1, in
+ * twentieths -- a few dozen styles, however many cables, as "how full" has:
+ * from `tone`, which is a z-score across ±zRange σ (clamped past it), or
+ * already 0 to 1 from the lowest cable to the highest.
+ */
+export function valueStep(scale, tone) {
+  if (!Number.isFinite(tone)) return 0.5;
+  const t = scale.std !== 'off'
+    ? (Math.max(-scale.zRange, Math.min(scale.zRange, tone)) + scale.zRange) / (2 * scale.zRange)
+    : Math.max(0, Math.min(1, tone));
+  return Math.round(t * 20) / 20;
+}
+/** A step along the card's palette as the card paints it: turned round for higher=good. */
+export const valueColor = (scale, step) => ramp(scale.palette, scale.invert ? 1 - step : step);
 const MIN_LOAD_W = 1.25;
 const MAX_LOAD_W = 7;
 
@@ -1402,12 +1419,25 @@ function cableStyler(load, capacity) {
   // contended one, and takes the colour that past full has without it.
   const contended = !!(load && load.contention);
   const span = (load && load.span) || 1;
-  return (amount, worst, max) => {
+  const scale = colour === 'value' ? load.scale : null;
+  const widthOf = (f) => Math.round((MIN_LOAD_W + (MAX_LOAD_W - MIN_LOAD_W) * Math.sqrt(f)) * 2) / 2;
+  const styler = (amount, worst, max) => {
     // Drawing capacity, `worst` is the fastest cable along the piece.
     if (capacity) return worst ? intern(capacityWidth(worst), null, false, worst) : intern(1, null, true, -1);
+    if (scale && worst !== null) {
+      // Each cable its own value on the card's scale -- the highest along
+      // the piece, or by z-score the furthest from the mean either way. A
+      // cable whose counters read zero has a value too, and its colour: at
+      // the narrowest a load is drawn, not idle.
+      const step = valueStep(scale, worst);
+      const f = amount > 0 && max > 0 ? Math.min(1, amount / max) : 0;
+      // The most unusual on top: by z-score, furthest from the middle.
+      const rank = scale.std !== 'off' ? Math.abs(step - 0.5) : step;
+      return intern(widthOf(f), valueColor(scale, step), false, rank);
+    }
     if (!(amount > 0) || !(max > 0)) return intern(1, null, true, -1);
     const f = Math.min(1, amount / max);
-    const width = Math.round((MIN_LOAD_W + (MAX_LOAD_W - MIN_LOAD_W) * Math.sqrt(f)) * 2) / 2;
+    const width = widthOf(f);
     if (colour === 'average') {
       // An average: the highest along the piece, up the range from the
       // lowest anywhere to the highest.
@@ -1424,13 +1454,15 @@ function cableStyler(load, capacity) {
       const u = worst > 1.0005 || (contended && worst >= 0.9995) ? 2 : Math.round(worst * 20) / 20;
       return intern(width, u > 1 ? LOAD_COLORS.over : ramp('health', u), false, u);
     }
-    // Against a capacity, a cable with none is the grey that says so. A load
-    // that cannot be set against one -- not a bit rate, or an average -- is
-    // coloured against the busiest cable, gbps= or not, as its key says.
-    if (colour === 'util') return intern(width, LOAD_COLORS.unknown, false, 0);
-    const step = Math.round(f * 10) / 10;
-    return intern(width, ramp('plasma', 0.3 + 0.7 * step), false, step);
+    // Against a capacity, a cable with none is the grey that says so; so is
+    // a piece with no value to colour it by.
+    return intern(width, LOAD_COLORS.unknown, false, 0);
   };
+  // By z-score, a stretch of lane where a port's cables fan out takes the
+  // furthest from the mean either way, as every other piece does, rather
+  // than the highest.
+  styler.signed = !!(scale && scale.std !== 'off');
+  return styler;
 }
 
 // The one cable on from a splice is drawn heavier than the ones gathered into
@@ -1455,6 +1487,11 @@ const CABLE_LABEL_MAX = 400;
  */
 export function labelFigure(view, t) {
   if (view.compare) return t.delta ? { amount: t.delta, change: true } : null;
+  // "values as z-score" on the card: the cable's z-score, as the switches
+  // print theirs -- the furthest out, where several are drawn as one.
+  if (view.colour === 'value' && view.scale && view.scale.std === 'values') {
+    return t.worst === null || t.worst === undefined ? null : { amount: t.worst, change: false, sigma: true };
+  }
   if (view.colour === 'average') {
     // The average over every cable drawn as one, the higher way.
     const ab = t.ab > 1e-12 ? t.vab / t.ab : null;

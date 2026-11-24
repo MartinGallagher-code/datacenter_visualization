@@ -14,11 +14,11 @@
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
-  chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync,
+  chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { expand, subst } from '../js/expand.js';
 import { compileSelector } from '../js/select.js';
@@ -1827,6 +1827,295 @@ const segsOf = (cache, net) => {
   const near = (v) => Math.round(v * 1e6) / 1e6;
   eq(slow.links.map((l) => near(Math.max(...(exRtt.loads.get(l) || [0, 0])))), [48, 48], 'the slow pair’s own cables average 48 us');
   ok([...exRtt.loads.values()].every(([x, y]) => near(x) <= 48 && near(y) <= 48), 'and nothing averages more than its slowest flow');
+}
+
+// --------------------------------------------- cables by their own value (DV-011)
+// With no gbps= -- or a metric that is not a bit rate -- a cable was coloured
+// by the load of the lane it ran along against the busiest lane. One cable is
+// a small share of that, so nearly every cable came out the same purple-
+// magenta, and the card's z-score never reached the cables at all. Each cable
+// is its own value now, the busier way: on the card's palette from the lowest
+// cable to the highest, or by z-score against the other cables. The checks
+// are written once, over the modules they are given, so the mutations after
+// them can show that each fails without the fix.
+const modulesIn = async (dir) => {
+  const at = (name) => import(pathToFileURL(join(dir, name)).href);
+  const [parse, results, lay, render, traffic, palette, ui] = await Promise.all(
+    ['parse.js', 'results.js', 'layout.js', 'render.js', 'traffic.js', 'palette.js', 'ui.js'].map(at));
+  return { parse, results, lay, render, traffic, palette, ui };
+};
+function cableColourChecks(js) {
+  const out = [];
+  const check = (cond, name) => out.push([name, !!cond]);
+  const same = (a, b, name) => check(JSON.stringify(a) === JSON.stringify(b), `${name}  (${JSON.stringify(a)} != ${JSON.stringify(b)})`);
+  const { Renderer: Draw, LOAD_COLORS: COLOURS, loadColor: fullColour, labelFigure: figureOf } = js.render;
+  const rampOf = js.palette.ramp;
+
+  // Two racks of ten servers and a spine. No gbps= unless asked for.
+  const floor = (gbps = '') => {
+    const m = js.parse.parseLayout([
+      'dc D',
+      '  rack R1 u=42', '    node tor at=42 role=tor +switch', '    node s[01..10] role=server',
+      '  rack R2 u=42', '    node tor at=42 role=tor +switch', '    node s[01..10] role=server',
+      '  rack SP u=10', '    node spine role=spine +switch',
+      `net data ${gbps}`, 'net up',
+      'link data role=server role=tor scope=rack', 'link up role=tor spine',
+    ].join('\n'));
+    js.lay.layout(m.root);
+    return m;
+  };
+  // A card of counters, each row what a switch sent towards a neighbour.
+  const cardOf = (m, rows, head = 'unit=Gb/s') => js.results.bindOverlay([...js.results.parseResults([
+    `!test cable_traffic ${head} label="Cable traffic"`,
+    ...rows.map(([from, v, to, net = 'data']) => `cable_traffic ${from} ${v} link=${to} net=${net}`),
+  ].join('\n')).values()][0], m);
+  const server = (rack, i) => `${rack}/s${String(i).padStart(2, '0')}`;
+  const tens = Array.from({ length: 10 }, (_, i) => i + 1);
+  // Drawn on the cables, as the renderer lays them out for the canvas.
+  const draw = (m, card, anyCapacity = false) => {
+    const unit = js.traffic.loadUnit(card, 'cables');
+    const view = js.traffic.viewOf({
+      view: 'measured', views: ['measured'], anyCapacity,
+      counters: { overlay: card, kind: 'cables', loads: js.traffic.countersOf(card, m).loads, toGbps: unit.toGbps, unit: unit.unit },
+    });
+    const r = new Draw({ getContext: () => null }, viewOf(m));
+    r.camera.scale = 4;
+    r.rebuildLinkCache(0, null, null, view, false);
+    const find = (net, hit) => {
+      for (const [style, s] of r.linkCache.nets.get(net).segs) {
+        for (let i = 0; i < s.length; i += 4) if (hit(s[i], s[i + 1], s[i + 2], s[i + 3])) return style;
+      }
+      return {};
+    };
+    const port = (path, net) => r.linkCache.ports(m.resolve(path), net);
+    return {
+      view, r, scale: view.scale || {},
+      styles: (net = 'data') => [...r.linkCache.nets.get(net).segs.keys()],
+      // A device's own stub, from its port out to its lane: its cables alone.
+      stub(path, net = 'data') {
+        const P = port(path, net);
+        return find(net, (x0, y0, x1, y1) => x0 === P.start && y0 === P.y && y1 === P.y && x1 !== x0);
+      },
+      // The run of lane into a rack's ToR, which every cable of the rack runs along.
+      intoTor(rack) {
+        const T = port(`${rack}/tor`, 'data');
+        const x = T.edge + T.side * T.lane;
+        return find('data', (x0, y0, x1, y1) => x0 === x && x1 === x && (y0 === T.y || y1 === T.y));
+      },
+      // The stretch of lane a port's cables fan out along.
+      fan(path, net) {
+        const P = port(path, net);
+        const x = P.edge + P.side * P.lane;
+        return find(net, (x0, y0, x1, y1) => x0 === x && x1 === x && y0 < P.y && y1 > P.y);
+      },
+    };
+  };
+  const stubColours = (d, rack = 'R1') => tens.map((i) => d.stub(server(rack, i)).color);
+  // The key's notes, for a view coloured by value (and none for any other).
+  const keyOf = (dd) => (dd.view.colour === 'value' ? js.ui.valueKey(dd.view) : { ends: [], notes: [] });
+
+  // The owner's case: counters on cables with no gbps=, 1 to 10 on R1's
+  // servers, and 5.5 on one cable alone in R2.
+  const m = floor();
+  const rows = [...tens.map((i) => ['R1/tor', i, server('R1', i)]), ['R2/tor', 5.5, server('R2', 1)]];
+  const card = cardOf(m, rows);
+  const d = draw(m, card);
+  same([d.view.colour, d.scale.low, d.scale.high, d.scale.n], ['value', 1, 10, 11],
+    'no gbps=: the cables are coloured by their own values, from the lowest (1) to the highest (10) of 11');
+  const along = (t, palette = 'viridis') => rampOf(palette, Math.round(t * 20) / 20);
+  same(stubColours(d), tens.map((v) => along((v - 1) / 9)),
+    'cables carrying 1 to 10 take the card’s palette in order, the quietest its first colour and the busiest its last');
+  same(new Set(stubColours(d)).size, 10, 'ten loads, ten colours');
+  check(d.styles().every((st) => st.color !== COLOURS.over), 'and none is drawn in the over colour');
+  same([d.stub(server('R2', 1)).color, d.intoTor('R2').color], [along(0.5), along(0.5)],
+    'a cable of 5.5 alone in its rack is the middle colour, and so is the lane it runs along alone');
+  same(d.intoTor('R1').color, along(1), 'a lane is the colour of its highest cable: R1’s, into its ToR, the 10’s');
+  same([d.intoTor('R1').width, d.intoTor('R2').width, d.stub(server('R1', 1)).width], [7, 3, 2],
+    'widths are still the load against the busiest piece: the lane of 55 the widest, 5.5 and 1 narrower');
+  // The same cable alone in its rack, the others' range unchanged.
+  const alone = draw(m, cardOf(m, [['R1/tor', 4, server('R1', 4)], ['R2/tor', 1, server('R2', 1)], ['R2/tor', 10, server('R2', 10)]]));
+  same([alone.stub(server('R1', 4)).color, alone.intoTor('R1').color], [d.stub(server('R1', 4)).color, d.stub(server('R1', 4)).color],
+    'a cable of 4 is the same colour alone in its rack as beside six busier cables, and its lane alone is too');
+
+  // A metric that is not a bit rate, with and without gbps= on the cables.
+  const pps = draw(m, cardOf(m, rows, 'unit=pps'));
+  same([pps.view.colour, pps.view.toGbps], ['value', null], 'a pps metric is coloured by its own values too');
+  same(stubColours(pps), stubColours(d), 'pps: 1 to 10 in order along the palette');
+  check(pps.styles().every((st) => st.color !== COLOURS.over), 'pps: never the over colour');
+  const mg = floor('gbps=25');
+  const ppsCap = draw(mg, cardOf(mg, rows, 'unit=pps'), true);
+  same([ppsCap.view.colour, ppsCap.stub(server('R1', 10)).color], ['value', along(1)],
+    'pps on cables that have a gbps=: still its own values, which no capacity can be set against');
+
+  // The card's palette and its direction.
+  const bad = draw(m, cardOf(m, rows, 'unit=Gb/s higher=bad'));
+  same([bad.stub(server('R1', 1)).color, bad.stub(server('R1', 10)).color], [rampOf('health', 0), rampOf('health', 1)],
+    'higher=bad: green for the quietest cable and red for the busiest, as its switches go');
+  const good = draw(m, cardOf(m, rows, 'unit=Gb/s higher=good'));
+  same([good.stub(server('R1', 1)).color, good.stub(server('R1', 10)).color], [rampOf('health', 1), rampOf('health', 0)],
+    'higher=good turns it round');
+  card.palette = 'magma';
+  const magma = draw(m, card);
+  same([magma.stub(server('R1', 10)).color, d.scale.palette], [rampOf('magma', 1), 'viridis'],
+    'a new palette on the card is a new view in that palette; a view already made keeps what it was made with');
+
+  // The renderer lays the cables out again whenever the view it is handed is
+  // a new one, which is what a changed card setting makes (app.js keys the
+  // view on them) -- and not otherwise.
+  let shown = d.view;
+  const live = new Draw({ getContext: () => null }, { ...viewOf(m), cableView: () => shown });
+  live.camera.scale = 4;
+  live.syncLinkCache();
+  const laid = live.linkCache;
+  live.syncLinkCache();
+  check(live.linkCache === laid, 'the same view: the cables are not laid out again');
+  shown = magma.view;
+  live.syncLinkCache();
+  check(live.linkCache !== laid && live.linkCache.load === magma.view,
+    'a new view, from a card setting changed, lays them out again on the next frame');
+
+  // Colour by z-score: against the cables, never the card's switches.
+  card.palette = 'rdbu';
+  card.standardize = 'colour';
+  card.zRange = 3;
+  card.zShared = null;
+  card.stats = { mean: 1000, sd: 1, n: 2, zMin: 0, zMax: 0, wide: 0 };   // the switches', nothing to do with the cables
+  const sd = Math.sqrt(7.5);
+  const round9 = (v) => Math.round(v * 1e9) / 1e9;
+  const z = draw(m, card);
+  same([z.view.colour, z.scale.std, z.scale.mean, round9(z.scale.sd)], ['value', 'colour', 5.5, round9(sd)],
+    'colour by z-score: against the cables’ own mean and spread, not the card’s switches');
+  same(z.stub(server('R2', 1)).color, rampOf('rdbu', 0.5), 'a cable at the cables’ mean is the middle of the ramp');
+  const zAt = (v, range) => along((Math.max(-range, Math.min(range, (v - 5.5) / sd)) + range) / (2 * range), 'rdbu');
+  same(stubColours(z), tens.map((v) => zAt(v, 3)), 'and every cable by how far it sits from the mean, ±3σ at the ends');
+  card.zRange = 4.5 / sd;
+  const ends = draw(m, card);
+  same([ends.stub(server('R1', 1)).color, ends.stub(server('R1', 10)).color], [rampOf('rdbu', 0), rampOf('rdbu', 1)],
+    'a cable at −zRange σ is the first colour, and one at +zRange σ the last');
+  card.zRange = 1;
+  const clamped = draw(m, card);
+  same([clamped.stub(server('R1', 9)).color, clamped.stub(server('R1', 10)).color], [rampOf('rdbu', 1), rampOf('rdbu', 1)],
+    'past the end of the range a cable clamps to the end colour');
+  same([clamped.scale.off, Math.round(Math.abs(clamped.scale.worst) * 1000) / 1000], [4, Math.round((4.5 / sd) * 1000) / 1000],
+    'and is counted as off the scale, with the furthest out');
+  const offKey = keyOf(clamped);
+  same(offKey.ends, ['≤ −1σ', '≥ +1σ'], 'the key’s ends are the σ range');
+  check(offKey.notes.some((n) => /^4 cables past ±1σ, the furthest at [+−]1\.64σ/.test(n)),
+    `and it says how many are off the scale  (${offKey.notes.join(' | ')})`);
+  card.zRange = 3;
+  card.palette = 'magma';
+  card.invert = true;
+  card.zShared = { palette: 'viridis', zRange: 2 };
+  const shared = draw(m, card);
+  same([shared.scale.palette, shared.scale.zRange, shared.scale.invert, shared.scale.shared],
+    ['viridis', 2, false, true], 'the panel’s shared z scale wins over the card’s own palette, range and direction');
+  same(shared.stub(server('R1', 10)).color, along((4.5 / sd + 2) / 4), 'and colours the cables');
+  card.zShared = null;
+  card.invert = false;
+  card.palette = 'rdbu';
+  const flatCard = cardOf(m, tens.map((i) => ['R1/tor', 4, server('R1', i)]));
+  flatCard.standardize = 'colour';
+  const flat = draw(m, flatCard);
+  same([flat.scale.sd, new Set(stubColours(flat)).size, stubColours(flat)[0]], [0, 1, along(0.5)],
+    'cables that all carry the same are all the middle colour');
+  check(keyOf(flat).notes.some((n) => /^Every cable carries the same/.test(n)), 'and the key says so');
+
+  // Values as z-score: σ on the cables.
+  card.standardize = 'values';
+  const sigma = draw(m, card);
+  same(figureOf(sigma.view, { ab: 10, ba: 0, worst: 1.25 }), { amount: 1.25, change: false, sigma: true },
+    'values as z-score: a cable’s figure is its z-score');
+  same([js.traffic.cableFigure(sigma.view, -4.5 / sd, false, true), js.traffic.cableFigure(sigma.view, 0.5, false, true)], ['−1.64σ', '+0.50σ'],
+    'printed signed, in σ, as the card prints it');
+  const printed = [];
+  sigma.r.ctx = {
+    save() {}, restore() {}, setLineDash() {}, fillRect() {},
+    measureText: (text) => ({ width: (text.length * 6) / sigma.r.camera.scale }),
+    fillText: (text) => printed.push(text),
+  };
+  sigma.r.view = { x0: -1e6, y0: -1e6, x1: 1e6, y1: 1e6 };
+  sigma.r.state.traffic = { labels: true };
+  sigma.r.camera.scale = 30;
+  sigma.r.rebuildLinkCache(0, null, null, sigma.view, false);
+  sigma.r.drawCableLabels();
+  check(printed.length > 0 && printed.every((t) => /^[+−]\d+\.\d\dσ$/.test(t)), `and on the cables, every figure is in σ  (${printed.join(', ')})`);
+  check(printed.includes('+1.64σ'), 'the busiest cable prints +1.64σ');
+  card.standardize = 'off';
+  const back = draw(m, card);
+  same([back.scale.std, stubColours(back)], ['off', tens.map((v) => along((v - 1) / 9, 'rdbu'))],
+    'turning z-score off puts the cables back on the palette, lowest to highest');
+
+  // By z-score a lane, and a fan of cables at a port, take their most
+  // unusual cable either way -- and a counter that read zero is a value.
+  const zRows = [['R1/tor', 0, server('R1', 1)], ...tens.slice(1).map((i) => ['R1/tor', 6, server('R1', i)]),
+    ['R2/tor', 6, server('R2', 1)], ['R2/tor', 7, server('R2', 2)], ['R1/tor', 1, 'SP/spine', 'up'], ['R2/tor', 7, 'SP/spine', 'up']];
+  const zCard = cardOf(m, zRows);
+  zCard.standardize = 'colour';
+  const zd = draw(m, zCard);
+  const zero = zd.stub(server('R1', 1));
+  same([zero.idle, zero.width], [false, 1.5], 'by z-score, a counter that read zero is drawn as a value, at the narrowest');
+  same(zd.intoTor('R1').color, zero.color, 'and R1’s lane takes its colour: its most unusual cable, though the lowest');
+  same(zd.fan('SP/spine', 'up').color, zd.stub('R1/tor', 'up').color,
+    'where the spine’s two uplinks fan out, the one furthest from the mean colours it, not the higher');
+  check(zd.fan('SP/spine', 'up').color !== zd.stub('R2/tor', 'up').color, 'the two uplinks are different colours');
+
+  // With gbps=: how full stays the default, and the card's z-score wins.
+  const mc = floor('gbps=10');
+  const capCard = cardOf(mc, [...tens.map((i) => ['R1/tor', i, server('R1', i)]), ['R2/tor', 12, server('R2', 1)]]);
+  const howFull = draw(mc, capCard, true);
+  same(howFull.view.colour, 'util', 'with gbps=, how full is still the default');
+  same([howFull.stub(server('R1', 5)).color, howFull.stub(server('R2', 1)).color], [fullColour(0.5), COLOURS.over],
+    'half full reads half full, and past its gbps= is the over colour');
+  capCard.standardize = 'colour';
+  const zCap = draw(mc, capCard, true);
+  same([zCap.view.colour, zCap.scale.std], ['value', 'colour'], 'z-score on the card colours them by z-score instead');
+  check(zCap.styles().every((st) => st.color !== COLOURS.over), 'and nothing is the over colour then');
+  check(keyOf(zCap).notes.some((n) => /Set it back to off to see how full/.test(n)), 'the key says how to see how full they are');
+  capCard.standardize = 'off';
+  same(draw(mc, capCard, true).view.colour, 'util', 'turning it off puts how full back');
+
+  // Comparing and averaging are coloured as they were, whatever the card says.
+  const flowsLoad = { loads: js.traffic.countersOf(card, m).loads, toGbps: 1, unit: 'Gb/s', overlay: card };
+  card.standardize = 'colour';
+  same(js.traffic.viewOf({ view: 'diff', views: ['diff'], anyCapacity: false, model: flowsLoad, counters: { ...flowsLoad } }).colour, 'diff',
+    'measured against the model is still coloured by the difference');
+  card.standardize = 'off';
+  return out;
+}
+{
+  const real = await modulesIn(join(root, 'js'));
+  for (const [name, pass] of cableColourChecks(real)) ok(pass, name);
+  // The mutations the ticket names, each made to a copy of the modules:
+  // every one must make a check above fail, or the checks prove nothing.
+  const mutant = async (file, needle, patch) => {
+    const dir = mkdtempSync(join(tmpdir(), 'dv011-'));
+    try {
+      cpSync(join(root, 'js'), dir, { recursive: true });
+      const path = join(dir, file);
+      const text = readFileSync(path, 'utf8');
+      if (!text.includes(needle)) return null;
+      writeFileSync(path, text.replace(needle, patch));
+      try {
+        return cableColourChecks(await modulesIn(dir)).filter(([, pass]) => !pass).map(([name]) => name);
+      } catch (err) {
+        return [`threw: ${err.message}`];
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+  const failing = (names, re) => !!names && names.some((n) => re.test(n));
+  const summed = await mutant('render.js', 'const step = valueStep(scale, worst);',
+    'const step = valueStep({ ...scale, std: \'off\' }, max > 0 ? amount / max : 0);');
+  ok(failing(summed, /in order/) && failing(summed, /alone in its rack/),
+    `mutation: the lane's summed load as the colour source again fails the in-order and alone checks  (${summed && summed.length} failed)`);
+  const noZ = await mutant('traffic.js', "const std = isStandardized(overlay) ? overlay.stdMode : 'off';", "const std = 'off';");
+  ok(failing(noZ, /colour by z-score/) && failing(noZ, /colours them by z-score instead/) && failing(noZ, /prints \+1\.64σ/),
+    `mutation: ignoring the card's z-score setting fails the z-score checks  (${noZ && noZ.length} failed)`);
+  const highest = await mutant('route.js', 'if (o.signed) worst = worse(worst, t.worst);', 'if (false) worst = worse(worst, t.worst);');
+  ok(failing(highest, /fan out/), `mutation: a fan of cables taking the highest by z-score fails the fan check  (${highest && highest.length} failed)`);
+  const idleZero = await mutant('render.js', 'if (scale && worst !== null) {', 'if (scale && worst !== null && amount > 0) {');
+  ok(failing(idleZero, /read zero/), `mutation: a zero drawn idle fails the zero check  (${idleZero && idleZero.length} failed)`);
 }
 
 // ------------------------------------------- host totals, counters and what-if

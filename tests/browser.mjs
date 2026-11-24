@@ -170,6 +170,12 @@ const fixtures = new Map([
   // The dual-plane fabric with each server's two NICs bonded.
   ['/fx/bonded.dc', readFileSync(join(root, 'examples/dual-plane.dc'), 'utf8')
     .replace(/^(net nica .*)$/m, '$1 bond=nic').replace(/^(net nicb .*)$/m, '$1 bond=nic')],
+  // The leaf-spine example with no gbps= on its cables, and its port rates
+  // as a "Cable traffic" card: what arista-tools metrics writes (DV-011).
+  ['/fx/fabric-no-gbps.dc', readFileSync(join(root, 'examples/fabric/fabric.dc'), 'utf8').replace(' gbps=100', '')],
+  ['/fx/cable-traffic.tsv', readFileSync(join(root, 'examples/fabric/counters.tsv'), 'utf8')
+    .replace(/^port_rate\t/gm, 'link_gbps\t')
+    .replace('!test port_rate unit=Gb/s label="Switch port counters" short=PORT', '!test link_gbps unit=Gb/s label="Cable traffic"')],
 ]);
 
 function serve() {
@@ -1300,6 +1306,95 @@ await test('a floor plan wired from a neighbour table', async () => {
   const text = await page.evaluate(() => document.querySelector('#cable-load').innerText);
   ok(/20 cables measured by Switch port counters/.test(text), `every cable added is measured  (${text.slice(0, 120).replace(/\n/g, ' | ')})`);
 }, { url: '?layout=examples/fabric-links/wired.dc&results=examples/fabric/counters.tsv' });
+
+// Cables drawn from a card, with no gbps= (DV-011): each its own value on the
+// card's palette, and by z-score when the card says so -- against the other
+// cables, on the shared z scale or the card's own -- rebuilt the moment any
+// of the card's colour settings changes, with no reload. The key is drawn
+// from the same view the renderer lays the cables out by.
+await test('cables take their card’s colours, z-score included', async () => {
+  await page.locator('#overlays .overlay-head input[type=checkbox]').first().check();
+  await page.waitForTimeout(200);
+  await page.locator('#overlays label', { hasText: 'draw on the cables' }).locator('input').check();
+  await page.waitForTimeout(400);
+  const key = () => page.evaluate(() => {
+    const k = document.querySelector('#cable-load .load-key');
+    const ramp = k ? k.querySelector('.load-ramp') : null;
+    return {
+      ends: k ? [...k.children].filter((c) => !c.classList.contains('load-ramp')).map((c) => c.textContent) : [],
+      colours: ramp ? ramp.style.background.match(/rgb\([^)]*\)/g) : [],
+      notes: [...document.querySelectorAll('#cable-load .cable-note')].map((p) => p.textContent).join(' | '),
+    };
+  });
+  // A select or box on the card, by the label in front of it.
+  const field = async (label, value) => {
+    await page.evaluate(([l, v]) => {
+      const lab = [...document.querySelectorAll('#overlays .overlay label')].find((x) => x.textContent.trim() === l);
+      let input = lab.nextElementSibling;
+      if (input.tagName === 'DIV') input = input.querySelector('input');
+      input.value = v;
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    }, [label, value]);
+    await page.waitForTimeout(300);
+  };
+  const first = (k) => k.colours[0];
+  const last = (k) => k.colours[k.colours.length - 1];
+
+  let k = await key();
+  eq(k.ends, ['2Gb/s', '60Gb/s'], 'with no gbps=, the key runs from the quietest cable to the busiest');
+  eq([first(k), last(k)], ['rgb(68, 1, 84)', 'rgb(253, 231, 37)'], 'on the card’s palette, viridis');
+  ok(/each cable’s own value, the busier way, on the card’s palette/.test(k.notes) && /No cable has a gbps=/.test(k.notes),
+     `and says what the colour means  (${k.notes})`);
+  ok(!/against the busiest cable\. No cable/.test(k.notes), 'not the load against the busiest cable any more');
+
+  await field('palette', 'magma');
+  k = await key();
+  eq([first(k), last(k)], ['rgb(0, 0, 4)', 'rgb(252, 253, 191)'], 'a new palette on the card redraws the cables in it');
+
+  await field('standardize', 'colour');
+  k = await key();
+  eq(k.ends, ['≤ −3σ', '≥ +3σ'], 'colour by z-score: the key is ±3σ');
+  eq([first(k), last(k)], ['rgb(178, 24, 43)', 'rgb(33, 102, 172)'], 'on the shared z scale, rdbu');
+  ok(/as a z-score against the other cables \(20 cables, mean/.test(k.notes) && /the shared z scale’s ±3σ/.test(k.notes),
+     `against the cables, and it says so  (${k.notes})`);
+  const tip = await page.evaluate(() => {
+    const c = document.querySelector('#view');
+    const r = c.getBoundingClientRect();
+    for (let y = 10; y < r.height; y += 4) {
+      for (let x = 4; x < r.width; x += 2) {
+        c.dispatchEvent(new PointerEvent('pointermove', { clientX: r.left + x, clientY: r.top + y, bubbles: true }));
+        const t = document.querySelector('#tooltip');
+        if (!t.hidden && /^Cables from neighbors\.tsv: /.test(t.textContent)) return t.textContent;
+      }
+    }
+    return '';
+  });
+  ok(/[+−]\d\.\d\dσ against the other cables, the busier way/.test(tip), `a cable’s tooltip says how unusual it is  (${tip.replace(/\n/g, ' | ')})`);
+
+  await page.evaluate(() => {
+    const s = document.querySelector('.zspread');
+    s.value = '2';
+    s.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  await page.waitForTimeout(300);
+  eq((await key()).ends, ['≤ −2σ', '≥ +2σ'], 'a new shared σ range redraws the cables on it');
+
+  await page.evaluate(() => {
+    const box = document.querySelector('.zscale input[type=checkbox]');
+    box.checked = false;
+    box.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  await page.waitForTimeout(300);
+  k = await key();
+  eq([k.ends, first(k)], [['≤ −3σ', '≥ +3σ'], 'rgb(0, 0, 4)'], 'with no shared scale, the card’s own: ±3σ, magma');
+  ok(/the card’s ±3σ/.test(k.notes), 'and the key says whose');
+  await field('spread', '1.5');
+  eq((await key()).ends, ['≤ −1.5σ', '≥ +1.5σ'], 'the card’s own σ range redraws them');
+
+  await field('standardize', 'off');
+  k = await key();
+  eq([k.ends, first(k)], [['2Gb/s', '60Gb/s'], 'rgb(0, 0, 4)'], 'z-score off puts the cables back on the palette');
+}, { url: '?layout=fx/fabric-no-gbps.dc&results=fx/cable-traffic.tsv' });
 
 await test('per-host totals load the cables as an estimate', async () => {
   await page.locator('#overlays .overlay-head input[type=checkbox]').first().check();

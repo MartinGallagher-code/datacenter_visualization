@@ -12,6 +12,52 @@ command-line tools**. A file that loads today loads on every later 1.x. The
 JavaScript modules are internal: they are read, forked and patched freely, but
 their shapes are not a promise.
 
+## 1.59.0 — 2026-11-24
+
+Each cable coloured by its own value, in its card's colours, z-score
+included (DV-011, for arista_tools AT-006).
+
+- **The bug:** with no `gbps=` on the cables (or a metric that is not a bit
+  rate), a cable drawn from a card was coloured by the load of the lane it
+  ran along, against the busiest lane. One cable is a small share of that,
+  so nearly every cable came out the same purple-magenta, from rgb(142,21,156)
+  to rgb(187,54,135) — what the owner saw with `link_gbps` from
+  `arista-tools metrics` drawn on a floor plan with no `gbps=`. And none of
+  the card's colour settings reached the cables: z-score changed the
+  switches, never the cables.
+- **Now each cable is its own value, the busier way, on the card's palette**
+  from the lowest cable to the highest — the key prints the two ends. A
+  quiet cable is as quiet beside nine busy ones as alone. Where several are
+  drawn as one (a lane, a ToR's stub) the piece takes its highest cable.
+  `higher=bad` stays green to red on the cables, and `higher=good` turns it
+  round. Widths are unchanged: what a piece carries against the busiest.
+- **Colour by z-score** on the card colours each cable by how far it sits
+  from the mean of the cables, in their own standard deviations (not the
+  card's, which are its switches'), across the card's ±σ or the panel's
+  shared z scale. A piece of several cables takes the one furthest from the
+  mean either way; a counter that read zero is a value, coloured, at the
+  narrowest width; cables past the ends clamp, and the key counts them.
+  **values as z-score** prints each cable's σ on it, and the hover says it.
+- **With `gbps=`**, how full stays the default, with the magenta past full;
+  the card's z-score, turned on, wins.
+- Changing the card's palette, its z-score setting or σ range, or the shared
+  z scale redraws the cables at once: the cable view is keyed on them.
+- **The Cable load key** shows the scale the cables are drawn with — the
+  palette between the lowest and highest cable, or ±σ — and says in plain
+  words what the colour means.
+- **Unchanged:** the comparison (measured − model), the what-if's change,
+  averages and the explanation draw exactly as before; checked piece by
+  piece against 1.58.0 on the same inputs. The load generator or a test flow
+  on its own, with no card, is drawn on the viridis palette.
+- Tests: the colours in order along the palette for a bit rate and for
+  `pps`, a cable's colour alone and in a shared lane, the z-score ends,
+  clamping, the shared scale and a flat population, σ on the cables, how full
+  with `gbps=` and z-score over it, the renderer laying cables out again for
+  a new view; and four mutations of the fix (the lane's summed load as the
+  colour again, the card's z-score ignored, a fan taking the highest by
+  z-score, a zero drawn idle), each failing the checks. In the browser: the
+  key following the card's palette, z-score, shared scale and σ range.
+
 ## 1.58.0 — 2026-11-16
 
 The cables a neighbour table lists, added to a floor plan you already have
